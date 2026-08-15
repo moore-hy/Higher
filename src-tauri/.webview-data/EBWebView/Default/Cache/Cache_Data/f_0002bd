@@ -1,0 +1,198 @@
+import { c as invoke } from "/node_modules/.vite/deps/core-CP6vdcl6.js?v=deb02f03";
+//#region node_modules/@tauri-apps/plugin-dialog/dist-js/index.js
+/**
+* Internal function to convert the buttons to the Rust type.
+*/
+function buttonsToRust(buttons) {
+	if (buttons === void 0) return;
+	if (typeof buttons === "string") return buttons;
+	else if ("ok" in buttons && "cancel" in buttons) return { OkCancelCustom: [buttons.ok, buttons.cancel] };
+	else if ("yes" in buttons && "no" in buttons && "cancel" in buttons) return { YesNoCancelCustom: [
+		buttons.yes,
+		buttons.no,
+		buttons.cancel
+	] };
+	else if ("ok" in buttons) return { OkCustom: buttons.ok };
+}
+/**
+* Open a file/directory selection dialog.
+*
+* The selected paths are added to the filesystem and asset protocol scopes.
+* When security is more important than the easy of use of this API,
+* prefer writing a dedicated command instead.
+*
+* Note that the scope change is not persisted, so the values are cleared when the application is restarted.
+* You can save it to the filesystem using [tauri-plugin-persisted-scope](https://github.com/tauri-apps/tauri-plugin-persisted-scope).
+* @example
+* ```typescript
+* import { open } from '@tauri-apps/plugin-dialog';
+* // Open a selection dialog for image files
+* const selected = await open({
+*   multiple: true,
+*   filters: [{
+*     name: 'Image',
+*     extensions: ['png', 'jpeg']
+*   }]
+* });
+* if (Array.isArray(selected)) {
+*   // user selected multiple files
+* } else if (selected === null) {
+*   // user cancelled the selection
+* } else {
+*   // user selected a single file
+* }
+* ```
+*
+* @example
+* ```typescript
+* import { open } from '@tauri-apps/plugin-dialog';
+* import { appDir } from '@tauri-apps/api/path';
+* // Open a selection dialog for directories
+* const selected = await open({
+*   directory: true,
+*   multiple: true,
+*   defaultPath: await appDir(),
+* });
+* if (Array.isArray(selected)) {
+*   // user selected multiple directories
+* } else if (selected === null) {
+*   // user cancelled the selection
+* } else {
+*   // user selected a single directory
+* }
+* ```
+*
+* @returns A promise resolving to the selected path(s)
+*
+* @since 2.0.0
+*/
+async function open(options = {}) {
+	if (typeof options === "object") Object.freeze(options);
+	return await invoke("plugin:dialog|open", { options });
+}
+/**
+* Open a file/directory save dialog.
+*
+* The selected path is added to the filesystem and asset protocol scopes.
+* When security is more important than the easy of use of this API,
+* prefer writing a dedicated command instead.
+*
+* Note that the scope change is not persisted, so the values are cleared when the application is restarted.
+* You can save it to the filesystem using [tauri-plugin-persisted-scope](https://github.com/tauri-apps/tauri-plugin-persisted-scope).
+* @example
+* ```typescript
+* import { save } from '@tauri-apps/plugin-dialog';
+* const filePath = await save({
+*   filters: [{
+*     name: 'Image',
+*     extensions: ['png', 'jpeg']
+*   }]
+* });
+* ```
+*
+* @returns A promise resolving to the selected path.
+*
+* @since 2.0.0
+*/
+async function save(options = {}) {
+	if (typeof options === "object") Object.freeze(options);
+	return await invoke("plugin:dialog|save", { options });
+}
+async function messageCommand(message, options) {
+	return await invoke("plugin:dialog|message", {
+		message,
+		title: options?.title,
+		kind: options?.kind,
+		buttons: buttonsToRust(options?.buttons)
+	});
+}
+/**
+* Shows a message dialog with an `Ok` button.
+* @example
+* ```typescript
+* import { message } from '@tauri-apps/plugin-dialog';
+* await message('Tauri is awesome', 'Tauri');
+* await message('File not found', { title: 'Tauri', kind: 'error' });
+* ```
+*
+* @param message The message to show.
+* @param options The dialog's options. If a string, it represents the dialog title.
+*
+* @returns A promise indicating the success or failure of the operation.
+*
+* @since 2.0.0
+*
+*/
+async function message(message, options) {
+	const opts = typeof options === "string" ? { title: options } : options;
+	if (opts && !opts.buttons && opts.okLabel) opts.buttons = { ok: opts.okLabel };
+	return messageCommand(message, opts);
+}
+/**
+* Shows a question dialog with `Yes` and `No` buttons.
+*
+* Convenient wrapper for `await message('msg', { buttons: 'YesNo' }) === 'Yes'`
+*
+* @example
+* ```typescript
+* import { ask } from '@tauri-apps/plugin-dialog';
+* const yes = await ask('Are you sure?', 'Tauri');
+* const yes2 = await ask('This action cannot be reverted. Are you sure?', { title: 'Tauri', kind: 'warning' });
+* ```
+*
+* @param message The message to show.
+* @param options The dialog's options. If a string, it represents the dialog title.
+*
+* @returns A promise resolving to a boolean indicating whether `Yes` was clicked or not.
+*
+* @since 2.0.0
+*/
+async function ask(message, options) {
+	const opts = typeof options === "string" ? { title: options } : options;
+	const customButtons = opts?.okLabel || opts?.cancelLabel;
+	const okLabel = opts?.okLabel ?? "Yes";
+	return await messageCommand(message, {
+		title: opts?.title,
+		kind: opts?.kind,
+		buttons: customButtons ? {
+			ok: okLabel,
+			cancel: opts.cancelLabel ?? "No"
+		} : "YesNo"
+	}) === okLabel;
+}
+/**
+* Shows a question dialog with `Ok` and `Cancel` buttons.
+*
+* Convenient wrapper for `await message('msg', { buttons: 'OkCancel' }) === 'Ok'`
+*
+* @example
+* ```typescript
+* import { confirm } from '@tauri-apps/plugin-dialog';
+* const confirmed = await confirm('Are you sure?', 'Tauri');
+* const confirmed2 = await confirm('This action cannot be reverted. Are you sure?', { title: 'Tauri', kind: 'warning' });
+* ```
+*
+* @param message The message to show.
+* @param options The dialog's options. If a string, it represents the dialog title.
+*
+* @returns A promise resolving to a boolean indicating whether `Ok` was clicked or not.
+*
+* @since 2.0.0
+*/
+async function confirm(message, options) {
+	const opts = typeof options === "string" ? { title: options } : options;
+	const customButtons = opts?.okLabel || opts?.cancelLabel;
+	const okLabel = opts?.okLabel ?? "Ok";
+	return await messageCommand(message, {
+		title: opts?.title,
+		kind: opts?.kind,
+		buttons: customButtons ? {
+			ok: okLabel,
+			cancel: opts.cancelLabel ?? "Cancel"
+		} : "OkCancel"
+	}) === okLabel;
+}
+//#endregion
+export { ask, confirm, message, open, save };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoiQHRhdXJpLWFwcHNfcGx1Z2luLWRpYWxvZy5qcyIsIm5hbWVzIjpbXSwic291cmNlcyI6WyIuLi8uLi9AdGF1cmktYXBwcy9wbHVnaW4tZGlhbG9nL2Rpc3QtanMvaW5kZXguanMiXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0IHsgaW52b2tlIH0gZnJvbSAnQHRhdXJpLWFwcHMvYXBpL2NvcmUnO1xuXG4vLyBDb3B5cmlnaHQgMjAxOS0yMDIzIFRhdXJpIFByb2dyYW1tZSB3aXRoaW4gVGhlIENvbW1vbnMgQ29uc2VydmFuY3lcbi8vIFNQRFgtTGljZW5zZS1JZGVudGlmaWVyOiBBcGFjaGUtMi4wXG4vLyBTUERYLUxpY2Vuc2UtSWRlbnRpZmllcjogTUlUXG4vKipcbiAqIEludGVybmFsIGZ1bmN0aW9uIHRvIGNvbnZlcnQgdGhlIGJ1dHRvbnMgdG8gdGhlIFJ1c3QgdHlwZS5cbiAqL1xuZnVuY3Rpb24gYnV0dG9uc1RvUnVzdChidXR0b25zKSB7XG4gICAgaWYgKGJ1dHRvbnMgPT09IHVuZGVmaW5lZCkge1xuICAgICAgICByZXR1cm4gdW5kZWZpbmVkO1xuICAgIH1cbiAgICBpZiAodHlwZW9mIGJ1dHRvbnMgPT09ICdzdHJpbmcnKSB7XG4gICAgICAgIHJldHVybiBidXR0b25zO1xuICAgIH1cbiAgICBlbHNlIGlmICgnb2snIGluIGJ1dHRvbnMgJiYgJ2NhbmNlbCcgaW4gYnV0dG9ucykge1xuICAgICAgICByZXR1cm4geyBPa0NhbmNlbEN1c3RvbTogW2J1dHRvbnMub2ssIGJ1dHRvbnMuY2FuY2VsXSB9O1xuICAgIH1cbiAgICBlbHNlIGlmICgneWVzJyBpbiBidXR0b25zICYmICdubycgaW4gYnV0dG9ucyAmJiAnY2FuY2VsJyBpbiBidXR0b25zKSB7XG4gICAgICAgIHJldHVybiB7XG4gICAgICAgICAgICBZZXNOb0NhbmNlbEN1c3RvbTogW2J1dHRvbnMueWVzLCBidXR0b25zLm5vLCBidXR0b25zLmNhbmNlbF1cbiAgICAgICAgfTtcbiAgICB9XG4gICAgZWxzZSBpZiAoJ29rJyBpbiBidXR0b25zKSB7XG4gICAgICAgIHJldHVybiB7IE9rQ3VzdG9tOiBidXR0b25zLm9rIH07XG4gICAgfVxuICAgIHJldHVybiB1bmRlZmluZWQ7XG59XG4vKipcbiAqIE9wZW4gYSBmaWxlL2RpcmVjdG9yeSBzZWxlY3Rpb24gZGlhbG9nLlxuICpcbiAqIFRoZSBzZWxlY3RlZCBwYXRocyBhcmUgYWRkZWQgdG8gdGhlIGZpbGVzeXN0ZW0gYW5kIGFzc2V0IHByb3RvY29sIHNjb3Blcy5cbiAqIFdoZW4gc2VjdXJpdHkgaXMgbW9yZSBpbXBvcnRhbnQgdGhhbiB0aGUgZWFzeSBvZiB1c2Ugb2YgdGhpcyBBUEksXG4gKiBwcmVmZXIgd3JpdGluZyBhIGRlZGljYXRlZCBjb21tYW5kIGluc3RlYWQuXG4gKlxuICogTm90ZSB0aGF0IHRoZSBzY29wZSBjaGFuZ2UgaXMgbm90IHBlcnNpc3RlZCwgc28gdGhlIHZhbHVlcyBhcmUgY2xlYXJlZCB3aGVuIHRoZSBhcHBsaWNhdGlvbiBpcyByZXN0YXJ0ZWQuXG4gKiBZb3UgY2FuIHNhdmUgaXQgdG8gdGhlIGZpbGVzeXN0ZW0gdXNpbmcgW3RhdXJpLXBsdWdpbi1wZXJzaXN0ZWQtc2NvcGVdKGh0dHBzOi8vZ2l0aHViLmNvbS90YXVyaS1hcHBzL3RhdXJpLXBsdWdpbi1wZXJzaXN0ZWQtc2NvcGUpLlxuICogQGV4YW1wbGVcbiAqIGBgYHR5cGVzY3JpcHRcbiAqIGltcG9ydCB7IG9wZW4gfSBmcm9tICdAdGF1cmktYXBwcy9wbHVnaW4tZGlhbG9nJztcbiAqIC8vIE9wZW4gYSBzZWxlY3Rpb24gZGlhbG9nIGZvciBpbWFnZSBmaWxlc1xuICogY29uc3Qgc2VsZWN0ZWQgPSBhd2FpdCBvcGVuKHtcbiAqICAgbXVsdGlwbGU6IHRydWUsXG4gKiAgIGZpbHRlcnM6IFt7XG4gKiAgICAgbmFtZTogJ0ltYWdlJyxcbiAqICAgICBleHRlbnNpb25zOiBbJ3BuZycsICdqcGVnJ11cbiAqICAgfV1cbiAqIH0pO1xuICogaWYgKEFycmF5LmlzQXJyYXkoc2VsZWN0ZWQpKSB7XG4gKiAgIC8vIHVzZXIgc2VsZWN0ZWQgbXVsdGlwbGUgZmlsZXNcbiAqIH0gZWxzZSBpZiAoc2VsZWN0ZWQgPT09IG51bGwpIHtcbiAqICAgLy8gdXNlciBjYW5jZWxsZWQgdGhlIHNlbGVjdGlvblxuICogfSBlbHNlIHtcbiAqICAgLy8gdXNlciBzZWxlY3RlZCBhIHNpbmdsZSBmaWxlXG4gKiB9XG4gKiBgYGBcbiAqXG4gKiBAZXhhbXBsZVxuICogYGBgdHlwZXNjcmlwdFxuICogaW1wb3J0IHsgb3BlbiB9IGZyb20gJ0B0YXVyaS1hcHBzL3BsdWdpbi1kaWFsb2cnO1xuICogaW1wb3J0IHsgYXBwRGlyIH0gZnJvbSAnQHRhdXJpLWFwcHMvYXBpL3BhdGgnO1xuICogLy8gT3BlbiBhIHNlbGVjdGlvbiBkaWFsb2cgZm9yIGRpcmVjdG9yaWVzXG4gKiBjb25zdCBzZWxlY3RlZCA9IGF3YWl0IG9wZW4oe1xuICogICBkaXJlY3Rvcnk6IHRydWUsXG4gKiAgIG11bHRpcGxlOiB0cnVlLFxuICogICBkZWZhdWx0UGF0aDogYXdhaXQgYXBwRGlyKCksXG4gKiB9KTtcbiAqIGlmIChBcnJheS5pc0FycmF5KHNlbGVjdGVkKSkge1xuICogICAvLyB1c2VyIHNlbGVjdGVkIG11bHRpcGxlIGRpcmVjdG9yaWVzXG4gKiB9IGVsc2UgaWYgKHNlbGVjdGVkID09PSBudWxsKSB7XG4gKiAgIC8vIHVzZXIgY2FuY2VsbGVkIHRoZSBzZWxlY3Rpb25cbiAqIH0gZWxzZSB7XG4gKiAgIC8vIHVzZXIgc2VsZWN0ZWQgYSBzaW5nbGUgZGlyZWN0b3J5XG4gKiB9XG4gKiBgYGBcbiAqXG4gKiBAcmV0dXJucyBBIHByb21pc2UgcmVzb2x2aW5nIHRvIHRoZSBzZWxlY3RlZCBwYXRoKHMpXG4gKlxuICogQHNpbmNlIDIuMC4wXG4gKi9cbmFzeW5jIGZ1bmN0aW9uIG9wZW4ob3B0aW9ucyA9IHt9KSB7XG4gICAgaWYgKHR5cGVvZiBvcHRpb25zID09PSAnb2JqZWN0Jykge1xuICAgICAgICBPYmplY3QuZnJlZXplKG9wdGlvbnMpO1xuICAgIH1cbiAgICByZXR1cm4gYXdhaXQgaW52b2tlKCdwbHVnaW46ZGlhbG9nfG9wZW4nLCB7IG9wdGlvbnMgfSk7XG59XG4vKipcbiAqIE9wZW4gYSBmaWxlL2RpcmVjdG9yeSBzYXZlIGRpYWxvZy5cbiAqXG4gKiBUaGUgc2VsZWN0ZWQgcGF0aCBpcyBhZGRlZCB0byB0aGUgZmlsZXN5c3RlbSBhbmQgYXNzZXQgcHJvdG9jb2wgc2NvcGVzLlxuICogV2hlbiBzZWN1cml0eSBpcyBtb3JlIGltcG9ydGFudCB0aGFuIHRoZSBlYXN5IG9mIHVzZSBvZiB0aGlzIEFQSSxcbiAqIHByZWZlciB3cml0aW5nIGEgZGVkaWNhdGVkIGNvbW1hbmQgaW5zdGVhZC5cbiAqXG4gKiBOb3RlIHRoYXQgdGhlIHNjb3BlIGNoYW5nZSBpcyBub3QgcGVyc2lzdGVkLCBzbyB0aGUgdmFsdWVzIGFyZSBjbGVhcmVkIHdoZW4gdGhlIGFwcGxpY2F0aW9uIGlzIHJlc3RhcnRlZC5cbiAqIFlvdSBjYW4gc2F2ZSBpdCB0byB0aGUgZmlsZXN5c3RlbSB1c2luZyBbdGF1cmktcGx1Z2luLXBlcnNpc3RlZC1zY29wZV0oaHR0cHM6Ly9naXRodWIuY29tL3RhdXJpLWFwcHMvdGF1cmktcGx1Z2luLXBlcnNpc3RlZC1zY29wZSkuXG4gKiBAZXhhbXBsZVxuICogYGBgdHlwZXNjcmlwdFxuICogaW1wb3J0IHsgc2F2ZSB9IGZyb20gJ0B0YXVyaS1hcHBzL3BsdWdpbi1kaWFsb2cnO1xuICogY29uc3QgZmlsZVBhdGggPSBhd2FpdCBzYXZlKHtcbiAqICAgZmlsdGVyczogW3tcbiAqICAgICBuYW1lOiAnSW1hZ2UnLFxuICogICAgIGV4dGVuc2lvbnM6IFsncG5nJywgJ2pwZWcnXVxuICogICB9XVxuICogfSk7XG4gKiBgYGBcbiAqXG4gKiBAcmV0dXJucyBBIHByb21pc2UgcmVzb2x2aW5nIHRvIHRoZSBzZWxlY3RlZCBwYXRoLlxuICpcbiAqIEBzaW5jZSAyLjAuMFxuICovXG5hc3luYyBmdW5jdGlvbiBzYXZlKG9wdGlvbnMgPSB7fSkge1xuICAgIGlmICh0eXBlb2Ygb3B0aW9ucyA9PT0gJ29iamVjdCcpIHtcbiAgICAgICAgT2JqZWN0LmZyZWV6ZShvcHRpb25zKTtcbiAgICB9XG4gICAgcmV0dXJuIGF3YWl0IGludm9rZSgncGx1Z2luOmRpYWxvZ3xzYXZlJywgeyBvcHRpb25zIH0pO1xufVxuYXN5bmMgZnVuY3Rpb24gbWVzc2FnZUNvbW1hbmQobWVzc2FnZSwgb3B0aW9ucykge1xuICAgIHJldHVybiBhd2FpdCBpbnZva2UoJ3BsdWdpbjpkaWFsb2d8bWVzc2FnZScsIHtcbiAgICAgICAgbWVzc2FnZSxcbiAgICAgICAgdGl0bGU6IG9wdGlvbnM/LnRpdGxlLFxuICAgICAgICBraW5kOiBvcHRpb25zPy5raW5kLFxuICAgICAgICBidXR0b25zOiBidXR0b25zVG9SdXN0KG9wdGlvbnM/LmJ1dHRvbnMpXG4gICAgfSk7XG59XG4vKipcbiAqIFNob3dzIGEgbWVzc2FnZSBkaWFsb2cgd2l0aCBhbiBgT2tgIGJ1dHRvbi5cbiAqIEBleGFtcGxlXG4gKiBgYGB0eXBlc2NyaXB0XG4gKiBpbXBvcnQgeyBtZXNzYWdlIH0gZnJvbSAnQHRhdXJpLWFwcHMvcGx1Z2luLWRpYWxvZyc7XG4gKiBhd2FpdCBtZXNzYWdlKCdUYXVyaSBpcyBhd2Vzb21lJywgJ1RhdXJpJyk7XG4gKiBhd2FpdCBtZXNzYWdlKCdGaWxlIG5vdCBmb3VuZCcsIHsgdGl0bGU6ICdUYXVyaScsIGtpbmQ6ICdlcnJvcicgfSk7XG4gKiBgYGBcbiAqXG4gKiBAcGFyYW0gbWVzc2FnZSBUaGUgbWVzc2FnZSB0byBzaG93LlxuICogQHBhcmFtIG9wdGlvbnMgVGhlIGRpYWxvZydzIG9wdGlvbnMuIElmIGEgc3RyaW5nLCBpdCByZXByZXNlbnRzIHRoZSBkaWFsb2cgdGl0bGUuXG4gKlxuICogQHJldHVybnMgQSBwcm9taXNlIGluZGljYXRpbmcgdGhlIHN1Y2Nlc3Mgb3IgZmFpbHVyZSBvZiB0aGUgb3BlcmF0aW9uLlxuICpcbiAqIEBzaW5jZSAyLjAuMFxuICpcbiAqL1xuYXN5bmMgZnVuY3Rpb24gbWVzc2FnZShtZXNzYWdlLCBvcHRpb25zKSB7XG4gICAgY29uc3Qgb3B0cyA9IHR5cGVvZiBvcHRpb25zID09PSAnc3RyaW5nJyA/IHsgdGl0bGU6IG9wdGlvbnMgfSA6IG9wdGlvbnM7XG4gICAgaWYgKG9wdHMgJiYgIW9wdHMuYnV0dG9ucyAmJiBvcHRzLm9rTGFiZWwpIHtcbiAgICAgICAgb3B0cy5idXR0b25zID0geyBvazogb3B0cy5va0xhYmVsIH07XG4gICAgfVxuICAgIHJldHVybiBtZXNzYWdlQ29tbWFuZChtZXNzYWdlLCBvcHRzKTtcbn1cbi8qKlxuICogU2hvd3MgYSBxdWVzdGlvbiBkaWFsb2cgd2l0aCBgWWVzYCBhbmQgYE5vYCBidXR0b25zLlxuICpcbiAqIENvbnZlbmllbnQgd3JhcHBlciBmb3IgYGF3YWl0IG1lc3NhZ2UoJ21zZycsIHsgYnV0dG9uczogJ1llc05vJyB9KSA9PT0gJ1llcydgXG4gKlxuICogQGV4YW1wbGVcbiAqIGBgYHR5cGVzY3JpcHRcbiAqIGltcG9ydCB7IGFzayB9IGZyb20gJ0B0YXVyaS1hcHBzL3BsdWdpbi1kaWFsb2cnO1xuICogY29uc3QgeWVzID0gYXdhaXQgYXNrKCdBcmUgeW91IHN1cmU/JywgJ1RhdXJpJyk7XG4gKiBjb25zdCB5ZXMyID0gYXdhaXQgYXNrKCdUaGlzIGFjdGlvbiBjYW5ub3QgYmUgcmV2ZXJ0ZWQuIEFyZSB5b3Ugc3VyZT8nLCB7IHRpdGxlOiAnVGF1cmknLCBraW5kOiAnd2FybmluZycgfSk7XG4gKiBgYGBcbiAqXG4gKiBAcGFyYW0gbWVzc2FnZSBUaGUgbWVzc2FnZSB0byBzaG93LlxuICogQHBhcmFtIG9wdGlvbnMgVGhlIGRpYWxvZydzIG9wdGlvbnMuIElmIGEgc3RyaW5nLCBpdCByZXByZXNlbnRzIHRoZSBkaWFsb2cgdGl0bGUuXG4gKlxuICogQHJldHVybnMgQSBwcm9taXNlIHJlc29sdmluZyB0byBhIGJvb2xlYW4gaW5kaWNhdGluZyB3aGV0aGVyIGBZZXNgIHdhcyBjbGlja2VkIG9yIG5vdC5cbiAqXG4gKiBAc2luY2UgMi4wLjBcbiAqL1xuYXN5bmMgZnVuY3Rpb24gYXNrKG1lc3NhZ2UsIG9wdGlvbnMpIHtcbiAgICBjb25zdCBvcHRzID0gdHlwZW9mIG9wdGlvbnMgPT09ICdzdHJpbmcnID8geyB0aXRsZTogb3B0aW9ucyB9IDogb3B0aW9ucztcbiAgICBjb25zdCBjdXN0b21CdXR0b25zID0gb3B0cz8ub2tMYWJlbCB8fCBvcHRzPy5jYW5jZWxMYWJlbDtcbiAgICBjb25zdCBva0xhYmVsID0gb3B0cz8ub2tMYWJlbCA/PyAnWWVzJztcbiAgICByZXR1cm4gKChhd2FpdCBtZXNzYWdlQ29tbWFuZChtZXNzYWdlLCB7XG4gICAgICAgIHRpdGxlOiBvcHRzPy50aXRsZSxcbiAgICAgICAga2luZDogb3B0cz8ua2luZCxcbiAgICAgICAgYnV0dG9uczogY3VzdG9tQnV0dG9uc1xuICAgICAgICAgICAgPyB7IG9rOiBva0xhYmVsLCBjYW5jZWw6IG9wdHMuY2FuY2VsTGFiZWwgPz8gJ05vJyB9XG4gICAgICAgICAgICA6ICdZZXNObydcbiAgICB9KSkgPT09IG9rTGFiZWwpO1xufVxuLyoqXG4gKiBTaG93cyBhIHF1ZXN0aW9uIGRpYWxvZyB3aXRoIGBPa2AgYW5kIGBDYW5jZWxgIGJ1dHRvbnMuXG4gKlxuICogQ29udmVuaWVudCB3cmFwcGVyIGZvciBgYXdhaXQgbWVzc2FnZSgnbXNnJywgeyBidXR0b25zOiAnT2tDYW5jZWwnIH0pID09PSAnT2snYFxuICpcbiAqIEBleGFtcGxlXG4gKiBgYGB0eXBlc2NyaXB0XG4gKiBpbXBvcnQgeyBjb25maXJtIH0gZnJvbSAnQHRhdXJpLWFwcHMvcGx1Z2luLWRpYWxvZyc7XG4gKiBjb25zdCBjb25maXJtZWQgPSBhd2FpdCBjb25maXJtKCdBcmUgeW91IHN1cmU/JywgJ1RhdXJpJyk7XG4gKiBjb25zdCBjb25maXJtZWQyID0gYXdhaXQgY29uZmlybSgnVGhpcyBhY3Rpb24gY2Fubm90IGJlIHJldmVydGVkLiBBcmUgeW91IHN1cmU/JywgeyB0aXRsZTogJ1RhdXJpJywga2luZDogJ3dhcm5pbmcnIH0pO1xuICogYGBgXG4gKlxuICogQHBhcmFtIG1lc3NhZ2UgVGhlIG1lc3NhZ2UgdG8gc2hvdy5cbiAqIEBwYXJhbSBvcHRpb25zIFRoZSBkaWFsb2cncyBvcHRpb25zLiBJZiBhIHN0cmluZywgaXQgcmVwcmVzZW50cyB0aGUgZGlhbG9nIHRpdGxlLlxuICpcbiAqIEByZXR1cm5zIEEgcHJvbWlzZSByZXNvbHZpbmcgdG8gYSBib29sZWFuIGluZGljYXRpbmcgd2hldGhlciBgT2tgIHdhcyBjbGlja2VkIG9yIG5vdC5cbiAqXG4gKiBAc2luY2UgMi4wLjBcbiAqL1xuYXN5bmMgZnVuY3Rpb24gY29uZmlybShtZXNzYWdlLCBvcHRpb25zKSB7XG4gICAgY29uc3Qgb3B0cyA9IHR5cGVvZiBvcHRpb25zID09PSAnc3RyaW5nJyA/IHsgdGl0bGU6IG9wdGlvbnMgfSA6IG9wdGlvbnM7XG4gICAgY29uc3QgY3VzdG9tQnV0dG9ucyA9IG9wdHM/Lm9rTGFiZWwgfHwgb3B0cz8uY2FuY2VsTGFiZWw7XG4gICAgY29uc3Qgb2tMYWJlbCA9IG9wdHM/Lm9rTGFiZWwgPz8gJ09rJztcbiAgICByZXR1cm4gKChhd2FpdCBtZXNzYWdlQ29tbWFuZChtZXNzYWdlLCB7XG4gICAgICAgIHRpdGxlOiBvcHRzPy50aXRsZSxcbiAgICAgICAga2luZDogb3B0cz8ua2luZCxcbiAgICAgICAgYnV0dG9uczogY3VzdG9tQnV0dG9uc1xuICAgICAgICAgICAgPyB7IG9rOiBva0xhYmVsLCBjYW5jZWw6IG9wdHMuY2FuY2VsTGFiZWwgPz8gJ0NhbmNlbCcgfVxuICAgICAgICAgICAgOiAnT2tDYW5jZWwnXG4gICAgfSkpID09PSBva0xhYmVsKTtcbn1cblxuZXhwb3J0IHsgYXNrLCBjb25maXJtLCBtZXNzYWdlLCBvcGVuLCBzYXZlIH07XG4iXSwibWFwcGluZ3MiOiI7Ozs7O0FBUUEsU0FBUyxjQUFjLFNB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

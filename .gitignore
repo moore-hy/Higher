@@ -1,0 +1,25 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+
+# Tauri / Rust 构建产物
+src-tauri/target/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
+
+# 本地数据库文件（运行时生成）
+*.db
+*.db-journal
+src-tauri/.data/
