@@ -3,16 +3,36 @@ import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
+  compilePersonalization,
+  confirmPersonalizationProfile,
+  deletePersonalizationSource,
+  editPersonalizationProfile,
   getAiSettings,
   getNotificationEnabled,
+  getPersonalizationProfile,
+  getRequirementTemplate,
+  getWebSearchSettings,
+  importPersonalizationFiles,
   listBackups,
   listArchivedTasksByProfile,
+  listPersonalizationSources,
   saveAiSettings,
   setNotificationEnabled,
+  setWebSearchSettings,
+  setUiSetting,
+  getUiSetting,
   syncNotifications,
   testAiConnection,
   unarchiveTask,
+  vaultCreateSnapshot,
+  vaultExportEvents,
+  vaultListEvents,
+  vaultListSnapshots,
+  vaultLock,
+  vaultStatus,
+  vaultUnlock,
 } from "../api";
 import {
   canSwitchProfile,
@@ -20,8 +40,17 @@ import {
 } from "../contexts/ActiveProfileContext";
 import { createStudyProfile, executeProfileCleanup, previewProfileCleanup, updateStudyProfile } from "../api";
 import { PROFILE_TYPE_LABELS } from "../types";
-import type { CleanupPreview, ProfileType, StudyProfile, Task } from "../types";
-import { todayDate } from "../utils";
+import type {
+  CleanupPreview,
+  PersonalizationProfile,
+  PersonalizationSource,
+  ProfileType,
+  StudyProfile,
+  Task,
+  VaultEvent,
+  VaultSnapshot,
+} from "../types";
+import { downloadTextFile, formatDateTime, todayDate } from "../utils";
 
 /**
  * 设置中心（DEV-0016 + DEV-0030 数据管理 + DEV-0042 学习提醒）。
@@ -36,7 +65,19 @@ import { todayDate } from "../utils";
  */
 export default function Settings() {
   const { activeProfile, exitProfile, refreshGate, enterProfile } = useActiveProfile();
-  const [tab, setTab] = useState<"profile" | "ai" | "notify" | "data">("profile");
+  const [tab, setTab] = useState<
+    "profile" | "ai" | "notify" | "data" | "personal" | "websearch" | "vault"
+  >("profile");
+
+  const TABS: { key: typeof tab; label: string }[] = [
+    { key: "profile", label: "学习档案" },
+    { key: "ai", label: "AI 设置" },
+    { key: "personal", label: "私人化部署" },
+    { key: "websearch", label: "联网搜索" },
+    { key: "notify", label: "学习提醒" },
+    { key: "data", label: "数据管理" },
+    { key: "vault", label: "保险箱" },
+  ];
 
   return (
     <div className="page">
@@ -45,31 +86,17 @@ export default function Settings() {
       </header>
 
       <div className="review-window" style={{ marginBottom: 16 }}>
-        <button
-          className={
-            "review-window__item" + (tab === "profile" ? " review-window__item--active" : "")
-          }
-          onClick={() => setTab("profile")}
-        >
-          学习档案
-        </button>
-        <button className={"review-window__item" + (tab === "ai" ? " review-window__item--active" : "")}
-          onClick={() => setTab("ai")}
-        >
-          AI 设置
-        </button>
-        <button
-          className={"review-window__item" + (tab === "notify" ? " review-window__item--active" : "")}
-          onClick={() => setTab("notify")}
-        >
-          学习提醒
-        </button>
-        <button
-          className={"review-window__item" + (tab === "data" ? " review-window__item--active" : "")}
-          onClick={() => setTab("data")}
-        >
-          数据管理
-        </button>
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            className={
+              "review-window__item" + (tab === t.key ? " review-window__item--active" : "")
+            }
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       {tab === "profile" ? (
@@ -85,6 +112,12 @@ export default function Settings() {
         <AiSection />
       ) : tab === "notify" ? (
         <NotificationSection />
+      ) : tab === "personal" ? (
+        <PersonalizationSection profileId={activeProfile?.id ?? null} />
+      ) : tab === "websearch" ? (
+        <WebSearchSection />
+      ) : tab === "vault" ? (
+        <VaultSection />
       ) : (
         <DataSection profileId={activeProfile?.id ?? null} profileName={activeProfile?.name ?? ""} />
       )}
@@ -212,14 +245,14 @@ type CleanupScopeKey =
   | "keep_year"
   | "full_reset";
 
-const CLEANUP_OPTIONS: { key: CleanupScopeKey; label: string; desc: string }[] = [
+const CLEANUP_OPTIONS: { key: CleanupScopeKey; label: string; desc: string; danger?: boolean }[] = [
   { key: "clear_today", label: "清除今天的活动数据", desc: "删除今天的任务 / 学习记录 / 验证 / 问题 / 调整 / 学习附件" },
   { key: "keep_today", label: "只保留今天的活动数据", desc: "删除今天以外其他日期的活动数据（长期学习系统结构保留）" },
   { key: "clear_month", label: "清除本月的活动数据", desc: "删除本月全部活动数据" },
   { key: "keep_month", label: "只保留本月的活动数据", desc: "删除其他月份的活动数据" },
   { key: "clear_year", label: "清除今年的活动数据", desc: "删除今年全部活动数据" },
   { key: "keep_year", label: "只保留今年的活动数据", desc: "删除其他年份的活动数据" },
-  { key: "full_reset", label: "清空当前档案全部数据", desc: "保留档案外壳，删除目标 / 知识 / 阶段 / 计划 / 全部记录与附件" },
+  { key: "full_reset", label: "清空当前档案全部数据", desc: "保留档案外壳，删除目标 / 知识 / 阶段 / 计划 / 全部记录与附件", danger: true },
 ];
 
 function DataSection({ profileId, profileName }: { profileId: number | null; profileName: string }) {
@@ -304,8 +337,8 @@ function DataSection({ profileId, profileName }: { profileId: number | null; pro
       {doneMsg && <div className="alert alert--ok">{doneMsg}</div>}
 
       <ul className="cleanup-list">
-        {CLEANUP_OPTIONS.map((o) => (
-          <li key={o.key} className={"cleanup-item" + (o.key === "full_reset" ? " cleanup-item--danger" : "")}>
+        {CLEANUP_OPTIONS.filter((o) => !o.danger).map((o) => (
+          <li key={o.key} className="cleanup-item">
             <div className="cleanup-item__main">
               <span className="cleanup-item__label">{o.label}</span>
               <span className="muted cleanup-item__desc">{o.desc}</span>
@@ -390,6 +423,27 @@ function DataSection({ profileId, profileName }: { profileId: number | null; pro
             </p>
           </div>
         )}
+      </div>
+
+      {/* DEV-0054 §105-106：危险操作独立 Danger Zone（红边框卡片，置于底部） */}
+      <div className="danger-zone">
+        <div className="danger-zone__title">危险区</div>
+        <p className="muted danger-zone__note">
+          以下操作影响面大且不可恢复（自动备份除外），请谨慎使用。
+        </p>
+        <ul className="cleanup-list">
+          {CLEANUP_OPTIONS.filter((o) => o.danger).map((o) => (
+            <li key={o.key} className="cleanup-item cleanup-item--danger">
+              <div className="cleanup-item__main">
+                <span className="cleanup-item__label">{o.label}</span>
+                <span className="muted cleanup-item__desc">{o.desc}</span>
+              </div>
+              <button className="btn btn--small" onClick={() => void openPreview(o.key)} disabled={loading}>
+                预览
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {/* 预览确认 Modal */}
@@ -817,5 +871,650 @@ function AiSection() {
         </ul>
       </section>
     </>
+  );
+}
+
+// ---------------- 私人化部署（DEV-0052 §57-91） ----------------
+
+const AUTO_PZ_KEY = "ui.auto_personalization";
+
+function PersonalizationSection({ profileId }: { profileId: number | null }) {
+  const [profile, setProfile] = useState<PersonalizationProfile | null>(null);
+  const [sources, setSources] = useState<PersonalizationSource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [compiling, setCompiling] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [viewing, setViewing] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [showDraft, setShowDraft] = useState(true);
+  const [autoMaintain, setAutoMaintain] = useState(false);
+  /** DEV-0054 §108：查看/编辑/下载/模板 收进「更多 ▾」下拉 */
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  async function load() {
+    if (profileId == null) return;
+    try {
+      const [p, s] = await Promise.all([
+        getPersonalizationProfile(profileId),
+        listPersonalizationSources(profileId),
+      ]);
+      setProfile(p);
+      setSources(s);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    setShowDraft(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
+
+  useEffect(() => {
+    getUiSetting(AUTO_PZ_KEY)
+      .then((v) => setAutoMaintain(v === "true"))
+      .catch(() => {});
+  }, []);
+
+  async function toggleAutoMaintain(next: boolean) {
+    setAutoMaintain(next);
+    try {
+      await setUiSetting(AUTO_PZ_KEY, next ? "true" : "false");
+    } catch {
+      /* 失败保持本地态 */
+    }
+  }
+
+  async function addFiles() {
+    if (profileId == null) return;
+    const picked = await openDialog({
+      multiple: true,
+      filters: [
+        { name: "支持的资料（txt / md / docx / pdf）", extensions: ["txt", "md", "docx", "pdf"] },
+      ],
+    });
+    if (!picked) return;
+    const paths = Array.isArray(picked) ? picked.map(String) : [String(picked)];
+    setImporting(true);
+    setError("");
+    setMessage("");
+    try {
+      const created = await importPersonalizationFiles(profileId, paths);
+      setMessage(`已导入 ${created.length} 个资料文件。导入后可点「重新分析」生成档案。`);
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function recompile() {
+    if (profileId == null) return;
+    setCompiling(true);
+    setError("");
+    setMessage("");
+    try {
+      const p = await compilePersonalization(profileId);
+      setProfile(p);
+      setShowDraft(true);
+      setMessage("重新分析完成，已生成新的草稿，请查看后确认。");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCompiling(false);
+    }
+  }
+
+  async function downloadMd() {
+    if (!profile) return;
+    // 项目未安装 fs 插件：统一走纯前端 Blob 下载（浏览器下载目录）
+    downloadTextFile(
+      `higher-personalization-v${profile.version}.md`,
+      profile.md_content,
+      "text/markdown"
+    );
+    setMessage("已开始下载 .md 文件（保存到浏览器下载目录）。");
+  }
+
+  async function exportTemplate() {
+    try {
+      const tpl = await getRequirementTemplate();
+      downloadTextFile("higher-requirements-template.md", tpl, "text/markdown");
+      setMessage("需求采集模板已导出。");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function saveEdit() {
+    if (profileId == null) return;
+    setEditSaving(true);
+    setError("");
+    try {
+      await editPersonalizationProfile(profileId, editText);
+      setEditing(false);
+      setMessage("已保存修改（档案变为待重新确认的草稿）。");
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function confirmDraft() {
+    if (profileId == null) return;
+    setError("");
+    try {
+      await confirmPersonalizationProfile(profileId);
+      setMessage("已确认并保存私人化档案。");
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function removeSource(id: number) {
+    if (profileId == null) return;
+    setError("");
+    try {
+      await deletePersonalizationSource(profileId, id);
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  if (profileId == null) {
+    return <p className="muted">还没有激活的学习档案。</p>;
+  }
+
+  if (loading) return <section className="card"><p className="muted">加载中…</p></section>;
+
+  const statusText =
+    profile == null
+      ? "未生成"
+      : profile.status === "draft"
+        ? "草稿待确认"
+        : `已生成 v${profile.version}`;
+  const updatedText = profile?.last_updated_at ?? profile?.last_compiled_at ?? null;
+
+  return (
+    <>
+      <section className="card">
+        <h2 className="card__title">私人化部署（完全可选）</h2>
+        <p className="muted pz__intro">
+          把你的学习背景、习惯与偏好整理成一份本地档案，AI 回答时会更懂你。
+          全部数据只保存在本机，不会上传；不配置也完全不影响 Higher 的其他功能。
+        </p>
+        {error && <div className="alert alert--error">{error}</div>}
+        {message && <div className="alert alert--ok">{message}</div>}
+
+        {/* 主卡（§59） */}
+        <div className="pz__main">
+          <div className="pz__main-info">
+            <span className={"pz__status pz__status--" + (profile?.status ?? "none")}>
+              {statusText}
+            </span>
+            <span className="muted pz__main-time">
+              {updatedText ? `最后更新：${formatDateTime(updatedText)}` : "还没有生成过档案"}
+              {profile?.dirty ? " · 资料有更新，可重新分析" : ""}
+            </span>
+          </div>
+          <div className="btn-row pz__main-actions">
+            <button className="btn btn--small" onClick={() => void addFiles()} disabled={importing}>
+              {importing ? "导入中…" : "添加资料"}
+            </button>
+            <button className="btn btn--small" onClick={() => void recompile()} disabled={compiling}>
+              {compiling ? "分析中（可能需要几分钟）…" : "重新分析"}
+            </button>
+            <div className="taskmenu">
+              <button className="taskmenu__btn" onClick={() => setMoreOpen((v) => !v)}>
+                更多 ▾
+              </button>
+              {moreOpen && (
+                <>
+                  <div className="actrow__backdrop" onClick={() => setMoreOpen(false)} />
+                  <div className="taskmenu__pop">
+                    <button
+                      disabled={!profile}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        setViewing(true);
+                      }}
+                    >
+                      查看
+                    </button>
+                    <button
+                      disabled={!profile}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        setEditText(profile?.md_content ?? "");
+                        setEditing(true);
+                      }}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      disabled={!profile}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        void downloadMd();
+                      }}
+                    >
+                      下载 .md
+                    </button>
+                    <button
+                      onClick={() => {
+                        setMoreOpen(false);
+                        void exportTemplate();
+                      }}
+                    >
+                      导出需求采集模板
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+          <p className="muted pz__hint">
+            支持导入 txt / md / docx / pdf（旧版 .doc 请先另存为 .docx）。导入的文件会被复制到 Higher 自己的资料目录。
+          </p>
+        </div>
+
+        {/* 草稿待确认（§59） */}
+        {profile?.status === "draft" && showDraft && (
+          <div className="pz__draft">
+            <p>已生成草稿，确认后 AI 才会使用这份档案。</p>
+            <div className="btn-row">
+              <button className="btn btn--small btn--primary" onClick={() => void confirmDraft()}>
+                确认并保存
+              </button>
+              <button className="btn btn--small" onClick={() => setShowDraft(false)}>
+                继续补充
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 资料列表 */}
+        <div className="pz__sources">
+          <div className="pz__sources-title">已导入资料（{sources.length}）</div>
+          {sources.length === 0 ? (
+            <p className="muted" style={{ fontSize: 12 }}>
+              还没有导入资料。可导入个人说明、简历、学习计划、错题总结等文件。
+            </p>
+          ) : (
+            <ul className="pz__source-list">
+              {sources.map((s) => (
+                <li key={s.id} className="pz__source">
+                  <div className="pz__source-main">
+                    <span className="pz__source-name" title={s.relative_path}>{s.file_name}</span>
+                    <span className="pz__source-meta">
+                      {s.file_type.toUpperCase()} · 导入于 {formatDateTime(s.created_at)}
+                    </span>
+                  </div>
+                  <button className="btn btn--small" onClick={() => void removeSource(s.id)}>
+                    删除
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* 自动维护（§91） */}
+        <div className="pz__auto">
+          <label className="pz__auto-toggle">
+            <input
+              type="checkbox"
+              checked={autoMaintain}
+              onChange={(e) => void toggleAutoMaintain(e.target.checked)}
+            />
+            自动维护私人化档案（AI 在对话中发现的长期信息自动并入草稿）
+          </label>
+          <p className="muted pz__auto-note">
+            自动维护可能产生少量 AI API 调用。关闭后仅在你手动「重新分析」时更新档案。
+          </p>
+        </div>
+      </section>
+
+      {/* 查看档案（只读） */}
+      {viewing && profile && (
+        <div className="modal-overlay" onClick={() => setViewing(false)}>
+          <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal__title">私人化档案（只读）v{profile.version}</div>
+            <pre className="pz__view-pre">{profile.md_content}</pre>
+            <div className="modal__actions">
+              <button className="btn" onClick={() => setViewing(false)}>关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 编辑档案 */}
+      {editing && (
+        <div className="modal-overlay" onClick={() => !editSaving && setEditing(false)}>
+          <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal__title">编辑私人化档案（Markdown）</div>
+            <textarea
+              className="pz__edit-area"
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              rows={20}
+              spellCheck={false}
+            />
+            <p className="muted" style={{ fontSize: 11 }}>
+              保存后档案会回到「草稿待确认」，需要再次确认才会被 AI 使用。
+            </p>
+            <div className="modal__actions">
+              <button className="btn btn--primary" onClick={() => void saveEdit()} disabled={editSaving}>
+                {editSaving ? "保存中…" : "保存"}
+              </button>
+              <button className="btn" onClick={() => setEditing(false)} disabled={editSaving}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---------------- 联网搜索（DEV-0052 §95-97） ----------------
+
+function WebSearchSection() {
+  const [enabled, setEnabled] = useState(false);
+  const [hasKey, setHasKey] = useState(false);
+  const [braveKey, setBraveKey] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [en, hk] = await getWebSearchSettings();
+        setEnabled(en);
+        setHasKey(hk);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  async function save(nextEnabled: boolean, keyInput?: string) {
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      // 只有输入了新 Key 才更新（空输入 = 保留已保存的 Key）
+      const key = keyInput != null && keyInput.trim() ? keyInput.trim() : undefined;
+      await setWebSearchSettings(nextEnabled, key);
+      setEnabled(nextEnabled);
+      if (key) setHasKey(true);
+      setMessage("已保存。");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <section className="card"><p className="muted">加载中…</p></section>;
+
+  return (
+    <section className="card">
+      <h2 className="card__title">联网搜索</h2>
+      {error && <div className="alert alert--error">{error}</div>}
+      {message && <div className="alert alert--ok">{message}</div>}
+
+      <label className="modal__field ws__toggle">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={saving}
+          onChange={(e) => void save(e.target.checked)}
+        />
+        启用联网搜索（允许 AI 在需要时检索互联网并给出带来源的回答）
+      </label>
+
+      <label className="modal__field">
+        Brave Search API Key{hasKey ? "（已保存；留空则不修改）" : ""}
+        <input
+          className="modal__input"
+          type="password"
+          value={braveKey}
+          onChange={(e) => setBraveKey(e.target.value)}
+          placeholder={hasKey ? "••••••••" : "BSA…"}
+          autoComplete="off"
+        />
+      </label>
+      <p className="muted ws__note" style={{ margin: "0 0 8px" }}>
+        用于 Higher AI 联网搜索。
+      </p>
+
+      <div className="btn-row">
+        <button
+          className="btn btn--primary"
+          disabled={saving || (!braveKey.trim() && !hasKey)}
+          onClick={() => void save(enabled, braveKey)}
+        >
+          {saving ? "保存中…" : "保存"}
+        </button>
+      </div>
+
+      <p className="muted ws__note">
+        Key 仅保存在本机数据库，不会上传。AI 回答中的每个联网结论都会标注来源编号，可点击用系统浏览器打开原文。
+      </p>
+    </section>
+  );
+}
+
+// ---------------- 保险箱（DEV-0052 §159-163 / §230 Flow N） ----------------
+
+function VaultSection() {
+  const [locked, setLocked] = useState(true);
+  const [hint, setHint] = useState("");
+  const [stats, setStats] = useState<[number, number, number] | null>(null);
+  const [password, setPassword] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
+  const [events, setEvents] = useState<VaultEvent[]>([]);
+  const [snapshots, setSnapshots] = useState<VaultSnapshot[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function refreshUnlocked() {
+    const [st, ev, sn] = await Promise.all([
+      vaultStatus(),
+      vaultListEvents(50).catch(() => [] as VaultEvent[]),
+      vaultListSnapshots().catch(() => [] as VaultSnapshot[]),
+    ]);
+    setLocked(st.locked);
+    setHint(st.hint);
+    setStats(st.stats);
+    setEvents(ev);
+    setSnapshots(sn);
+  }
+
+  useEffect(() => {
+    void refreshUnlocked().catch((e) => setError(String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function unlock() {
+    if (!password) return;
+    setUnlocking(true);
+    setError("");
+    setMessage("");
+    try {
+      await vaultUnlock(password);
+      setPassword("");
+      await refreshUnlocked();
+      setMessage("保险箱已解锁。");
+    } catch (e) {
+      setError("密码错误，解锁被拒绝。");
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
+  async function lock() {
+    setBusy(true);
+    try {
+      await vaultLock();
+      await refreshUnlocked();
+      setMessage("保险箱已锁定。");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function snapshot() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await vaultCreateSnapshot();
+      await refreshUnlocked();
+      setMessage("已创建数据库快照。");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportAudit() {
+    setBusy(true);
+    setError("");
+    try {
+      const json = await vaultExportEvents();
+      downloadTextFile("higher-vault-audit.json", json, "application/json");
+      setMessage("审计日志已导出。");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card">
+      <h2 className="card__title">保险箱</h2>
+      {error && <div className="alert alert--error">{error}</div>}
+      {message && <div className="alert alert--ok">{message}</div>}
+
+      {locked ? (
+        <div className="vault__locked">
+          <div className="vault__lock-icon">🔒</div>
+          <div className="vault__lock-title">保险箱已锁定</div>
+          <p className="muted vault__lock-hint">{hint || "测试版密码为 root"}</p>
+          <div className="vault__unlock-row">
+            <input
+              className="modal__input"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void unlock();
+              }}
+              placeholder="输入密码"
+              autoComplete="off"
+            />
+            <button className="btn btn--primary" onClick={() => void unlock()} disabled={unlocking || !password}>
+              {unlocking ? "解锁中…" : "解锁"}
+            </button>
+          </div>
+          <p className="muted vault__lock-note">
+            保险箱记录所有写入操作（用户与 AI）并保存数据库快照；锁定时不影响 Higher 的正常使用。
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="vault__stats">
+            <div className="vault__stat">
+              <span className="vault__stat-num">{stats?.[0] ?? events.length}</span>
+              <span className="vault__stat-label">审计事件</span>
+            </div>
+            <div className="vault__stat">
+              <span className="vault__stat-num">{stats?.[1] ?? 0}</span>
+              <span className="vault__stat-label">Blob 记录</span>
+            </div>
+            <div className="vault__stat">
+              <span className="vault__stat-num">{stats?.[2] ?? snapshots.length}</span>
+              <span className="vault__stat-label">快照</span>
+            </div>
+          </div>
+
+          <div className="btn-row">
+            <button className="btn" onClick={() => void lock()} disabled={busy}>
+              立即锁定
+            </button>
+            <button className="btn" onClick={() => void snapshot()} disabled={busy}>
+              {busy ? "处理中…" : "创建快照"}
+            </button>
+            <button className="btn" onClick={() => void exportAudit()} disabled={busy}>
+              导出审计 JSON
+            </button>
+          </div>
+
+          <div className="vault__list">
+            <div className="vault__list-title">审计事件（最近 {events.length}）</div>
+            {events.length === 0 ? (
+              <p className="muted" style={{ fontSize: 12 }}>还没有审计事件。</p>
+            ) : (
+              <ul className="vault__events">
+                {events.map((ev) => (
+                  <li key={ev.seq} className="vault__event">
+                    <span className={"vault__actor vault__actor--" + ev.actor_type.toLowerCase()}>
+                      {ev.actor_type === "USER" ? "USER" : ev.actor_type === "AI" ? "AI" : "SYSTEM"}
+                    </span>
+                    <span className="vault__event-main">
+                      <span className="vault__event-action">{ev.action}</span>
+                      <span className="vault__event-entity">{ev.entity_type}{ev.entity_id != null ? ` #${ev.entity_id}` : ""}</span>
+                    </span>
+                    <span className="vault__event-time" title={ev.run_id ? `run ${ev.run_id.slice(0, 8)}` : ""}>
+                      {formatDateTime(ev.timestamp)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="vault__list">
+            <div className="vault__list-title">快照（最近 {snapshots.length}）</div>
+            {snapshots.length === 0 ? (
+              <p className="muted" style={{ fontSize: 12 }}>还没有快照。应用 AI 修改提案时会自动创建。</p>
+            ) : (
+              <ul className="vault__snaps">
+                {snapshots.map((s) => (
+                  <li key={s[0]} className="vault__snap">
+                    <span>#{s[0]} · {s[1]}</span>
+                    <span className="muted">{(s[2] / 1024 / 1024).toFixed(2)} MB · {formatDateTime(s[3])}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </section>
   );
 }

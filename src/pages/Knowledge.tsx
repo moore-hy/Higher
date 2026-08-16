@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -7,44 +8,53 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
-  addLearningAttachment,
+  addDocumentAttachment,
+  addDocumentAttachmentFromBase64,
+  correctSessionTime,
   createChildLearningItem,
+  createKnowledgeDocument,
   createRootLearningItem,
+  deleteKnowledgeDocument,
   deleteLearningItem,
+  deleteSession,
+  getKnowledgeWorkspace,
   getLearningItemPath,
-  getLearningItemStats,
-  listAttachmentsByItem,
   listEvaluationsByLearningItem,
   listFeedbacksByLearningItem,
   listGoalsByProfile,
   listLearningItemsByGoal,
-  listSessionsByLearningItem,
+  listUnassignedSessions,
   moveLearningItem,
+  organizeSessionIntoKnowledge,
   reorderLearningItems,
-  saveDrawingAttachment,
+  renameKnowledgeDocument,
+  saveDocumentDrawing,
   startSession,
+  updateKnowledgeDocument,
   updateLearningItem,
-  updateLearningItemContent,
   updateLearningItemStatus,
-  updateSessionNote,
+  updateSessionTitle,
 } from "../api";
-import AiProposalReview from "../components/AiProposalReview";
 import AttachmentList from "../components/AttachmentList";
-import DrawModal from "../components/DrawModal";
 import EvaluationModal from "../components/EvaluationModal";
 import FeedbackCard from "../components/FeedbackCard";
 import FeedbackModal from "../components/FeedbackModal";
 import KnowledgeFlow from "../components/KnowledgeFlow";
+import RichDocEditor, {
+  noteToDocument,
+  type MediaSaveAdapter,
+} from "../components/RichDocEditor";
+import { durationShort, studyClockHHMM } from "../components/DailyActivitiesSection";
+import type { JSONContent } from "@tiptap/react";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
 import type {
   Evaluation,
   Feedback,
   Goal,
-  KnowledgeNodeStats,
-  LearningAttachment,
+  KnowledgeDocument,
+  KnowledgeWorkspaceData,
   LearningItem,
   StudySession,
 } from "../types";
@@ -53,10 +63,9 @@ import {
   MASTERY_STATUSES,
   EVALUATION_TYPE_LABELS,
   OUTCOME_LABELS,
-  FEEDBACK_TYPE_LABELS,
 } from "../types";
-import type { MasteryStatus, EvaluationType, Outcome, FeedbackType } from "../types";
-import { formatDateTime, formatDuration } from "../utils";
+import type { MasteryStatus, EvaluationType, Outcome } from "../types";
+import { formatDateTime, formatDuration, studyDayOf, todayDate } from "../utils";
 
 /** 后代集合（移动目标排除；DEV-0034）。 */
 function descendantsOf(items: LearningItem[], id: number): Set<number> {
@@ -112,16 +121,89 @@ function computeFullPath(items: LearningItem[], id: number): string {
   return chain.reverse().join(" > ");
 }
 
-/** 自动保存延迟（TASK 建议 800ms ~ 1500ms）。 */
-const AUTOSAVE_DELAY_MS = 1000;
+// ---------- DEV-0051 Workspace V2 工具 ----------
+
+/** UTC datetime（SQLite）→ 本地 HH:MM（时间线卡左侧时间）。 */
+function utcHHMM(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  const d = new Date(raw.includes("T") ? raw : raw.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return raw;
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** UTC datetime（SQLite）→ 本地 yyyy-MM-dd HH:mm（Header 统计行「最近」）。 */
+function fmtFullDateTime(raw: string | null | undefined): string {
+  if (!raw) return "—";
+  const d = new Date(raw.includes("T") ? raw : raw.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return raw;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** UTC datetime（SQLite）→ datetime-local 输入值（本地时区；修正时间用）。 */
+function utcToLocalInput(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const d = new Date(raw.includes("T") ? raw : raw.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** datetime-local 输入值（本地）→ 后端 SQLite "YYYY-MM-DD HH:MM:SS"（UTC）。 */
+function localInputToDbUtc(value: string): string {
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+  return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
+/** 昨天日期 YYYY-MM-DD（本地时区；时间线分组）。 */
+function yesterdayDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 时间线分组标题：今天 / 昨天 / 更早（学习日 = UTC+8 日历日）。 */
+function dayGroupLabel(at: string): string {
+  const day = studyDayOf(at);
+  if (day === todayDate()) return "今天";
+  if (day === yesterdayDate()) return "昨天";
+  return "更早";
+}
+
+/** 粗计 JSON 中某节点类型出现次数（图片 / 代码块摘要计数）。 */
+function countNodeType(json: string | null, type: string): number {
+  if (!json) return 0;
+  const needle = `"type":"${type}"`;
+  let count = 0;
+  let i = json.indexOf(needle);
+  while (i !== -1) {
+    count++;
+    i = json.indexOf(needle, i + needle.length);
+  }
+  return count;
+}
+
+/** 文档自动保存延迟（DEV-0051 §37：900ms debounce）。 */
+const DOC_SAVE_DELAY_MS = 900;
 
 type SaveStatus = "saved" | "dirty" | "saving" | "error";
 
+/** 文档待保存快照（含 profileId，卸载兜底不依赖闭包）。 */
+interface PendingDocSave {
+  profileId: number;
+  id: number;
+  title: string;
+  plain: string;
+  json: string | null;
+}
+
 /**
- * 知识体系工作区 V1（DEV-0010）。
+ * 知识体系工作区 V2（DEV-0051）。
  *
- * 左侧：知识树（搜索 / 展开折叠 / ··· 菜单 / 新建）
- * 右侧：知识编辑器（面包屑 / 标题 / 掌握状态 / 学习统计 / 正文 / 自动保存）
+ * 左侧：知识树（搜索 / 展开折叠 / ··· 菜单 / 新建 / 拖拽）
+ * 右侧：Workspace（§27 Header → §28-34 内容时间线 → §36-37 文档详情模式）
  *
  * 产品语言：对用户呈现"知识 / 知识体系"，代码内部仍为 LearningItem。
  */
@@ -130,6 +212,7 @@ function Knowledge() {
   const [searchParams, setSearchParams] = useSearchParams();
   const goalIdParam = searchParams.get("goal");
   const itemParam = searchParams.get("item");
+  const fromParam = searchParams.get("from");
 
   const { activeProfile, refreshKey } = useActiveProfile();
 
@@ -140,13 +223,12 @@ function Knowledge() {
 
   const goalId = goalIdParam ? Number(goalIdParam) : null;
 
-  // 选中节点与编辑器状态
+  // 选中节点与标题
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
-  const [stats, setStats] = useState<KnowledgeNodeStats | null>(null);
-  const [recentEvals, setRecentEvals] = useState<Evaluation[]>([]);
+
+  // DEV-0051 §49：Workspace 聚合（文档 / 学习记录 / Legacy 附件 / 统计）
+  const [workspace, setWorkspace] = useState<KnowledgeWorkspaceData | null>(null);
 
   // 记录验证 Modal（DEV-0012：知识详情直接验证，自动带入当前 Goal + Item）
   const [showEvalModal, setShowEvalModal] = useState(false);
@@ -154,16 +236,36 @@ function Knowledge() {
   // 需要关注（DEV-0013：当前知识的 open Feedback + 记录入口）
   const [itemFeedbacks, setItemFeedbacks] = useState<Feedback[]>([]);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [recentEvals, setRecentEvals] = useState<Evaluation[]>([]);
 
-  // DEV-0017/0018：学习记录 / 附件 / 双视图 / AI
-  const [itemSessions, setItemSessions] = useState<StudySession[]>([]);
-  const [expandedSession, setExpandedSession] = useState<number | null>(null);
-  const [editingSession, setEditingSession] = useState<StudySession | null>(null);
-  const [editNoteValue, setEditNoteValue] = useState("");
-  const [itemAttachments, setItemAttachments] = useState<LearningAttachment[]>([]);
-  const [showItemDraw, setShowItemDraw] = useState(false);
   const [viewMode, setViewMode] = useState<"workspace" | "graph">("workspace");
-  const [organizeOpen, setOrganizeOpen] = useState(false);
+
+  // DEV-0053 §50-52：未归类学习（learning_item_id IS NULL 的 Session；虚拟入口，非 Knowledge Node）
+  const [unassigned, setUnassigned] = useState<StudySession[]>([]);
+  const [showUnassigned, setShowUnassigned] = useState(false);
+  /** 「整理进知识」选择器（当前目标下的知识节点） */
+  const [organizeFor, setOrganizeFor] = useState<StudySession | null>(null);
+  const [organizeSearch, setOrganizeSearch] = useState("");
+  const [organizeBusy, setOrganizeBusy] = useState(false);
+
+  // DEV-0051 §36-37：文档详情模式
+  const [editingDoc, setEditingDoc] = useState<KnowledgeDocument | null>(null);
+  const [docTitle, setDocTitle] = useState("");
+  const [docTitleFocus, setDocTitleFocus] = useState(false);
+  const [docSave, setDocSave] = useState<SaveStatus>("saved");
+
+  // 时间线卡片「更多 ⋯」菜单（session / document）
+  const [sessionMenuFor, setSessionMenuFor] = useState<number | null>(null);
+  const [docMenuFor, setDocMenuFor] = useState<number | null>(null);
+  const [renamingSessionId, setRenamingSessionId] = useState<number | null>(null);
+  const [renameSessionValue, setRenameSessionValue] = useState("");
+  const [renamingDocId, setRenamingDocId] = useState<number | null>(null);
+  const [renameDocValue, setRenameDocValue] = useState("");
+  const [timeFixFor, setTimeFixFor] = useState<{
+    id: number;
+    start: string;
+    end: string;
+  } | null>(null);
 
   // DEV-0022：AI 统一进入右侧 Panel；并上报当前知识上下文
   const { runAction: aiRunAction, setPageContext } = useAiPanel();
@@ -186,33 +288,47 @@ function Knowledge() {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
-  // ---- 自动保存（refs 避免闭包过期）----
-  const timerRef = useRef<number | null>(null);
-  const pendingSaveRef = useRef<{ id: number; content: string } | null>(null);
+  // ---- 文档自动保存（refs 避免闭包过期）----
+  const docTimerRef = useRef<number | null>(null);
+  const pendingDocRef = useRef<PendingDocSave | null>(null);
+  const docTitleRef = useRef("");
 
   const selectedItem = useMemo(
     () => items.find((i) => i.id === selectedId) ?? null,
     [items, selectedId]
   );
 
-  /** 立即执行待保存的正文（切换节点 / 删除 / 卸载前调用，禁止丢内容）。 */
-  const flushSave = useCallback(async () => {
-    const pending = pendingSaveRef.current;
+  /** 立即执行待保存的文档（切节点 / 返回列表 / 卸载前调用，禁止丢内容）。 */
+  const flushDocSave = useCallback(async () => {
+    const pending = pendingDocRef.current;
     if (!pending) return;
-    pendingSaveRef.current = null;
-    if (timerRef.current != null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
+    pendingDocRef.current = null;
+    if (docTimerRef.current != null) {
+      window.clearTimeout(docTimerRef.current);
+      docTimerRef.current = null;
     }
-    setSaveStatus("saving");
+    setDocSave("saving");
     try {
-      await updateLearningItemContent(pending.id, pending.content);
-      // 保存期间若无新输入则标记成功；否则保持 dirty 由新定时器接管
-      if (pendingSaveRef.current == null) setSaveStatus("saved");
+      const updated = await updateKnowledgeDocument(
+        pending.profileId,
+        pending.id,
+        pending.title,
+        pending.plain,
+        pending.json
+      );
+      if (pendingDocRef.current == null) setDocSave("saved");
+      setWorkspace((w) =>
+        w
+          ? {
+              ...w,
+              documents: w.documents.map((d) => (d.id === updated.id ? updated : d)),
+            }
+          : w
+      );
     } catch (e) {
       // 失败不静默：恢复 pending 让用户可重试
-      pendingSaveRef.current = pending;
-      setSaveStatus("error");
+      pendingDocRef.current = pending;
+      setDocSave("error");
       setError(String(e));
     }
   }, []);
@@ -220,41 +336,69 @@ function Knowledge() {
   // 卸载前尽力保存（正常路径 debounce 已落库；此为兜底）
   useEffect(() => {
     return () => {
-      const pending = pendingSaveRef.current;
+      const pending = pendingDocRef.current;
       if (pending) {
-        void updateLearningItemContent(pending.id, pending.content).catch(() => {});
+        void updateKnowledgeDocument(
+          pending.profileId,
+          pending.id,
+          pending.title,
+          pending.plain,
+          pending.json
+        ).catch(() => {});
       }
     };
   }, []);
 
-  const scheduleSave = useCallback(
-    (id: number, next: string) => {
-      pendingSaveRef.current = { id, content: next };
-      setSaveStatus("dirty");
-      if (timerRef.current != null) window.clearTimeout(timerRef.current);
-      timerRef.current = window.setTimeout(() => {
-        void flushSave();
-      }, AUTOSAVE_DELAY_MS);
+  const handleDocChange = useCallback(
+    (doc: JSONContent, plainText: string) => {
+      if (editingDoc == null || activeProfile == null) return;
+      setDocSave("dirty");
+      pendingDocRef.current = {
+        profileId: activeProfile.id,
+        id: editingDoc.id,
+        title: docTitleRef.current.trim() || editingDoc.title,
+        plain: plainText,
+        json: JSON.stringify(doc),
+      };
+      if (docTimerRef.current != null) window.clearTimeout(docTimerRef.current);
+      docTimerRef.current = window.setTimeout(() => {
+        void flushDocSave();
+      }, DOC_SAVE_DELAY_MS);
     },
-    [flushSave]
+    [editingDoc, activeProfile, flushDocSave]
   );
 
-  const handleContentChange = (next: string) => {
-    setContent(next);
-    if (selectedId != null) scheduleSave(selectedId, next);
-  };
+  /** §49：Workspace 聚合加载（selectedItem 变化 / 增删后刷新）。 */
+  const loadWorkspace = useCallback(
+    async (itemId: number) => {
+      if (!activeProfile) return;
+      try {
+        const w = await getKnowledgeWorkspace(activeProfile.id, itemId);
+        setWorkspace(w);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [activeProfile]
+  );
 
-  /** 切换选中节点：先保证未保存正文落库，再切换。 */
+  /** 切换选中节点：先保证未保存文档落库，再切换。 */
   const selectNode = useCallback(
     async (id: number, expandAncestors = false) => {
-      await flushSave();
+      await flushDocSave();
       setError("");
+      setEditingDoc(null);
+      setShowUnassigned(false);
       const item = items.find((i) => i.id === id);
       if (!item) return;
       setSelectedId(id);
       setTitle(item.name);
-      setContent(item.content);
-      setSaveStatus("saved");
+      setWorkspace(null);
+      setSessionMenuFor(null);
+      setDocMenuFor(null);
+      setRenamingSessionId(null);
+      setRenamingDocId(null);
+      setTimeFixFor(null);
       setMenuForId(null);
       if (expandAncestors) {
         const byId = new Map(items.map((i) => [i.id, i]));
@@ -269,11 +413,6 @@ function Knowledge() {
         });
       }
       try {
-        setStats(await getLearningItemStats(id));
-      } catch {
-        setStats(null);
-      }
-      try {
         // 最近验证（轻量区域，最近 5 条；按 occurred_at DESC 由后端保证）
         const evals = await listEvaluationsByLearningItem(id);
         setRecentEvals(evals.slice(0, 5));
@@ -286,44 +425,26 @@ function Knowledge() {
       } catch {
         setItemFeedbacks([]);
       }
+      // DEV-0022：上报当前知识上下文（item_id + 面包屑路径）
+      let pathLabel = item.name;
       try {
-        const sessions = await listSessionsByLearningItem(id, 10);
-        setItemSessions(sessions);
-        setExpandedSession(null);
-        setEditingSession(null);
-        // DEV-0022：上报当前知识上下文（item_id + 面包屑路径）
-        let pathLabel = item.name;
-        try {
-          const p = await getLearningItemPath(id);
-          pathLabel = p;
-        } catch {
-          /* 退化用名称 */
-        }
-        setPageContext({
-          page: "knowledge",
-          pageLabel: "知识体系",
-          learningItemId: id,
-          knowledgePath: pathLabel,
-        });
+        pathLabel = await getLearningItemPath(id);
       } catch {
-        setItemSessions([]);
+        /* 退化用名称 */
       }
-      try {
-        setItemAttachments(await listAttachmentsByItem(id));
-      } catch {
-        setItemAttachments([]);
-      }
+      setPageContext({
+        page: "knowledge",
+        pageLabel: "知识体系",
+        learningItemId: id,
+        knowledgePath: pathLabel,
+      });
+      await loadWorkspace(id);
     },
-    [items, flushSave]
+    [items, flushDocSave, loadWorkspace, setPageContext]
   );
 
-  /** 创建验证成功后刷新统计与最近验证（同一套 Evidence，不复制数据）。 */
+  /** 验证 / 问题 / 学习记录变更后刷新证据与聚合。 */
   async function reloadItemEvidence(id: number) {
-    try {
-      setStats(await getLearningItemStats(id));
-    } catch {
-      /* 保持原值 */
-    }
     try {
       const evals = await listEvaluationsByLearningItem(id);
       setRecentEvals(evals.slice(0, 5));
@@ -336,16 +457,7 @@ function Knowledge() {
     } catch {
       /* 保持原值 */
     }
-    try {
-      setItemSessions(await listSessionsByLearningItem(id, 10));
-    } catch {
-      /* 保持原值 */
-    }
-    try {
-      setItemAttachments(await listAttachmentsByItem(id));
-    } catch {
-      /* 保持原值 */
-    }
+    void loadWorkspace(id);
   }
 
   // ---- 数据加载 ----
@@ -363,11 +475,12 @@ function Knowledge() {
       }
       const itemList = await listLearningItemsByGoal(goalId);
       setItems(itemList);
-      // 当前选中节点失效（被删 / 切档）时清空编辑器
+      // 当前选中节点失效（被删 / 切档）时清空工作区
       if (selectedId != null && !itemList.some((i) => i.id === selectedId)) {
         setSelectedId(null);
         setTitle("");
-        setContent("");
+        setWorkspace(null);
+        setEditingDoc(null);
       }
     } catch (e) {
       setError(String(e));
@@ -377,10 +490,41 @@ function Knowledge() {
   }, [goalId, activeProfile, refreshKey, selectedId]);
 
   useEffect(() => {
-    void flushSave();
+    void flushDocSave();
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refresh]);
+
+  // DEV-0053 §51：未归类学习列表与计数（Profile Scope，独立于当前 goal 刷新）
+  const reloadUnassigned = useCallback(async () => {
+    if (!activeProfile) return;
+    try {
+      setUnassigned(await listUnassignedSessions(activeProfile.id, 50));
+    } catch {
+      /* 保持原值 */
+    }
+  }, [activeProfile]);
+
+  useEffect(() => {
+    void reloadUnassigned();
+  }, [reloadUnassigned, refreshKey]);
+
+  /** §52：整理进知识（只更新 session.learning_item_id，不复制笔记） */
+  async function organizeUnassigned(itemId: number) {
+    if (!organizeFor || !activeProfile) return;
+    setOrganizeBusy(true);
+    setError("");
+    try {
+      await organizeSessionIntoKnowledge(activeProfile.id, organizeFor.id, itemId);
+      setOrganizeFor(null);
+      setOrganizeSearch("");
+      await reloadUnassigned();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setOrganizeBusy(false);
+    }
+  }
 
   // 无 goal 参数时默认选中第一个 active goal（单目标不强迫用户选择）
   useEffect(() => {
@@ -391,6 +535,7 @@ function Knowledge() {
   }, [goals, goalId, setSearchParams]);
 
   // ?item= 参数：自动定位并打开指定知识节点（今日任务"打开知识"入口）
+  // DEV-0051 §43：?from=knowledge&item=N（学习后回来）→ 选中后清掉导航参数（保留 goal）
   const itemParamApplied = useRef<string | null>(null);
   useEffect(() => {
     if (
@@ -401,9 +546,15 @@ function Knowledge() {
     ) {
       itemParamApplied.current = itemParam;
       void selectNode(Number(itemParam), true);
+      if (fromParam === "knowledge") {
+        const next = new URLSearchParams(searchParams);
+        next.delete("from");
+        next.delete("item");
+        setSearchParams(next, { replace: true });
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, itemParam]);
+  }, [items, itemParam, fromParam]);
 
   // ---- 树操作 ----
   async function handleCreateRoot() {
@@ -483,7 +634,8 @@ function Knowledge() {
       if (selectedId === id) {
         setSelectedId(null);
         setTitle("");
-        setContent("");
+        setWorkspace(null);
+        setEditingDoc(null);
       }
       await refresh();
     } catch (e) {
@@ -521,6 +673,209 @@ function Knowledge() {
     }
   }
 
+  // ---- 开始学习 / 新建文档（§35） ----
+
+  async function handleStartSession() {
+    if (selectedItem == null) return;
+    try {
+      const s = await startSession(selectedItem.id);
+      navigate(`/learn/${s.id}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleCreateDocument() {
+    if (selectedItem == null || activeProfile == null) return;
+    setError("");
+    try {
+      await flushDocSave();
+      const created = await createKnowledgeDocument(activeProfile.id, selectedItem.id);
+      await loadWorkspace(selectedItem.id);
+      setEditingDoc(created);
+      setDocTitle(created.title);
+      setDocTitleFocus(true);
+      setDocSave("saved");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  // ---- 文档详情模式（§36-37） ----
+
+  function openDocumentDetail(doc: KnowledgeDocument) {
+    setDocMenuFor(null);
+    setEditingDoc(doc);
+    setDocTitle(doc.title);
+    setDocTitleFocus(false);
+    setDocSave("saved");
+  }
+
+  async function handleBackToContent() {
+    await flushDocSave();
+    setEditingDoc(null);
+    setDocTitle("");
+    if (selectedId != null) void loadWorkspace(selectedId);
+  }
+
+  // 标题跟随输入；Enter / 失焦 → rename
+  useEffect(() => {
+    docTitleRef.current = docTitle;
+  }, [docTitle]);
+
+  async function commitDocTitle() {
+    setDocTitleFocus(false);
+    if (editingDoc == null || activeProfile == null) return;
+    const name = docTitle.trim();
+    if (!name || name === editingDoc.title) return;
+    try {
+      const updated = await renameKnowledgeDocument(activeProfile.id, editingDoc.id, name);
+      setEditingDoc(updated);
+      setWorkspace((w) =>
+        w
+          ? {
+              ...w,
+              documents: w.documents.map((d) => (d.id === updated.id ? updated : d)),
+            }
+          : w
+      );
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function handleDocTitleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      (e.target as HTMLInputElement).blur();
+    }
+  }
+
+  /** §15 persistence adapter：编辑器媒体 → 文档附件链。 */
+  const docSaveMedia = useCallback<MediaSaveAdapter>(
+    async (args) => {
+      if (activeProfile == null || selectedItem == null || editingDoc == null) {
+        throw new Error("文档未打开");
+      }
+      const att =
+        args.base64 != null
+          ? await addDocumentAttachmentFromBase64(
+              activeProfile.id,
+              selectedItem.id,
+              editingDoc.id,
+              args.kind,
+              args.fileName,
+              args.mime,
+              args.base64
+            )
+          : await addDocumentAttachment(
+              activeProfile.id,
+              selectedItem.id,
+              editingDoc.id,
+              args.kind,
+              args.sourcePath!
+            );
+      return { id: att.id, file_name: att.file_name };
+    },
+    [activeProfile, selectedItem, editingDoc]
+  );
+
+  /** §15 画图适配器：文档链（禁止回退 Session 链）。 */
+  const docSaveDrawing = useCallback(
+    async (dataBase64: string) => {
+      if (activeProfile == null || selectedItem == null || editingDoc == null) {
+        throw new Error("文档未打开");
+      }
+      const att = await saveDocumentDrawing(
+        activeProfile.id,
+        selectedItem.id,
+        editingDoc.id,
+        dataBase64
+      );
+      return { id: att.id, file_name: att.file_name };
+    },
+    [activeProfile, selectedItem, editingDoc]
+  );
+
+  /** 编辑器初始文档：content_document_json 优先；NULL → 纯文本构造。 */
+  const editingDocInitial = useMemo<JSONContent | null>(() => {
+    if (editingDoc == null) return null;
+    if (editingDoc.content_document_json) {
+      try {
+        return JSON.parse(editingDoc.content_document_json) as JSONContent;
+      } catch {
+        /* 回退纯文本构造 */
+      }
+    }
+    return noteToDocument(editingDoc.content_text);
+  }, [editingDoc]);
+
+  // ---- 时间线卡片操作（§32-34） ----
+
+  async function commitSessionTitle(id: number) {
+    const name = renameSessionValue.trim();
+    setRenamingSessionId(null);
+    if (!name) return;
+    try {
+      await updateSessionTitle(id, name);
+      if (selectedId != null) await loadWorkspace(selectedId);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function commitTimeFix() {
+    if (timeFixFor == null || !timeFixFor.start || selectedId == null) return;
+    try {
+      await correctSessionTime(
+        timeFixFor.id,
+        localInputToDbUtc(timeFixFor.start),
+        timeFixFor.end ? localInputToDbUtc(timeFixFor.end) : null
+      );
+      setTimeFixFor(null);
+      await loadWorkspace(selectedId);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function removeSessionCard(id: number) {
+    setSessionMenuFor(null);
+    if (!window.confirm("删除这条学习记录？时间与笔记记录将一并删除，无法恢复。")) return;
+    try {
+      await deleteSession(id);
+      if (selectedId != null) await loadWorkspace(selectedId);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function commitDocCardRename(id: number) {
+    const name = renameDocValue.trim();
+    setRenamingDocId(null);
+    if (!name || activeProfile == null) return;
+    try {
+      await renameKnowledgeDocument(activeProfile.id, id, name);
+      if (selectedId != null) await loadWorkspace(selectedId);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function removeDocCard(id: number) {
+    setDocMenuFor(null);
+    if (activeProfile == null) return;
+    const doc = workspace?.documents.find((d) => d.id === id);
+    if (!doc) return;
+    if (!window.confirm(`删除文档「${doc.title}」？该操作无法恢复。`)) return;
+    try {
+      await deleteKnowledgeDocument(activeProfile.id, id);
+      if (selectedId != null) await loadWorkspace(selectedId);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   // ---- 渲染 ----
   const tree = useMemo(() => buildTree(items), [items]);
 
@@ -531,6 +886,32 @@ function Knowledge() {
   }, [items, search]);
 
   const breadcrumb = selectedItem ? computeFullPath(items, selectedItem.id) : "";
+
+  /** §30：document × session 合并时间线（倒序；UTC 字符串比较即可）。 */
+  type TimelineRow =
+    | {
+        kind: "session";
+        at: string;
+        s: KnowledgeWorkspaceData["sessions"][number];
+      }
+    | { kind: "document"; at: string; d: KnowledgeDocument };
+  const timeline = useMemo<TimelineRow[]>(() => {
+    if (!workspace) return [];
+    const rows: TimelineRow[] = [
+      ...workspace.documents.map((d) => ({
+        kind: "document" as const,
+        at: d.updated_at,
+        d,
+      })),
+      ...workspace.sessions.map((s) => ({
+        kind: "session" as const,
+        at: s.started_at,
+        s,
+      })),
+    ];
+    rows.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+    return rows;
+  }, [workspace]);
 
   // 无 Goal 空状态
   if (!loading && goals.length === 0) {
@@ -574,6 +955,8 @@ function Knowledge() {
               value={goalId ?? ""}
               onChange={(e) => {
                 setSelectedId(null);
+                setWorkspace(null);
+                setEditingDoc(null);
                 setSearchParams({ goal: e.target.value });
               }}
             >
@@ -585,6 +968,19 @@ function Knowledge() {
             </select>
           </div>
         )}
+
+        {/* DEV-0053 §50-51：未归类学习虚拟入口（非 Knowledge Node；Quick Study 未归类 Session） */}
+        <div className="kws__unassigned">
+          <button
+            className={
+              "kws__unassigned-btn" + (showUnassigned ? " kws__unassigned-btn--active" : "")
+            }
+            onClick={() => setShowUnassigned(true)}
+            title="没有关联任何知识的学习记录（快速学习「先学，再归档」）"
+          >
+            未归类学习 ({unassigned.length})
+          </button>
+        </div>
 
         <div className="knowledge__search">
           <input
@@ -682,9 +1078,12 @@ function Knowledge() {
             <button
               className={
                 "review-window__item" +
-                (viewMode === "workspace" ? " review-window__item--active" : "")
+                (viewMode === "workspace" && !showUnassigned ? " review-window__item--active" : "")
               }
-              onClick={() => setViewMode("workspace")}
+              onClick={() => {
+                setShowUnassigned(false);
+                setViewMode("workspace");
+              }}
             >
               工作区
             </button>
@@ -707,7 +1106,51 @@ function Knowledge() {
           </button>
         </div>
 
-        {viewMode === "graph" ? (
+        {showUnassigned ? (
+          /* ============ 未归类学习列表（DEV-0053 §51-52；极简行 + 整理进知识） ============ */
+          <div className="kws kws--unassigned">
+            <div className="kws__detail-bar">
+              <button className="kws__back" onClick={() => setShowUnassigned(false)}>
+                ← 返回知识
+              </button>
+              <span className="muted" style={{ fontSize: 12 }}>
+                未关联任何知识的学习记录（{unassigned.length} 条，最多显示 50）
+              </span>
+            </div>
+            {unassigned.length === 0 ? (
+              <p className="muted kws__empty">
+                没有未归类学习。快速学习结束后选择知识，或在这里整理。
+              </p>
+            ) : (
+              <ul className="kws__unassigned-list">
+                {unassigned.map((s) => (
+                  <li key={s.id} className="actrow">
+                    <button
+                      className="actrow__main"
+                      onClick={() => navigate(`/learn/${s.id}`)}
+                      title="打开这条学习记录"
+                    >
+                      <span className="actrow__title">{s.title || `学习记录 #${s.id}`}</span>
+                      <span className="actrow__time">
+                        {studyDayOf(s.started_at).slice(5)} {studyClockHHMM(s.started_at)} ·{" "}
+                        {durationShort(s.duration_seconds)}
+                      </span>
+                    </button>
+                    <button
+                      className="btn btn--small"
+                      onClick={() => {
+                        setOrganizeFor(s);
+                        setOrganizeSearch("");
+                      }}
+                    >
+                      整理进知识
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : viewMode === "graph" ? (
           <KnowledgeFlow
             items={items}
             currentId={selectedId}
@@ -753,9 +1196,65 @@ function Knowledge() {
           <div className="knowledge__editor-empty">
             <p className="muted">选择左侧一个知识，开始整理你的学习内容。</p>
           </div>
+        ) : editingDoc != null ? (
+          /* ============ 文档详情模式（DEV-0051 §36-37） ============ */
+          <div className="kws kws--doc">
+            <div className="kws__detail-bar">
+              <button className="kws__back" onClick={() => void handleBackToContent()}>
+                ← 返回内容
+              </button>
+              <span
+                className={
+                  "knowledge__save-status knowledge__save-status--" + docSave
+                }
+              >
+                {docSave === "dirty" && "未保存…"}
+                {docSave === "saving" && "正在保存…"}
+                {docSave === "saved" && "已保存 ✓"}
+                {docSave === "error" && (
+                  <>
+                    保存失败{" "}
+                    <button
+                      className="knowledge__retry"
+                      onClick={() => void flushDocSave()}
+                    >
+                      重试
+                    </button>
+                  </>
+                )}
+              </span>
+            </div>
+            <div className="knowledge__breadcrumb">
+              {breadcrumb.split(" > ").join(" › ")} › {editingDoc.title}
+            </div>
+            <div className="knowledge__title-row">
+              <input
+                className="knowledge__title"
+                value={docTitle}
+                autoFocus={docTitleFocus}
+                onChange={(e) => setDocTitle(e.target.value)}
+                onBlur={() => void commitDocTitle()}
+                onKeyDown={handleDocTitleKeyDown}
+                spellCheck={false}
+              />
+            </div>
+            <RichDocEditor
+              key={"kdoc-" + editingDoc.id}
+              profileId={selectedItem.profile_id}
+              learningItemId={selectedItem.id}
+              sessionId={null}
+              initialDocument={editingDocInitial}
+              initialLegacyNote={null}
+              onChange={handleDocChange}
+              saveMedia={docSaveMedia}
+              saveDrawing={docSaveDrawing}
+            />
+          </div>
         ) : (
-          <>
-            <div className="knowledge__editor-head">
+          /* ============ Workspace V2 主区（DEV-0051 §27-34 / §45-46） ============ */
+          <div className="kws">
+            {/* Header（§27） */}
+            <div className="kws__head">
               <div className="knowledge__breadcrumb">{breadcrumb}</div>
               <div className="knowledge__title-row">
                 <input
@@ -779,360 +1278,434 @@ function Knowledge() {
                   ))}
                 </select>
               </div>
-              <div className="knowledge__stats">
-                {stats && stats.session_count > 0 && (
-                  <>
-                    <span>累计学习 {formatDuration(stats.study_seconds)}</span>
-                    <span>学习 {stats.session_count} 次</span>
-                    <span>最近 {formatDateTime(stats.last_studied_at)}</span>
-                  </>
+              {workspace != null &&
+                (workspace.session_count > 0 || workspace.documents.length > 0) && (
+                  <div className="kws__stats">
+                    累计学习 {formatDuration(workspace.study_seconds)} · 学习{" "}
+                    {workspace.session_count} 次 · 文档 {workspace.documents.length} 篇 · 最近{" "}
+                    {fmtFullDateTime(workspace.last_studied_at)}
+                  </div>
                 )}
-                {stats && stats.evaluation_count > 0 && (
-                  <span>验证 {stats.evaluation_count} 次</span>
-                )}
+              <div className="kws__actions">
                 <button
-                  className="knowledge__eval-btn"
-                  onClick={async () => {
-                    const s = await startSession(selectedItem.id);
-                    navigate(`/learn/${s.id}`);
-                  }}
+                  className="knowledge__eval-btn knowledge__eval-btn--first"
+                  onClick={() => void handleStartSession()}
                   title="开始学习这个知识"
                 >
                   开始学习
                 </button>
                 <button
-                  className="knowledge__eval-btn"
+                  className="knowledge__eval-btn knowledge__eval-btn--first"
+                  onClick={() => void handleCreateDocument()}
+                  title="新建一篇文档（DEV-0051 §35）"
+                >
+                  + 新建文档
+                </button>
+                <button
+                  className="knowledge__eval-btn knowledge__eval-btn--first"
                   onClick={() => void runAiCheck()}
-                  title="AI 检查当前知识"
+                  title="AI 分析当前知识"
                 >
-                  ✨ AI 检查
+                  ✨ AI 分析
                 </button>
                 <button
-                  className="knowledge__eval-btn"
-                  onClick={() => setOrganizeOpen(true)}
-                  title="AI 帮我整理知识"
-                >
-                  ✨ AI 帮我整理
-                </button>
-                <button
-                  className="knowledge__eval-btn"
+                  className="knowledge__eval-btn knowledge__eval-btn--first"
                   onClick={() => setShowEvalModal(true)}
                   title="记录一次验证"
                 >
                   记录验证
                 </button>
               </div>
-
             </div>
 
-            {/* 我的知识（DEV-0028 §86：最大主编辑区；引导文字仅空态 placeholder） */}
-            <div className="knowledge__mine-label">我的知识</div>
-            <textarea
-              className="knowledge__content"
-              value={content}
-              onChange={(e) => handleContentChange(e.target.value)}
-              placeholder={
-                "记录你真正学到的东西……\n\n你可以写：\n• 自己的理解\n• 核心概念\n• 例子\n• 容易混淆的地方\n• 当前问题\n• 学习总结"
-              }
-              spellCheck={false}
-            />
-            <div className="knowledge__editor-foot">
-              <span className="knowledge__foot-note">
-                {selectedItem.mastery_status === "mastered"
-                  ? "已标记掌握 · 继续用验证巩固"
-                  : "学习后可用「记录验证」检验掌握情况"}
-              </span>
-              <span className={"knowledge__save-status knowledge__save-status--" + saveStatus}>
-                {saveStatus === "dirty" && "未保存…"}
-                {saveStatus === "saving" && "正在保存…"}
-                {saveStatus === "saved" && "已保存 ✓"}
-                {saveStatus === "error" && (
-                  <>
-                    保存失败{" "}
-                    <button
-                      className="knowledge__retry"
-                      onClick={() => void flushSave()}
-                    >
-                      重试
-                    </button>
-                  </>
-                )}
-              </span>
-            </div>
-
-              {/* 学习记录（DEV-0017：Session = 学习历史，与知识正文分离） */}
-              <div className="knowledge__recent-evals">
-                <div className="knowledge__recent-evals-head">
-                  <span className="knowledge__recent-evals-title">学习记录</span>
-                  <span className="muted" style={{ fontSize: 11 }}>
-                    共 {stats?.session_count ?? itemSessions.length} 次（显示最近 {itemSessions.length}）
-                  </span>
-                </div>
-                {itemSessions.length === 0 ? (
-                  <span className="muted" style={{ fontSize: 12 }}>
-                    还没有学习记录。点击「开始学习」即可创建。
-                  </span>
-                ) : (
-                  <ul className="k-sessions">
-                    {itemSessions.map((s) => {
-                      const isOpen = expandedSession === s.id;
-                      const noteLen = (s.note ?? "").trim().length;
-                      const sessAtts = itemAttachments.filter((a) => a.session_id === s.id);
-                      return (
-                        <li key={s.id} className="k-sessions__item">
-                          <button
-                            className="k-sessions__head"
-                            onClick={() => setExpandedSession(isOpen ? null : s.id)}
-                          >
-                            <span>{formatDateTime(s.started_at)}</span>
-                            <span className="muted">
-                              学习 {formatDuration(s.duration_seconds)} · 笔记 {noteLen} 字
-                              {sessAtts.length > 0 && ` · 附件 ${sessAtts.length}`}
-                              {s.status === "active" && " · 进行中"}
+            {/* 内容时间线（§28-34） */}
+            {workspace == null ? (
+              <p className="muted kws__loading">加载中…</p>
+            ) : workspace.documents.length === 0 && workspace.sessions.length === 0 ? (
+              <p className="muted kws__empty">
+                还没有内容——新建一篇文档，或开始一次学习。
+              </p>
+            ) : (
+              <div className="kws__timeline">
+                {timeline.map((row, idx) => {
+                  const label = dayGroupLabel(row.at);
+                  const prevLabel = idx > 0 ? dayGroupLabel(timeline[idx - 1].at) : null;
+                  const showGroup = label !== prevLabel;
+                  if (row.kind === "session") {
+                    const s = row.s;
+                    const note = (s.note_plain || "").trim();
+                    const mediaParts: string[] = [];
+                    if (s.image_count > 0) mediaParts.push(`图片 ${s.image_count}`);
+                    if (s.video_count > 0) mediaParts.push(`视频 ${s.video_count}`);
+                    const noteLines = note
+                      .split(/\r?\n/)
+                      .map((l) => l.trim())
+                      .filter(Boolean);
+                    return (
+                      <Fragment key={"s" + s.id}>
+                        {showGroup && <div className="kws__group-title">{label}</div>}
+                        <article className="kws__card">
+                          <div className="kws__card-meta">
+                            <span className="kws__card-time">
+                              {utcHHMM(s.started_at)}
                             </span>
-                            <span className="k-sessions__arrow">{isOpen ? "▾" : "▸"}</span>
-                          </button>
-                          {isOpen && (
-                            <div className="k-sessions__body">
-                              <div className="muted" style={{ fontSize: 11 }}>
-                                {formatDateTime(s.started_at)} → {s.ended_at ? formatDateTime(s.ended_at) : "进行中"}
+                            <span className="kws__card-kind">学习记录</span>
+                            {s.status === "active" && (
+                              <span className="kws__card-flag">进行中</span>
+                            )}
+                          </div>
+                          {renamingSessionId === s.id ? (
+                            <div className="kws__rename">
+                              <input
+                                autoFocus
+                                className="modal__input"
+                                value={renameSessionValue}
+                                onChange={(e) => setRenameSessionValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") void commitSessionTitle(s.id);
+                                  if (e.key === "Escape") setRenamingSessionId(null);
+                                }}
+                              />
+                              <div className="btn-row">
+                                <button
+                                  className="btn btn--small btn--primary"
+                                  onClick={() => void commitSessionTitle(s.id)}
+                                >
+                                  保存
+                                </button>
+                                <button
+                                  className="btn btn--small"
+                                  onClick={() => setRenamingSessionId(null)}
+                                >
+                                  取消
+                                </button>
                               </div>
-                              {editingSession?.id === s.id ? (
+                            </div>
+                          ) : (
+                            <>
+                              <div className="kws__card-title">
+                                {s.title || selectedItem.name}
+                              </div>
+                              <div className="kws__card-sub">
+                                学习 {formatDuration(s.duration_seconds)}
+                              </div>
+                              {note ? (
                                 <>
-                                  <textarea
-                                    className="modal__input"
-                                    rows={6}
-                                    value={editNoteValue}
-                                    onChange={(e) => setEditNoteValue(e.target.value)}
-                                  />
-                                  <div className="btn-row" style={{ marginTop: 6 }}>
-                                    <button
-                                      className="btn btn--small btn--primary"
-                                      onClick={async () => {
-                                        await updateSessionNote(s.id, editNoteValue);
-                                        setEditingSession(null);
-                                        if (selectedId != null) void reloadItemEvidence(selectedId);
-                                      }}
-                                    >
-                                      保存笔记
-                                    </button>
-                                    <button className="btn btn--small" onClick={() => setEditingSession(null)}>
-                                      取消
-                                    </button>
-                                  </div>
-                                </>
-                              ) : (
-                                <>
-                                  {noteLen > 0 ? (
-                                    <pre className="k-sessions__note">{s.note}</pre>
-                                  ) : (
-                                    <span className="muted" style={{ fontSize: 12 }}>
-                                      本次没有笔记
-                                    </span>
+                                  <p className="kws__card-summary">
+                                    {noteLines.slice(0, 3).join("\n")}
+                                    {noteLines.length > 3 ? " …" : ""}
+                                  </p>
+                                  {mediaParts.length > 0 && (
+                                    <div className="kws__card-media">
+                                      {mediaParts.join(" · ")}
+                                    </div>
                                   )}
-                                  <div className="btn-row" style={{ marginTop: 6 }}>
-                                    <button
-                                      className="btn btn--small"
-                                      onClick={() => {
-                                        setEditingSession(s);
-                                        setEditNoteValue(s.note ?? "");
-                                      }}
-                                    >
-                                      编辑笔记
-                                    </button>
-                                    {noteLen > 0 && (
-                                      <button
-                                        className="btn btn--small"
-                                        onClick={async () => {
-                                          if (!window.confirm("清空这条学习笔记？时间记录将保留。")) return;
-                                          await updateSessionNote(s.id, "");
-                                          if (selectedId != null) void reloadItemEvidence(selectedId);
-                                        }}
-                                      >
-                                        清空笔记
-                                      </button>
-                                    )}
-                                  </div>
                                 </>
-                              )}
-                              {sessAtts.length > 0 && (
-                                <div style={{ marginTop: 8 }}>
-                                  <AttachmentList
-                                    attachments={sessAtts}
-                                    onChanged={(list) => {
-                                      const removed = sessAtts.filter(
-                                        (a) => !list.some((x) => x.id === a.id)
-                                      );
-                                      setItemAttachments((prev) =>
-                                        prev.filter((a) => !removed.some((r) => r.id === a.id))
-                                      );
-                                    }}
-                                    readOnly
-                                  />
+                              ) : mediaParts.length > 0 ? (
+                                <div className="kws__card-media">
+                                  {mediaParts.join(" · ")}
+                                </div>
+                              ) : (
+                                <div className="kws__card-summary kws__card-summary--muted">
+                                  （无笔记）
                                 </div>
                               )}
-                            </div>
+                              <div className="kws__card-actions">
+                                <button
+                                  className="kws__card-btn"
+                                  title="在学习工作区打开这条记录"
+                                  onClick={() =>
+                                    navigate(
+                                      `/learn/${s.id}?from=knowledge&item=${selectedItem.id}`
+                                    )
+                                  }
+                                >
+                                  打开
+                                </button>
+                                <button
+                                  className="kws__card-btn"
+                                  title="再次开始学习这个知识"
+                                  onClick={() => void handleStartSession()}
+                                >
+                                  继续学习
+                                </button>
+                                <button
+                                  className="kws__card-btn"
+                                  onClick={() =>
+                                    setSessionMenuFor(
+                                      sessionMenuFor === s.id ? null : s.id
+                                    )
+                                  }
+                                >
+                                  更多 ⋯
+                                </button>
+                              </div>
+                            </>
                           )}
-                        </li>
-                      );
-                    })}
+                          {sessionMenuFor === s.id && (
+                            <>
+                              <div
+                                className="kws__menu-backdrop"
+                                onClick={() => setSessionMenuFor(null)}
+                              />
+                              <div className="kws__menu">
+                                <button
+                                  className="kws__menu-item"
+                                  onClick={() => {
+                                    setSessionMenuFor(null);
+                                    setRenamingSessionId(s.id);
+                                    setRenameSessionValue(s.title);
+                                  }}
+                                >
+                                  修改标题
+                                </button>
+                                <button
+                                  className="kws__menu-item"
+                                  onClick={() => {
+                                    setSessionMenuFor(null);
+                                    setTimeFixFor({
+                                      id: s.id,
+                                      start: utcToLocalInput(s.started_at),
+                                      end: "",
+                                    });
+                                  }}
+                                >
+                                  修正时间
+                                </button>
+                                <button
+                                  className="kws__menu-item kws__menu-item--danger"
+                                  onClick={() => void removeSessionCard(s.id)}
+                                >
+                                  删除
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </article>
+                      </Fragment>
+                    );
+                  }
+                  const d = row.d;
+                  const text = (d.content_text || "").trim();
+                  const previewLines = text
+                    ? text
+                        .split(/\r?\n/)
+                        .map((l) => l.trim())
+                        .filter(Boolean)
+                        .slice(0, 2)
+                    : [];
+                  const preview = previewLines.join(" ");
+                  const images = countNodeType(d.content_document_json, "higherImage");
+                  const codes = countNodeType(d.content_document_json, "codeBlock");
+                  const docMeta: string[] = [];
+                  if (images > 0) docMeta.push(`图片 ${images}`);
+                  if (codes > 0) docMeta.push(`代码块 ${codes}`);
+                  return (
+                    <Fragment key={"d" + d.id}>
+                      {showGroup && <div className="kws__group-title">{label}</div>}
+                      <article className="kws__card">
+                        <div className="kws__card-meta">
+                          <span className="kws__card-time">{utcHHMM(d.updated_at)}</span>
+                          <span className="kws__card-kind kws__card-kind--doc">文档</span>
+                        </div>
+                        {renamingDocId === d.id ? (
+                          <div className="kws__rename">
+                            <input
+                              autoFocus
+                              className="modal__input"
+                              value={renameDocValue}
+                              onChange={(e) => setRenameDocValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void commitDocCardRename(d.id);
+                                if (e.key === "Escape") setRenamingDocId(null);
+                              }}
+                            />
+                            <div className="btn-row">
+                              <button
+                                className="btn btn--small btn--primary"
+                                onClick={() => void commitDocCardRename(d.id)}
+                              >
+                                保存
+                              </button>
+                              <button
+                                className="btn btn--small"
+                                onClick={() => setRenamingDocId(null)}
+                              >
+                                取消
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="kws__card-title">{d.title}</div>
+                            {preview ? (
+                              <p className="kws__card-summary">
+                                {preview.length > 120 ? preview.slice(0, 120) + "…" : preview}
+                              </p>
+                            ) : docMeta.length > 0 ? null : (
+                              <div className="kws__card-summary kws__card-summary--muted">
+                                （空白文档）
+                              </div>
+                            )}
+                            {docMeta.length > 0 && (
+                              <div className="kws__card-media">{docMeta.join(" · ")}</div>
+                            )}
+                            <div className="kws__card-actions">
+                              <button
+                                className="kws__card-btn"
+                                onClick={() => openDocumentDetail(d)}
+                              >
+                                打开
+                              </button>
+                              <button
+                                className="kws__card-btn"
+                                onClick={() => openDocumentDetail(d)}
+                              >
+                                编辑
+                              </button>
+                              <button
+                                className="kws__card-btn"
+                                onClick={() =>
+                                  setDocMenuFor(docMenuFor === d.id ? null : d.id)
+                                }
+                              >
+                                更多 ⋯
+                              </button>
+                            </div>
+                          </>
+                        )}
+                        {docMenuFor === d.id && (
+                          <>
+                            <div
+                              className="kws__menu-backdrop"
+                              onClick={() => setDocMenuFor(null)}
+                            />
+                            <div className="kws__menu">
+                              <button
+                                className="kws__menu-item"
+                                onClick={() => {
+                                  setDocMenuFor(null);
+                                  setRenamingDocId(d.id);
+                                  setRenameDocValue(d.title);
+                                }}
+                              >
+                                重命名
+                              </button>
+                              <button
+                                className="kws__menu-item kws__menu-item--danger"
+                                onClick={() => void removeDocCard(d.id)}
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </article>
+                    </Fragment>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Legacy 附件区（§45-46） */}
+            {workspace != null && workspace.legacy_attachments.length > 0 && (
+              <div className="kws__legacy">
+                <div className="kws__legacy-head">
+                  未归入文档的附件 · {workspace.legacy_attachments.length}
+                </div>
+                <AttachmentList
+                  attachments={workspace.legacy_attachments}
+                  onChanged={(list) =>
+                    setWorkspace((w) =>
+                      w ? { ...w, legacy_attachments: list } : w
+                    )
+                  }
+                />
+              </div>
+            )}
+
+            {/* 学习证据（DEV-0028 §89：最近验证 + 问题，默认折叠，不抢主区） */}
+            <details className="knowledge-evidence">
+              <summary>
+                学习证据（最近验证 {recentEvals.length} · 待处理问题 {itemFeedbacks.length}）
+              </summary>
+
+              {/* 最近验证 */}
+              <div className="knowledge__recent-evals">
+                <div className="knowledge__recent-evals-head">
+                  <span className="knowledge__recent-evals-title">最近验证</span>
+                </div>
+                {recentEvals.length === 0 ? (
+                  <div className="knowledge__recent-evals-empty">
+                    <span className="muted">还没有验证记录</span>
+                    <button
+                      className="knowledge__eval-btn knowledge__eval-btn--first"
+                      onClick={() => setShowEvalModal(true)}
+                    >
+                      记录第一次验证
+                    </button>
+                  </div>
+                ) : (
+                  <ul className="knowledge__recent-evals-list">
+                    {recentEvals.map((ev) => (
+                      <li key={ev.id} className="knowledge__recent-evals-item">
+                        <span className="knowledge__recent-evals-date">
+                          {formatDateTime(ev.occurred_at)}
+                        </span>
+                        <span className="knowledge__recent-evals-type">
+                          {EVALUATION_TYPE_LABELS[ev.evaluation_type as EvaluationType] ??
+                            ev.evaluation_type}
+                        </span>
+                        <span
+                          className={
+                            "knowledge__recent-evals-outcome knowledge__recent-evals-outcome--" +
+                            (ev.outcome ?? "unrated")
+                          }
+                        >
+                          {OUTCOME_LABELS[(ev.outcome ?? "unrated") as Outcome]}
+                          {ev.correct_items != null && ev.total_items != null && (
+                            <>（{ev.correct_items}/{ev.total_items}）</>
+                          )}
+                        </span>
+                      </li>
+                    ))}
                   </ul>
                 )}
               </div>
 
-              {/* 知识独立附件（DEV-0018：不要求先开始 Session） */}
+              {/* 需要关注（open Feedback，可安排重新学习/解决/忽略） */}
               <div className="knowledge__recent-evals">
                 <div className="knowledge__recent-evals-head">
-                  <span className="knowledge__recent-evals-title">知识附件</span>
-                  <div className="btn-row">
+                  <span className="knowledge__recent-evals-title">需要关注</span>
+                  {itemFeedbacks.length === 0 && (
                     <button
-                      className="knowledge__eval-btn"
-                      onClick={async () => {
-                        if (!activeProfile || !selectedItem) return;
-                        const filters = [
-                          { name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] },
-                        ];
-                        const sel = await openDialog({ multiple: false, directory: false, filters });
-                        const p = Array.isArray(sel) ? sel[0] : sel;
-                        if (!p) return;
-                        try {
-                          const att = await addLearningAttachment({
-                            profileId: activeProfile.id,
-                            learningItemId: selectedItem.id,
-                            attachmentType: "image",
-                            sourcePath: p,
-                          });
-                          setItemAttachments((a) => [...a, att]);
-                        } catch (e) {
-                          setError(String(e));
-                        }
-                      }}
+                      className="knowledge__eval-btn knowledge__eval-btn--first"
+                      onClick={() => setShowFeedbackModal(true)}
                     >
-                      上传图片
+                      + 记录问题
                     </button>
-                    <button
-                      className="knowledge__eval-btn"
-                      onClick={async () => {
-                        if (!activeProfile || !selectedItem) return;
-                        const filters = [
-                          { name: "视频", extensions: ["mp4", "webm", "mov", "mkv"] },
-                        ];
-                        const sel = await openDialog({ multiple: false, directory: false, filters });
-                        const p = Array.isArray(sel) ? sel[0] : sel;
-                        if (!p) return;
-                        try {
-                          const att = await addLearningAttachment({
-                            profileId: activeProfile.id,
-                            learningItemId: selectedItem.id,
-                            attachmentType: "video",
-                            sourcePath: p,
-                          });
-                          setItemAttachments((a) => [...a, att]);
-                        } catch (e) {
-                          setError(String(e));
-                        }
-                      }}
-                    >
-                      上传视频
-                    </button>
-                    <button className="knowledge__eval-btn" onClick={() => setShowItemDraw(true)}>
-                      画图
-                    </button>
-                  </div>
+                  )}
                 </div>
-                <AttachmentList
-                  attachments={itemAttachments.filter((a) => a.session_id == null)}
-                  onChanged={(list) =>
-                    setItemAttachments((prev) => [
-                      ...prev.filter((a) => a.session_id != null),
-                      ...list,
-                    ])
-                  }
-                />
+                {itemFeedbacks.length === 0 ? (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    暂无待处理问题
+                  </span>
+                ) : (
+                  <ul className="review-feedback">
+                    {itemFeedbacks.map((f) => (
+                      <FeedbackCard
+                        key={f.id}
+                        feedback={f}
+                        onChanged={() => {
+                          if (selectedId != null) void reloadItemEvidence(selectedId);
+                        }}
+                      />
+                    ))}
+                  </ul>
+                )}
               </div>
-
-              {/* 学习证据（DEV-0028 §89：最近验证 + 问题，默认折叠，不抢占正文） */}
-              <details className="knowledge-evidence">
-                <summary>
-                  学习证据（最近验证 {recentEvals.length} · 待处理问题 {itemFeedbacks.length}）
-                </summary>
-
-                {/* 最近验证 */}
-                <div className="knowledge__recent-evals">
-                  <div className="knowledge__recent-evals-head">
-                    <span className="knowledge__recent-evals-title">最近验证</span>
-                  </div>
-                  {recentEvals.length === 0 ? (
-                    <div className="knowledge__recent-evals-empty">
-                      <span className="muted">还没有验证记录</span>
-                      <button
-                        className="knowledge__eval-btn knowledge__eval-btn--first"
-                        onClick={() => setShowEvalModal(true)}
-                      >
-                        记录第一次验证
-                      </button>
-                    </div>
-                  ) : (
-                    <ul className="knowledge__recent-evals-list">
-                      {recentEvals.map((ev) => (
-                        <li key={ev.id} className="knowledge__recent-evals-item">
-                          <span className="knowledge__recent-evals-date">
-                            {formatDateTime(ev.occurred_at)}
-                          </span>
-                          <span className="knowledge__recent-evals-type">
-                            {EVALUATION_TYPE_LABELS[ev.evaluation_type as EvaluationType] ??
-                              ev.evaluation_type}
-                          </span>
-                          <span
-                            className={
-                              "knowledge__recent-evals-outcome knowledge__recent-evals-outcome--" +
-                              (ev.outcome ?? "unrated")
-                            }
-                          >
-                            {OUTCOME_LABELS[(ev.outcome ?? "unrated") as Outcome]}
-                            {ev.correct_items != null && ev.total_items != null && (
-                              <>（{ev.correct_items}/{ev.total_items}）</>
-                            )}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-                {/* 需要关注（open Feedback，可安排重新学习/解决/忽略） */}
-                <div className="knowledge__recent-evals">
-                  <div className="knowledge__recent-evals-head">
-                    <span className="knowledge__recent-evals-title">需要关注</span>
-                    {itemFeedbacks.length === 0 && (
-                      <button
-                        className="knowledge__eval-btn knowledge__eval-btn--first"
-                        onClick={() => setShowFeedbackModal(true)}
-                      >
-                        + 记录问题
-                      </button>
-                    )}
-                  </div>
-                  {itemFeedbacks.length === 0 ? (
-                    <span className="muted" style={{ fontSize: 12 }}>
-                      暂无待处理问题
-                    </span>
-                  ) : (
-                    <ul className="review-feedback">
-                      {itemFeedbacks.map((f) => (
-                        <FeedbackCard
-                          key={f.id}
-                          feedback={f}
-                          onChanged={() => {
-                            if (selectedId != null) void reloadItemEvidence(selectedId);
-                          }}
-                        />
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </details>
-          </>
+            </details>
+          </div>
         )}
         {error && <div className="knowledge__error">{error}</div>}
       </main>
@@ -1166,34 +1739,90 @@ function Knowledge() {
         />
       )}
 
-      {/* 知识独立画图（session_id = null） */}
-      {showItemDraw && activeProfile && selectedItem && (
-        <DrawModal
-          onClose={() => setShowItemDraw(false)}
-          onSave={async (dataUrl) => {
-            const att = await saveDrawingAttachment({
-              profileId: activeProfile.id,
-              learningItemId: selectedItem.id,
-              dataBase64: dataUrl,
-            });
-            setShowItemDraw(false);
-            setItemAttachments((a) => [...a, att]);
-          }}
-        />
+      {/* DEV-0051 §33：学习记录「修正时间」小 Modal */}
+      {timeFixFor && (
+        <div className="modal-overlay" onClick={() => setTimeFixFor(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal__title">修正学习时间</div>
+            <div className="kws__fixrow">
+              <label>开始</label>
+              <input
+                type="datetime-local"
+                value={timeFixFor.start}
+                onChange={(e) =>
+                  setTimeFixFor((t) => (t ? { ...t, start: e.target.value } : t))
+                }
+              />
+              <label>结束</label>
+              <input
+                type="datetime-local"
+                value={timeFixFor.end}
+                onChange={(e) =>
+                  setTimeFixFor((t) => (t ? { ...t, end: e.target.value } : t))
+                }
+              />
+            </div>
+            <div className="modal__actions">
+              <button className="btn btn--primary" onClick={() => void commitTimeFix()}>
+                保存
+              </button>
+              <button className="btn" onClick={() => setTimeFixFor(null)}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
-      {/* ✨ AI 帮我整理（DEV-0021：Proposal + Diff + 用户确认） */}
-      {organizeOpen && activeProfile && selectedItem && (
-        <AiProposalReview
-          profileId={activeProfile.id}
-          action="knowledge_organize"
-          learningItemId={selectedItem.id}
-          items={items}
-          onClose={() => setOrganizeOpen(false)}
-          onApplied={() => {
-            if (selectedId != null) void reloadItemEvidence(selectedId);
-          }}
-        />
+      {/* DEV-0053 §52：未归类学习「整理进知识」（选 Knowledge Node → organize_session_into_knowledge） */}
+      {organizeFor && (
+        <div className="modal-overlay" onClick={() => setOrganizeFor(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal__title">
+              把「{organizeFor.title || `学习记录 #${organizeFor.id}`}」整理进哪个知识？
+            </div>
+            <p className="evmodal__note muted">
+              只更新这条学习记录的知识关联，笔记不会被复制或修改。
+            </p>
+            <div className="taskmodal__picker">
+              <input
+                className="modal__input taskmodal__search"
+                value={organizeSearch}
+                onChange={(e) => setOrganizeSearch(e.target.value)}
+                placeholder="搜索知识…"
+              />
+            </div>
+            <div className="taskmodal__list">
+              {(organizeSearch.trim()
+                ? items.filter((i) =>
+                    i.name.toLowerCase().includes(organizeSearch.trim().toLowerCase())
+                  )
+                : items
+              )
+                .slice(0, 30)
+                .map((i) => (
+                  <button
+                    key={i.id}
+                    className="taskmodal__item"
+                    disabled={organizeBusy}
+                    onClick={() => void organizeUnassigned(i.id)}
+                  >
+                    {i.name}
+                  </button>
+                ))}
+              {items.length === 0 && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  当前目标下还没有知识节点，先在左侧新建。
+                </span>
+              )}
+            </div>
+            <div className="modal__actions">
+              <button className="btn" onClick={() => setOrganizeFor(null)}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* DEV-0034 §65：树节点「移动到…」（Knowledge 选择器；排除自身与后代） */}
@@ -1248,7 +1877,7 @@ function Knowledge() {
     </div>
   );
 
-  /** ✨ AI 检查当前知识（DEV-0022：统一进入右侧 AI Panel）。 */
+  /** ✨ AI 分析当前知识（DEV-0022 统一入口；DEV-0051 合并为单一「✨ AI 分析」）。 */
   async function runAiCheck() {
     if (!selectedId) return;
     await aiRunAction("knowledge_analysis");

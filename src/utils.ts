@@ -187,3 +187,16 @@ export function friendlyDate(date: string): string {
   const names = ["日", "一", "二", "三", "四", "五", "六"];
   return `${d.getMonth() + 1}月${d.getDate()}日 星期${names[d.getDay()]}`;
 }
+
+/** 纯前端文本文件下载（Blob + a.download；不依赖 fs 插件）。 */
+export function downloadTextFile(fileName: string, content: string, mime = "text/plain") {
+  const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

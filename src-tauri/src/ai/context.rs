@@ -218,7 +218,7 @@ fn mastery_block(
     // 3. 周期内 Sessions（标题/时长/状态/note 纯文本前 600 字/附件元数据）
     let mut st = conn
         .prepare(
-            "SELECT id, title, COALESCE(duration_seconds,0), status, COALESCE(note,''), COALESCE(li.name,'')
+            "SELECT ss.id, ss.title, COALESCE(ss.duration_seconds,0), ss.status, COALESCE(ss.note,''), COALESCE(li.name,'')
              FROM study_sessions ss LEFT JOIN learning_items li ON ss.learning_item_id = li.id
              WHERE ss.profile_id = ?1
                AND date(ss.started_at, '+8 hours') BETWEEN date(?2) AND date(?3)
@@ -305,7 +305,7 @@ fn mastery_block(
         if eval_lines.is_empty() { "（无）".to_string() } else { eval_lines.join("\n") }
     ));
 
-    // 5. 关联 Knowledge 正文（§52：只注入 Session/Task 关联到的节点，非全库）
+    // 5. 关联 Knowledge（§52 只注入 Session/Task 关联到的节点；§55 优先 Document 正文，无文档 fallback legacy content，不双注）
     let mut st = conn
         .prepare(
             "SELECT DISTINCT li.id, li.name, COALESCE(li.content,'')
@@ -327,14 +327,30 @@ fn mastery_block(
         .map_err(|e| e.to_string())?
         .filter_map(|v| v.ok())
         .collect();
+    drop(st);
     let k_lines: Vec<String> = krows
         .iter()
-        .map(|(_, n, c)| {
-            format!(
-                "- {}：{}",
-                n,
-                esc(&c.chars().take(800).collect::<String>())
-            )
+        .map(|(iid, n, legacy)| {
+            let docs: Vec<String> = conn
+                .prepare(
+                    "SELECT title || '：' || substr(content_text, 1, 800) FROM knowledge_documents
+                     WHERE learning_item_id = ?1 AND profile_id = ?2
+                     ORDER BY updated_at DESC LIMIT 3",
+                )
+                .and_then(|mut s2| {
+                    let rows: Vec<String> = s2
+                        .query_map(params![iid, profile_id], |r| r.get::<_, String>(0))?
+                        .filter_map(|v| v.ok())
+                        .collect();
+                    Ok(rows)
+                })
+                .unwrap_or_default();
+            let body = if !docs.is_empty() {
+                docs.join("｜")
+            } else {
+                legacy.chars().take(800).collect::<String>()
+            };
+            format!("- {}：{}", n, esc(&body))
         })
         .collect();
     parts.push(format!(
@@ -542,6 +558,44 @@ fn knowledge_detail_block(conn: &Connection, profile_id: i64, item_id: i64) -> R
         )
         .map_err(|_| "知识节点不存在或不属于当前档案".to_string())?;
 
+    // DEV-0051 §25/§54：知识正文优先 knowledge_documents；无 Document 才 fallback learning_items.content（不双注）
+    let docs: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT title, content_text FROM knowledge_documents
+             WHERE learning_item_id = ?1 AND profile_id = ?2
+             ORDER BY updated_at DESC, id DESC LIMIT 10",
+        )
+        .map_err(|e| e.to_string())
+        .and_then(|mut st| {
+            let rows: Vec<(String, String)> = st
+                .query_map(params![item_id, profile_id], |r| -> rusqlite::Result<(String, String)> {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .map(|it| it.filter_map(|v| v.ok()).collect())
+                .unwrap_or_default();
+            Ok(rows)
+        })
+        .unwrap_or_default();
+    let content_block = if !docs.is_empty() {
+        let lines: Vec<String> = docs
+            .iter()
+            .map(|(t, c)| {
+                let brief: String = c.chars().take(1200).collect();
+                format!("- {}：{}", t, brief)
+            })
+            .collect();
+        format!(
+            "## 该节点知识文档（knowledge_documents，共 {} 篇）\n{}",
+            docs.len(),
+            lines.join("\n")
+        )
+    } else {
+        format!(
+            "## 该节点用户长期知识内容（legacy learning_items.content；尚无知识文档）\n{}",
+            esc_long(&row.2)
+        )
+    };
+
     // 子节点（名称 + 内容摘要）
     let mut stmt = conn
         .prepare(
@@ -561,11 +615,11 @@ fn knowledge_detail_block(conn: &Connection, profile_id: i64, item_id: i64) -> R
         .collect();
 
     Ok(format!(
-        "## 当前知识节点\n名称：{}（#{}）\n掌握状态：{}\n\n## 该节点用户长期知识内容（learning_items.content）\n{}\n\n## 子节点（最多 30 个，含内容摘要）\n{}",
+        "## 当前知识节点\n名称：{}（#{}）\n掌握状态：{}\n\n{}\n\n## 子节点（最多 30 个，含内容摘要）\n{}",
         row.0,
         item_id,
         row.1,
-        esc_long(&row.2),
+        content_block,
         if children.is_empty() { "（无子节点）".to_string() } else { children.join("\n") }
     ))
 }

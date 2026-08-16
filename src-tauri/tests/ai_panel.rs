@@ -249,8 +249,8 @@ fn test_trace_only_real_tools_and_allowlist() {
         assert!(execute_read_tool(&conn, pid, evil, &json!({})).is_err(), "{} 必须被拒绝", evil);
     }
 
-    // 白名单恰好 11 个只读工具（DEV-0023 新增 list_tasks）
-    assert_eq!(TOOL_ALLOWLIST.len(), 11);
+    // 白名单 17 个（DEV-0052：11 只读 + search/memory/personalization/web×2/propose；无直接写）
+    assert_eq!(TOOL_ALLOWLIST.len(), 17);
     for t in TOOL_ALLOWLIST {
         assert!(!tool_label(t).contains("未知"), "{} 应有标签", t);
     }

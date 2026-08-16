@@ -171,9 +171,9 @@ fn test_list_tasks_tool() {
         assert!(t0.get(forbidden).is_none(), "不得返回无关内部字段 {}", forbidden);
     }
 
-    // 6) allowlist 注册（11 个工具）
+    // 6) allowlist 注册（DEV-0052 起 17 个工具）
     assert!(TOOL_ALLOWLIST.contains(&"list_tasks"));
-    assert_eq!(TOOL_ALLOWLIST.len(), 11);
+    assert_eq!(TOOL_ALLOWLIST.len(), 17);
     let _ = t1;
 }
 
@@ -353,13 +353,27 @@ fn test_allowlist_rejects_dangerous_tools() {
     let conn = setup();
     let (pg, _pe, _ig, _ie) = seed_modes(&conn);
     for evil in [
-        "run_command", "shell", "powershell", "cmd", "read_file", "write_file", "query_sql", "web_search",
+        "run_command", "shell", "powershell", "cmd", "read_file", "write_file", "query_sql",
+        "apply_change_set", "read_vault",
     ] {
         assert!(!TOOL_ALLOWLIST.contains(&evil), "{} 不得在白名单", evil);
         assert!(execute_read_tool(&conn, pg, evil, &json!({})).is_err(), "{} 必须被拒绝", evil);
     }
-    // 写工具依旧为 0（全部只读）
-    assert_eq!(TOOL_ALLOWLIST.len(), 11);
+    // web_search / web_open 属于 DEV-0052 合法联网工具（execute_read_tool 不 dispatch，
+    // 由 run_chat_turn 专用路径执行 + SSRF 校验）
+    assert!(TOOL_ALLOWLIST.contains(&"web_search"));
+    // 直接写工具依旧为 0（唯一 propose_* 只写 ChangeSet Draft）
+    let direct_writes: Vec<&str> = TOOL_ALLOWLIST
+        .iter()
+        .filter(|t| {
+            let n = t.to_lowercase();
+            (n.contains("create") || n.contains("update") || n.contains("delete") || n.contains("write"))
+                && !n.starts_with("propose_")
+        })
+        .copied()
+        .collect();
+    assert!(direct_writes.is_empty(), "直接写工具泄漏：{:?}", direct_writes);
+    assert_eq!(TOOL_ALLOWLIST.len(), 17);
 }
 
 // ---------- §87 assistant_chat 两类响应 ----------

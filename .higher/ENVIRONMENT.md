@@ -2,7 +2,7 @@
 
 > Last Verified：2026-08-16 00:30
 > Snapshot：Higher FULL PROJECT SNAPSHOT
-> Schema：v015
+> Schema：v018
 
 ## 0. Snapshot Metadata
 
@@ -133,7 +133,7 @@ Source: src-tauri/src/repository/**
 
 ## 12. Database Schema
 
-（v015 后真实结构，Source: src-tauri/src/migrations/**）
+（v018 后真实结构，Source: src-tauri/src/migrations/**）
 
 | 表 | PK | 核心列（* = NOT NULL） | FK / 索引要点 |
 |---|---|---|---|
@@ -145,16 +145,26 @@ Source: src-tauri/src/repository/**
 | tasks | id | **profile_id***, goal_id(可空), learning_item_id(可空), title*, planned_date/time, status*('pending'), archived_at, plan_id, recurring_rule_id(无 FK) | FK 同理；idx×5 |
 | study_sessions | id | **profile_id***, goal_id/task_id/learning_item_id(均可空), **title***('快速学习'), started_at*, ended_at, duration_seconds, status*('active'), note, **time_corrected***(0)；**v014：note_document_json（Tiptap 文档）** | item SET NULL；idx×4 |
 | evaluations | id | **profile_id***, goal_id(可空), learning_item_id(可空), title*, evaluation_type*(5 种), outcome*('unrated'), 题数×3/分数×2(可空) | item **RESTRICT**；idx×4 |
-| learning_attachments | id | **profile_id***, learning_item_id(可空), session_id(可空), attachment_type*(CHECK 4 值), file_name*, relative_path*(禁绝对), caption*('') | 双 CASCADE；idx×3 |
+| learning_attachments | id | **profile_id***, learning_item_id(可空), session_id(可空), **document_id(可空, v016)**, attachment_type*(CHECK 4 值), file_name*, relative_path*(禁绝对), caption*('') | 双 CASCADE + documents CASCADE；idx×3 + idx_att_document |
 | recurring_task_rules | id | **profile_id***, goal_id/learning_item_id(可空), title*, repeat_type*(daily/weekly), weekdays_json*('[]'), time_of_day, start_date*, enabled*(1) | idx×2 |
 | feedbacks **(LEGACY)** | id | **goal_id*（仍必填）**, learning_item_id, evaluation_id, feedback_type*(4), status*(open/resolved/dismissed) | idx×4 |
 | adjustments **(LEGACY)** | id | feedback_id*, **goal_id*（仍必填）**, adjustment_type*(5), status*(planned/completed/cancelled), task_id, plan_id | FK feedbacks CASCADE；idx×3 |
 | settings | key(PK) | value*, updated_at* | UPSERT |
-| schema_migrations | version(PK) | name*, executed_at* | 15 行 |\n| **mastery_assessments(v015)** | id | **profile_id***, goal_id(SET NULL), period_type*(day/week/month/year), period_start*, period_end*, status*(scored/insufficient_evidence), score(可空 0-100), confidence*(low/medium/high), summary*, 三维分(可空), *_json*(默认'[]'), model*, created_at* | FK profiles CASCADE/goals SET NULL；idx profile+period+created_at；**append-only 不更新** |
+| schema_migrations | version(PK) | name*, executed_at* | 18 行 |
+| **ai_conversations(v017)** | id | profile_id*, title, mode*(readonly/assistant), created_at*, updated_at*, archived_at | FK profiles CASCADE；idx(profile,updated) |
+| **ai_messages(v017)** | id | conversation_id*, profile_id*, role*(user/assistant/system_summary), content, run_id, created_at* | FK conversations CASCADE；idx×2；写入联动 FTS |
+| **memory_records(v017)** | id | profile_id*, memory_type*(7 值), category, memory_key, memory_value, source_kind*(4 值), source_ref, source_excerpt, importance*(1-5), confidence*(3 值), status*(3 值), valid_from/to, supersedes_id, last_used_at | FK profiles CASCADE；idx×2 |
+| **personalization_sources(v017)** | id | profile_id*, file_name, file_type*(4 值), relative_path, sha256, extracted_text_path, status* | FK CASCADE |
+| **personalization_source_chunks(v017)** | id | source_id*, profile_id*, chunk_index*, content | FK CASCADE |
+| **personalization_profiles(v017)** | id | profile_id* UNIQUE, md_content, structured_json, status*(draft/confirmed), version*, dirty* | |
+| **ai_change_sets(v017)** | id | profile_id*, conversation_id, run_id, title, summary, status*(6 值), applied_at, rejected_at | FK CASCADE |
+| **ai_change_operations(v017)** | id | change_set_id*, operation_order*, entity_type, entity_id, action*(5 值), before_json, after_json, reason, deep_link, selected* | FK CASCADE |
+| **ai_runs/ai_run_events/ai_sources(v017)** | | run 状态机/事件流/Web 来源 | |
+| **search_index(v017)** | (entity_type,entity_id) | profile_id*, title, content, timestamp | + **search_fts (FTS5 外部内容表 + 3 触发器)** |\n| **knowledge_documents(v016)** | id | **profile_id***, **learning_item_id***, title*, content_text*(''), content_document_json, created_at*, updated_at* | FK profiles CASCADE / items **CASCADE**；idx profile、item、item+updated_at |\n| **mastery_assessments(v015)** | id | **profile_id***, goal_id(SET NULL), period_type*(day/week/month/year), period_start*, period_end*, status*(scored/insufficient_evidence), score(可空 0-100), confidence*(low/medium/high), summary*, 三维分(可空), *_json*(默认'[]'), model*, created_at* | FK profiles CASCADE/goals SET NULL；idx profile+period+created_at；**append-only 不更新** |
 
 ## 13. Migration History
 
-v001 settings → v002 四表 → v003 stages/plans → v004 evaluations → v005 档案+goals.profile_id（旧数据入默认档案） → v006 content → v007 feedbacks → v008 adjustments → v009 attachments → v010 recurring → v011 tasks 重建(item 可空/归档) → v012 sessions/attachments 重建(item 可空)+sort_order → **v013 六表重建 Profile First**（backfill 经 goal JOIN 取 profile；保 ID；末尾 NULL 自检 + foreign_key_check，违例即中止迁移）→ **v014 session 富文档**（sessions+note_document_json）→ **v015 goal_tree_mastery**（goals 树五列+四索引；旧 Goal 三态升级 0→占位 final / 1→final / 多→MIN(id)=final 其余 legacy；mastery_assessments 表）。
+v001 settings → v002 四表 → v003 stages/plans → v004 evaluations → v005 档案+goals.profile_id（旧数据入默认档案） → v006 content → v007 feedbacks → v008 adjustments → v009 attachments → v010 recurring → v011 tasks 重建(item 可空/归档) → v012 sessions/attachments 重建(item 可空)+sort_order → **v013 六表重建 Profile First**（backfill 经 goal JOIN 取 profile；保 ID；末尾 NULL 自检 + foreign_key_check，违例即中止迁移）→ **v014 session 富文档**（sessions+note_document_json）→ **v015 goal_tree_mastery**（goals 树五列+四索引；旧 Goal 三态升级；mastery_assessments 表）→ **v016 knowledge_documents** → **v017 personal_intelligence** → **v018 daily_dual_tree_loop**（tasks.+3 列；study_sessions.+activity_kind+backfill；ai_change_operations.+operation_ref+idx；旧数据全保留）。
 机制：每迁移事务外 `PRAGMA foreign_keys=OFF`→事务→commit→恢复 ON（防 DROP 隐式 DELETE 级联）。
 Source: src-tauri/src/migrations/**
 

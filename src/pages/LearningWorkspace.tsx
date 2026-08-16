@@ -21,6 +21,9 @@ import {
   updateSessionTitle,
 } from "../api";
 import AttachmentList from "../components/AttachmentList";
+import ActiveSessionConflictModal, {
+  useActiveSessionConflict,
+} from "../components/ActiveSessionConflictModal";
 import RichDocEditor, {
   documentToPlainText,
   noteToDocument,
@@ -90,6 +93,9 @@ export default function LearningWorkspace() {
   const [attachments, setAttachments] = useState<LearningAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  /** DEV-0054 Start Guard：开始下一个的 Active Session 冲突弹窗 */
+  const { conflict: startConflict, guard: guardStart, close: closeStart } =
+    useActiveSessionConflict();
 
   /** 本次访问内刚结束（§57 endSession 已成功）：显示结束后视图 */
   const [justEnded, setJustEnded] = useState(false);
@@ -383,13 +389,14 @@ export default function LearningWorkspace() {
     setError("");
   }
 
-  /** 开始下一个（§66）：从任务 / 快速学习 */
+  /** 开始下一个（§66）：从任务 / 快速学习；Start Guard 冲突 → 弹窗 */
   async function startNext(fn: () => Promise<StudySession>) {
     setError("");
     try {
       const s = await fn();
       navigate(`/learn/${s.id}`);
     } catch (e) {
+      if (guardStart(e)) return;
       setError(String(e));
     }
   }
@@ -604,6 +611,13 @@ export default function LearningWorkspace() {
       </header>
 
       {error && <div className="alert alert--error">{error}</div>}
+
+      {/* Start Guard 冲突弹窗（PHASE F） */}
+      <ActiveSessionConflictModal
+        conflict={startConflict}
+        onClose={closeStart}
+        onResolved={() => void loadNextCandidates()}
+      />
 
       {justEnded ? (
         /* ===== 结束后视图（§61 默认 Primary 关闭 Sheet 后）===== */

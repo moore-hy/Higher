@@ -11,8 +11,12 @@
 
 pub mod client;
 pub mod context;
+pub mod context_builder;
 pub mod prompts;
+pub mod run;
 pub mod tools;
+pub mod vault;
+pub mod web;
 
 use serde::{Deserialize, Serialize};
 

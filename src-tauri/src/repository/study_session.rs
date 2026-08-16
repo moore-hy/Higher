@@ -33,6 +33,13 @@ pub struct StudySession {
     /// 手动修正过 started_at/ended_at 的标记（§69：明确标记，不在主界面突出）
     #[serde(default)]
     pub time_corrected: i64,
+    /// v018（DEV-0053 §27-29）：core | regular | accumulation | unplanned
+    #[serde(default = "default_activity_kind")]
+    pub activity_kind: String,
+}
+
+fn default_activity_kind() -> String {
+    "unplanned".into()
 }
 
 /// 学习日归属不变量（DEV-0049 §11.4，全项目统一）：
@@ -40,7 +47,7 @@ pub struct StudySession {
 /// - Higher 学习日 = **UTC+8** 日历日；
 /// - 因此任何"某学习日 D 的 Session"过滤必须使用
 ///   `date(started_at, '+8 hours') = D`（或 BETWEEN），禁止裸 `date(started_at)`。
-const SESSION_COLUMNS: &str = "id, profile_id, goal_id, task_id, learning_item_id, title, started_at, ended_at, duration_seconds, status, note, note_document_json, created_at, updated_at, time_corrected";
+const SESSION_COLUMNS: &str = "id, profile_id, goal_id, task_id, learning_item_id, title, started_at, ended_at, duration_seconds, status, note, note_document_json, created_at, updated_at, time_corrected, activity_kind";
 
 fn cols(alias: &str) -> String {
     SESSION_COLUMNS
@@ -60,31 +67,57 @@ impl<'a> StudySessionRepository<'a> {
     }
 
     /// Quick Study（§39）：只要求 profile_id；task/goal/item 全 NULL；title="快速学习"。
+    /// DEV-0053 §29：activity_kind = unplanned（用户可后续重新分类）。
     pub fn start_quick(&self, profile_id: i64, task_id: Option<i64>) -> rusqlite::Result<StudySession> {
-        self.start_full(profile_id, None, None, task_id, "快速学习")
+        self.start_full(profile_id, None, None, task_id, "快速学习", "unplanned")
     }
 
     /// 从 Task 开始（§40）：默认 title=task.title。
+    /// DEV-0053 §42：历史 Snapshot——复制 Task.goal_id/learning_item_id 并按
+    /// task_kind/priority 推导 activity_kind（§28），不随 Task 未来改动漂移（§43）。
     pub fn start_for_task(&self, profile_id: i64, task_id: i64) -> rusqlite::Result<StudySession> {
-        let title: String = self
+        let task: Option<(String, Option<i64>, Option<i64>, String, String)> = self
             .conn
             .query_row(
-                "SELECT title FROM tasks WHERE id = ?1",
-                params![task_id],
-                |r| r.get(0),
+                "SELECT title, goal_id, learning_item_id, task_kind, priority
+                 FROM tasks WHERE id = ?1 AND profile_id = ?2",
+                params![task_id, profile_id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                    ))
+                },
             )
-            .unwrap_or_else(|_| "任务学习".to_string());
-        self.start_full(profile_id, None, None, Some(task_id), &title)
+            .ok();
+        let (title, goal_id, item_id, kind) = match task {
+            Some((t, g, i, k, p)) => {
+                let activity = if k == "accumulation" {
+                    "accumulation"
+                } else if p == "core" {
+                    "core"
+                } else {
+                    "regular"
+                };
+                (t, g, i, activity)
+            }
+            None => ("任务学习".to_string(), None, None, "regular"),
+        };
+        self.start_full(profile_id, goal_id, item_id, Some(task_id), &title, kind)
     }
 
-    /// 从 Knowledge 开始（§41）：默认 title=item.name。
+    /// 从 Knowledge 开始（§41）：默认 title=item.name；activity_kind=unplanned
+    /// （知识自由学不属于当日计划；可在结束/历史中重新分类）。
     pub fn start_for_item(&self, learning_item_id: i64, task_id: Option<i64>) -> rusqlite::Result<StudySession> {
         let (profile_id, goal_id, name): (i64, Option<i64>, String) = self.conn.query_row(
             "SELECT profile_id, goal_id, name FROM learning_items WHERE id = ?1",
             params![learning_item_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
-        self.start_full(profile_id, goal_id, Some(learning_item_id), task_id, &name)
+        self.start_full(profile_id, goal_id, Some(learning_item_id), task_id, &name, "unplanned")
     }
 
     /// 兼容旧调用：start(item_id, task_id)。
@@ -99,14 +132,127 @@ impl<'a> StudySessionRepository<'a> {
         learning_item_id: Option<i64>,
         task_id: Option<i64>,
         title: &str,
+        activity_kind: &str,
     ) -> rusqlite::Result<StudySession> {
+        // DEV-0054 §26-28 Start Guard：一个 Profile 最多一个 active StudySession。
+        // 已有 active → 拒绝（人话错误；历史多 active 不在此自动处理 §29）。
+        let active_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM study_sessions WHERE profile_id = ?1 AND status = 'active'",
+            params![profile_id],
+            |r| r.get(0),
+        )?;
+        if active_count > 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+                Some("你已有一项学习正在进行，请先继续或结束当前学习。".to_string()),
+            ));
+        }
+        let ak = match activity_kind {
+            "core" | "regular" | "accumulation" => activity_kind,
+            _ => "unplanned",
+        };
         self.conn.execute(
-            "INSERT INTO study_sessions (profile_id, goal_id, learning_item_id, task_id, title, started_at, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), 'active')",
-            params![profile_id, goal_id, learning_item_id, task_id, title],
+            "INSERT INTO study_sessions (profile_id, goal_id, learning_item_id, task_id, title, started_at, status, activity_kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), 'active', ?6)",
+            params![profile_id, goal_id, learning_item_id, task_id, title, ak],
         )?;
         let id = self.conn.last_insert_rowid();
         self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    /// DEV-0053 §35/§89：修改活动分类（Activity ⋯ 菜单 / Session 编辑）。
+    pub fn set_activity_kind(&self, id: i64, profile_id: i64, kind: &str) -> Result<(), String> {
+        let k = match kind {
+            "core" | "regular" | "accumulation" | "unplanned" => kind,
+            other => return Err(format!("非法活动分类：{other}")),
+        };
+        let n = self
+            .conn
+            .execute(
+                "UPDATE study_sessions SET activity_kind = ?1, updated_at = datetime('now')
+                 WHERE id = ?2 AND profile_id = ?3",
+                params![k, id, profile_id],
+            )
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("学习记录不存在或不属于当前档案".to_string());
+        }
+        Ok(())
+    }
+
+    /// DEV-0053 §35/§52：整理进知识（只改 learning_item_id 关联，不复制 Note）。
+    /// 目标 item 必须与 Session 同 profile。
+    pub fn set_learning_item(&self, id: i64, profile_id: i64, learning_item_id: Option<i64>) -> Result<(), String> {
+        if let Some(item) = learning_item_id {
+            let item_profile: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT profile_id FROM learning_items WHERE id = ?1",
+                    params![item],
+                    |r| r.get(0),
+                )
+                .ok();
+            if item_profile != Some(profile_id) {
+                return Err("所选知识不属于当前学习档案".to_string());
+            }
+        }
+        let n = self
+            .conn
+            .execute(
+                "UPDATE study_sessions SET learning_item_id = ?1, updated_at = datetime('now')
+                 WHERE id = ?2 AND profile_id = ?3",
+                params![learning_item_id, id, profile_id],
+            )
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("学习记录不存在或不属于当前档案".to_string());
+        }
+        Ok(())
+    }
+
+    /// DEV-0053 §46：Goal 学习记录（Day 直接 goal_id；Month/Annual/Final 经 descendant）。
+    pub fn list_by_goal(&self, profile_id: i64, goal_id: i64, limit: i64) -> Result<Vec<StudySession>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "WITH RECURSIVE sub(id) AS (
+                     SELECT id FROM goals WHERE id = ?2 AND profile_id = ?1
+                     UNION ALL
+                     SELECT g.id FROM goals g JOIN sub s ON g.parent_goal_id = s.id
+                 )
+                 SELECT s.id, s.profile_id, s.goal_id, s.task_id, s.learning_item_id, s.title,
+                        s.started_at, s.ended_at, s.duration_seconds, s.status, s.note,
+                        s.note_document_json, s.created_at, s.updated_at, s.time_corrected, s.activity_kind
+                 FROM study_sessions s
+                 WHERE s.profile_id = ?1 AND s.goal_id IN (SELECT id FROM sub)
+                 ORDER BY s.started_at DESC
+                 LIMIT ?3",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![profile_id, goal_id, limit.clamp(1, 200)], parse_session)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    /// DEV-0053 §50-51：未归类学习（learning_item_id IS NULL）。
+    pub fn list_unassigned(&self, profile_id: i64, limit: i64) -> Result<Vec<StudySession>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, profile_id, goal_id, task_id, learning_item_id, title,
+                        started_at, ended_at, duration_seconds, status, note,
+                        note_document_json, created_at, updated_at, time_corrected, activity_kind
+                 FROM study_sessions
+                 WHERE profile_id = ?1 AND learning_item_id IS NULL
+                 ORDER BY started_at DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![profile_id, limit.clamp(1, 200)], parse_session)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
     /// 结束归档：把本次学习挂到知识 / 任务（均可空=仅保留学习记录）。
@@ -351,5 +497,6 @@ fn parse_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<StudySession> {
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
         time_corrected: row.get(14)?,
+        activity_kind: row.get(15)?,
     })
 }

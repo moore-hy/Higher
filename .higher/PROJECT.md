@@ -2,7 +2,7 @@
 
 > Last Verified：2026-08-16 00:30
 > Snapshot：Higher FULL PROJECT SNAPSHOT
-> Schema：v015
+> Schema：v018
 > 面向开发者/AI 的项目总档案。产品视角见 PRODUCT.md；技术实况细节见 ENVIRONMENT.md。
 
 ## 1. 项目概览
@@ -111,6 +111,9 @@ SQLite v013
 | **v013** | **profile_first** | **六表重建直挂 profile_id；goal 全可空；sessions + title/time_corrected；backfill 保 ID + NULL 自检 + fk_check** |
 | v014 | session_rich_document | study_sessions + note_document_json（Tiptap 文档与 note 纯文本投影原子写） |
 | **v015** | **goal_tree_mastery** | **goals 自关联树五列 + final/sibling 唯一索引 + 旧 Goal 三态升级；mastery_assessments 表** |
+| **v016** | **knowledge_documents** | **文档表（双 CASCADE+3 索引）；attachments.document_id；旧 content→「旧知识正文」迁移（防重复，原值保留）** |
+| **v017** | **personal_intelligence** | **11 表：ai_conversations/messages/runs/run_events/sources、memory_records、personalization_sources/chunks/profiles、ai_change_sets/operations；goals.day_kind；search_index+FTS5+3 触发器+6 实体 rebuild** |
+| **v018** | **daily_dual_tree_loop** | **tasks.+estimated_minutes/task_kind/priority；study_sessions.+activity_kind（backfill 按任务映射）；ai_change_operations.+operation_ref+idx** |
 
 ## 11. 开发历程
 
@@ -125,6 +128,10 @@ SQLite v013
 | **BATCH-04（DEV-0040~0048）** | **产品模型纠正** | **Profile First/三入口导航/Today+通知/工作流终版/Planning Cockpit/React Flow 图/AI Daily Review** | **模型级重构** | **v013** | ✅ |
 | DEV-0049 | Human 验证 Fix 01 | Tiptap 富文本文档编辑器（图/视频/代码/画图入正文）+ 全链 UTC+8 学习日 + 日期详情摘要 | sessions + document 列 | v014 | ✅ |
 | **DEV-0050** | **Runtime Fix + Goal Tree V1** | **P0×2（CodeBlock 死循环/编辑器 effect 死循环冻结导航）+ 目标树 Final→Year→Month→Day + Planning 重排（树+下一步/日历/学习数据/最近学习）+ 学习数据三指标 + AI Mastery（仅手动/40-30-30/证据不足无分）** | **goals 树化 + mastery 表；旧 Goal/Stage/Plan 保留 legacy** | **v015** | ✅（GUI 人工验收待负责人） |
+| **DEV-0051** | **Knowledge Workspace V2** | **三区独立滚动修复 + Knowledge Documents（CRUD/原子保存/文档附件/删除清理）+ 旧 content 迁移 + 内容时间线（文档×学习记录倒序/media-only/legacy 附件区）+ safe_delete 守卫 + AI Context 读 Documents + AI Panel Compact** | **knowledge_documents 表 + attachments.document_id；content 转 legacy** | **v016** | ✅（实机 v016 首启待确认） |
+| **DEV-0052** | **Personal Intelligence V1** | **AI 双模式（只读/助手+一键切换续跑）+ Run/流式/停止 + Conversation 持久化 + Memory Engine（7 类/supersede/提取）+ FTS5 全局搜索 + Context Builder 五层 60k + 私人化部署（4 格式导入/Compile/冲突并列/模板）+ Brave 联网+SSRF+[[S]] Citation+Repair + ChangeSet（Diff/勾选/事务/冲突拒/Undo）+ 年度目标跨年+Rest Day + Vault（root/审计/blob/快照）** | **v017 十一表；Direct Write Tools 仍 0** | **v017** | ✅（负责人实机确认 v017） |
+| **DEV-0053** | **Daily & Dual-Tree Loop** | **P0 AI 真实性三层防线（措辞硬规则+Backend Write-Intent Guard+真实结果✓行）+ Today 重构（今日任务[三组全字段 CRUD]+今日活动[四组极简行/⋯菜单]）+ 统一日报 get_daily_learning_report（全指标公式+缺失态）+ Calendar 下方内联日报（旧 Modal 废弃）+ Session 历史快照双树引用（Goal CTE 四级/未归类/整理）+ ChangeSet Ref 机制（operation_ref/parent_ref/goal_ref/learning_item_ref+Forward-Ref Guard+原子 Apply）** | **v018 四列+一索引；Direct Write Tools 仍 0** | **v018** | ✅（负责人实机确认 v018） |
+| **DEV-0054** | **UI/UX Convergence & Runtime Fix** | **综合效率证据规则（未估时→时间维度无效；<2 维度→暂不可计算）+ Active Session Start Guard（单 Profile 单 active；冲突弹窗；多条异常列表不自改历史）+ AI Markdown 渲染（react-markdown+remark-gfm；GFM 表格横滚；禁 raw HTML；[[S]] 上标）+ Today/Task/Activity 产品级重构（Compact Banner/直接动作+⋯/时间倒序+Filter）+ Calendar 日报 4+Summary 层级 + Planning 白 Input 修复 + Settings 收敛（Tab 序/中文化/Danger Zone）+ Design Tokens + Browser Preview Guard（isTauriRuntime）** | **无 Schema 变化（保持 v018 §151）** | **v018** | ✅ Gate（实机待负责人复验 UI） |
 
 ## 12. 已解决重大问题
 

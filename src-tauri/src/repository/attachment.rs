@@ -16,6 +16,9 @@ pub struct LearningAttachment {
     #[serde(default)]
     pub learning_item_id: Option<i64>,
     pub session_id: Option<i64>,
+    /// v016：Knowledge Document 附件（文档内媒体；session/document 二选一或都空=节点级 legacy）
+    #[serde(default)]
+    pub document_id: Option<i64>,
     pub attachment_type: String, // image | video | drawing | file
     pub file_name: String,
     pub relative_path: String,
@@ -108,6 +111,62 @@ impl<'a> AttachmentRepository<'a> {
         self.validate(profile_id, Some(learning_item_id), None)
     }
 
+    /// v016 校验：document 属于 profile 且其 learning_item_id 与传入一致。
+    pub fn validate_document(
+        &self,
+        profile_id: i64,
+        document_id: i64,
+        learning_item_id: Option<i64>,
+    ) -> rusqlite::Result<()> {
+        let (doc_profile, doc_item): (i64, i64) = self
+            .conn
+            .query_row(
+                "SELECT profile_id, learning_item_id FROM knowledge_documents WHERE id = ?1",
+                params![document_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| {
+                rusqlite::Error::InvalidParameterName("知识文档不存在，无法关联附件".to_string())
+            })?;
+        if doc_profile != profile_id {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "跨档案的知识文档被拒绝：该文档不属于当前学习档案".to_string(),
+            ));
+        }
+        if let Some(item) = learning_item_id {
+            if item != doc_item {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "附件与知识文档的节点不一致，已拒绝".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// v016 创建文档附件（document 内 Image/Video/Drawing：session_id=NULL）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_for_document(
+        &self,
+        profile_id: i64,
+        learning_item_id: i64,
+        document_id: i64,
+        attachment_type: &str,
+        file_name: &str,
+        relative_path: &str,
+        mime_type: Option<&str>,
+        caption: &str,
+    ) -> rusqlite::Result<LearningAttachment> {
+        self.validate_document(profile_id, document_id, Some(learning_item_id))?;
+        self.conn.execute(
+            "INSERT INTO learning_attachments
+                (profile_id, learning_item_id, session_id, document_id, attachment_type, file_name, relative_path, mime_type, caption)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![profile_id, learning_item_id, document_id, attachment_type, file_name, relative_path, mime_type, caption],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
     /// 创建附件记录（relative_path 由 command 层生成并传入；v013 写 profile_id）。
     #[allow(clippy::too_many_arguments)]
     pub fn create(
@@ -134,7 +193,7 @@ impl<'a> AttachmentRepository<'a> {
 
     pub fn get(&self, id: i64) -> rusqlite::Result<Option<LearningAttachment>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, profile_id, learning_item_id, session_id, attachment_type, file_name, relative_path,
+            "SELECT id, profile_id, learning_item_id, session_id, document_id, attachment_type, file_name, relative_path,
                     mime_type, caption, created_at
              FROM learning_attachments WHERE id = ?1",
         )?;
@@ -145,7 +204,7 @@ impl<'a> AttachmentRepository<'a> {
     /// 某知识节点的全部附件（Knowledge 详情 / 学习记录展开）。
     pub fn list_by_learning_item(&self, learning_item_id: i64) -> rusqlite::Result<Vec<LearningAttachment>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, profile_id, learning_item_id, session_id, attachment_type, file_name, relative_path,
+            "SELECT id, profile_id, learning_item_id, session_id, document_id, attachment_type, file_name, relative_path,
                     mime_type, caption, created_at
              FROM learning_attachments WHERE learning_item_id = ?1
              ORDER BY session_id IS NULL, session_id DESC, id",
@@ -157,11 +216,35 @@ impl<'a> AttachmentRepository<'a> {
     /// 某 Session 的附件（学习记录展开 / AI Context metadata）。
     pub fn list_by_session(&self, session_id: i64) -> rusqlite::Result<Vec<LearningAttachment>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, profile_id, learning_item_id, session_id, attachment_type, file_name, relative_path,
+            "SELECT id, profile_id, learning_item_id, session_id, document_id, attachment_type, file_name, relative_path,
                     mime_type, caption, created_at
              FROM learning_attachments WHERE session_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map(params![session_id], parse_attachment)?;
+        rows.collect()
+    }
+
+    /// v016 某文档的附件。
+    pub fn list_by_document(&self, document_id: i64) -> rusqlite::Result<Vec<LearningAttachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, profile_id, learning_item_id, session_id, document_id, attachment_type, file_name, relative_path,
+                    mime_type, caption, created_at
+             FROM learning_attachments WHERE document_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![document_id], parse_attachment)?;
+        rows.collect()
+    }
+
+    /// v016 legacy 节点级附件（session_id NULL 且 document_id NULL）。
+    pub fn list_legacy_by_item(&self, learning_item_id: i64) -> rusqlite::Result<Vec<LearningAttachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, profile_id, learning_item_id, session_id, document_id, attachment_type, file_name, relative_path,
+                    mime_type, caption, created_at
+             FROM learning_attachments
+             WHERE learning_item_id = ?1 AND session_id IS NULL AND document_id IS NULL
+             ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![learning_item_id], parse_attachment)?;
         rows.collect()
     }
 
@@ -191,11 +274,12 @@ fn parse_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<LearningAttachm
         profile_id: row.get(1)?,
         learning_item_id: row.get(2)?,
         session_id: row.get(3)?,
-        attachment_type: row.get(4)?,
-        file_name: row.get(5)?,
-        relative_path: row.get(6)?,
-        mime_type: row.get(7)?,
-        caption: row.get(8)?,
-        created_at: row.get(9)?,
+        document_id: row.get(4)?,
+        attachment_type: row.get(5)?,
+        file_name: row.get(6)?,
+        relative_path: row.get(7)?,
+        mime_type: row.get(8)?,
+        caption: row.get(9)?,
+        created_at: row.get(10)?,
     })
 }

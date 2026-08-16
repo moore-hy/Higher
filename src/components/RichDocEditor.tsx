@@ -318,7 +318,20 @@ export function documentToPlainText(doc: JSONContent | null): string {
   return parts.join("").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// ---------- 主组件 ----------
+// ---------- 主组件（DEV-0051 §15：RichDocumentEditor 复用形态） ----------
+/** §15 persistence adapter：编辑器只关心"给我一个附件"，存到哪由外层决定。
+ * - Session：LearningWorkspace（默认 = session 附件链）
+ * - Knowledge Document：KnowledgeDocumentEditor（document 附件链）
+ * 未传时回退 Session 链（原行为，保证 LearningWorkspace 零改动）。 */
+export type MediaSaveArgs = {
+  kind: "image" | "video";
+  fileName: string;
+  mime: string | null;
+  base64?: string;
+  sourcePath?: string;
+};
+export type MediaSaveAdapter = (args: MediaSaveArgs) => Promise<{ id: number; file_name: string }>;
+
 export default function RichDocEditor({
   profileId,
   learningItemId,
@@ -327,6 +340,9 @@ export default function RichDocEditor({
   initialLegacyNote,
   onChange,
   readOnly = false,
+  saveMedia,
+  saveDrawing,
+  toolbarExtra,
 }: {
   profileId: number;
   learningItemId: number | null;
@@ -338,6 +354,12 @@ export default function RichDocEditor({
   /** 文档变化：外部 debounce 保存（json + 纯文本投影） */
   onChange: (doc: JSONContent, plainText: string) => void;
   readOnly?: boolean;
+  /** §15 持久化适配器（缺省 = Session 附件链） */
+  saveMedia?: MediaSaveAdapter;
+  /** §15 画图适配器（缺省 = Session 链） */
+  saveDrawing?: (dataBase64: string) => Promise<{ id: number; file_name: string }>;
+  /** 工具栏尾部扩展（如文档模式额外按钮） */
+  toolbarExtra?: React.ReactNode;
 }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -410,13 +432,14 @@ export default function RichDocEditor({
     [editor]
   );
 
-  /** 附件保存链（粘贴 base64 / 上传复制），成功后插入 */
+  /** 附件保存链（§15：saveMedia 适配器优先；缺省 = Session 附件链） */
   const saveAndInsert = useCallback(
-    async (args: { kind: "image" | "video"; fileName: string; mime: string | null; base64?: string; sourcePath?: string }) => {
+    async (args: MediaSaveArgs) => {
       setBusy(`正在插入 ${args.fileName}…`);
       try {
-        const att =
-          args.base64 != null
+        const att = saveMedia
+          ? await saveMedia(args)
+          : args.base64 != null
             ? await addAttachmentFromBase64({
                 profileId,
                 learningItemId,
@@ -441,7 +464,7 @@ export default function RichDocEditor({
         setBusy("");
       }
     },
-    [profileId, learningItemId, sessionId, insertMedia]
+    [profileId, learningItemId, sessionId, insertMedia, saveMedia]
   );
 
   // ---------- Ctrl+V 剪贴板图片（§5.1 A；DOM 事件即可插入当前光标） ----------
@@ -588,11 +611,12 @@ export default function RichDocEditor({
         <Btn label="图片" onClick={() => void uploadImage()} title="上传图片" />
         <Btn label="视频" onClick={() => void uploadVideo()} title="上传视频" />
         <Btn label="画图" onClick={() => setShowDraw(true)} title="画图并插入" />
+        {toolbarExtra}
         {busy && <span className="muted">{busy}</span>}
         <span className="leditor__hint">支持 Ctrl+V 粘贴截图、拖入图片/视频</span>
       </div>
     );
-  }, [editor, busy, uploadImage, uploadVideo]);
+  }, [editor, busy, uploadImage, uploadVideo, toolbarExtra]);
 
   if (!editor) return <div className="muted">编辑器加载中…</div>;
 
@@ -609,16 +633,19 @@ export default function RichDocEditor({
         <p className="muted">（本次学习没有笔记）</p>
       )}
       {dragOver && <div className="leditor__dropzone">松开以插入图片 / 视频</div>}
-      {showDraw && sessionId != null && (
+      {showDraw && (
         <DrawModal
           onClose={() => setShowDraw(false)}
           onSave={async (dataUrl) => {
-            const att = await saveDrawingAttachment({
-              profileId,
-              learningItemId: learningItemId ?? null,
-              sessionId,
-              dataBase64: dataUrl,
-            });
+            // §15：saveDrawing 适配器优先（Document 链）；缺省 = Session 链
+            const att = saveDrawing
+              ? await saveDrawing(dataUrl)
+              : await saveDrawingAttachment({
+                  profileId,
+                  learningItemId: learningItemId ?? null,
+                  sessionId: sessionId!,
+                  dataBase64: dataUrl,
+                });
             setShowDraw(false);
             insertMedia("image", att.id, att.file_name);
           }}

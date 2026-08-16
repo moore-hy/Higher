@@ -6,14 +6,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   GoalTree,
+  DailyReport,
+  KnowledgeDocument,
+  KnowledgeWorkspaceData,
   LearningStats,
   MasteryAssessment,
   MasteryView,
   TrendPoint,
   Adjustment,
+  ActiveSessionBrief,
+  AiConversation,
+  AiMessage,
+  AiMode,
   AiResult,
   AiSettings,
   AttachmentImageData,
+  ChangeOperation,
+  ChangeSet,
   CleanupPreview,
   CountPair,
   DbStatus,
@@ -26,16 +35,24 @@ import type {
   KnowledgeNodeStats,
   LearningAttachment,
   LearningItem,
+  MemoryRecord,
   NextAction,
+  PersonalizationProfile,
+  PersonalizationSource,
   Plan,
   ProfileCalendarDay,
   ProgressMetrics,
   RecurringRule,
+  SearchHit,
   StudyProfile,
   StudySession,
   StudyStage,
   Task,
   TrendDay,
+  VaultEvent,
+  VaultSnapshot,
+  VaultStatus,
+  WebSource,
 } from "./types";
 
 // ---- DB ----
@@ -201,6 +218,99 @@ export const assessMastery = (
     periodStart,
     periodEnd,
   });
+
+// =============== Knowledge Documents（DEV-0051） ===============
+
+export const createKnowledgeDocument = (profileId: number, learningItemId: number, title?: string) =>
+  invoke<KnowledgeDocument>("create_knowledge_document", {
+    profileId,
+    learningItemId,
+    title: title ?? "未命名文档",
+  });
+
+export const getKnowledgeDocument = (profileId: number, id: number) =>
+  invoke<KnowledgeDocument | null>("get_knowledge_document", { profileId, id });
+
+export const listKnowledgeDocuments = (profileId: number, learningItemId: number) =>
+  invoke<KnowledgeDocument[]>("list_knowledge_documents", { profileId, learningItemId });
+
+/** §37：title + text + json 原子更新 */
+export const updateKnowledgeDocument = (
+  profileId: number,
+  id: number,
+  title: string,
+  contentText: string,
+  contentDocumentJson: string | null
+) =>
+  invoke<KnowledgeDocument>("update_knowledge_document", {
+    profileId,
+    id,
+    title,
+    contentText,
+    contentDocumentJson,
+  });
+
+export const renameKnowledgeDocument = (profileId: number, id: number, title: string) =>
+  invoke<KnowledgeDocument>("rename_knowledge_document", { profileId, id, title });
+
+export const deleteKnowledgeDocument = (profileId: number, id: number) =>
+  invoke<void>("delete_knowledge_document", { profileId, id });
+
+/** §49：Workspace 聚合 */
+export const getKnowledgeWorkspace = (profileId: number, itemId: number) =>
+  invoke<KnowledgeWorkspaceData>("get_knowledge_workspace", { profileId, itemId });
+
+export const addDocumentAttachment = (
+  profileId: number,
+  learningItemId: number,
+  documentId: number,
+  attachmentType: "image" | "video" | "drawing" | "file",
+  sourcePath: string,
+  caption?: string
+) =>
+  invoke<LearningAttachment>("add_document_attachment", {
+    profileId,
+    learningItemId,
+    documentId,
+    attachmentType,
+    sourcePath,
+    caption: caption ?? "",
+  });
+
+export const addDocumentAttachmentFromBase64 = (
+  profileId: number,
+  learningItemId: number,
+  documentId: number,
+  attachmentType: "image" | "video" | "drawing" | "file",
+  fileName: string,
+  mimeType: string | null,
+  dataBase64: string
+) =>
+  invoke<LearningAttachment>("add_document_attachment_from_base64", {
+    profileId,
+    learningItemId,
+    documentId,
+    attachmentType,
+    fileName,
+    mimeType,
+    dataBase64,
+  });
+
+export const saveDocumentDrawing = (
+  profileId: number,
+  learningItemId: number,
+  documentId: number,
+  dataBase64: string
+) =>
+  invoke<LearningAttachment>("save_document_drawing", {
+    profileId,
+    learningItemId,
+    documentId,
+    dataBase64,
+  });
+
+export const listAttachmentsByDocument = (profileId: number, documentId: number) =>
+  invoke<LearningAttachment[]>("list_attachments_by_document", { profileId, documentId });
 
 export const listGoals = () => invoke<Goal[]>("list_goals");
 
@@ -491,6 +601,10 @@ export const deleteSession = (id: number) =>
 
 export const getActiveSession = () =>
   invoke<StudySession | null>("get_active_session");
+
+/** DEV-0054 Start Guard：档案内全部进行中 Session（历史测试数据可能多于一条） */
+export const listActiveSessions = (profileId: number) =>
+  invoke<ActiveSessionBrief[]>("list_active_sessions", { profileId });
 
 export const listRecentSessions = (limit = 50) =>
   invoke<StudySession[]>("list_recent_sessions", { limit });
@@ -1034,3 +1148,300 @@ export const setNotificationEnabled = (enabled: boolean) =>
 /** 同步学习提醒（无参；后端对全部 profile 重建未来 30 天的到点通知） */
 export const syncNotifications = () =>
   invoke<void>("sync_notifications");
+
+// =============== DEV-0052 · Personal Intelligence ===============
+
+// ---- AI 模式 / 对话（PHASE A / C） ----
+
+/** 当前档案的 AI 模式偏好（缺省 readonly） */
+export const getAiMode = (profileId: number) =>
+  invoke<AiMode | string>("get_ai_mode", { profileId });
+
+export const setAiMode = (profileId: number, mode: AiMode) =>
+  invoke<void>("set_ai_mode", { profileId, mode });
+
+export const createAiConversation = (profileId: number, mode?: AiMode, title?: string) =>
+  invoke<AiConversation>("create_ai_conversation", {
+    profileId,
+    mode: mode ?? null,
+    title: title ?? null,
+  });
+
+export const listAiConversations = (profileId: number, limit = 20, beforeId?: number) =>
+  invoke<AiConversation[]>("list_ai_conversations", {
+    profileId,
+    limit,
+    beforeId: beforeId ?? null,
+  });
+
+/** 最近 N 条消息（时间正序；offset 分页加载更早） */
+export const listAiMessages = (
+  profileId: number,
+  conversationId: number,
+  limit = 50,
+  offset = 0
+) =>
+  invoke<AiMessage[]>("list_ai_messages", {
+    profileId,
+    conversationId,
+    limit,
+    offset,
+  });
+
+export const archiveAiConversation = (profileId: number, id: number) =>
+  invoke<void>("archive_ai_conversation", { profileId, id });
+
+/** 设置单个会话的临时模式（优先于档案偏好） */
+export const setAiConversationMode = (profileId: number, id: number, mode: AiMode) =>
+  invoke<void>("set_ai_conversation_mode", { profileId, id, mode });
+
+// ---- 全库搜索 / 长期记忆（PHASE D / E） ----
+
+export const searchHigher = (
+  profileId: number,
+  query: string,
+  entityTypes?: string[],
+  limit = 20
+) =>
+  invoke<SearchHit[]>("search_higher", {
+    profileId,
+    query,
+    entityTypes: entityTypes ?? null,
+    limit,
+  });
+
+export const listMemoryRecords = (profileId: number) =>
+  invoke<MemoryRecord[]>("list_memory_records", { profileId });
+
+export const dismissMemoryRecord = (profileId: number, id: number) =>
+  invoke<void>("dismiss_memory_record", { profileId, id });
+
+// ---- ChangeSet（PHASE O-Q） ----
+
+export const getAiChangeSet = (profileId: number, id: number) =>
+  invoke<ChangeSet | null>("get_ai_change_set", { profileId, id });
+
+export const listAiChangeSetOperations = (profileId: number, changeSetId: number) =>
+  invoke<ChangeOperation[]>("list_ai_change_set_operations", { profileId, changeSetId });
+
+export const setAiChangeOpSelected = (
+  profileId: number,
+  changeSetId: number,
+  opId: number,
+  selected: boolean
+) =>
+  invoke<void>("set_ai_change_op_selected", { profileId, changeSetId, opId, selected });
+
+export const applyAiChangeSet = (profileId: number, id: number, onlySelected: boolean) =>
+  invoke<void>("apply_ai_change_set", { profileId, id, onlySelected });
+
+export const rejectAiChangeSet = (profileId: number, id: number) =>
+  invoke<void>("reject_ai_change_set", { profileId, id });
+
+export const undoAiChangeSet = (profileId: number, id: number) =>
+  invoke<void>("undo_ai_change_set", { profileId, id });
+
+// ---- 私人化部署（PHASE G-J） ----
+
+/** 导入资料文件（txt / md / docx / pdf；后端提取文本 + sha256 去重） */
+export const importPersonalizationFiles = (profileId: number, paths: string[]) =>
+  invoke<PersonalizationSource[]>("import_personalization_files", { profileId, paths });
+
+export const listPersonalizationSources = (profileId: number) =>
+  invoke<PersonalizationSource[]>("list_personalization_sources", { profileId });
+
+export const deletePersonalizationSource = (profileId: number, id: number) =>
+  invoke<void>("delete_personalization_source", { profileId, id });
+
+export const getPersonalizationProfile = (profileId: number) =>
+  invoke<PersonalizationProfile | null>("get_personalization_profile", { profileId });
+
+/** 重新分析（Map → Merge → 19 节 MD Draft；async 耗时，调用 AI） */
+export const compilePersonalization = (profileId: number) =>
+  invoke<PersonalizationProfile>("compile_personalization", { profileId });
+
+/** 确认草稿并保存（status → confirmed，version+1） */
+export const confirmPersonalizationProfile = (profileId: number) =>
+  invoke<void>("confirm_personalization_profile", { profileId });
+
+export const editPersonalizationProfile = (profileId: number, mdContent: string) =>
+  invoke<void>("edit_personalization_profile", { profileId, mdContent });
+
+/** 需求采集模板（Markdown 文本，前端下载保存） */
+export const getRequirementTemplate = () =>
+  invoke<string>("get_requirement_template");
+
+// ---- 联网搜索（§95-97） ----
+
+/** [enabled, hasKey]；Key 不回显 */
+export const getWebSearchSettings = () =>
+  invoke<[boolean, boolean]>("get_web_search_settings");
+
+export const setWebSearchSettings = (enabled: boolean, braveKey?: string) =>
+  invoke<void>("set_web_search_settings", {
+    enabled,
+    braveKey: braveKey ?? null,
+  });
+
+// ---- 保险箱（§159-163） ----
+
+export const vaultStatus = () => invoke<VaultStatus>("vault_status");
+
+export const vaultUnlock = (password: string) =>
+  invoke<void>("vault_unlock", { password });
+
+export const vaultLock = () => invoke<void>("vault_lock");
+
+export const vaultListEvents = (limit = 100) =>
+  invoke<VaultEvent[]>("vault_list_events", { limit });
+
+export const vaultListSnapshots = () =>
+  invoke<VaultSnapshot[]>("vault_list_snapshots");
+
+/** 创建快照（返回快照 id） */
+export const vaultCreateSnapshot = () => invoke<number>("vault_create_snapshot");
+
+/** 导出审计 JSON（pretty 字符串，前端下载保存） */
+export const vaultExportEvents = () => invoke<string>("vault_export_events");
+
+// ---- AI Run（PHASE B：流式对话） ----
+
+/**
+ * 启动一轮后台对话（立即返回 run_id）。
+ * 事件（payload = { run_id, data }）：ai://delta / ai://source / ai://changeset /
+ * ai://run-status（completed | cancelled | waiting_approval | failed）/ ai://error。
+ */
+export const aiStartRun = (args: {
+  profileId: number;
+  conversationId: number;
+  userMessage: string;
+  pageLabel: string;
+  knowledgePath?: string | null;
+  sessionTitle?: string | null;
+  date?: string | null;
+}) =>
+  invoke<string>("ai_start_run", {
+    profileId: args.profileId,
+    conversationId: args.conversationId,
+    userMessage: args.userMessage,
+    pageLabel: args.pageLabel,
+    knowledgePath: args.knowledgePath ?? null,
+    sessionTitle: args.sessionTitle ?? null,
+    date: args.date ?? null,
+  });
+
+/** 取消正在运行的 run（返回是否成功发出取消） */
+export const aiCancelRun = (runId: string) =>
+  invoke<boolean>("ai_cancel_run", { runId });
+
+export const aiActiveRunCount = () => invoke<number>("ai_active_run_count");
+
+/** 用系统浏览器打开来源 URL（sid 优先从 Source Registry 解析；SSRF 校验在后端） */
+export const openExternalUrl = (
+  profileId: number,
+  runId: string | null,
+  sidOrUrl: string
+) =>
+  invoke<void>("open_external_url", { profileId, runId, sidOrUrl });
+
+// =============== DEV-0053 · Daily Report / 双树引用 / Task V2 ===============
+
+/** §90：Today（today）/ Calendar（selected_date）共用的单日学习报告（一次只查一天 §166） */
+export const getDailyLearningReport = (profileId: number, date: string) =>
+  invoke<DailyReport>("get_daily_learning_report", { profileId, date });
+
+/** §51：未归类学习（learning_item_id IS NULL 的 Session，虚拟入口数据） */
+export const listUnassignedSessions = (profileId: number, limit = 50) =>
+  invoke<StudySession[]>("list_unassigned_sessions", { profileId, limit });
+
+/** §52：未归类 Session 整理进知识（只更新 learning_item_id，不复制笔记） */
+export const organizeSessionIntoKnowledge = (
+  profileId: number,
+  sessionId: number,
+  learningItemId: number
+) =>
+  invoke<void>("organize_session_into_knowledge", { profileId, sessionId, learningItemId });
+
+/** §27/§35：修改 Session 活动分类（core | regular | accumulation | unplanned） */
+export const setSessionActivityKind = (
+  profileId: number,
+  sessionId: number,
+  activityKind: "core" | "regular" | "accumulation" | "unplanned"
+) =>
+  invoke<void>("set_session_activity_kind", { profileId, sessionId, activityKind });
+
+/** §35：修改 Session 目标关联（goalId 传 null = 取消关联） */
+export const setSessionGoal = (profileId: number, sessionId: number, goalId: number | null) =>
+  invoke<void>("set_session_goal", { profileId, sessionId, goalId });
+
+/** §36：从 Session 生成后续任务（新 Task；原 Activity 历史事实保持存在） */
+export const createFollowupTaskFromSession = (
+  profileId: number,
+  sessionId: number,
+  plannedDate?: string | null,
+  estimatedMinutes?: number | null
+) =>
+  invoke<Task>("create_followup_task_from_session", {
+    profileId,
+    sessionId,
+    plannedDate: plannedDate ?? null,
+    estimatedMinutes: estimatedMinutes ?? null,
+  });
+
+/** §46：Goal 关联的学习记录（同一 StudySession View，不复制） */
+export const listSessionsByGoal = (profileId: number, goalId: number, limit = 50) =>
+  invoke<StudySession[]>("list_sessions_by_goal", { profileId, goalId, limit });
+
+/** §15/§23：Task V2 创建（预计时间 / task_kind / priority / Goal+Knowledge 双树引用） */
+export const createTaskV2 = (args: {
+  profileId: number;
+  title: string;
+  plannedDate?: string | null;
+  plannedTime?: string | null;
+  goalId?: number | null;
+  learningItemId?: number | null;
+  estimatedMinutes?: number | null;
+  taskKind?: "structured" | "accumulation" | null;
+  priority?: "core" | "normal" | null;
+}) =>
+  invoke<Task>("create_task_v2", {
+    profileId: args.profileId,
+    title: args.title,
+    plannedDate: args.plannedDate ?? null,
+    plannedTime: args.plannedTime ?? null,
+    goalId: args.goalId ?? null,
+    learningItemId: args.learningItemId ?? null,
+    estimatedMinutes: args.estimatedMinutes ?? null,
+    taskKind: args.taskKind ?? null,
+    priority: args.priority ?? null,
+  });
+
+/** §84：Task V2 更新（同字段全量；null = 清除） */
+export const updateTaskV2 = (args: {
+  profileId: number;
+  id: number;
+  title: string;
+  plannedDate?: string | null;
+  plannedTime?: string | null;
+  goalId?: number | null;
+  learningItemId?: number | null;
+  estimatedMinutes?: number | null;
+  taskKind?: "structured" | "accumulation" | null;
+  priority?: "core" | "normal" | null;
+}) =>
+  invoke<void>("update_task_v2", {
+    profileId: args.profileId,
+    id: args.id,
+    title: args.title,
+    plannedDate: args.plannedDate ?? null,
+    plannedTime: args.plannedTime ?? null,
+    goalId: args.goalId ?? null,
+    learningItemId: args.learningItemId ?? null,
+    estimatedMinutes: args.estimatedMinutes ?? null,
+    taskKind: args.taskKind ?? null,
+    priority: args.priority ?? null,
+  });
+
+/** §11：Apply 成功后的真实结果行（如「✓ 已创建任务「背10个英语单词」」；由后端结果生成） */
+export const getChangeSetApplySummary = (profileId: number, changeSetId: number) =>
+  invoke<string[]>("get_change_set_apply_summary", { profileId, changeSetId });

@@ -331,6 +331,18 @@ impl<'a> LearningItemRepository<'a> {
             )));
         }
 
+        // 检查 Knowledge Documents（DEV-0051 §51：长期知识文档禁误删）
+        let doc_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM knowledge_documents WHERE learning_item_id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        if doc_count > 0 {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "该知识节点仍包含文档，请先处理文档后再删除。".to_string(),
+            ));
+        }
+
         self.conn.execute(
             "DELETE FROM learning_items WHERE id = ?1",
             params![id],

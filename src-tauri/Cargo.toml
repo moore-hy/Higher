@@ -25,6 +25,20 @@ tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-# AI HTTP 客户端（OpenAI-compatible REST，仅 json + rustls TLS，不引入大型 SDK）
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# AI HTTP client (OpenAI-compatible REST; json + rustls TLS only, no heavy SDK)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tauri-plugin-notification = "2.3.3"
+# DEV-0052 Personal Intelligence
+tokio-util = "0.7"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+encoding_rs = "0.8"
+quick-xml = "0.36"
+# NOTE: zip / scraper / pdf-extract dependency chains contain build-script crates
+# (crc32fast, markup5ever) blocked by Windows Smart App Control (os error 4551,
+# confirmed twice). Direct flate2 dependency also perturbs the png->flate2
+# feature union and re-triggers the blocked crc32fast build script. Using
+# miniz_oxide directly (same backend, no crc32fast link) plus hand-written
+# ZIP/HTML/PDF parsing. No security bypass.
+miniz_oxide = { version = "0.8", default-features = false, features = ["std", "with-alloc"] }
+tauri-plugin-opener = "2"

@@ -67,7 +67,7 @@ fn test_migration_v006_schema_version_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
 
     // learning_items 有 content 列
     let columns: Vec<String> = {
@@ -84,7 +84,7 @@ fn test_migration_v006_schema_version_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 14);
+    assert_eq!(count, 18);
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn test_migration_v005_to_v006_preserves_old_items_with_empty_content() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
 
     // 旧 Item 保留 + content 默认空串
     let repo = LearningItemRepository::new(&conn);

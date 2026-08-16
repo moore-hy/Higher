@@ -16,6 +16,9 @@ pub mod v012_ux_convergence;
 pub mod v013_profile_first;
 pub mod v014_session_rich_document;
 pub mod v015_goal_tree_mastery;
+pub mod v016_knowledge_documents;
+pub mod v017_personal_intelligence;
+pub mod v018_daily_dual_tree_loop;
 
 /// 单个 Migration 定义。
 ///
@@ -106,6 +109,21 @@ const MIGRATIONS: &[Migration] = &[
         version: 15,
         name: "goal_tree_mastery",
         up: v015_goal_tree_mastery::up,
+    },
+    Migration {
+        version: 16,
+        name: "knowledge_documents",
+        up: v016_knowledge_documents::up,
+    },
+    Migration {
+        version: 17,
+        name: "personal_intelligence",
+        up: v017_personal_intelligence::up,
+    },
+    Migration {
+        version: 18,
+        name: "daily_dual_tree_loop",
+        up: v018_daily_dual_tree_loop::up,
     },
 ];
 

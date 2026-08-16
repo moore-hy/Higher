@@ -31,9 +31,26 @@ pub struct Task {
     pub recurring_rule_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
+    /// v018（DEV-0053 §16-17）：预计学习分钟（NULL=未估时；1..=1440）
+    #[serde(default)]
+    pub estimated_minutes: Option<i64>,
+    /// v018（§17）：structured | accumulation
+    #[serde(default = "default_task_kind")]
+    pub task_kind: String,
+    /// v018（§20）：core | normal（accumulation 任务 UI 统一显示「积累」，不读此值）
+    #[serde(default = "default_priority")]
+    pub priority: String,
 }
 
-const TASK_COLUMNS: &str = "id, profile_id, goal_id, learning_item_id, title, planned_date, planned_time, status, archived_at, plan_id, recurring_rule_id, created_at, updated_at";
+fn default_task_kind() -> String {
+    "structured".into()
+}
+
+fn default_priority() -> String {
+    "normal".into()
+}
+
+const TASK_COLUMNS: &str = "id, profile_id, goal_id, learning_item_id, title, planned_date, planned_time, status, archived_at, plan_id, recurring_rule_id, created_at, updated_at, estimated_minutes, task_kind, priority";
 
 fn cols(alias: &str) -> String {
     TASK_COLUMNS
@@ -98,6 +115,121 @@ impl<'a> TaskRepository<'a> {
         learning_item_id: Option<i64>,
     ) -> rusqlite::Result<Task> {
         self.create_for_profile(profile_id, None, title, planned_date, None, learning_item_id, None)
+    }
+
+    /// DEV-0053 §15-23：V1 全字段创建（Today/ChangeSet 共用）。
+    /// kind/priority 值域校验；estimated NULL 或 1..=1440。
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_v2(
+        &self,
+        profile_id: i64,
+        goal_id: Option<i64>,
+        title: &str,
+        planned_date: Option<&str>,
+        planned_time: Option<&str>,
+        learning_item_id: Option<i64>,
+        estimated_minutes: Option<i64>,
+        task_kind: &str,
+        priority: &str,
+    ) -> Result<Task, String> {
+        let kind = match task_kind {
+            "accumulation" => "accumulation",
+            _ => "structured",
+        };
+        let pri = match priority {
+            "core" => "core",
+            _ => "normal",
+        };
+        if let Some(m) = estimated_minutes {
+            if !(1..=1440).contains(&m) {
+                return Err(format!("预计学习分钟必须在 1~1440 之间（收到 {m}）"));
+            }
+        }
+        if let Some(item) = learning_item_id {
+            let item_profile: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT profile_id FROM learning_items WHERE id = ?1",
+                    params![item],
+                    |r| r.get(0),
+                )
+                .ok();
+            if item_profile.is_none() {
+                return Err("所选知识节点不存在".to_string());
+            }
+            if item_profile != Some(profile_id) {
+                return Err("所选知识不属于当前学习档案".to_string());
+            }
+        }
+        self.conn
+            .execute(
+                "INSERT INTO tasks
+                 (profile_id, goal_id, learning_item_id, title, planned_date, planned_time,
+                  estimated_minutes, task_kind, priority, status)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending')",
+                params![profile_id, goal_id, learning_item_id, title, planned_date, planned_time, estimated_minutes, kind, pri],
+            )
+            .map_err(|e| e.to_string())?;
+        let id = self.conn.last_insert_rowid();
+        self.get(id).map_err(|e| e.to_string())?.ok_or_else(|| "创建失败".to_string())
+    }
+
+    /// DEV-0053 §23：全字段编辑（title/date/time/kind/priority/estimated/goal/item）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_v2(
+        &self,
+        id: i64,
+        title: &str,
+        planned_date: Option<&str>,
+        planned_time: Option<&str>,
+        learning_item_id: Option<i64>,
+        goal_id: Option<i64>,
+        estimated_minutes: Option<i64>,
+        task_kind: &str,
+        priority: &str,
+    ) -> Result<(), String> {
+        let kind = match task_kind {
+            "accumulation" => "accumulation",
+            _ => "structured",
+        };
+        let pri = match priority {
+            "core" => "core",
+            _ => "normal",
+        };
+        if let Some(m) = estimated_minutes {
+            if !(1..=1440).contains(&m) {
+                return Err(format!("预计学习分钟必须在 1~1440 之间（收到 {m}）"));
+            }
+        }
+        let profile_id: i64 = self
+            .conn
+            .query_row("SELECT profile_id FROM tasks WHERE id = ?1", params![id], |r| r.get(0))
+            .map_err(|_| "任务不存在".to_string())?;
+        if let Some(item) = learning_item_id {
+            let item_profile: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT profile_id FROM learning_items WHERE id = ?1",
+                    params![item],
+                    |r| r.get(0),
+                )
+                .ok();
+            if item_profile.is_none() {
+                return Err("所选知识节点不存在".to_string());
+            }
+            if item_profile != Some(profile_id) {
+                return Err("所选知识不属于当前学习档案".to_string());
+            }
+        }
+        self.conn
+            .execute(
+                "UPDATE tasks SET title=?1, planned_date=?2, planned_time=?3, learning_item_id=?4,
+                        goal_id=?5, estimated_minutes=?6, task_kind=?7, priority=?8, updated_at=datetime('now')
+                 WHERE id=?9",
+                params![title, planned_date, planned_time, learning_item_id, goal_id, estimated_minutes, kind, pri, id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// 兼容旧调用（BATCH-03.1 前）：item 必填版本（内部解析 profile）。
@@ -378,5 +510,8 @@ fn parse_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         recurring_rule_id: row.get(10)?,
         created_at: row.get(11)?,
         updated_at: row.get(12)?,
+        estimated_minutes: row.get(13)?,
+        task_kind: row.get(14)?,
+        priority: row.get(15)?,
     })
 }

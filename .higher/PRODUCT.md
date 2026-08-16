@@ -1,7 +1,7 @@
 # Higher
 
-> Last Verified：2026-08-16 03:15（DEV-0050）
-> Schema：v015
+> Last Verified：2026-08-16 20:10（DEV-0054）
+> Schema：v018
 
 ## 1. 一句话定义
 
@@ -18,7 +18,7 @@ Higher 是一个帮助用户**建立个人学习系统**的本地软件：它记
 ↓ 今天要做到什么（Day）
 ↓ 实际执行任务和学习（Task / Study Session）
 ↓ 记录真实学习内容（富文本笔记：文字/图片/视频/代码/画图）
-↓ 形成知识体系（Knowledge，仅用户手动）
+↓ 形成知识体系（**User Controlled Knowledge**（用户手动创建 或 AI Assistant 提案→ChangeSet→用户批准后创建；非 Manual Only）
 ↓ 判断掌握情况（Evaluation + AI Mastery 评估）
 ↓ 发现不足 → 调整后续目标和学习
 ↓ 继续学习
@@ -41,7 +41,7 @@ Higher 是一个帮助用户**建立个人学习系统**的本地软件：它记
 - **Study First**——快速学习零前置；目标树只负责组织方向，**不是学习权限门**（无 Final/年/月/日均可学习、建任务、开 Session）
 - **Archive Later**——学习先永久保存，整理稍后决定
 - **User Controlled Knowledge**——知识结构只由用户手动建立
-- **AI Advisory**——AI 只读取分析建议；**Write Tools 永远为 0**；AI 掌握度仅在用户点击「AI评估」时调用（从不自动扣 Token）
+- **AI Advisory + Dual Mode**——只读模式/助手模式；AI 只读取分析建议；**Direct Write Tools 永远为 0**（助手模式经 propose → ChangeSet → 用户批准）；联网与修改权限独立
 - **No Decorative Data**——不打努力分/专注分/效率分；0/0 不显示伪 0%；未评估 ≠ 0 分；证据不足不硬打分
 
 ## 5. 当前信息架构
@@ -68,8 +68,8 @@ Profile
 ↓ Month Goal（父=Year；period=月；属年校验；同月唯一）
 ↓ Day Goal（父=Month；period=当日；属月校验；同日唯一）
 ↓ Task（goal_id 可空复用既有列；树「+任务」预填）
-↓ Study Session（富文本文档 note_document_json + 纯文本投影 note）
-↓ Knowledge / Evaluation
+↓ Knowledge Document（多篇长期文档，富文本同 Session 编辑器）× Study Session（富文本 note_document_json + note 投影）
+↓ 共同构成该知识节点的「内容」时间线 / Evaluation
 ↓ AI Mastery（mastery_assessments append-only）
 ↓ Next Step（下一步 P0-P5）
 ```
@@ -84,11 +84,39 @@ Profile
 
 三指标 + 趋势：学习时间（ended Session）/ 任务完成率（planned 归期，含归档）/ AI 掌握度（仅手动触发；40 理解 + 30 覆盖 + 30 验证；证据不足→无分）；日/周/月/年切换，趋势 14 日/8 周/12 月/5 年，未评估不补 0。
 
-## 9. 旧版规划数据
+## 9. Knowledge 内容模型（v016）
+
+Knowledge Item = 知识主题/容器；Knowledge Content = Knowledge Documents（用户长期文档）× Study Sessions（真实学习记录）合并时间线（倒序）。旧 learning_items.content 为 legacy compatibility 字段（v016 迁移为「旧知识正文」文档，原值保留备份；新 UI 不再写）。文档内媒体走统一附件系统（document_id 归属）。
+
+## 9b. 旧版规划数据
 
 study_stages / plans 不再是主 UI；表与历史数据永久保留（>0 时 Planning 底部轻提示）。
 
-## 10. 用户第一次使用
+## 10. Personal Intelligence（v017）
+
+- **Memory Engine**：7 类记忆（用户事实/观点/偏好/约束/系统观察/AI 推断/目标上下文）；supersede 不删旧；对话结束轻量提取 0-5 条
+- **跨会话不失忆**：新对话通过 Memory + FTS 检索历史
+- **全局搜索（FTS5）**：9 类实体全索引；Profile 隔离
+- **Context Builder 五层**：当前上下文/私人档案相关章节/Higher 数据/Memory+历史对话/Web；60k 字符预算
+- **私人化部署**：导入 txt/md/docx/pdf（.doc 拒绝）→ 分块 → Compile（Map→Merge，冲突并列不取舍）→ 19 节档案 MD（Draft→用户确认）；AI 需求采集模板可导出
+- **联网搜索（Brave）+ Web Open**：SSRF 全防护；[[S1]] Citation（Registry 校验+一次 Repair）
+- **ChangeSet**：propose → Diff 审查（逐项勾选）→ 事务 Apply（冲突拒绝）→ Undo；年度目标跨自然年不重叠；Rest Day
+- **Vault 保险箱**：独立 SQLite；root 测试密码；10min 自动锁；USER/AI/SYSTEM 审计；Blob 去重分块；快照
+- **年度目标**：以年为规划尺度可跨自然年（如 2026-08-20~2027-08-19）；同 Final 下不重叠
+- **休息日**：day_kind=rest 禁计划任务但快速学习自由
+
+## 11. 每日执行与双树闭环（v018）
+
+- **Today = 今日任务 + 今日活动**（只有两区）：任务=当天计划（核心/常规/积累三组）；活动=当天真实 StudySession 视图（核心/常规/积累/计划外四组，极简行 标题+时间）
+- **Task**：estimated_minutes（1-1440 可空）/task_kind（structured 关联知识节点；accumulation 用宽节点不碎片化）/priority（core/normal）
+- **Activity**：activity_kind 四态；Task 开始=自动分类快照（accumulation>core>regular）；快速学习=unplanned
+- **Session = 唯一 Learning Artifact**：一份笔记被 Today/Calendar/Goal Tree/Knowledge Tree/Search 同时引用；修改一处全部同步；无复制
+- **双树语义**：Goal Tree=什么时候完成什么（年度可跨年）；Knowledge Tree=需要掌握哪些东西；Task（goal_id+learning_item_id）是两树桥梁
+- **Calendar 日报**：点日期在日历下方展开（不跳页）；计划/实际学习时间·任务完成率·日目标进度·计划时间执行度·综合学习效率（0.4/0.3/0.3 纯 DB 计算）·学习状态四态标签
+- **未归类学习**：Quick Study 虚拟入口；整理进知识只改关联
+- **AI 真实性 P0**：修改四阶段措辞（准备/等待确认/✓已应用[系统生成]/失败）；Backend Guard——写意图无 ChangeSet 时明确声明数据未变化
+
+## 12. 用户第一次使用
 
 1. 创建档案（自动生成占位最终目标）
 2. 直接「今日任务」→ 快速学习，无需先建任何目标

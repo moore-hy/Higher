@@ -180,6 +180,101 @@ impl AiClient {
             usage: parsed.usage.unwrap_or_default(),
         })
     }
+    /// DEV-0052 §16 流式（OpenAI-compatible SSE；reqwest chunk() 逐块，无 futures 依赖）。
+    /// on_delta 逐段回调；每块检查取消。返回 (完整文本, usage)。
+    pub async fn chat_stream<F>(
+        &self,
+        messages: Vec<ChatMessage>,
+        max_tokens: Option<i64>,
+        mut on_delta: F,
+        token: tokio_util::sync::CancellationToken,
+    ) -> Result<(String, Usage), String>
+    where
+        F: FnMut(&str),
+    {
+        if self.settings.api_key.trim().is_empty() {
+            return Err("尚未配置 API Key。请先在「设置 → AI」中填写。".to_string());
+        }
+        let base = self.settings.base_url.trim().trim_end_matches('/');
+        let url = format!("{}/chat/completions", base);
+        let mut model = self.settings.model.clone();
+        if self.settings.thinking_enabled && !model.contains("thinking") {
+            model = format!("{}-thinking", model);
+        }
+        let body = serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+        });
+        let mut resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.settings.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(human_network_error)?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(human_http_error(status.as_u16(), &text));
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        let mut full = String::new();
+        let mut usage = Usage::default();
+        loop {
+            if token.is_cancelled() {
+                return Ok((full, usage));
+            }
+            match resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    buf.extend_from_slice(&chunk);
+                    // 完整帧处理（按 \n\n 分隔）
+                    loop {
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        let Some(pos) = s.find("\n\n") else { break };
+                        let frame = s[..pos].to_string();
+                        buf = s[pos + 2..].as_bytes().to_vec();
+                        for line in frame.lines() {
+                            if let Some(data) = line.strip_prefix("data:") {
+                                let d = data.trim();
+                                if d == "[DONE]" {
+                                    return Ok((full, usage));
+                                }
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(d) {
+                                    if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
+                                        usage.prompt_tokens = u.get("prompt_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                        usage.completion_tokens = u.get("completion_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                        usage.total_tokens = u.get("total_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                    }
+                                    let delta = v
+                                        .pointer("/choices/0/delta/content")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("");
+                                    if !delta.is_empty() {
+                                        full.push_str(delta);
+                                        on_delta(delta);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    if !full.is_empty() {
+                        // 已有部分输出：流中断但保留已生成内容
+                        return Ok((full, usage));
+                    }
+                    return Err(human_network_error(e));
+                }
+            }
+        }
+        Ok((full, usage))
+    }
 }
 
 fn human_network_error(e: reqwest::Error) -> String {

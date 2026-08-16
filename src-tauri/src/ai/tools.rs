@@ -114,6 +114,102 @@ pub fn tool_definitions() -> serde_json::Value {
                 "description": "读取最近 14 天学习进展统计",
                 "parameters": { "type": "object", "properties": {} }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_higher",
+                "description": "在当前档案的 Higher 数据中全文检索（目标/任务/学习记录/知识/文档/验证/记忆/对话）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "搜索关键词" },
+                        "entity_types": { "type": "array", "items": { "type": "string" }, "description": "可选过滤：goal/task/session/knowledge/document/evaluation/memory/conversation" },
+                        "limit": { "type": "integer", "description": "默认 10，最大 50" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_memory",
+                "description": "检索当前档案的长期记忆（用户事实/偏好/约束/AI 推断，带相关性加权）",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" }, "limit": { "type": "integer", "description": "默认 8" } },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_personalization",
+                "description": "读取当前档案的私人化学习档案（用户已确认的综合资料）",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "联网搜索（Brave）。时效性问题（最新/今年/政策/招生/版本/新闻）必须实时搜索。返回带来源编号 [S1][S2] 的结果",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "count": { "type": "integer", "description": "默认 5，最大 10" },
+                        "freshness": { "type": "string", "description": "可选：pd（24h）/pw（7天）/pm（30天）/py（1年）" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_open",
+                "description": "读取网页正文（只能打开 web_search 返回的 sid 或用户明确提供的 URL）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sid": { "type": "string", "description": "来源编号，如 S1" },
+                        "url": { "type": "string", "description": "用户明确提供的完整 URL（可选，与 sid 二选一）" }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "propose_change_set",
+                "description": "（仅助手模式）提交数据修改提案。只是 Draft，用户审查批准前不会修改任何数据。一次性提交完整修改集。规划类请求应同时覆盖 Goal Tree（时间结构）与 Knowledge Tree（知识结构），用 operation_ref/parent_ref/goal_ref/learning_item_ref 串联",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string", "description": "修改集标题，如「创建明日学习任务」" },
+                        "summary": { "type": "string", "description": "一句话说明" },
+                        "operations": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_type": { "type": "string", "enum": ["goal","task","knowledge","document","session","evaluation","personalization"] },
+                                    "entity_id": { "type": "integer", "description": "create 时省略" },
+                                    "action": { "type": "string", "enum": ["create","update","delete","status_change"] },
+                                    "operation_ref": { "type": "string", "description": "本提案内唯一引用键（如 G1/K1/T1）；供后续操作引用" },
+                                    "after": { "type": "object", "description": "目标状态字段。task: title/goal_id|goal_ref/planned_date/planned_time/estimated_minutes/task_kind(structured|accumulation)/priority(core|normal)/learning_item_id|learning_item_ref/status；goal create: goal_level(final|year|month|day)/parent_goal_id|parent_ref/name/period（year=\"YYYY-MM-DD..YYYY-MM-DD\" 可跨年 / month=\"YYYY-MM\" / day=\"YYYY-MM-DD\"）/day_kind(study|rest)；knowledge: name/parent_id|parent_ref；document: title/content_text；session: title/learning_item_id/started_at/ended_at；evaluation: title/evaluation_type/outcome" },
+                                    "reason": { "type": "string" }
+                                },
+                                "required": ["entity_type", "action", "after"]
+                            }
+                        }
+                    },
+                    "required": ["title", "operations"]
+                }
+            }
         }
     ])
 }
@@ -359,6 +455,38 @@ pub fn execute_read_tool(
                 "total_evaluations_14d": trend.iter().map(|t| t.evaluation_count).sum::<i64>(),
             }).to_string()
         }
+        "search_higher" => {
+            let q = arguments.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let limit = arguments.get("limit").and_then(|v| v.as_i64()).unwrap_or(10);
+            let ets: Option<Vec<String>> = arguments
+                .get("entity_types")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+            let hits = crate::repository::search::SearchRepository::new(conn)
+                .search(profile_id, q, ets.as_deref(), limit)?;
+            json!(hits).to_string()
+        }
+        "search_memory" => {
+            let q = arguments.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let limit = arguments.get("limit").and_then(|v| v.as_i64()).unwrap_or(8);
+            let mems = crate::repository::memory::MemoryRepository::new(conn)
+                .search(profile_id, q, limit)?;
+            json!(mems).to_string()
+        }
+        "read_personalization" => {
+            let p = crate::repository::personalization::PersonalizationRepository::new(conn)
+                .get_profile(profile_id)
+                .map_err(|e| e.to_string())?;
+            match p {
+                Some(pp) if pp.status == "confirmed" => json!({
+                    "status": "confirmed",
+                    "version": pp.version,
+                    "md": pp.md_content,
+                }).to_string(),
+                Some(_) => json!({"status": "draft", "md": ""}).to_string(),
+                None => json!({"status": "none", "md": ""}).to_string(),
+            }
+        }
         other => return Err(format!("未知工具：{}（仅只读工具可用）", other)),
     };
     Ok(out)
@@ -386,11 +514,20 @@ pub fn tool_label(name: &str) -> &'static str {
         "list_recent_evaluations" => "查看最近验证",
         "list_tasks" => "查看学习任务",
         "get_progress_summary" => "查看学习进展",
+        "search_higher" => "搜索 Higher 数据",
+        "search_memory" => "检索长期记忆",
+        "read_personalization" => "读取私人化档案",
+        "web_search" => "联网搜索",
+        "web_open" => "读取网页",
+        "propose_change_set" => "生成修改提案",
         _ => "未知工具",
     }
 }
 
-/// 允许 AI 调用的工具白名单（明确 dispatch；未知一律拒绝；无任何写工具 / 文件 / Shell / SQL）。
+/// 允许 AI 调用的工具白名单（明确 dispatch；未知一律拒绝；无任何直接写工具 / 文件 / Shell / SQL）。
+/// DEV-0052：+ search_higher / search_memory / read_personalization（只读）
+/// + web_search / web_open（联网，双模式均可用）
+/// + propose_*（仅助手模式；只写 ChangeSet Draft，不直接改数据）。
 pub const TOOL_ALLOWLIST: &[&str] = &[
     "get_profile_summary",
     "get_current_goal",
@@ -403,7 +540,16 @@ pub const TOOL_ALLOWLIST: &[&str] = &[
     "list_recent_evaluations",
     "list_tasks",
     "get_progress_summary",
+    "search_higher",
+    "search_memory",
+    "read_personalization",
+    "web_search",
+    "web_open",
+    "propose_change_set",
 ];
+
+/// 助手模式专属（propose；§193：模型永远看不到直接 CRUD 工具）。
+pub const ASSISTANT_TOOLS: &[&str] = &["propose_change_set"];
 
 /// 受限 tool-call loop：最多 6 轮；每轮若返回 tool_calls 则执行只读查询并回填。
 /// 返回 (最终回答, usage, 真实 tool_trace, 实际使用的轮数)。超过轮数限制：用已有信息作答。

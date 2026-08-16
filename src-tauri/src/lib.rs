@@ -820,6 +820,7 @@ fn start_session(
 }
 
 /// 从 Task 开始学习（§40）：title=task.title；Profile 经 Task 直取。
+/// DEV-0054 §27-28 Start Guard：已有 Active Session → 拒绝并返回冲突信息（不创建第二个）。
 #[tauri::command]
 fn start_task_session(
     state: tauri::State<'_, db::DbState>,
@@ -833,6 +834,9 @@ fn start_task_session(
             |r| r.get(0),
         )
         .map_err(|_| "任务不存在".to_string())?;
+    if let Some(conflict) = active_session_conflict(&conn, profile_id) {
+        return Err(format!("ActiveSessionConflict:{}", serde_json::to_string(&conflict).unwrap_or_default()));
+    }
     StudySessionRepository::new(&conn)
         .start_for_task(profile_id, task_id)
         .map_err(|e| e.to_string())
@@ -840,6 +844,7 @@ fn start_task_session(
 
 /// 快速学习（§38-39「先学，再归档」）：一键创建 Session（title="快速学习"）直达编辑页。
 /// Profile First：只要求 profile_id；不弹 Goal/Knowledge 选择，无 Goal 也完全正常。
+/// DEV-0054 §27-28 Start Guard：已有 Active Session → 拒绝并返回冲突信息（不创建第二个）。
 #[tauri::command]
 fn start_quick_session(
     state: tauri::State<'_, db::DbState>,
@@ -847,9 +852,92 @@ fn start_quick_session(
     task_id: Option<i64>,
 ) -> Result<repository::study_session::StudySession, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(conflict) = active_session_conflict(&conn, profile_id) {
+        return Err(format!("ActiveSessionConflict:{}", serde_json::to_string(&conflict).unwrap_or_default()));
+    }
     StudySessionRepository::new(&conn)
         .start_quick(profile_id, task_id)
         .map_err(|e| e.to_string())
+}
+
+/// DEV-0054 §25-30：Active Session 审计与冲突检测。
+/// 单 Profile 最多一个 active StudySession；历史脏数据（>1）不自动修改（§29）。
+#[derive(Debug, serde::Serialize)]
+struct ActiveSessionInfo {
+    id: i64,
+    title: String,
+    started_at: String,
+    learning_item_id: Option<i64>,
+    task_id: Option<i64>,
+}
+
+fn active_session_conflict(
+    conn: &Connection,
+    profile_id: i64,
+) -> Option<serde_json::Value> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, started_at, learning_item_id, task_id
+             FROM study_sessions
+             WHERE profile_id = ?1 AND status = 'active'
+             ORDER BY started_at",
+        )
+        .ok()?;
+    let rows: Vec<ActiveSessionInfo> = stmt
+        .query_map(rusqlite::params![profile_id], |r| {
+            Ok(ActiveSessionInfo {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                started_at: r.get(2)?,
+                learning_item_id: r.get(3)?,
+                task_id: r.get(4)?,
+            })
+        })
+        .ok()?
+        .filter_map(|v| v.ok())
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+    let multi = rows.len() > 1;
+    Some(serde_json::json!({
+        "message": if multi {
+            "检测到历史测试数据中存在多条进行中的学习记录。"
+        } else {
+            "你已有一项学习正在进行。"
+        },
+        "multiple": multi,
+        "sessions": rows,
+    }))
+}
+
+/// DEV-0054 §30：多 Active 异常列表（前端逐条 打开/结束/删除；后台不自动猜）。
+#[tauri::command]
+fn list_active_sessions(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, started_at, learning_item_id, task_id
+             FROM study_sessions
+             WHERE profile_id = ?1 AND status = 'active'
+             ORDER BY started_at",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![profile_id], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "title": r.get::<_, String>(1)?,
+                "started_at": r.get::<_, String>(2)?,
+                "learning_item_id": r.get::<_, Option<i64>>(3)?,
+                "task_id": r.get::<_, Option<i64>>(4)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
 /// 结束归档（DEV-0304）：把本次学习挂到知识 / 任务（均可空=仅保留学习记录）。
@@ -2619,6 +2707,1620 @@ fn ai_setting_model(state: &tauri::State<'_, db::DbState>) -> Result<String, Str
     Ok(s.model)
 }
 
+// =============== Knowledge Documents（DEV-0051 / PHASE B-E） ===============
+
+#[tauri::command]
+fn create_knowledge_document(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    learning_item_id: i64,
+    title: Option<String>,
+) -> Result<repository::knowledge_document::KnowledgeDocument, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
+        .create(profile_id, learning_item_id, title.as_deref().unwrap_or("未命名文档"))
+}
+
+#[tauri::command]
+fn get_knowledge_document(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<Option<repository::knowledge_document::KnowledgeDocument>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
+        .get(id, profile_id)
+}
+
+#[tauri::command]
+fn list_knowledge_documents(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    learning_item_id: i64,
+) -> Result<Vec<repository::knowledge_document::KnowledgeDocument>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
+        .list_by_item(profile_id, learning_item_id)
+}
+
+/// §37：title + content_text + content_document_json 单事务原子更新。
+#[tauri::command]
+fn update_knowledge_document(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    title: String,
+    content_text: String,
+    content_document_json: Option<String>,
+) -> Result<repository::knowledge_document::KnowledgeDocument, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
+        .update(id, profile_id, &title, &content_text, content_document_json.as_deref())
+}
+
+#[tauri::command]
+fn rename_knowledge_document(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    title: String,
+) -> Result<repository::knowledge_document::KnowledgeDocument, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
+        .rename(id, profile_id, &title)
+}
+
+/// §20：先删 Sandbox 文件（PathGuard 解析），全部成功才删附件行与文档行；失败明确报错不静默。
+#[tauri::command]
+fn delete_knowledge_document(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let repo = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn);
+    let att_repo = AttachmentRepository::new(&conn);
+    // 归属预检
+    repo.get(id, profile_id)?.ok_or("文档不存在或不属于当前档案")?;
+    let atts = att_repo.list_by_document(id).map_err(|e| e.to_string())?;
+    // 物理删除（PathGuard：resolve 相对路径进 Sandbox）
+    let mut failed: Vec<String> = Vec::new();
+    for a in &atts {
+        match sandbox::resolve_in_sandbox(&adir.0, &a.relative_path) {
+            Ok(full) => {
+                if full.exists() {
+                    if let Err(e) = std::fs::remove_file(&full) {
+                        failed.push(format!("{}：{}", a.file_name, e));
+                    }
+                }
+                // 文件已不在磁盘（历史手动清理）→ 视为成功（行必须清）
+            }
+            Err(e) => failed.push(format!("{}：{}", a.file_name, e)),
+        }
+    }
+    if !failed.is_empty() {
+        return Err(format!("部分附件文件删除失败，已中止（数据库未改动）：{}", failed.join("；")));
+    }
+    // 附件行（文档 FK CASCADE 也会清，这里显式删以明确语义）
+    for a in &atts {
+        let _ = att_repo.delete(a.id);
+    }
+    repo.delete(id, profile_id)?;
+    Ok(())
+}
+
+/// §49：Workspace 聚合（item + documents + sessions + legacy attachments + 统计）。
+#[tauri::command]
+fn get_knowledge_workspace(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    item_id: i64,
+) -> Result<repository::knowledge_workspace::KnowledgeWorkspaceData, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_workspace::KnowledgeWorkspaceRepository::new(&conn)
+        .get(profile_id, item_id)
+}
+
+// =============== Document Attachments（DEV-0051 / PHASE C §17-18） ===============
+
+/// 文档内上传文件（source_path：用户 dialog 选择；复制进 Sandbox）。
+#[tauri::command]
+fn add_document_attachment(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    learning_item_id: i64,
+    document_id: i64,
+    attachment_type: String,
+    source_path: String,
+    caption: Option<String>,
+) -> Result<repository::attachment::LearningAttachment, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let src = sandbox::resolve_import_source(&source_path)?;
+    let original = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment")
+        .to_string();
+    let (full, rel) = attachment_target(&conn, &adir.0, profile_id, Some(learning_item_id), &original)?;
+    std::fs::copy(&src, &full).map_err(|e| format!("复制附件失败：{}", e))?;
+    let mime = mime_from_ext(&rel);
+    AttachmentRepository::new(&conn)
+        .create_for_document(
+            profile_id,
+            learning_item_id,
+            document_id,
+            &attachment_type,
+            &original,
+            &rel,
+            mime.as_deref(),
+            caption.as_deref().unwrap_or(""),
+        )
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&full);
+            e.to_string()
+        })
+}
+
+/// 文档内粘贴/拖入（base64）。
+#[tauri::command]
+fn add_document_attachment_from_base64(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    learning_item_id: i64,
+    document_id: i64,
+    attachment_type: String,
+    file_name: String,
+    mime_type: Option<String>,
+    data_base64: String,
+) -> Result<repository::attachment::LearningAttachment, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let (full, rel) = attachment_target(&conn, &adir.0, profile_id, Some(learning_item_id), &file_name)?;
+    let bytes = base64_decode(&data_base64)?;
+    if bytes.is_empty() {
+        return Err("文件内容为空".to_string());
+    }
+    std::fs::write(&full, &bytes).map_err(|e| format!("保存附件失败：{}", e))?;
+    let mime = mime_type.or_else(|| mime_from_ext(&rel));
+    AttachmentRepository::new(&conn)
+        .create_for_document(
+            profile_id,
+            learning_item_id,
+            document_id,
+            &attachment_type,
+            &file_name,
+            &rel,
+            mime.as_deref(),
+            "",
+        )
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&full);
+            e.to_string()
+        })
+}
+
+/// 文档内画图。
+#[tauri::command]
+fn save_document_drawing(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    learning_item_id: i64,
+    document_id: i64,
+    data_base64: String,
+    caption: Option<String>,
+) -> Result<repository::attachment::LearningAttachment, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let (full, rel) = attachment_target(&conn, &adir.0, profile_id, Some(learning_item_id), "drawing.png")?;
+    let bytes = base64_decode(data_base64.trim())?;
+    std::fs::write(&full, bytes).map_err(|e| format!("保存画图失败：{}", e))?;
+    AttachmentRepository::new(&conn)
+        .create_for_document(
+            profile_id,
+            learning_item_id,
+            document_id,
+            "drawing",
+            "画图.png",
+            &rel,
+            Some("image/png"),
+            caption.as_deref().unwrap_or(""),
+        )
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&full);
+            e.to_string()
+        })
+}
+
+#[tauri::command]
+fn list_attachments_by_document(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    document_id: i64,
+) -> Result<Vec<repository::attachment::LearningAttachment>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    AttachmentRepository::new(&conn)
+        .validate_document(profile_id, document_id, None)
+        .map_err(|e| e.to_string())?;
+    AttachmentRepository::new(&conn)
+        .list_by_document(document_id)
+        .map_err(|e| e.to_string())
+}
+
+// =============== DEV-0052 · Personal Intelligence ===============
+
+// ---------- Mode（PHASE A） ----------
+
+#[tauri::command]
+fn get_ai_mode(state: tauri::State<'_, db::DbState>, profile_id: i64) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let v = SettingRepository::new(&conn)
+        .get(&format!("ai.mode.{}", profile_id))
+        .map_err(|e| e.to_string())?;
+    Ok(v.unwrap_or_else(|| "readonly".to_string()))
+}
+
+#[tauri::command]
+fn set_ai_mode(state: tauri::State<'_, db::DbState>, profile_id: i64, mode: String) -> Result<(), String> {
+    let m = if mode == "assistant" { "assistant" } else { "readonly" };
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    SettingRepository::new(&conn)
+        .set(&format!("ai.mode.{}", profile_id), m)
+        .map_err(|e| e.to_string())
+}
+
+// ---------- Conversation（PHASE C） ----------
+
+#[tauri::command]
+fn create_ai_conversation(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    mode: Option<String>,
+    title: Option<String>,
+) -> Result<repository::conversation::AiConversation, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::conversation::ConversationRepository::new(&conn)
+        .create(profile_id, mode.as_deref().unwrap_or("readonly"), title.as_deref().unwrap_or("新对话"))
+}
+
+#[tauri::command]
+fn list_ai_conversations(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    limit: Option<i64>,
+    before_id: Option<i64>,
+) -> Result<Vec<repository::conversation::AiConversation>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::conversation::ConversationRepository::new(&conn)
+        .list_recent(profile_id, limit.unwrap_or(20), before_id)
+}
+
+#[tauri::command]
+fn list_ai_messages(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    conversation_id: i64,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<repository::conversation::AiMessage>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::conversation::ConversationRepository::new(&conn)
+        .list_messages(conversation_id, profile_id, limit.unwrap_or(50), offset.unwrap_or(0))
+}
+
+#[tauri::command]
+fn archive_ai_conversation(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::conversation::ConversationRepository::new(&conn).archive(id, profile_id)
+}
+
+#[tauri::command]
+fn set_ai_conversation_mode(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    mode: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::conversation::ConversationRepository::new(&conn).set_mode(id, profile_id, &mode)
+}
+
+// ---------- Search（PHASE E） ----------
+
+#[tauri::command]
+fn search_higher(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    query: String,
+    entity_types: Option<Vec<String>>,
+    limit: Option<i64>,
+) -> Result<Vec<repository::search::SearchHit>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::search::SearchRepository::new(&conn)
+        .search(profile_id, &query, entity_types.as_deref(), limit.unwrap_or(20))
+}
+
+// ---------- Memory（PHASE D） ----------
+
+#[tauri::command]
+fn list_memory_records(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<repository::memory::MemoryRecord>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::memory::MemoryRepository::new(&conn).list_active(profile_id)
+}
+
+#[tauri::command]
+fn dismiss_memory_record(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::memory::MemoryRepository::new(&conn).dismiss(id, profile_id)
+}
+
+// ---------- ChangeSet（PHASE O-Q） ----------
+
+#[tauri::command]
+fn get_ai_change_set(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<Option<repository::changeset::ChangeSet>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::changeset::ChangeSetRepository::new(&conn).get(id, profile_id)
+}
+
+#[tauri::command]
+fn list_ai_change_set_operations(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    change_set_id: i64,
+) -> Result<Vec<repository::changeset::ChangeOperation>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::changeset::ChangeSetRepository::new(&conn).list_operations(change_set_id, profile_id)
+}
+
+#[tauri::command]
+fn set_ai_change_op_selected(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    change_set_id: i64,
+    op_id: i64,
+    selected: bool,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let repo = repository::changeset::ChangeSetRepository::new(&conn);
+    if repo.get(change_set_id, profile_id)?.is_none() {
+        return Err("ChangeSet 不存在或不属于当前档案".to_string());
+    }
+    repo.set_selected(op_id, change_set_id, selected)
+}
+
+#[tauri::command]
+fn apply_ai_change_set(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, db::DbState>,
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+    profile_id: i64,
+    id: i64,
+    only_selected: bool,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::changeset::ChangeSetRepository::new(&conn).apply(id, profile_id, only_selected)?;
+    vault.record_user("changeset_applied", "ai_change_set", Some(id), if only_selected { "selected" } else { "all" });
+    // §171：ChangeSet 应用后自动快照
+    let db_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db");
+    let real = if db_path.exists() { Some(db_path.as_path()) } else { None };
+    let _ = vault.snapshot("changeset", real);
+    let _ = app;
+    Ok(())
+}
+
+#[tauri::command]
+fn reject_ai_change_set(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::changeset::ChangeSetRepository::new(&conn).reject(id, profile_id)
+}
+
+#[tauri::command]
+fn undo_ai_change_set(
+    state: tauri::State<'_, db::DbState>,
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::changeset::ChangeSetRepository::new(&conn).undo(id, profile_id)?;
+    vault.record_user("changeset_undone", "ai_change_set", Some(id), "");
+    Ok(())
+}
+
+// ---------- Personalization（PHASE G-J） ----------
+
+#[tauri::command]
+fn import_personalization_files(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    paths: Vec<String>,
+) -> Result<Vec<repository::personalization::PersonalizationSource>, String> {
+    use sha2::{Digest, Sha256};
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let root = adir.0.join("personalization").join(profile_id.to_string()).join("sources");
+    let mut created = Vec::new();
+    for p in paths {
+        let src = sandbox::resolve_import_source(&p)?;
+        let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("source").to_string();
+        let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+        let ftype = match ext.as_str() {
+            "txt" => "txt",
+            "md" | "markdown" => "md",
+            "docx" => "docx",
+            "pdf" => "pdf",
+            "doc" => {
+                return Err(format!("「{}」是旧版 .doc 格式，请转换为 .docx / .pdf / .txt 后重新导入。", name));
+            }
+            _ => return Err(format!("「{}」格式不支持（仅 txt / md / docx / pdf）", name)),
+        };
+        // 提取（流式 → 文本）
+        let text = match ftype {
+            "txt" | "md" => {
+                let mut bytes = Vec::new();
+                std::fs::File::open(&src).map_err(|e| e.to_string())?
+                    .read_to_end_mut(&mut bytes).map_err(|e| e.to_string())?;
+                repository::personalization::decode_text(bytes)?
+            }
+            "docx" => repository::personalization::extract_docx(&src)?,
+            "pdf" => repository::personalization::extract_pdf(&src)?,
+            _ => unreachable!(),
+        };
+        // sha256
+        let mut hasher = Sha256::new();
+        hasher.update(text.as_bytes());
+        let sha = format!("{:x}", hasher.finalize());
+        // 保存原件 + 提取文本
+        let sid_dir = root.join(&sha[..16]);
+        std::fs::create_dir_all(&sid_dir).map_err(|e| e.to_string())?;
+        let orig_target = sid_dir.join(format!("original.{}", ext));
+        std::fs::copy(&src, &orig_target).map_err(|e| format!("保存原文件失败：{e}"))?;
+        let text_target = sid_dir.join("extracted.txt");
+        std::fs::write(&text_target, &text).map_err(|e| format!("保存提取文本失败：{e}"))?;
+        let rel = orig_target
+            .strip_prefix(&adir.0)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let repo = repository::personalization::PersonalizationRepository::new(&conn);
+        let sid = repo.insert_source(
+            profile_id,
+            &name,
+            ftype,
+            &rel,
+            &sha,
+            &text_target.to_string_lossy(),
+            "extracted",
+        )?;
+        repo.store_chunks(sid, profile_id, &text)?;
+        if let Some(s) = repo.get_source(sid, profile_id)? {
+            created.push(s);
+        }
+    }
+    Ok(created)
+}
+
+/// read_to_end helper（避免 trait 导入散落）
+trait ReadToEndMut {
+    fn read_to_end_mut(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize>;
+}
+impl ReadToEndMut for std::fs::File {
+    fn read_to_end_mut(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+        std::io::Read::read_to_end(self, buf)
+    }
+}
+
+#[tauri::command]
+fn list_personalization_sources(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<repository::personalization::PersonalizationSource>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::personalization::PersonalizationRepository::new(&conn).list_sources(profile_id)
+}
+
+#[tauri::command]
+fn delete_personalization_source(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::personalization::PersonalizationRepository::new(&conn).delete_source(id, profile_id)
+}
+
+#[tauri::command]
+fn get_personalization_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Option<repository::personalization::PersonalizationProfile>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::personalization::PersonalizationRepository::new(&conn).get_profile(profile_id)
+}
+
+/// §69-78 Compile：Map（每 source 抽取）→ Merge（冲突并列）→ 19 节 MD Draft。
+/// AI 调用按 source 分批（每批 ≤30k chars）。
+#[tauri::command]
+async fn compile_personalization(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<repository::personalization::PersonalizationProfile, String> {
+    // 1) 读取全部 chunk（锁内短临界区）
+    let (settings, chunks) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let settings = ai::load_ai_settings(&conn).map_err(|e| e.to_string())?;
+        let chunks = repository::personalization::PersonalizationRepository::new(&conn)
+            .all_chunks(profile_id)?;
+        (settings, chunks)
+    };
+    if chunks.is_empty() {
+        return Err("还没有导入任何资料。请先在「添加资料」导入 txt / md / docx / pdf。".to_string());
+    }
+    let client = ai::client::AiClient::new(settings);
+    // 2) Map：每 source 提取结构化要点
+    let mut facts: Vec<serde_json::Value> = Vec::new();
+    let mut by_source: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    for (sid, content) in &chunks {
+        by_source.entry(*sid).or_default().push_str(content);
+    }
+    let mut source_names: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        for s in repository::personalization::PersonalizationRepository::new(&conn).list_sources(profile_id)? {
+            source_names.insert(s.id, s.file_name);
+        }
+    }
+    for (sid, content) in &by_source {
+        let brief: String = content.chars().take(30_000).collect();
+        let name = source_names.get(sid).cloned().unwrap_or_else(|| format!("source#{}", sid));
+        let prompt = format!(
+            "从下面这份用户资料（文件名：{}）中提取关于用户的结构化信息。只输出 JSON（不要 markdown 代码块）：\n{{\"facts\":[{{\"section\":\"基本情况|学历与专业背景|当前状态|最终学习目标|当前能力基础|优势|明显短板|学习习惯|时间条件|学习偏好|既往学习经历|当前学习进度|重要限制条件|用户明确要求\",\"kind\":\"fact|opinion\",\"text\":\"一句话\"}}]}}\n规则：只提取资料中明确写的；不确定不编造；原文观点标 opinion。\n\n资料内容：\n{}",
+            name, brief
+        );
+        let c = client
+            .chat(
+                vec![ai::client::ChatMessage::user(prompt)],
+                true,
+                None,
+                Some(3000),
+            )
+            .await?;
+        let raw = c.content.unwrap_or_default();
+        let trimmed = raw.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(arr) = v.get("facts").and_then(|f| f.as_array()) {
+                for mut f in arr.clone() {
+                    if let Some(obj) = f.as_object_mut() {
+                        obj.insert("source".into(), serde_json::json!(name));
+                    }
+                    facts.push(f);
+                }
+            }
+        }
+    }
+    // 3) Merge：冲突检测（同 section 同 kind 相似 text 不同值 → 冲突段）
+    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+    let mut conflicts: Vec<String> = Vec::new();
+    for sec in repository::personalization::section_title_seq() {
+        let mut lines: Vec<String> = Vec::new();
+        for f in &facts {
+            if f.get("section").and_then(|x| x.as_str()) == Some(sec) {
+                let kind = f.get("kind").and_then(|x| x.as_str()).unwrap_or("fact");
+                let text = f.get("text").and_then(|x| x.as_str()).unwrap_or("");
+                let src = f.get("source").and_then(|x| x.as_str()).unwrap_or("?");
+                if text.is_empty() {
+                    continue;
+                }
+                // 冲突检测：同 section 已有相似前 12 字但不同文本
+                let key: String = text.chars().take(12).collect();
+                let dup = lines.iter().find(|l| {
+                    let lkey: String = l.chars().skip(2).take(12).collect();
+                    lkey == key && !l.contains(text)
+                });
+                if let Some(_) = dup {
+                    conflicts.push(format!("来源《{}》：{}", src, text));
+                } else {
+                    lines.push(format!("- {}（{}；来源《{}》）", text, if kind == "opinion" { "用户观点" } else { "事实" }, src));
+                }
+            }
+        }
+        sections.push((sec.to_string(), lines));
+    }
+    // 4) 生成 MD（19 节）
+    let mut md = String::from("# Higher 私人化学习档案\n\n");
+    for (i, (title, lines)) in sections.iter().enumerate() {
+        md.push_str(&format!("## {}. {}\n", i + 1, title));
+        if lines.is_empty() {
+            md.push_str("（资料中未提及）\n\n");
+        } else {
+            for l in lines {
+                md.push_str(l);
+                md.push('\n');
+            }
+            md.push('\n');
+        }
+    }
+    md.push_str("## 15. Higher 客观观察\n（由 Higher 系统在 Consolidation 时补充：近期学习统计等）\n\n");
+    md.push_str("## 16. AI 推断\n");
+    for f in &facts {
+        if f.get("kind").and_then(|x| x.as_str()) == Some("opinion") {
+            // 已在观点行标注
+        }
+    }
+    md.push_str("（无高置信推断；推断需依据+置信度标注，暂无）\n\n");
+    md.push_str("## 17. 尚未确认 / 冲突信息\n");
+    if conflicts.is_empty() {
+        md.push_str("（未发现资料间冲突）\n\n");
+    } else {
+        md.push_str("⚠ 待确认（可能存在资料版本差异）：\n");
+        for c in &conflicts {
+            md.push_str(&format!("- {}\n", c));
+        }
+        md.push('\n');
+    }
+    md.push_str("## 18. 资料来源\n");
+    for (sid, name) in &source_names {
+        md.push_str(&format!("- 《{}》（source#{}）\n", name, sid));
+    }
+    md.push_str(&format!("\n## 19. 更新历史\n- {}：首次 Compile 生成 Draft（{} 份资料）\n", chrono_now(), by_source.len()));
+    // 5) Draft 落库
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::personalization::PersonalizationRepository::new(&conn)
+        .save_draft(profile_id, &md, Some(&serde_json::to_string(&facts).unwrap_or_default()))?;
+    repository::personalization::PersonalizationRepository::new(&conn)
+        .get_profile(profile_id)?
+        .ok_or("生成失败".to_string())
+}
+
+fn chrono_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // 简易 UTC 日期（用于更新历史标注）
+    let days = secs / 86400;
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+#[tauri::command]
+fn confirm_personalization_profile(state: tauri::State<'_, db::DbState>, profile_id: i64) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::personalization::PersonalizationRepository::new(&conn).confirm(profile_id)
+}
+
+#[tauri::command]
+fn edit_personalization_profile(state: tauri::State<'_, db::DbState>, profile_id: i64, md_content: String) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::personalization::PersonalizationRepository::new(&conn).user_edit(profile_id, &md_content)
+}
+
+#[tauri::command]
+fn get_requirement_template() -> Result<String, String> {
+    Ok(repository::personalization::REQUIREMENT_TEMPLATE_MD.to_string())
+}
+
+// ---------- Web（PHASE K） ----------
+
+#[tauri::command]
+fn get_web_search_settings(state: tauri::State<'_, db::DbState>) -> Result<(bool, bool), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let enabled = SettingRepository::new(&conn).get("websearch.enabled").ok().flatten()
+        .map(|v| v == "true").unwrap_or(false);
+    let has_key = SettingRepository::new(&conn).get("websearch.brave_key").ok().flatten()
+        .map(|v| !v.trim().is_empty()).unwrap_or(false);
+    Ok((enabled, has_key))
+}
+
+#[tauri::command]
+fn set_web_search_settings(
+    state: tauri::State<'_, db::DbState>,
+    enabled: bool,
+    brave_key: Option<String>,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let repo = SettingRepository::new(&conn);
+    repo.set("websearch.enabled", if enabled { "true" } else { "false" }).map_err(|e| e.to_string())?;
+    if let Some(k) = brave_key {
+        repo.set("websearch.brave_key", k.trim()).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// ---------- Vault（PHASE U） ----------
+
+#[tauri::command]
+fn vault_status(vault: tauri::State<'_, crate::ai::vault::VaultState>) -> Result<serde_json::Value, String> {
+    let locked = vault.is_locked();
+    let stats = if locked { None } else { vault.stats().ok() };
+    Ok(serde_json::json!({
+        "locked": locked,
+        "hint": "测试版密码为 root",
+        "stats": stats,
+    }))
+}
+
+#[tauri::command]
+fn vault_unlock(vault: tauri::State<'_, crate::ai::vault::VaultState>, password: String) -> Result<(), String> {
+    vault.unlock(&password)
+}
+
+#[tauri::command]
+fn vault_lock(vault: tauri::State<'_, crate::ai::vault::VaultState>) -> Result<(), String> {
+    vault.lock();
+    Ok(())
+}
+
+#[tauri::command]
+fn vault_list_events(
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+    limit: Option<i64>,
+) -> Result<Vec<crate::ai::vault::VaultEvent>, String> {
+    vault.list_events(limit.unwrap_or(100))
+}
+
+#[tauri::command]
+fn vault_list_snapshots(vault: tauri::State<'_, crate::ai::vault::VaultState>) -> Result<Vec<(i64, String, i64, String)>, String> {
+    vault.list_snapshots()
+}
+
+#[tauri::command]
+fn vault_create_snapshot(
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+) -> Result<i64, String> {
+    let db_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db");
+    let real = if db_path.exists() { Some(db_path.as_path()) } else { None };
+    vault.snapshot("manual", real)
+}
+
+#[tauri::command]
+fn vault_export_events(vault: tauri::State<'_, crate::ai::vault::VaultState>) -> Result<String, String> {
+    vault.export_events_json()
+}
+
+// ---------- AI Run（PHASE B：start / cancel） ----------
+
+/// §17：立即返回 run_id，后台执行。事件：ai://delta / ai://step / ai://source /
+/// ai://changeset / ai://run-status / ai://error。前端 listen 后更新 UI。
+#[tauri::command]
+async fn ai_start_run(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, db::DbState>,
+    runs: tauri::State<'_, ai::run::RunManager>,
+    _vault: tauri::State<'_, crate::ai::vault::VaultState>,
+    profile_id: i64,
+    conversation_id: i64,
+    user_message: String,
+    page_label: String,
+    knowledge_path: Option<String>,
+    session_title: Option<String>,
+    date: Option<String>,
+) -> Result<String, String> {
+    // mode（§13：conversation 临时 mode 优先于 profile 偏好）
+    let (settings, mode, web_enabled, brave_key) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let s = ai::load_ai_settings(&conn).map_err(|e| e.to_string())?;
+        let conv_mode = repository::conversation::ConversationRepository::new(&conn)
+            .get(conversation_id, profile_id)
+            .ok()
+            .flatten()
+            .map(|c| c.mode);
+        let m = conv_mode.unwrap_or_else(|| {
+            SettingRepository::new(&conn)
+                .get(&format!("ai.mode.{}", profile_id))
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "readonly".to_string())
+        });
+        let we = SettingRepository::new(&conn).get("websearch.enabled").ok().flatten()
+            .map(|v| v == "true").unwrap_or(false);
+        let bk = SettingRepository::new(&conn).get("websearch.brave_key").ok().flatten().unwrap_or_default();
+        (s, m, we, bk)
+    };
+    let is_assistant = mode == "assistant";
+
+    // 记录用户消息
+    {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        repository::conversation::ConversationRepository::new(&conn)
+            .add_message(conversation_id, profile_id, "user", &user_message, None)?;
+    }
+
+    let (run_id, token) = runs.register();
+    let run_id_clone = run_id.clone();
+    let app_handle = app.clone();
+
+    // 后台执行（tauri async spawn；State 生命周期从 AppHandle 重新获取以满足 'static）
+    tauri::async_runtime::spawn(async move {
+        let state = app_handle.state::<db::DbState>();
+        let runs = app_handle.state::<ai::run::RunManager>();
+        let vault = app_handle.state::<crate::ai::vault::VaultState>();
+        let result = run_chat_turn(
+            &app_handle, &state, &vault, profile_id, conversation_id, &run_id_clone, &token,
+            &user_message, &settings, is_assistant, &page_label, knowledge_path.as_deref(),
+            session_title.as_deref(), date.as_deref(), web_enabled, &brave_key,
+        ).await;
+        runs.finish(&run_id_clone);
+        match result {
+            Ok(status) => {
+                ai::run::emit(Some(&app_handle), "ai://run-status", &run_id_clone,
+                    serde_json::json!({ "status": status }));
+            }
+            Err(e) => {
+                // failed 状态 + 保存错误消息
+                {
+                    if let Ok(conn) = state.0.lock() {
+                        let _ = repository::conversation::ConversationRepository::new(&conn)
+                            .add_message(conversation_id, profile_id, "assistant", &format!("[出错] {}", e), Some(&run_id_clone));
+                    }
+                }
+                ai::run::emit(Some(&app_handle), "ai://error", &run_id_clone, serde_json::json!({ "error": e }));
+            }
+        }
+    });
+    Ok(run_id)
+}
+
+/// 单轮对话执行（streaming + 工具循环 + 引用校验/修复 + Memory Extract + ChangeSet 落库）。
+#[allow(clippy::too_many_arguments)]
+async fn run_chat_turn(
+    app: &tauri::AppHandle,
+    state: &db::DbState,
+    vault: &crate::ai::vault::VaultState,
+    profile_id: i64,
+    conversation_id: i64,
+    run_id: &str,
+    token: &tokio_util::sync::CancellationToken,
+    user_message: &str,
+    settings: &ai::AiSettings,
+    is_assistant: bool,
+    page_label: &str,
+    knowledge_path: Option<&str>,
+    session_title: Option<&str>,
+    date: Option<&str>,
+    web_enabled: bool,
+    brave_key: &str,
+) -> Result<&'static str, String> {
+    use ai::client::{AiClient, ChatMessage};
+    let client = AiClient::new(settings.clone());
+    vault.record_ai("run_started", run_id, page_label);
+
+    // ---- Context Builder（五层） ----
+    let (context_pack, recent_msgs) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let page = ai::context_builder::PageContext {
+            page_label: page_label.to_string(),
+            knowledge_path: knowledge_path.map(String::from),
+            session_title: session_title.map(String::from),
+            date: date.map(String::from),
+            conversation_id: Some(conversation_id),
+        };
+        let report = ai::context_builder::build(&conn, profile_id, user_message, &page,
+            if is_assistant { "assistant" } else { "readonly" })?;
+        let recent = repository::conversation::ConversationRepository::new(&conn)
+            .list_messages(conversation_id, profile_id, 20, 0)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.role == "user" || m.role == "assistant")
+            .filter(|m| m.content != user_message)
+            .map(|m| ChatMessage {
+                role: m.role,
+                content: m.content,
+                tool_calls: None, tool_call_id: None, name: None,
+            })
+            .collect::<Vec<_>>();
+        (report, recent)
+    };
+    let context_text = context_pack
+        .layers
+        .iter()
+        .map(|l| format!("{}\n{}", l.name, l.text))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    // ---- 消息组装（readonly 修改意图走专门协议） ----
+    let instruction = if is_assistant {
+        ai::prompts::ASSISTANT_CHAT_INSTRUCTION.to_string()
+    } else {
+        format!("{}\n\n{}", ai::prompts::READONLY_INTENT, "以上为只读协议。若用户消息并不涉及修改数据（纯咨询/分析），忽略该协议，正常回答（但不得调用任何修改类工具）。")
+    };
+    let mut messages: Vec<ChatMessage> = vec![ChatMessage::system(ai::prompts::SYSTEM_PROMPT)];
+    for m in recent_msgs {
+        messages.push(m);
+    }
+    messages.push(ChatMessage::user(format!("{}\n\n{}", context_text, instruction)));
+
+    // ---- Source Registry（§108） ----
+    let mut sources: Vec<ai::web::WebSource> = Vec::new();
+    let mut trace: Vec<ai::tools::ToolTraceEntry> = Vec::new();
+    let mut changeset_ids: Vec<i64> = Vec::new();
+    let mut used_web = false;
+    let mut usage_total = ai::client::Usage::default();
+
+    // ---- 工具循环（最多 6 轮） ----
+    const MAX_ROUNDS: usize = 6;
+    let tools = ai::tools::tool_definitions();
+    let mut final_text = String::new();
+    let mut cancelled = false;
+    'outer: for _round in 0..MAX_ROUNDS {
+        if token.is_cancelled() { cancelled = true; break; }
+        // 工具循环轮用非流式（需要 tool_calls）；最终轮流式
+        let completion = client
+            .chat(messages.clone(), false, Some(tools.clone()), Some(4096))
+            .await?;
+        usage_total.prompt_tokens += completion.usage.prompt_tokens;
+        usage_total.completion_tokens += completion.usage.completion_tokens;
+        usage_total.total_tokens += completion.usage.total_tokens;
+        let tool_calls = match completion.tool_calls.clone() {
+            Some(tc) if tc.as_array().map(|a| !a.is_empty()).unwrap_or(false) => tc,
+            _ => {
+                // 无工具调用 → 流式输出最终回答（§16）
+                let streamed = client
+                    .chat_stream(
+                        vec![ChatMessage::assistant(completion.content.clone().unwrap_or_default())],
+                        Some(4096),
+                        |d| {
+                            ai::run::emit(Some(app), "ai://delta", run_id, serde_json::json!({ "delta": d }));
+                        },
+                        token.clone(),
+                    )
+                    .await;
+                match streamed {
+                    Ok((t, u)) => {
+                        final_text = if t.is_empty() { completion.content.unwrap_or_default() } else { t };
+                        usage_total.prompt_tokens += u.prompt_tokens;
+                        usage_total.completion_tokens += u.completion_tokens;
+                        usage_total.total_tokens += u.total_tokens;
+                        break 'outer;
+                    }
+                    Err(_) => {
+                        // stream 失败 → 非流式 fallback（§16）
+                        let c2 = client.chat(messages.clone(), false, None, Some(4096)).await?;
+                        final_text = c2.content.unwrap_or_default();
+                        usage_total.prompt_tokens += c2.usage.prompt_tokens;
+                        usage_total.completion_tokens += c2.usage.completion_tokens;
+                        usage_total.total_tokens += c2.usage.total_tokens;
+                        break 'outer;
+                    }
+                }
+            }
+        };
+        // 处理 tool calls
+        messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: completion.content.clone().unwrap_or_default(),
+            tool_calls: Some(tool_calls.clone()),
+            tool_call_id: None,
+            name: None,
+        });
+        for tc in tool_calls.as_array().cloned().unwrap_or_default() {
+            if token.is_cancelled() { cancelled = true; break 'outer; }
+            let fname = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+            let fid = tc.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+            let args_str = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).unwrap_or("{}");
+            let args: serde_json::Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+            if !ai::tools::TOOL_ALLOWLIST.contains(&fname) {
+                messages.push(ChatMessage {
+                    role: "tool".into(), content: format!("未知工具 {}（拒绝）", fname),
+                    tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                });
+                continue;
+            }
+            // 助手专属门（§193：readonly 拿不到 propose）
+            if ai::tools::ASSISTANT_TOOLS.contains(&fname) && !is_assistant {
+                messages.push(ChatMessage {
+                    role: "tool".into(), content: "当前为只读模式，无修改权限。请按只读协议输出 needs_assistant。".into(),
+                    tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                });
+                continue;
+            }
+            // web 门（未启用 → 明确提示）
+            if (fname == "web_search" || fname == "web_open") && !web_enabled {
+                trace.push(ai::tools::ToolTraceEntry { tool: fname.into(), label: ai::tools::tool_label(fname).into(), status: "error".into() });
+                messages.push(ChatMessage {
+                    role: "tool".into(), content: "联网搜索未启用（设置 → 联网搜索）".into(),
+                    tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                });
+                continue;
+            }
+            let result: Result<String, String> = match fname {
+                "web_search" => {
+                    used_web = true;
+                    let q = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let count = args.get("count").and_then(|v| v.as_i64()).unwrap_or(5) as u32;
+                    let fresh = args.get("freshness").and_then(|v| v.as_str()).map(String::from);
+                    let res = ai::web::brave_search(brave_key, &q, count, fresh.as_deref()).await;
+                    match res {
+                        Ok(items) => {
+                            let mut out_items = Vec::new();
+                            for (title, url, snippet, published) in items {
+                                let sid = format!("S{}", sources.len() + 1);
+                                let ws = ai::web::WebSource {
+                                    sid: sid.clone(),
+                                    title: title.clone(),
+                                    url: url.clone(),
+                                    snippet: snippet.clone(),
+                                    published_at: published,
+                                    source_type: "web".into(),
+                                    retrieved_at: chrono_now(),
+                                };
+                                ai::run::emit(Some(app), "ai://source", run_id, serde_json::to_value(&ws).unwrap_or_default());
+                                out_items.push(serde_json::json!({ "sid": sid, "title": title, "url": url, "snippet": snippet }));
+                                sources.push(ws);
+                            }
+                            Ok(serde_json::json!({ "results": out_items, "note": "引用时用 [[S1]] 格式" }).to_string())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                "web_open" => {
+                    used_web = true;
+                    let url = if let Some(sid) = args.get("sid").and_then(|v| v.as_str()) {
+                        sources.iter().find(|s| s.sid == sid).map(|s| s.url.clone())
+                            .ok_or_else(|| format!("来源 {} 不存在（只能打开 web_search 返回过的来源）", sid))?
+                    } else if let Some(u) = args.get("url").and_then(|v| v.as_str()) {
+                        u.to_string()
+                    } else {
+                        String::new()
+                    };
+                    ai::web::web_open(&url).await
+                }
+                "propose_change_set" => {
+                    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("修改提案").to_string();
+                    let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let ops_json = args.get("operations").cloned().unwrap_or(serde_json::json!([]));
+                    let ops: Vec<repository::changeset::ProposedOp> =
+                        serde_json::from_value(ops_json).map_err(|e| format!("提案格式错误：{e}"))?;
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    let cs_id = repository::changeset::ChangeSetRepository::new(&conn)
+                        .create(profile_id, Some(conversation_id), Some(run_id), &title, &summary, &ops)?;
+                    changeset_ids.push(cs_id);
+                    vault.record_ai("changeset_proposed", run_id, &title);
+                    ai::run::emit(Some(app), "ai://changeset", run_id, serde_json::json!({ "change_set_id": cs_id, "title": title, "count": ops.len() }));
+                    Ok(serde_json::json!({ "ok": true, "change_set_id": cs_id, "note": "提案已生成，等待用户审查" }).to_string())
+                }
+                _ => {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    ai::tools::execute_read_tool(&conn, profile_id, fname, &args)
+                }
+            };
+            match result {
+                Ok(out) => {
+                    trace.push(ai::tools::ToolTraceEntry { tool: fname.into(), label: ai::tools::tool_label(fname).into(), status: "success".into() });
+                    messages.push(ChatMessage {
+                        role: "tool".into(), content: out.chars().take(20_000).collect(),
+                        tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                    });
+                }
+                Err(e) => {
+                    trace.push(ai::tools::ToolTraceEntry { tool: fname.into(), label: ai::tools::tool_label(fname).into(), status: "error".into() });
+                    messages.push(ChatMessage {
+                        role: "tool".into(), content: format!("[错误] {}", e),
+                        tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                    });
+                }
+            }
+        }
+    }
+    if cancelled {
+        // §19-20：保留已产出；数据 0 修改（ChangeSet 未 apply 本就不动数据）
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let _ = repository::conversation::ConversationRepository::new(&conn)
+            .add_message(conversation_id, profile_id, "assistant",
+                &format!("（已停止。已生成内容：{}）", if final_text.is_empty() { "无" } else { &final_text }), Some(run_id));
+        vault.record_ai("run_cancelled", run_id, "");
+        return Ok("cancelled");
+    }
+
+    // ---- Citation 校验（§115-116） ----
+    let mut citation_warning = None;
+    if used_web {
+        let valid_ids: Vec<String> = sources.iter().map(|s| s.sid.clone()).collect();
+        let mut bad: Vec<String> = Vec::new();
+        for cap in citation_re(&final_text).find_iter(&final_text) {
+            let id = cap.1.to_string();
+            if !valid_ids.contains(&id) {
+                bad.push(id);
+            }
+        }
+        let has_any = valid_ids.iter().any(|id| final_text.contains(&format!("[[{}]]", id)));
+        if (!bad.is_empty() || !has_any) && !final_text.is_empty() {
+            // §116 一次 Citation Repair（只加引用不加事实）
+            let listed = valid_ids.iter().map(|s| format!("[[{}]]", s)).collect::<Vec<_>>().join(" ");
+            let repair_prompt = format!(
+                "你刚才的回答{}。请只在原回答基础上为依赖网络信息的句子添加已有来源引用（{}），不得新增任何事实或删改内容；原样输出修改后的完整回答。",
+                if bad.is_empty() { "没有任何来源引用" } else { "包含不存在的来源引用" },
+                listed
+            );
+            messages.push(ChatMessage::assistant(final_text.clone()));
+            messages.push(ChatMessage::user(repair_prompt));
+            if let Ok(c) = client.chat(messages.clone(), false, None, Some(4096)).await {
+                if let Some(t) = c.content {
+                    let valid_now = valid_ids.iter().any(|id| t.contains(&format!("[[{}]]", id)));
+                    if valid_now && citation_re(&t).find_iter(&t).iter().all(|m| valid_ids.contains(&m.1.to_string())) {
+                        final_text = t;
+                    } else {
+                        citation_warning = Some("本次联网回答的来源关联不完整，请谨慎参考。");
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- needs_assistant（只读协议解析） ----
+    let trimmed = final_text.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+    let mut needs_assistant: Option<String> = None;
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if v.get("type").and_then(|t| t.as_str()) == Some("needs_assistant") {
+            needs_assistant = v.get("intent").and_then(|i| i.as_str()).map(String::from);
+        }
+    }
+
+    // ---- DEV-0053 §8-9：Assistant Write Intent Guard ----
+    // requires_change_set = 关键词检测；Run 结束无 ChangeSet → 禁止模型"完成"措辞冒充成功，
+    // 追加系统守卫文案并通知前端提供 [重新生成修改方案]。
+    let requires_change_set = is_assistant && ai::prompts::detect_write_intent(user_message);
+    let mut guard_appended = false;
+    if requires_change_set && changeset_ids.is_empty() && needs_assistant.is_none() && !final_text.is_empty() {
+        final_text.push_str(
+            "\n\n——\n（系统校验：Higher AI 没有生成可审批的修改方案，正式数据没有发生变化。以上如有\"已创建/已修改\"等表述均不成立。）",
+        );
+        guard_appended = true;
+    }
+
+    // ---- 保存 assistant 消息 + 来源 ----
+    {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(intent) = &needs_assistant {
+            repository::conversation::ConversationRepository::new(&conn)
+                .add_message(conversation_id, profile_id, "assistant",
+                    &format!("[需要助手模式] {}", intent), Some(run_id))?;
+        } else {
+            let mut save = final_text.clone();
+            if let Some(w) = &citation_warning {
+                save.push_str(&format!("\n\n（{}）", w));
+            }
+            repository::conversation::ConversationRepository::new(&conn)
+                .add_message(conversation_id, profile_id, "assistant", &save, Some(run_id))?;
+        }
+        // ai_sources 落库（run 结束释放 RAM，历史进 DB §180）
+        for s in &sources {
+            let _ = conn.execute(
+                "INSERT INTO ai_sources (profile_id, run_id, source_type, title, url, snippet, published_at)
+                 VALUES (?1,?2,'web',?3,?4,?5,?6)",
+                rusqlite::params![profile_id, run_id, s.title, s.url, s.snippet, s.published_at],
+            );
+        }
+        // ai_runs 终态（§8：记录 requires_change_set）
+        let _ = conn.execute(
+            "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error, prompt_tokens, completion_tokens, total_tokens)
+             VALUES (?1,?2,?3,?4,'assistant_chat',?5,?6,?7,?8,?9)
+             ON CONFLICT(id) DO UPDATE SET status='completed', error=excluded.error, updated_at=datetime('now')",
+            rusqlite::params![run_id, profile_id, conversation_id, if is_assistant { "assistant" } else { "readonly" },
+                "completed",
+                if guard_appended { "no_changeset_guard" } else { "" },
+                usage_total.prompt_tokens, usage_total.completion_tokens, usage_total.total_tokens],
+        );
+    }
+    vault.record_ai("run_completed", run_id, &format!("tokens={}", usage_total.total_tokens));
+
+    // ---- §9：guard → 通知前端显示 [重新生成修改方案] ----
+    if guard_appended {
+        ai::run::emit(Some(app), "ai://run-status", run_id, serde_json::json!({
+            "status": "no_changeset",
+            "message": "Higher AI 没有生成可审批的修改方案，正式数据没有发生变化。",
+        }));
+    }
+
+    // ---- needs_assistant → 提示前端（§11） ----
+    if let Some(intent) = needs_assistant {
+        ai::run::emit(Some(app), "ai://run-status", run_id, serde_json::json!({
+            "status": "waiting_approval",
+            "needs_assistant": intent,
+        }));
+        return Ok("waiting_approval");
+    }
+
+    // ---- Memory Extract（§36-38：run 完成后轻量二次调用） ----
+    if !user_message.trim().is_empty() && !final_text.is_empty() {
+        let extract = client
+            .chat(
+                vec![ai::client::ChatMessage::user(format!(
+                    "{}\n\n用户消息：{}\n\nAI 回复：{}",
+                    ai::prompts::MEMORY_EXTRACT_INSTRUCTION,
+                    user_message.chars().take(4000).collect::<String>(),
+                    final_text.chars().take(4000).collect::<String>()
+                ))],
+                true, None, Some(1000),
+            )
+            .await;
+        if let Ok(c) = extract {
+            let raw = c.content.unwrap_or_default();
+            let t2 = raw.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(t2) {
+                if let Some(arr) = v.get("memories").and_then(|m| m.as_array()) {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    let repo = repository::memory::MemoryRepository::new(&conn);
+                    let before_count = repo.count_since(profile_id, "2000-01-01").unwrap_or(0);
+                    for m in arr.iter().take(5) {
+                        let rec = repository::memory::MemoryRecord {
+                            id: 0, profile_id,
+                            memory_type: m.get("memory_type").and_then(|x| x.as_str()).unwrap_or("user_fact").to_string(),
+                            category: "chat".into(),
+                            memory_key: m.get("memory_key").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            memory_value: m.get("memory_value").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            source_kind: if m.get("memory_type").and_then(|x| x.as_str()) == Some("ai_inference") { "ai_inference" } else { "user_message" }.to_string(),
+                            source_ref: format!("conversation:{}", conversation_id),
+                            source_excerpt: m.get("source_excerpt").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            importance: m.get("importance").and_then(|x| x.as_i64()).unwrap_or(3).clamp(1, 5),
+                            confidence: m.get("confidence").and_then(|x| x.as_str()).unwrap_or("medium").to_string(),
+                            status: "active".into(),
+                            valid_from: None, valid_to: None, supersedes_id: None,
+                            created_at: String::new(), updated_at: String::new(), last_used_at: None,
+                        };
+                        if !rec.memory_value.is_empty() {
+                            let _ = repo.insert(&rec);
+                        }
+                    }
+                    // §87-88：新长期信息 → dirty
+                    let after_count = repo.count_since(profile_id, "2000-01-01").unwrap_or(0);
+                    if after_count > before_count {
+                        let _ = repository::personalization::PersonalizationRepository::new(&conn).mark_dirty(profile_id);
+                    }
+                }
+            }
+        }
+    }
+    Ok("completed")
+}
+
+/// §110 citation 正则替代（手工扫描 [[Sx]]）。
+struct CitationIter;
+fn citation_re(_s: &str) -> CitationIter { CitationIter }
+
+impl CitationIter {
+    fn find_iter<'a>(&self, text: &'a str) -> Vec<(usize, &'a str)> {
+        let mut out = Vec::new();
+        let b = text.as_bytes();
+        let mut i = 0usize;
+        while i + 4 <= b.len() {
+            if b[i] == b'[' && b[i + 1] == b'[' && b[i + 2] == b'S' {
+                let mut j = i + 3;
+                while j < b.len() && b[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j + 1 < b.len() && b[j] == b']' && b[j + 1] == b']' && j > i + 3 {
+                    out.push((i, &text[i + 2..j]));
+                    i = j + 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+}
+
+/// §18 取消。
+#[tauri::command]
+fn ai_cancel_run(runs: tauri::State<'_, ai::run::RunManager>, run_id: String) -> Result<bool, String> {
+    Ok(runs.cancel(&run_id))
+}
+
+#[tauri::command]
+fn ai_active_run_count(runs: tauri::State<'_, ai::run::RunManager>) -> Result<usize, String> {
+    Ok(runs.active_count())
+}
+
+/// §112：来源 URL 用系统浏览器打开（只 http/https；SSRF 校验 + Source Registry 解析）。
+#[tauri::command]
+async fn open_external_url(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    run_id: Option<String>,
+    sid_or_url: String,
+) -> Result<(), String> {
+    // 优先从 Source Registry 按 sid 解析（§109：不信模型自写 URL；用户点击的来自真实列表）
+    let url = if sid_or_url.starts_with("S") && !sid_or_url.contains('/') {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let u: Option<String> = conn
+            .query_row(
+                "SELECT url FROM ai_sources WHERE profile_id=?1 AND run_id=?2 AND url != '' ORDER BY id DESC LIMIT 1",
+                rusqlite::params![profile_id, run_id.clone().unwrap_or_default()],
+                |r| r.get(0),
+            )
+            .ok();
+        u.ok_or("来源不存在")?
+    } else {
+        sid_or_url
+    };
+    ai::web::ssrf_check(&url)?;
+    use tauri_plugin_opener::OpenerExt as _;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("打开网页失败：{e}"))
+}
+
+// =============== DEV-0053 · Daily & Dual-Tree Loop ===============
+
+/// §90：统一日报查询（Today=今天；Calendar=选中日期）。
+#[tauri::command]
+fn get_daily_learning_report(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    date: String,
+) -> Result<repository::daily_report::DailyReport, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::daily_report::DailyReportRepository::new(&conn).get(profile_id, &date)
+}
+
+/// §52：未归类学习列表。
+#[tauri::command]
+fn list_unassigned_sessions(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<repository::study_session::StudySession>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::study_session::StudySessionRepository::new(&conn)
+        .list_unassigned(profile_id, limit.unwrap_or(50))
+}
+
+/// §52：整理进知识（只改 learning_item_id 关联）。
+#[tauri::command]
+fn organize_session_into_knowledge(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    session_id: i64,
+    learning_item_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::study_session::StudySessionRepository::new(&conn)
+        .set_learning_item(session_id, profile_id, Some(learning_item_id))?;
+    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
+        "session",
+        session_id,
+        profile_id,
+        "session",
+        "",
+        None,
+    );
+    // 刷新索引标题
+    if let Ok(s) = repository::study_session::StudySessionRepository::new(&conn).get(session_id) {
+        if let Some(sess) = s {
+            let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
+                "session",
+                session_id,
+                profile_id,
+                &sess.title,
+                sess.note.as_deref().unwrap_or(""),
+                Some(&sess.started_at),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// §35：修改活动分类。
+#[tauri::command]
+fn set_session_activity_kind(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    session_id: i64,
+    activity_kind: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::study_session::StudySessionRepository::new(&conn)
+        .set_activity_kind(session_id, profile_id, &activity_kind)
+}
+
+/// §35：修改 Session 目标关联。
+#[tauri::command]
+fn set_session_goal(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    session_id: i64,
+    goal_id: Option<i64>,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let n = conn
+        .execute(
+            "UPDATE study_sessions SET goal_id = ?1, updated_at = datetime('now')
+             WHERE id = ?2 AND profile_id = ?3",
+            rusqlite::params![goal_id, session_id, profile_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("学习记录不存在或不属于当前档案".to_string());
+    }
+    Ok(())
+}
+
+/// §36：从 Activity 生成后续任务（新建 Task；原 Activity 保留）。
+#[tauri::command]
+fn create_followup_task_from_session(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    session_id: i64,
+    planned_date: Option<String>,
+    estimated_minutes: Option<i64>,
+) -> Result<repository::task::Task, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let sess = repository::study_session::StudySessionRepository::new(&conn)
+        .get(session_id)
+        .map_err(|e| e.to_string())?
+        .filter(|s| s.profile_id == profile_id)
+        .ok_or("学习记录不存在或不属于当前档案")?;
+    let title = if sess.title.trim().is_empty() {
+        format!("学习记录 #{}", sess.id)
+    } else {
+        format!("继续：{}", sess.title)
+    };
+    repository::task::TaskRepository::new(&conn).create_v2(
+        profile_id,
+        sess.goal_id,
+        &title,
+        planned_date.as_deref(),
+        None,
+        sess.learning_item_id,
+        estimated_minutes,
+        "structured",
+        "normal",
+    )
+}
+
+/// §45：Goal Detail 学习记录（Day 直查；Month/Annual/Final 经 descendant）。
+#[tauri::command]
+fn list_sessions_by_goal(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    goal_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<repository::study_session::StudySession>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::study_session::StudySessionRepository::new(&conn)
+        .list_by_goal(profile_id, goal_id, limit.unwrap_or(50))
+}
+
+/// §23：Task V2 全字段创建。
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn create_task_v2(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    title: String,
+    planned_date: Option<String>,
+    planned_time: Option<String>,
+    goal_id: Option<i64>,
+    learning_item_id: Option<i64>,
+    estimated_minutes: Option<i64>,
+    task_kind: Option<String>,
+    priority: Option<String>,
+) -> Result<repository::task::Task, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let t = repository::task::TaskRepository::new(&conn).create_v2(
+        profile_id,
+        goal_id,
+        &title,
+        planned_date.as_deref(),
+        planned_time.as_deref(),
+        learning_item_id,
+        estimated_minutes,
+        task_kind.as_deref().unwrap_or("structured"),
+        priority.as_deref().unwrap_or("normal"),
+    )?;
+    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
+        "task",
+        t.id,
+        profile_id,
+        &t.title,
+        &t.title,
+        None,
+    );
+    Ok(t)
+}
+
+/// §23：Task V2 全字段编辑。
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn update_task_v2(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    title: String,
+    planned_date: Option<String>,
+    planned_time: Option<String>,
+    goal_id: Option<i64>,
+    learning_item_id: Option<i64>,
+    estimated_minutes: Option<i64>,
+    task_kind: Option<String>,
+    priority: Option<String>,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::task::TaskRepository::new(&conn).update_v2(
+        id,
+        &title,
+        planned_date.as_deref(),
+        planned_time.as_deref(),
+        learning_item_id,
+        goal_id,
+        estimated_minutes,
+        task_kind.as_deref().unwrap_or("structured"),
+        priority.as_deref().unwrap_or("normal"),
+    )?;
+    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
+        "task",
+        id,
+        profile_id,
+        &title,
+        &title,
+        None,
+    );
+    Ok(())
+}
+
+/// §11：Apply 成功反馈数据（前端生成 ✓ 已应用 X 项消息，不由模型生成）。
+#[tauri::command]
+fn get_change_set_apply_summary(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    change_set_id: i64,
+) -> Result<Vec<String>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let cs = repository::changeset::ChangeSetRepository::new(&conn)
+        .get(change_set_id, profile_id)?
+        .ok_or("ChangeSet 不存在或不属于当前档案")?;
+    if cs.status != "applied" {
+        return Ok(vec![]);
+    }
+    let ops = repository::changeset::ChangeSetRepository::new(&conn)
+        .list_operations(change_set_id, profile_id)?;
+    let mut lines = Vec::new();
+    for op in ops.iter().filter(|o| o.selected) {
+        let entity_label = match op.entity_type.as_str() {
+            "goal" => "目标",
+            "task" => "任务",
+            "knowledge" => "知识节点",
+            "document" => "文档",
+            "session" => "学习记录",
+            "evaluation" => "验证",
+            "personalization" => "私人档案",
+            _ => "条目",
+        };
+        let title = op
+            .after_json
+            .get("title")
+            .or_else(|| op.after_json.get("name"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        match op.action.as_str() {
+            "create" => lines.push(format!("✓ 已创建{}「{}」", entity_label, title)),
+            "update" => lines.push(format!("✓ 已修改{}「{}」", entity_label, title)),
+            "delete" => lines.push(format!("✓ 已删除{}", entity_label)),
+            "status_change" => lines.push(format!("✓ 已调整{}「{}」", entity_label, title)),
+            "move" => lines.push(format!("✓ 已移动{}", entity_label)),
+            _ => lines.push(format!("✓ 已应用{}", entity_label)),
+        }
+    }
+    if lines.is_empty() {
+        lines.push("✓ 已应用修改".to_string());
+    }
+    Ok(lines)
+}
+
 /// 最近备份列表（DEV-0036 §108：仅显示；不做恢复 API）。
 #[tauri::command]
 fn list_backups(app: tauri::AppHandle) -> Result<Vec<repository::BackupInfo>, String> {
@@ -2996,6 +4698,18 @@ pub fn run() {
             std::fs::create_dir_all(&att_root)?;
             app.manage(AttachmentDir(att_root));
 
+            // DEV-0052：AI Run Manager（Active Run Registry）+ Vault
+            app.manage(ai::run::RunManager::new());
+            let vault_dir = if cfg!(debug_assertions) {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(".data")
+                    .join("vault")
+            } else {
+                app.path().app_data_dir()?.join("vault")
+            };
+            std::fs::create_dir_all(&vault_dir)?;
+            app.manage(ai::vault::VaultState::new(vault_dir));
+
             // 学习提醒（DEV-0042）：启动调度线程 + 按 DB 重建全部 profile 的排定通知
             notifications::start_scheduler(app.handle().clone());
             notifications::resync(app.handle());
@@ -3004,6 +4718,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             // DB
             ping_db,
@@ -3155,6 +4870,69 @@ pub fn run() {
             get_latest_mastery,
             list_mastery_history,
             assess_mastery,
+            // Knowledge Documents（DEV-0051）
+            create_knowledge_document,
+            get_knowledge_document,
+            list_knowledge_documents,
+            update_knowledge_document,
+            rename_knowledge_document,
+            delete_knowledge_document,
+            get_knowledge_workspace,
+            add_document_attachment,
+            add_document_attachment_from_base64,
+            save_document_drawing,
+            list_attachments_by_document,
+            // DEV-0052 Personal Intelligence
+            get_ai_mode,
+            set_ai_mode,
+            create_ai_conversation,
+            list_ai_conversations,
+            list_ai_messages,
+            archive_ai_conversation,
+            set_ai_conversation_mode,
+            search_higher,
+            list_memory_records,
+            dismiss_memory_record,
+            get_ai_change_set,
+            list_ai_change_set_operations,
+            set_ai_change_op_selected,
+            apply_ai_change_set,
+            reject_ai_change_set,
+            undo_ai_change_set,
+            import_personalization_files,
+            list_personalization_sources,
+            delete_personalization_source,
+            get_personalization_profile,
+            compile_personalization,
+            confirm_personalization_profile,
+            edit_personalization_profile,
+            get_requirement_template,
+            get_web_search_settings,
+            set_web_search_settings,
+            vault_status,
+            vault_unlock,
+            vault_lock,
+            vault_list_events,
+            vault_list_snapshots,
+            vault_create_snapshot,
+            vault_export_events,
+            ai_start_run,
+            ai_cancel_run,
+            ai_active_run_count,
+            open_external_url,
+            // DEV-0053 Daily & Dual-Tree
+            get_daily_learning_report,
+            list_unassigned_sessions,
+            organize_session_into_knowledge,
+            set_session_activity_kind,
+            set_session_goal,
+            create_followup_task_from_session,
+            list_sessions_by_goal,
+            create_task_v2,
+            update_task_v2,
+            get_change_set_apply_summary,
+            // DEV-0054 Active Session
+            list_active_sessions,
             // AI 分析统一入口（DEV-0019/0020/0021）
             ai_analyze,
             // Progress 指标 / Knowledge Move（BATCH-03）

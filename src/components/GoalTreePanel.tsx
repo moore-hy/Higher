@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   createGoalNode,
   deleteGoalNode,
   getGoalTree,
+  listAllTasksByProfile,
+  listSessionsByGoal,
   updateGoal,
 } from "../api";
-import type { GoalTree, GoalTreeNode } from "../types";
+import type { GoalTree, GoalTreeNode, StudySession, Task } from "../types";
+import { durationShort } from "./DailyActivitiesSection";
 
 /**
- * 目标树面板（DEV-0050 / PHASE-B §25-26）。
+ * 目标树面板（DEV-0050 §25-26 / DEV-0053 §44-47、§112-113）。
  * 文件树形态：Final → Year → Month → Day；展开/折叠/缩进/层级标签/Hover 操作。
- * 不做卡片墙 / 分页 / 三栏 / 甘特图。
- * Final：编辑 + 创建年目标；Year：编辑/创建月/删除；Month：编辑/创建日/删除；Day：编辑/删除/新建任务。
+ * 选中 Goal 节点（点击名称）→ 树下方 Detail 区显示两个 tab：
+ *   目标任务（现有 tasks 查询按 goal 过滤）/ 学习记录（list_sessions_by_goal；极简行点击进 Session）。
  */
 export default function GoalTreePanel({
   profileId,
@@ -26,6 +30,7 @@ export default function GoalTreePanel({
   /** 供外部读取当前树（下一步面包屑用） */
   goalPathOf?: (goalId: number) => string[];
 }) {
+  const navigate = useNavigate();
   const [tree, setTree] = useState<GoalTree | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -38,6 +43,13 @@ export default function GoalTreePanel({
   const [createLevel, setCreateLevel] = useState<"year" | "month" | "day">("year");
   const [createPeriod, setCreatePeriod] = useState("");
   const [createName, setCreateName] = useState("");
+
+  // §112：选中节点的 Detail（目标任务 / 学习记录）
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [detailTab, setDetailTab] = useState<"tasks" | "sessions">("tasks");
+  const [goalTasks, setGoalTasks] = useState<Task[]>([]);
+  const [goalSessions, setGoalSessions] = useState<StudySession[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const load = async () => {
     try {
@@ -65,6 +77,30 @@ export default function GoalTreePanel({
 
   if (error && !tree) return <p className="muted">{error}</p>;
   if (!tree) return <p className="muted">加载目标…</p>;
+
+  /** §45/§112：选中 Goal → 下方 Detail 加载 目标任务 + 学习记录 */
+  async function selectGoal(n: GoalTreeNode) {
+    setSelectedId(n.id);
+    setDetailTab("tasks");
+    setDetailLoading(true);
+    try {
+      const [allTasks, sessions] = await Promise.all([
+        listAllTasksByProfile(profileId).catch(() => [] as Task[]),
+        listSessionsByGoal(profileId, n.id, 50).catch(() => [] as StudySession[]),
+      ]);
+      // 只保留属于该节点的任务（现有 tasks 查询 + goal 过滤）
+      setGoalTasks(
+        allTasks
+          .filter((t) => t.goal_id === n.id && t.archived_at == null)
+          .sort((a, b) => (a.planned_date ?? "9999") < (b.planned_date ?? "9999") ? -1 : 1)
+      );
+      setGoalSessions(sessions);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDetailLoading(false);
+    }
+  }
 
   async function doCreate() {
     if (!createFor) return;
@@ -96,6 +132,7 @@ export default function GoalTreePanel({
     setError("");
     try {
       await deleteGoalNode(g.id);
+      if (selectedId === g.id) setSelectedId(null);
       await load();
       onRefresh?.();
     } catch (e) {
@@ -120,6 +157,8 @@ export default function GoalTreePanel({
     }
   }
 
+  const selectedNode = selectedId != null ? findNode(tree.final_goal, selectedId) : null;
+
   const renderNode = (n: GoalTreeNode, depth: number) => {
     const level = n.goal_level ?? "legacy";
     const label =
@@ -134,9 +173,15 @@ export default function GoalTreePanel({
               : "目标";
     return (
       <div key={n.id} className="gtree__node-wrap">
-        <div className="gtree__node" style={{ paddingLeft: depth * 16 }}>
+        <div className={"gtree__node" + (n.id === selectedId ? " gtree__node--selected" : "")} style={{ paddingLeft: depth * 16 }}>
           <span className={`gtree__level-tag gtree__level-tag--${level}`}>{label}</span>
-          <span className="gtree__name">{n.name}</span>
+          <button
+            className={"gtree__name" + (n.id === selectedId ? " gtree__name--selected" : "")}
+            title="点击查看该目标的目标任务与学习记录"
+            onClick={() => void selectGoal(n)}
+          >
+            {n.name}
+          </button>
           <span className="gtree__actions">
             {level === "final" && (
               <button
@@ -231,6 +276,78 @@ export default function GoalTreePanel({
         )}
       </div>
 
+      {/* §44-47/§112-113：选中 Goal 节点的 Detail 区（目标任务 / 学习记录） */}
+      {selectedNode && (
+        <div className="gtree__detail">
+          <div className="gtree__detail-head">
+            <span className="gtree__detail-name" title={selectedNode.name}>
+              {selectedNode.name}
+            </span>
+            <div className="gtree__detail-tabs">
+              <button
+                className={"gtree__tab" + (detailTab === "tasks" ? " gtree__tab--active" : "")}
+                onClick={() => setDetailTab("tasks")}
+              >
+                目标任务
+              </button>
+              <button
+                className={"gtree__tab" + (detailTab === "sessions" ? " gtree__tab--active" : "")}
+                onClick={() => setDetailTab("sessions")}
+              >
+                学习记录
+              </button>
+              <button
+                className="gtree__tab gtree__tab--close"
+                title="收起详情"
+                onClick={() => setSelectedId(null)}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+          <div className="gtree__detail-body">
+            {detailLoading ? (
+              <p className="muted" style={{ fontSize: 12 }}>加载中…</p>
+            ) : detailTab === "tasks" ? (
+              goalTasks.length === 0 ? (
+                <p className="muted" style={{ fontSize: 12 }}>这个目标下还没有任务。</p>
+              ) : (
+                <ul className="gtree__rows">
+                  {goalTasks.map((t) => (
+                    <li key={t.id} className="gtree__row">
+                      <span className={"gtree__row-title" + (t.status === "completed" ? " gtree__row-title--done" : "")}>
+                        {t.status === "completed" ? "✓ " : "○ "}
+                        {t.title}
+                      </span>
+                      <span className="gtree__row-meta">
+                        {t.planned_date ? t.planned_date.slice(5) : "未排期"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : goalSessions.length === 0 ? (
+              <p className="muted" style={{ fontSize: 12 }}>这个目标还没有学习记录。</p>
+            ) : (
+              <ul className="gtree__rows">
+                {goalSessions.map((s) => (
+                  <li key={s.id} className="gtree__row">
+                    <button
+                      className="gtree__row-title gtree__row-link"
+                      title="打开这条学习记录"
+                      onClick={() => navigate(`/learn/${s.id}`)}
+                    >
+                      {s.title || `学习记录 #${s.id}`}
+                    </button>
+                    <span className="gtree__row-meta">{durationShort(s.duration_seconds)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* 新建子目标 */}
       {createFor && (
         <div className="modal-overlay" onClick={() => setCreateFor(null)}>
@@ -298,6 +415,16 @@ export default function GoalTreePanel({
       <span style={{ display: "none" }}>{menuFor}</span>
     </div>
   );
+}
+
+/** 在树中按 id 查找节点。 */
+function findNode(node: GoalTreeNode, id: number): GoalTreeNode | null {
+  if (node.id === id) return node;
+  for (const c of node.children) {
+    const hit = findNode(c, id);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /** 父链解析（供「下一步」面包屑）：组件加载时填充。 */

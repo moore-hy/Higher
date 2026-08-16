@@ -342,6 +342,59 @@ export interface MasteryView {
   stale: boolean;
 }
 
+/** v016 Knowledge Document（DEV-0051） */
+export interface KnowledgeDocument {
+  id: number;
+  profile_id: number;
+  learning_item_id: number;
+  title: string;
+  content_text: string;
+  content_document_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** §50 Timeline Entry（document | session 统一） */
+export interface KnowledgeContentEntry {
+  kind: "document" | "session";
+  id: number;
+  title: string;
+  timestamp: string;
+  preview: string;
+  image_count: number;
+  video_count: number;
+  attachment_count: number;
+  /** session 专属 */
+  duration_seconds?: number | null;
+  status?: string;
+  /** document 专属 */
+  updated_at?: string;
+}
+
+/** §49 Workspace 聚合 */
+export interface KnowledgeWorkspaceData {
+  item_id: number;
+  item_name: string;
+  mastery_status: string;
+  documents: KnowledgeDocument[];
+  sessions: {
+    id: number;
+    title: string;
+    started_at: string;
+    duration_seconds: number | null;
+    status: string;
+    note_plain: string;
+    image_count: number;
+    video_count: number;
+    attachment_count: number;
+  }[];
+  legacy_attachments: LearningAttachment[];
+  session_count: number;
+  study_seconds: number;
+  last_studied_at: string | null;
+  evaluation_count: number;
+}
+
 export interface LearningItem {
   id: number;
   /** v013 起 Profile 直挂 */
@@ -381,6 +434,12 @@ export interface Task {
   plan_id: number | null;
   created_at: string;
   updated_at: string;
+  /** DEV-0053 §16：预计学习分钟（1-1440；NULL = 未估时，禁止当 0 计） */
+  estimated_minutes?: number | null;
+  /** DEV-0053 §17：structured=结构型 / accumulation=积累型（旧数据默认 structured） */
+  task_kind?: "structured" | "accumulation";
+  /** DEV-0053 §20：core=核心 / normal=常规（旧数据默认 normal） */
+  priority?: "core" | "normal";
 }
 
 /** delete_task 结果（DEV-0031：有历史时前端改走 archive） */
@@ -461,6 +520,17 @@ export interface StudySession {
   updated_at: string;
   /** 手动修正过 started_at/ended_at 的标记（§69） */
   time_corrected: number;
+  /** DEV-0053 §27：core | regular | accumulation | unplanned（旧数据默认 unplanned） */
+  activity_kind?: "core" | "regular" | "accumulation" | "unplanned";
+}
+
+/** DEV-0054 Start Guard：进行中 Session 简要（ActiveSessionConflict:{json} 负载 / list_active_sessions） */
+export interface ActiveSessionBrief {
+  id: number;
+  title: string;
+  started_at: string;
+  learning_item_id: number | null;
+  task_id: number | null;
 }
 
 /** 某日详情（DEV-0301 学习规划日期抽屉） */
@@ -487,6 +557,65 @@ export interface DayDetail {
   }[];
   evaluations: [number, string, string][];
   total_seconds: number;
+}
+
+// =============== DEV-0053 · Daily Learning Report（§63-91 Today/Calendar 共用查询） ===============
+
+/** 日报任务行（与 Task 同源，仅列表必要字段；§168 RAM-light） */
+export interface DailyTaskRow {
+  id: number;
+  title: string;
+  status: string;
+  planned_time: string | null;
+  estimated_minutes: number | null;
+  task_kind: "structured" | "accumulation";
+  priority: "core" | "normal";
+  goal_id: number | null;
+  learning_item_id: number | null;
+  /** 知识归属（后端拼好的名称/父路径；NULL = 未关联） */
+  knowledge_name: string | null;
+  deep_link: string;
+}
+
+/** 日报活动行（StudySession View；不加载 Rich JSON） */
+export interface DailyActivityRow {
+  id: number;
+  title: string;
+  started_at: string;
+  duration_seconds: number | null;
+  activity_kind: "core" | "regular" | "accumulation" | "unplanned";
+  learning_item_id: number | null;
+  task_id: number | null;
+  deep_link: string;
+}
+
+/** 单日学习报告（Today date=today / Calendar date=selected_date 共用 §90） */
+export interface DailyReport {
+  date: string;
+  /** §65：当天所有 Task estimated_minutes 求和（只统计有估时的） */
+  planned_minutes: number;
+  /** §66：缺 estimated_minutes 的任务数 */
+  unestimated_task_count: number;
+  /** §67：当天全部真实 Session 时长（分钟） */
+  actual_minutes: number;
+  /** §75：关联当天计划 Task 的 Session 实际分钟（不含 Quick 抬高） */
+  planned_task_actual_minutes: number;
+  task_total: number;
+  task_completed: number;
+  /** null = 暂无计划任务（§70，禁止伪 0%） */
+  task_completion_rate: number | null;
+  day_goal: string | null;
+  day_goal_id: number | null;
+  /** null = 暂无日目标（§74） */
+  day_goal_progress: number | null;
+  /** §76：task-linked actual / planned，上限 100% */
+  time_execution_rate: number | null;
+  /** §78：完成率×40% + 执行度×30% + 日目标×30%；null = 自由学习日（§80） */
+  overall_efficiency: number | null;
+  /** §82：计划执行稳定 / 部分偏离计划 / 计划执行偏低 / 自由学习 */
+  learning_status: string;
+  tasks: DailyTaskRow[];
+  activities: DailyActivityRow[];
 }
 
 export interface DbStatus {
@@ -614,3 +743,158 @@ export const PROFILE_TYPE_LABELS: Record<ProfileType, string> = {
   language_learning: "语言学习",
   custom: "自定义",
 };
+
+// =============== DEV-0052 · Personal Intelligence ===============
+
+/** AI 模式（只读 / 助手） */
+export type AiMode = "readonly" | "assistant";
+
+/** AI 对话（PHASE C：DB 持久化） */
+export interface AiConversation {
+  id: number;
+  profile_id: number;
+  title: string;
+  mode: AiMode | string;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+/** AI 消息（user / assistant / system_summary） */
+export interface AiMessage {
+  id: number;
+  conversation_id: number;
+  profile_id: number;
+  role: string;
+  content: string;
+  run_id: string | null;
+  created_at: string;
+}
+
+/** 全库搜索命中（PHASE E） */
+export interface SearchHit {
+  entity_type: string;
+  entity_id: number;
+  title: string;
+  snippet: string;
+  rank: number;
+  timestamp: string | null;
+  deep_link: string;
+}
+
+/** 长期记忆（PHASE D） */
+export interface MemoryRecord {
+  id: number;
+  profile_id: number;
+  memory_type: string;
+  category: string;
+  memory_key: string;
+  memory_value: string;
+  source_kind: string;
+  source_ref: string;
+  source_excerpt: string;
+  importance: number;
+  confidence: string;
+  status: string;
+  valid_from: string | null;
+  valid_to: string | null;
+  supersedes_id: number | null;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+}
+
+/** AI 修改提案（PHASE O：待用户审查） */
+export interface ChangeSet {
+  id: number;
+  profile_id: number;
+  conversation_id: number | null;
+  run_id: string | null;
+  title: string;
+  summary: string;
+  status: string; // pending | applied | rejected | undone
+  created_at: string;
+  applied_at: string | null;
+  rejected_at: string | null;
+}
+
+/** ChangeSet 内单条操作（§128-130：逐字段 Field Diff） */
+export interface ChangeOperation {
+  id: number;
+  change_set_id: number;
+  operation_order: number;
+  entity_type: string;
+  entity_id: number | null;
+  action: string; // create | update | delete | status_change
+  before_json: Record<string, unknown> | null;
+  after_json: Record<string, unknown>;
+  reason: string;
+  deep_link: string;
+  selected: boolean;
+  created_at: string;
+  /** DEV-0053 §103：create 成功后回写的 ref → real id 解析结果 */
+  operation_ref?: string | null;
+}
+
+/** 私人化资料源（PHASE G） */
+export interface PersonalizationSource {
+  id: number;
+  profile_id: number;
+  file_name: string;
+  file_type: string;
+  relative_path: string;
+  sha256: string;
+  extracted_text_path: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 私人化档案（PHASE I：19 节 Markdown Draft → Confirm） */
+export interface PersonalizationProfile {
+  id: number;
+  profile_id: number;
+  md_content: string;
+  structured_json: string | null;
+  status: string; // draft | confirmed
+  version: number;
+  last_compiled_at: string | null;
+  last_updated_at: string | null;
+  dirty: boolean;
+}
+
+/** 联网搜索来源（§95；Source Registry sid=S1/S2…） */
+export interface WebSource {
+  sid: string;
+  title: string;
+  url: string;
+  snippet: string;
+  published_at: string | null;
+  source_type: string;
+  retrieved_at: string;
+}
+
+/** 保险箱审计事件（§159） */
+export interface VaultEvent {
+  seq: number;
+  actor_type: string; // USER | AI | SYSTEM
+  actor_id: string;
+  action: string;
+  entity_type: string;
+  entity_id: number | null;
+  before_json: string | null;
+  after_json: string | null;
+  timestamp: string;
+  run_id: string | null;
+  change_set_id: number | null;
+}
+
+/** vault_status 返回（stats = [事件数, Blob 数, 快照数]；锁定时为 null） */
+export interface VaultStatus {
+  locked: boolean;
+  hint: string;
+  stats: [number, number, number] | null;
+}
+
+/** vault_list_snapshots 返回：[id, kind, db_size, created_at] */
+export type VaultSnapshot = [number, string, number, string];
