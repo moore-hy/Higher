@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   EditorContent,
   NodeViewWrapper,
@@ -14,6 +15,7 @@ import type { JSONContent } from "@tiptap/react";
 import {
   addAttachmentFromBase64,
   addLearningAttachment,
+  getAttachmentAssetPath,
   readAttachmentImage,
   saveDrawingAttachment,
 } from "../api";
@@ -77,18 +79,52 @@ function CodeBlockView({ node, deleteNode, selected }: { node: any; deleteNode: 
  * - readOnly 用于 End Sheet 后的归档视图
  */
 
-// ---------- 媒体加载缓存（模块级，跨重开复用） ----------
-const imgCache = new Map<number, AttachmentImageData>();
-async function loadAttachment(id: number): Promise<AttachmentImageData | null> {
-  if (imgCache.has(id)) return imgCache.get(id)!;
+// ---------- 媒体加载（DEV-0057 §133-136：主路径 asset URL，base64 仅 fallback） ----------
+//
+// 主路径：getAttachmentAssetPath(profileId, attachmentId) → convertFileSrc(path)
+//   → <img src>/<video src>（WebView 按需流式加载，不再整文件 base64 进 JS 堆）。
+// imgCache 只缓存 URL 字符串（Map<number,string>，有界 100 条，超限删最旧）。
+// Fallback：asset URL 取回失败（或 <img>/<video> 加载失败）→ read_attachment_image base64。
+
+/** 模块级 URL 缓存（跨重开复用；只存字符串，内存占用可忽略） */
+const imgCache = new Map<number, string>();
+const IMG_CACHE_MAX = 100;
+
+function cacheUrl(id: number, url: string) {
+  imgCache.set(id, url);
+  while (imgCache.size > IMG_CACHE_MAX) {
+    const oldest = imgCache.keys().next().value;
+    if (oldest === undefined) break;
+    imgCache.delete(oldest);
+  }
+}
+
+/** 主路径：附件 → asset URL（失败返回 null，由调用方走 base64 fallback） */
+async function loadAttachmentUrl(id: number, profileId: number | null): Promise<string | null> {
+  const hit = imgCache.get(id);
+  if (hit) return hit;
+  if (profileId == null) return null;
   try {
-    const d = await readAttachmentImage(id);
-    imgCache.set(id, d);
-    return d;
+    const url = convertFileSrc(await getAttachmentAssetPath(profileId, id));
+    cacheUrl(id, url);
+    return url;
   } catch {
     return null;
   }
 }
+
+/** Fallback：read_attachment_image → data:URL（不缓存；仅 asset URL 不可用时使用） */
+async function loadAttachmentDataUrl(id: number): Promise<string | null> {
+  try {
+    const d: AttachmentImageData = await readAttachmentImage(id);
+    return `data:${d.mime_type};base64,${d.base64}`;
+  } catch {
+    return null;
+  }
+}
+
+/** NodeView 内取当前编辑器所属 profileId（asset URL 命令必需；经 Provider 注入） */
+const MediaProfileContext = createContext<number | null>(null);
 
 // ---------- higherImage Node ----------
 const HigherImage = Node.create({
@@ -117,20 +153,54 @@ const HigherImage = Node.create({
 function ImageNodeView({ node, deleteNode, selected }: { node: any; deleteNode: () => void; selected: boolean }) {
   const attId: number | null = node.attrs.attachmentId;
   const fileName: string = node.attrs.fileName ?? "";
-  const [data, setData] = useState<AttachmentImageData | null>(null);
+  const profileId = useContext(MediaProfileContext);
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   const [full, setFull] = useState(false);
+
+  /** 主路径 asset URL → 失败 fallback base64（画图 drawing 走同一 image 节点，自动受益） */
   useEffect(() => {
-    if (attId != null) void loadAttachment(attId).then(setData);
-  }, [attId]);
+    let alive = true;
+    setSrc(null);
+    setFailed(false);
+    if (attId != null) {
+      void loadAttachmentUrl(attId, profileId).then(async (url) => {
+        if (!alive) return;
+        if (url) {
+          setSrc(url);
+          return;
+        }
+        const dataUrl = await loadAttachmentDataUrl(attId);
+        if (!alive) return;
+        if (dataUrl) setSrc(dataUrl);
+        else setFailed(true);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [attId, profileId]);
+
+  /** asset URL 在 WebView 侧加载失败（文件丢失等）→ 再走一次 base64 fallback */
+  const handleImgError = useCallback(() => {
+    if (attId == null || src == null || src.startsWith("data:")) return;
+    void loadAttachmentDataUrl(attId).then((dataUrl) => {
+      if (dataUrl) setSrc(dataUrl);
+    });
+  }, [attId, src]);
+
   return (
     <NodeViewWrapper className={"hdoc__media" + (selected ? " hdoc__media--sel" : "")}>
-      {data ? (
+      {src ? (
         <img
           className="hdoc__img"
-          src={`data:${data.mime_type};base64,${data.base64}`}
+          src={src}
           alt={fileName}
+          onError={handleImgError}
           onClick={() => setFull(true)}
         />
+      ) : failed ? (
+        <div className="hdoc__loading">图片加载失败</div>
       ) : (
         <div className="hdoc__loading">图片加载中…</div>
       )}
@@ -138,10 +208,10 @@ function ImageNodeView({ node, deleteNode, selected }: { node: any; deleteNode: 
       <button className="hdoc__remove" title="从正文移除（附件保留）" onClick={deleteNode}>
         移除
       </button>
-      {full && data && (
+      {full && src && (
         <div className="modal-overlay" onClick={() => setFull(false)}>
           <div className="att-fullview" onClick={(e) => e.stopPropagation()}>
-            <img src={`data:${data.mime_type};base64,${data.base64}`} alt="原图" />
+            <img src={src} alt="原图" />
             <div className="btn-row" style={{ justifyContent: "center", marginTop: 10 }}>
               <button className="btn btn--small" onClick={() => setFull(false)}>关闭</button>
             </div>
@@ -179,19 +249,52 @@ const HigherVideo = Node.create({
 function VideoNodeView({ node, deleteNode }: { node: any; deleteNode: () => void }) {
   const attId: number | null = node.attrs.attachmentId;
   const fileName: string = node.attrs.fileName ?? "";
-  const [data, setData] = useState<AttachmentImageData | null>(null);
+  const profileId = useContext(MediaProfileContext);
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  /** 主路径 asset URL → 失败 fallback base64（preload=metadata 按需加载，不整文件进堆） */
   useEffect(() => {
-    if (attId != null) void loadAttachment(attId).then(setData);
-  }, [attId]);
+    let alive = true;
+    setSrc(null);
+    setFailed(false);
+    if (attId != null) {
+      void loadAttachmentUrl(attId, profileId).then(async (url) => {
+        if (!alive) return;
+        if (url) {
+          setSrc(url);
+          return;
+        }
+        const dataUrl = await loadAttachmentDataUrl(attId);
+        if (!alive) return;
+        if (dataUrl) setSrc(dataUrl);
+        else setFailed(true);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [attId, profileId]);
+
+  const handleVideoError = useCallback(() => {
+    if (attId == null || src == null || src.startsWith("data:")) return;
+    void loadAttachmentDataUrl(attId).then((dataUrl) => {
+      if (dataUrl) setSrc(dataUrl);
+    });
+  }, [attId, src]);
+
   return (
     <NodeViewWrapper className="hdoc__media">
-      {data ? (
+      {src ? (
         <video
           className="hdoc__video"
           controls
           preload="metadata"
-          src={`data:${data.mime_type};base64,${data.base64}`}
+          src={src}
+          onError={handleVideoError}
         />
+      ) : failed ? (
+        <div className="hdoc__loading">视频加载失败</div>
       ) : (
         <div className="hdoc__loading">视频加载中…</div>
       )}
@@ -621,36 +724,38 @@ export default function RichDocEditor({
   if (!editor) return <div className="muted">编辑器加载中…</div>;
 
   return (
-    <div className={"hdoc" + (dragOver ? " hdoc--drag" : "")}>
-      {!readOnly && toolbar}
-      {error && (
-        <div className="alert alert--error" onClick={() => setError("")}>
-          {error}（点击关闭）
-        </div>
-      )}
-      <EditorContent editor={editor} />
-      {readOnly && documentToPlainText(editor.getJSON()) === "" && (
-        <p className="muted">（本次学习没有笔记）</p>
-      )}
-      {dragOver && <div className="leditor__dropzone">松开以插入图片 / 视频</div>}
-      {showDraw && (
-        <DrawModal
-          onClose={() => setShowDraw(false)}
-          onSave={async (dataUrl) => {
-            // §15：saveDrawing 适配器优先（Document 链）；缺省 = Session 链
-            const att = saveDrawing
-              ? await saveDrawing(dataUrl)
-              : await saveDrawingAttachment({
-                  profileId,
-                  learningItemId: learningItemId ?? null,
-                  sessionId: sessionId!,
-                  dataBase64: dataUrl,
-                });
-            setShowDraw(false);
-            insertMedia("image", att.id, att.file_name);
-          }}
-        />
-      )}
-    </div>
+    <MediaProfileContext.Provider value={profileId}>
+      <div className={"hdoc" + (dragOver ? " hdoc--drag" : "")}>
+        {!readOnly && toolbar}
+        {error && (
+          <div className="alert alert--error" onClick={() => setError("")}>
+            {error}（点击关闭）
+          </div>
+        )}
+        <EditorContent editor={editor} />
+        {readOnly && documentToPlainText(editor.getJSON()) === "" && (
+          <p className="muted">（本次学习没有笔记）</p>
+        )}
+        {dragOver && <div className="leditor__dropzone">松开以插入图片 / 视频</div>}
+        {showDraw && (
+          <DrawModal
+            onClose={() => setShowDraw(false)}
+            onSave={async (dataUrl) => {
+              // §15：saveDrawing 适配器优先（Document 链）；缺省 = Session 链
+              const att = saveDrawing
+                ? await saveDrawing(dataUrl)
+                : await saveDrawingAttachment({
+                    profileId,
+                    learningItemId: learningItemId ?? null,
+                    sessionId: sessionId!,
+                    dataBase64: dataUrl,
+                  });
+              setShowDraw(false);
+              insertMedia("image", att.id, att.file_name);
+            }}
+          />
+        )}
+      </div>
+    </MediaProfileContext.Provider>
   );
 }

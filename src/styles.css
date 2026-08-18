@@ -3596,6 +3596,41 @@ button.calendar__cell--day:hover {
   color: var(--fg-muted);
 }
 
+/* ---- DEV-0059 §29：Calendar Milestone / Phase ---- */
+.pcal__plan {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 8px 0 4px;
+  font-size: 12px;
+}
+.pcal__phase {
+  color: var(--fg);
+}
+.pcal__month-ms {
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-soft, rgba(79, 140, 255, 0.14));
+  border-radius: 6px;
+  padding: 1px 8px;
+}
+.pcal__ms {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+}
+.pcal__ms-item {
+  font-size: 10px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 /* ============ DEV-0027 Review V2 ============ */
 
 .rv-stats-line {
@@ -7617,6 +7652,308 @@ button.calendar__cell--day:hover {
   justify-content: flex-end;
 }
 
+/* ============ DEV-0059：Today Review 提醒 / Risk Banner（§30） ============ */
+.today-banner--review .today-banner__label {
+  color: var(--warn);
+}
+.today-banner--risk {
+  border-left: 3px solid var(--danger);
+}
+.today-banner--risk .today-banner__label {
+  color: var(--danger);
+}
+
+/* ============ DEV-0059：Planning 正式目标/规划摘要（§27-28） ============ */
+.pt-summary {
+  margin-bottom: 12px;
+  padding: 10px 16px;
+}
+.pt-summary__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.pt-summary__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.pt-summary__meta {
+  font-size: 12px;
+}
+.pt-summary__msg {
+  margin: 8px 0 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.pt-summary__bp {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.pt-summary__bp-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pt-summary__risk {
+  font-size: 12px;
+  color: var(--warn, #d29922);
+  border: 1px solid var(--warn, #d29922);
+  border-radius: 6px;
+  padding: 1px 8px;
+}
+.pt-summary__review {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.pt-summary__review-due {
+  color: var(--warn, #d29922);
+}
+.pt-summary__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.pt-summary__act-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- §27 GoalTargetPanel：槽位 / legacy 候选 / 历史 / 来源 ---- */
+.pt-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 4px;
+}
+.pt-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.pt-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.pt-panel__empty {
+  font-size: 12px;
+  margin: 4px 0;
+}
+.pt-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pt-slot {
+  flex: 1 1 240px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg, #0f1115);
+}
+.pt-slot__label {
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.pt-slot__title {
+  font-size: 14px;
+}
+.pt-slot__meta {
+  font-size: 12px;
+}
+.pt-slot__empty {
+  font-size: 13px;
+}
+.pt-slot__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.pt-legacy {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.pt-legacy__head {
+  font-size: 12px;
+  margin: 0 0 4px;
+}
+.pt-legacy__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pt-legacy__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.pt-hist__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pt-hist__item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.pt-hist__tag {
+  font-size: 11px;
+  color: var(--fg-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0 6px;
+  margin-left: 6px;
+}
+.pt-src-pre {
+  background: var(--bg, #0f1115);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow: auto;
+}
+.pt-form-json {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+}
+
+/* ---- DEV-0059.1 §2：规划资料参与审查列表 ---- */
+.pt-sources {
+  margin-top: 10px;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.pt-sources__head {
+  margin-bottom: 4px;
+}
+.pt-sources__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 160px;
+  overflow: auto;
+}
+.pt-sources__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.pt-sources__label:hover {
+  background: var(--accent-soft, rgba(79, 140, 255, 0.14));
+}
+.pt-sources__name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pt-sources__meta {
+  font-size: 11px;
+}
+
+/* DEV-0059.1 §3：复盘证据快照摘要 + 确认启动 AI */
+.pt-snapshot {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border, #ddd);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-soft, rgba(0, 0, 0, 0.02));
+}
+.pt-snapshot__line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+/* DEV-0059.1 §10-12：手工维护规划 / 复盘节奏 / 近期计划提示 */
+.pt-summary__hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #b45309;
+  background: rgba(180, 83, 9, 0.08);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.pt-manual {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pt-manual__panel {
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pt-manual__sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pt-manual__chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pt-manual__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ---- 活动行 .actrow（DEV-0054 §42-52：高 52px；轻量 Badge + Title + 时间/状态动作 + ⋯） ---- */
 
 .today__acts-filter {
@@ -8439,3 +8776,509 @@ button.calendar__cell--day:hover {
     display: none;
   }
 }
+
+/* ============================================================
+   DEV-0055 PART 47 §174-175 · 新 Design Tokens 补充
+   （Typography / Spacing / Radius / Control Height / Surface /
+    Border / Accent / Muted / Danger；新页面只用 tokens，无 magic number）
+   ============================================================ */
+:root {
+  /* Typography（沿用 §9 字号档位） */
+  --fs-xs: 12px;
+  --fs-s: 13px;
+  --fs-body: 14px;
+  --fs-l: 15px;
+  --fs-xl: 16px;
+  --fs-title: 24px;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  /* Spacing（4/8/12/16/24/32） */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  /* Control Height */
+  --ctl-h: var(--btn-h);
+  --ctl-h-small: var(--btn-h-small);
+  /* Surface */
+  --surface: var(--bg);
+  --surface-raised: var(--bg-elevated);
+  --surface-sunken: var(--bg-sidebar);
+  /* 统一别名（Accent / Border 沿用既有变量） */
+  --muted: var(--fg-muted);
+  --danger: var(--error);
+}
+
+/* ============================================================
+   DEV-0055 · /data 学习数据页（.datapage__）
+   ============================================================ */
+
+.datapage__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.datapage__sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.datapage__chips {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* §104：三数一行 */
+.datapage__trio {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-2);
+}
+
+.datapage__duo {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-2);
+}
+
+.datapage__stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+
+.datapage__stat--inline {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.datapage__stat-label {
+  font-size: var(--fs-s);
+  color: var(--muted);
+}
+
+.datapage__stat-value {
+  font-size: var(--fs-title);
+  font-weight: var(--fw-semibold);
+  color: var(--fg);
+  line-height: 1.2;
+}
+
+.datapage__stat-unit {
+  font-size: var(--fs-s);
+  color: var(--muted);
+}
+
+/* §109：无任务 → 文本，不显示 0% */
+.datapage__stat-nodata {
+  font-size: var(--fs-l);
+  color: var(--muted);
+}
+
+/* §157：空态 */
+.datapage__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-2);
+}
+
+.datapage__empty-note {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--fg);
+}
+
+.datapage__empty-sub {
+  margin: 0;
+  font-size: var(--fs-s);
+  color: var(--muted);
+}
+
+.datapage__chart {
+  width: 100%;
+}
+
+.datapage__crumb {
+  margin: 0;
+  font-size: var(--fs-xs);
+}
+
+.datapage__legend {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.datapage__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.datapage__legend-dot {
+  display: inline-block;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.datapage__legend-dot--planned {
+  background: var(--muted);
+}
+
+.datapage__legend-dot--actual {
+  background: var(--accent);
+}
+
+/* §112-117 / §119：CSS 横条（可点击下钻） */
+.datapage__bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.datapage__bar-row {
+  display: flex;
+}
+
+.datapage__bar-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+}
+
+button.datapage__bar-main {
+  cursor: pointer;
+}
+
+button.datapage__bar-main:disabled {
+  cursor: default;
+}
+
+.datapage__bar-main--drill:hover .datapage__bar-label {
+  color: var(--accent);
+}
+
+.datapage__bar-label {
+  flex: 0 0 112px;
+  font-size: var(--fs-s);
+  color: var(--fg);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.datapage__bar-label--fixed {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.datapage__bar-track {
+  flex: 1;
+  height: var(--space-2);
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.datapage__bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+.datapage__bar-fill--muted {
+  background: var(--muted);
+}
+
+.datapage__bar-value {
+  flex: 0 0 auto;
+  min-width: 48px;
+  text-align: right;
+  font-size: var(--fs-s);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.datapage__bar-more {
+  color: var(--accent);
+}
+
+.datapage__bar-main--unassigned .datapage__bar-label {
+  color: var(--muted);
+}
+
+/* ============================================================
+   DEV-0055 PART 37 · Final Goal Card（.fgcard__）
+   ============================================================ */
+
+.fgcard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.fgcard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.fgcard__label {
+  font-size: var(--fs-s);
+  font-weight: var(--fw-medium);
+  color: var(--muted);
+}
+
+.fgcard__conflict {
+  font-size: var(--fs-s);
+  color: var(--warn);
+  border: 1px solid rgba(210, 153, 34, 0.45);
+  border-radius: var(--radius-md);
+  background: rgba(210, 153, 34, 0.08);
+  padding: var(--space-2) var(--space-3);
+}
+
+.fgcard__title {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  color: var(--fg);
+}
+
+.fgcard__title--pending {
+  color: var(--muted);
+}
+
+.fgcard__outcome {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--fg);
+}
+
+.fgcard__deadline {
+  margin: 0;
+  font-size: var(--fs-s);
+  color: var(--muted);
+}
+
+.fgcard__missing {
+  margin: 0;
+  padding-left: var(--space-5);
+  font-size: var(--fs-s);
+  color: var(--muted);
+}
+
+.fgcard__missing li {
+  margin: var(--space-1) 0;
+}
+
+.fgcard__actions {
+  margin-top: var(--space-1);
+}
+
+.fgcard__more {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: var(--space-1) 0;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+}
+
+.fgcard__more:hover {
+  text-decoration: underline;
+}
+
+.fgcard__detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px dashed var(--border);
+  padding-top: var(--space-2);
+}
+
+.fgcard__detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fgcard__detail-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.fgcard__detail-block ul {
+  margin: 0;
+  padding-left: var(--space-5);
+  font-size: var(--fs-s);
+  color: var(--fg);
+}
+
+/* ============================================================
+   DEV-0055 PART 25 §93-99 · Completion 反馈（.completefb__）
+   （禁止烟花 / XP / 排名 / 努力分——只显示事实）
+   ============================================================ */
+
+.completefb {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.completefb__title {
+  font-size: var(--fs-l);
+  font-weight: var(--fw-semibold);
+  color: var(--ok);
+}
+
+.completefb__name {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+  color: var(--fg);
+}
+
+.completefb__duration {
+  font-size: var(--fs-s);
+  color: var(--fg);
+}
+
+.completefb__row {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--fs-s);
+  color: var(--muted);
+}
+
+.completefb__path {
+  font-size: var(--fs-s);
+  color: var(--accent);
+}
+
+.completefb__unassigned {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--fs-s);
+  color: var(--muted);
+}
+
+/* ============================================================
+   DEV-0057 · Duration Review（时长可信度）最小样式
+   PART T：活动行「时间待确认」小标签（可点击打开该会话）
+   PART U：>12h 结束的异常 Completion（复用现有 .alert 底色）
+   PART S/R：待确认记录不计入统计的轻提示
+   ============================================================ */
+
+.actrow__review {
+  flex-shrink: 0;
+  align-self: center;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--warn);
+  background: transparent;
+  cursor: pointer;
+}
+
+.actrow__review:hover {
+  filter: brightness(1.2);
+}
+
+/* 异常 Completion：标题不再用绿色（--ok），复用现有 alert 呈现提示行 */
+.completefb__title--review {
+  color: var(--fg);
+}
+
+.completefb__review-alert {
+  margin: var(--space-1) 0;
+  padding: 6px 10px;
+  font-size: var(--fs-s);
+  border: 1px solid var(--warn);
+  color: var(--fg);
+  background: rgba(210, 153, 34, 0.08);
+  border-radius: var(--radius-ctl, 6px);
+}
+
+.completefb__review-later {
+  align-self: flex-start;
+}
+
+/* Planning 日报 / Data 页：待确认时长轻提示 */
+.dlr__review-note,
+.datapage__review-note {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-s);
+  color: var(--fg-muted);
+}
+
+
+/* ============================================================
+   DEV-0055 PART 21 §76 · Today AI复盘次级入口 + §91 活动分类极弱小标签
+   ============================================================ */
+
+.today__ai-secondary {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-1) 0;
+}
+
+/* §91：分类默认不作为首要文本——统一极弱小标签（11px muted，无色彩区分） */
+.actrow__kind {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  opacity: 0.8;
+  min-width: 32px;
+}
+
+.actrow__kind--core,
+.actrow__kind--accumulation {
+  color: var(--muted);
+  font-weight: var(--fw-medium);
+  opacity: 0.9;
+}
+
+.actrow__kind--unplanned {
+  opacity: 0.7;
+}
+
+/* 注：AI Panel 收起态右下角轻量悬浮按钮已由既有 .aipanel-fab（DEV-0022）实现，
+   语义等同 DEV-0055 §149 的收起浮钮，不重复实现第二套 .aidock__*。 */

@@ -57,7 +57,7 @@ fn test_case_b_two_dimensions_renormalize() {
     let srepo = StudySessionRepository::new(&conn);
     let s = srepo.start_for_task(p, t.id).unwrap();
     conn.execute(
-        "UPDATE study_sessions SET duration_seconds=1800, status='completed', ended_at='2026-08-16 03:00:00' WHERE id=?1",
+        "UPDATE study_sessions SET duration_seconds=1800, status='completed', started_at='2026-08-15 20:00:00', ended_at='2026-08-16 03:00:00' WHERE id=?1",
         rusqlite::params![s.id],
     ).unwrap();
     let rep = DailyReportRepository::new(&conn).get(p, "2026-08-16").unwrap();
@@ -86,7 +86,7 @@ fn test_case_c_three_dimensions_403030() {
     let srepo = StudySessionRepository::new(&conn);
     let s = srepo.start_for_task(p, t.id).unwrap();
     conn.execute(
-        "UPDATE study_sessions SET duration_seconds=1800, status='completed', ended_at='2026-08-16 03:00:00' WHERE id=?1",
+        "UPDATE study_sessions SET duration_seconds=1800, status='completed', started_at='2026-08-15 20:00:00', ended_at='2026-08-16 03:00:00' WHERE id=?1",
         rusqlite::params![s.id],
     ).unwrap();
     let rep = DailyReportRepository::new(&conn).get(p, "2026-08-16").unwrap();

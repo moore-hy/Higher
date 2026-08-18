@@ -499,24 +499,37 @@ fn test_mastery_stale_after_new_session_and_evaluation() {
     let id = repo.insert(&sample(p, true)).unwrap();
     let a = repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap();
     assert_eq!(a.id, id);
+    // DEV-0058：把评估 created_at 固定到窗口早期（08-16 01:00），后续新增记录只需
+    // 落在窗口内且晚于它即可 stale——消除跨日运行的时间敏感性
+    conn.execute(
+        "UPDATE mastery_assessments SET created_at='2026-08-16 01:00:00' WHERE id=?1",
+        rusqlite::params![id],
+    )
+    .unwrap();
+    let a = repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap();
     // 评估之后无新记录 → 不 stale
     assert!(!repo.stale_since(p, "2026-08-10", "2026-08-16", &a.created_at).unwrap());
 
-    // 新增 ended Session（评估之后，真实"现在"）→ stale
+    // 新增 ended Session（评估之后）→ stale（started_at 窗口内 + ended_at > created_at）
     conn.execute(
         "INSERT INTO study_sessions (profile_id, title, started_at, ended_at, duration_seconds, status)
-         VALUES (?1, 'new', datetime('now'), datetime('now', '+300 seconds'), 300, 'completed')",
+         VALUES (?1, 'new', '2026-08-16 05:00:00', '2026-08-16 05:05:00', 300, 'completed')",
         rusqlite::params![p],
     )
     .unwrap();
     assert!(repo.stale_since(p, "2026-08-10", "2026-08-16", &a.created_at).unwrap());
 
-    // 新增 Evaluation 同样 stale（occurred_at 默认 now；跨过秒粒度确保 > created_at）
+    // 新增 Evaluation 同样 stale（occurred_at 固定窗口内 08-16，且 > created_at）
     let a2 = repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1100));
     app_lib::repository::evaluation::EvaluationRepository::new(&conn)
         .create(p, None, None, "新验证", "test", None, None, None, None, None, None, None, Some("passed"), None)
         .unwrap();
+    // DEV-0058：评估 occurred_at 默认 now（可能已落 08-17 窗外）→ 固定回窗口内并晚于 a2
+    conn.execute(
+        "UPDATE evaluations SET occurred_at='2026-08-16 23:00:00' WHERE id=(SELECT MAX(id) FROM evaluations WHERE profile_id=?1)",
+        rusqlite::params![p],
+    )
+    .unwrap();
     assert!(repo.stale_since(p, "2026-08-10", "2026-08-16", &a2.created_at).unwrap());
 }
 

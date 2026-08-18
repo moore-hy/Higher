@@ -5,6 +5,8 @@ import {
   getActiveSession,
   getDailyLearningReport,
   getGoalTree,
+  getPlanningReviewRisk,
+  isPlanningReviewDue,
   listLearningItemsByProfile,
   materializeRecurringTasks,
   startQuickSession,
@@ -14,7 +16,8 @@ import ActiveSessionConflictModal, {
   useActiveSessionConflict,
 } from "../components/ActiveSessionConflictModal";
 import DailyTasksSection, { minutesShort } from "../components/DailyTasksSection";
-import DailyActivitiesSection, { studyClockHHMM } from "../components/DailyActivitiesSection";
+import DailyActivitiesSection from "../components/DailyActivitiesSection";
+import { PLAN_REQUEST_MESSAGE } from "../components/FinalGoalCard";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
 import type {
@@ -48,13 +51,13 @@ function flattenGoalTree(node: GoalTreeNode, acc: Goal[] = []): Goal[] {
 }
 
 /**
- * 今日任务 Cockpit（DEV-0053 §12-36 重构）。
+ * 今日任务 Cockpit（DEV-0053 §12-36 重构 → DEV-0055 PART 20-24 第一层产品化减法）。
  *
  * 页面主体只有两个区（§12，禁止第三区）：
- *   §14-23 今日任务（get_daily_learning_report(today).tasks；核心/常规/积累分组）
- *   §24-36 今日活动（get_daily_learning_report(today).activities；极简行 + ⋯ 菜单）
- * Header（§13）：`今日任务 · M月D日 星期X` + `完成 X/Y · 实际学习 2h36m`
- *   + ⚡ 快速学习 / + 新建任务 / 紧凑按钮 AI复盘 · AI安排建议（不占整行）
+ *   今日任务（§80-85：Checkbox + Title + 预计；开始/查看；编辑收进 ⋯）
+ *   今日活动（§86-92：Title + 时长 + 打开；分类极弱；Filter 只在 >8 时折叠出现）
+ * Header（§74-76）：`8月17日 星期一` + `已学习 2h36m · 完成 3/5`；
+ *   右：快速学习 / + 新建任务 / AI安排；AI复盘 移到页面底部次级入口（§76）
  */
 function Today() {
   const navigate = useNavigate();
@@ -67,11 +70,15 @@ function Today() {
   const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
 
-  const { runAction: aiRunAction, setPageContext } = useAiPanel();
+  const { runAction: aiRunAction, sendChat, setOpen: setAiOpen, setPageContext } = useAiPanel();
   const { conflict, guard, close } = useActiveSessionConflict();
 
   const [now, setNow] = useState(() => Date.now());
   const [dismissedStale, setDismissedStale] = useState(false);
+  // DEV-0059 §18/§30：阶段复盘提醒 + 风险 Banner（启动只读；不自动调 AI）
+  const [reviewDue, setReviewDue] = useState(false);
+  const [riskState, setRiskState] = useState("unknown");
+  const [dismissedReview, setDismissedReview] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!activeProfile) return;
@@ -81,16 +88,20 @@ function Today() {
       const today = todayDate();
       // 今日重复任务 materialize（幂等；失败静默）
       await materializeRecurringTasks(activeProfile.id, today).catch(() => {});
-      const [rep, itemList, tree, activeSess] = await Promise.all([
+      const [rep, itemList, tree, activeSess, due, risk] = await Promise.all([
         getDailyLearningReport(activeProfile.id, today),
         listLearningItemsByProfile(activeProfile.id),
         getGoalTree(activeProfile.id).catch(() => null),
         getActiveSession().catch(() => null),
+        isPlanningReviewDue(activeProfile.id).catch(() => false),
+        getPlanningReviewRisk(activeProfile.id).catch(() => "unknown"),
       ]);
       setReport(rep);
       setItems(itemList);
       setGoals(tree ? flattenGoalTree(tree.final_goal) : []);
       setActive(activeSess);
+      setReviewDue(due);
+      setRiskState(risk);
       // 任务/规则变化后对齐系统学习提醒（fire-and-forget，失败静默）
       void syncNotifications().catch(() => {});
     } catch (e) {
@@ -178,33 +189,34 @@ function Today() {
 
   return (
     <div className="page page--wide">
-      {/* Header（§13-20）：标题 + 轻量统计 + 按钮层级（Primary/Secondary/Subtle） */}
+      {/* Header（§74-76）：日期 + 轻量统计 + 按钮层级（Primary/Secondary/Ghost） */}
       <header className="page__header today-head">
         <div className="today-head__info">
-          <h1 className="page__title">今日任务 · {friendlyDate(todayDate())}</h1>
+          <h1 className="page__title">{friendlyDate(todayDate())}</h1>
           <p className="today-head__sub">
+            已学习 <b>{minutesShort(report?.actual_minutes ?? 0)}</b>
+            {" · "}
             <b>
               完成 {report?.task_completed ?? 0}/{report?.task_total ?? 0}
             </b>
-            {" · "}
-            已结束学习 {minutesShort(report?.actual_minutes ?? 0)}
             {active && " · 1 项学习进行中"}
           </p>
         </div>
         <div className="today-head__btns">
+          <button className="btn" onClick={() => void handleQuickStart()}>
+            快速学习
+          </button>
           <button className="btn btn--primary" onClick={() => setShowCreate(true)}>
             + 新建任务
           </button>
-          <button className="btn" onClick={() => void handleQuickStart()}>
-            ⚡ 快速学习
-          </button>
-          <button className="btn btn--ghost" onClick={runTodayReview} title="AI 复盘今天的学习">
-            ✨ AI复盘
-          </button>
           <button
             className="btn btn--ghost"
-            onClick={() => void aiRunAction("today_suggestion")}
-            title="AI 看看今天怎么安排（只读建议，不自动创建任务）"
+            onClick={() => {
+              // DEV-0058 §51-53：三入口统一 Planner（Planning「AI 生成计划」/对话写意图同一管线）
+              setAiOpen(true);
+              void sendChat(PLAN_REQUEST_MESSAGE);
+            }}
+            title="根据最终目标安排未来14天计划（助手模式下生成可应用计划）"
           >
             ✨ AI安排
           </button>
@@ -213,15 +225,56 @@ function Today() {
 
       {error && <div className="alert alert--error">{error}</div>}
 
-      {/* Active Session Compact Banner（§22-24：单行卡片；大面积空白 card 已删） */}
+      {/* DEV-0059 §30：Review 提醒（到期只提醒，不自动调 AI）+ Risk Banner（启动只读） */}
+      {!dismissedReview && reviewDue && (
+        <section className="card today-banner today-banner--review">
+          <div className="today-banner__main">
+            <span className="today-banner__label">阶段复盘</span>
+            <span className="today-banner__name">该进行阶段复盘了</span>
+          </div>
+          <div className="today-banner__actions">
+            <button
+              className="btn btn--small btn--primary"
+              onClick={() => {
+                setDismissedReview(true);
+                navigate("/planning");
+              }}
+            >
+              开始复盘
+            </button>
+            <button className="btn btn--small" onClick={() => setDismissedReview(true)}>
+              稍后
+            </button>
+          </div>
+        </section>
+      )}
+      {["near_safety", "below_safety", "off_reach"].includes(riskState) && (
+        <section className="card today-banner today-banner--risk">
+          <div className="today-banner__main">
+            <span className="today-banner__label">风险提示</span>
+            <span className="today-banner__name">
+              {riskState === "off_reach"
+                ? "当前进度偏离冲刺目标"
+                : riskState === "near_safety"
+                  ? "当前进度接近保底目标风险线"
+                  : "当前进度已低于保底目标"}
+            </span>
+          </div>
+          <div className="today-banner__actions">
+            <button className="btn btn--small" onClick={() => navigate("/planning")}>
+              查看依据
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Active Session Banner（§77-79：正在学习 · 已进行 Xm；继续/结束） */}
       {active && (
         <section className="card today-banner">
           <div className="today-banner__main">
             <span className="today-banner__label">正在学习</span>
             <span className="today-banner__name">{activeItemName}</span>
-            <span className="today-banner__meta">
-              开始 {studyClockHHMM(active.started_at)} · 已进行 {activeElapsed}
-            </span>
+            <span className="today-banner__meta">已进行 {activeElapsed}</span>
             {isStale(active) && !dismissedStale && (
               <span className="today-banner__stale">
                 上次学习仍未结束（可在学习工作区中结束）
@@ -233,16 +286,16 @@ function Today() {
               className="btn btn--small btn--primary"
               onClick={() => navigate(`/learn/${active.id}`)}
             >
-              进入学习
+              继续
             </button>
             <button className="btn btn--small" onClick={() => void handleEndActive()}>
-              结束学习
+              结束
             </button>
           </div>
         </section>
       )}
 
-      {/* ===== 区一：今日任务（§14-23） ===== */}
+      {/* ===== 区一：今日任务（§80-85） ===== */}
       <section className="card today__section">
         <div className="today__section-head">
           <h2 className="card__title">今日任务</h2>
@@ -263,7 +316,7 @@ function Today() {
               createOpen={showCreate}
               onCreateClose={() => setShowCreate(false)}
               onChanged={refresh}
-              emptyNote="今天还没有计划任务。"
+              emptyNote="今天没有计划任务。"
               onEmptyCreate={() => setShowCreate(true)}
               onEmptyQuickStart={() => void handleQuickStart()}
             />
@@ -271,7 +324,7 @@ function Today() {
         )}
       </section>
 
-      {/* ===== 区二：今日活动（§24-36 / DEV-0054 §42-52） ===== */}
+      {/* ===== 区二：今日活动（§86-92） ===== */}
       <section className="card today__section">
         <h2 className="card__title">今日活动</h2>
         {loading && !report ? (
@@ -290,6 +343,13 @@ function Today() {
           )
         )}
       </section>
+
+      {/* AI复盘（§76）：不抢首屏，页面底部次级入口 */}
+      <div className="today__ai-secondary">
+        <button className="btn btn--ghost" onClick={runTodayReview} title="AI 复盘今天的学习">
+          ✨ AI复盘今天
+        </button>
+      </div>
 
       {/* Start Guard 冲突弹窗（PHASE F） */}
       <ActiveSessionConflictModal

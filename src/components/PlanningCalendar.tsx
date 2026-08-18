@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createRecurringRule,
   deleteRecurringRule,
+  getActivePlanningBlueprint,
   getProfileRangeSessions,
+  listPlanningMilestones,
+  listPlanningPhases,
   listRecurringRulesByProfile,
   listTasksByRangeByProfile,
   materializeRecurringTasks,
@@ -11,17 +14,27 @@ import {
   updateRecurringRule,
 } from "../api";
 import TaskModal from "./TaskModal";
-import type { Goal, LearningItem, RecurringRule, StudySession, Task } from "../types";
+import type {
+  Goal,
+  LearningItem,
+  PlanningMilestone,
+  PlanningPhase,
+  RecurringRule,
+  StudySession,
+  Task,
+} from "../types";
 import { formatDuration, monthGrid, studyDayOf, todayDate } from "../utils";
 
 const WEEKDAY_NAMES = ["一", "二", "三", "四", "五", "六", "日"];
 
 /**
- * Planning Calendar（DEV-0053 §60-62 重构）。
+ * Planning Calendar（DEV-0053 §60-62 重构；DEV-0059 §29 增加 Milestone / Phase 理解）。
  *
  * - 旧 Date Detail 中央 Modal 已废弃（§60/§165）：点击日期不再打开 Modal，
  *   改为受控 selectedDate → Planning 在 Calendar 正下方展开 Daily Learning Report（§61-62）
- * - 月历 cell：日期 / 任务 完成·总数 / 学习时长（月度 tasks + sessions 一次拉取前端聚合 §75）
+ * - 月历 cell：日期 / 任务 完成·总数 / 学习时长 / 精确日期 Milestone（§29：exact milestone）
+ * - month-only milestone：不伪装成某一天，显示在月历上方月级摘要（§29）
+ * - current phase summary：显示在月历上方（§29）
  * - 保留：月切换 / 今天 / + 新建任务 / 重复任务管理（RecurringModal）
  */
 export default function PlanningCalendar({
@@ -45,6 +58,9 @@ export default function PlanningCalendar({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sessions, setSessions] = useState<StudySession[]>([]);
   const [rules, setRules] = useState<RecurringRule[]>([]);
+  // DEV-0059 §29：Active Blueprint 的 Milestone / Phase（exact → cell；month-only → 月级摘要）
+  const [milestones, setMilestones] = useState<PlanningMilestone[]>([]);
+  const [phases, setPhases] = useState<PlanningPhase[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [createFor, setCreateFor] = useState<string | null>(null);
@@ -61,15 +77,28 @@ export default function PlanningCalendar({
     try {
       // 今日重复任务 materialize（幂等；跨月未来日期在到达当天时生成）
       await materializeRecurringTasks(profileId, today).catch(() => {});
-      const [ts, ss, rs] = await Promise.all([
+      const [ts, ss, rs, bp] = await Promise.all([
         listTasksByRangeByProfile(profileId, monthStart, monthEnd),
         // §75：月度学习时长用一次 range 查询前端聚合（避免每格 get_day_detail）
         getProfileRangeSessions(profileId, monthStart, monthEnd).catch(() => [] as StudySession[]),
         listRecurringRulesByProfile(profileId),
+        getActivePlanningBlueprint(profileId).catch(() => null),
       ]);
       setTasks(ts);
       setSessions(ss);
       setRules(rs);
+      // §29：active blueprint 存在时才加载其 Milestone/Phase
+      if (bp) {
+        const [ml, ph] = await Promise.all([
+          listPlanningMilestones(bp.id).catch(() => [] as PlanningMilestone[]),
+          listPlanningPhases(bp.id).catch(() => [] as PlanningPhase[]),
+        ]);
+        setMilestones(ml);
+        setPhases(ph);
+      } else {
+        setMilestones([]);
+        setPhases([]);
+      }
       // 任务/规则变化后对齐系统学习提醒（fire-and-forget，失败静默）
       void syncNotifications().catch(() => {});
     } catch (e) {
@@ -105,6 +134,63 @@ export default function PlanningCalendar({
     }
     return map;
   }, [tasks]);
+
+  /** §29：精确日期 Milestone（date_precision=day 或 range 覆盖到当天）→ 日期 → milestone[] */
+  const milestoneByDate = useMemo(() => {
+    const map = new Map<string, PlanningMilestone[]>();
+    for (const ms of milestones) {
+      if (ms.date_precision === "month" || ms.date_precision === "unknown") continue;
+      const start = ms.start_date;
+      const end = ms.end_date ?? ms.start_date;
+      if (!start || !end) continue;
+      const s = start < end ? start : end;
+      const e = end < start ? start : end;
+      // 仅放入当月可见范围内（day 精度单日；range 精度整段覆盖）
+      const from = s > monthStart ? s : monthStart;
+      const to = e < monthEnd ? e : monthEnd;
+      if (from > to) continue;
+      let cur = from;
+      while (cur <= to) {
+        const arr = map.get(cur) ?? [];
+        arr.push(ms);
+        map.set(cur, arr);
+        // 推进一天
+        const d = new Date(cur + "T00:00:00");
+        d.setDate(d.getDate() + 1);
+        cur = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      }
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [milestones, monthStart, monthEnd]);
+
+  /** §29：month-only milestone（不伪装成某一天）→ 月级摘要 */
+  const monthMilestones = useMemo(
+    () =>
+      milestones.filter((ms) => {
+        if (ms.date_precision !== "month") return false;
+        const ym = ms.start_date ? ms.start_date.slice(0, 7) : null;
+        if (!ym) return false;
+        const curYm = `${y}-${String(m).padStart(2, "0")}`;
+        if (ym === curYm) return true;
+        // range 且跨月
+        if (ms.end_date && ms.start_date && ms.start_date.slice(0, 7) <= curYm && ms.end_date.slice(0, 7) >= curYm)
+          return true;
+        return false;
+      }),
+    [milestones, y, m]
+  );
+
+  /** §29：current phase（start_date<=today<=end_date 或覆盖今天的 range） */
+  const currentPhase = useMemo(
+    () =>
+      phases.find((p) => {
+        if (p.start_date && p.start_date > today) return false;
+        if (p.end_date && p.end_date < today) return false;
+        return true;
+      }) ?? null,
+    [phases, today]
+  );
 
   /** 当日学习秒数（按 started_at 的 UTC+8 学习日归属，与后端 date(started_at,'+8 hours') 一致）。 */
   const secondsByDate = useMemo(() => {
@@ -229,7 +315,25 @@ export default function PlanningCalendar({
         </section>
       )}
 
-      {/* 月历（§75：日期 / 任务 x/y / 学习时长 / 最多 2 条任务名；点击选中 → 正下方日报） */}
+      {/* §29：月级规划摘要（current phase + month-only milestone，不伪装成某一天） */}
+      {(currentPhase || monthMilestones.length > 0) && (
+        <div className="pcal__plan">
+          {currentPhase && (
+            <span className="pcal__phase">
+              当前阶段：<b>{currentPhase.title}</b>
+              {currentPhase.start_date ? `（${currentPhase.start_date} 起` : "（"}
+              {currentPhase.end_date ? ` 至 ${currentPhase.end_date}` : "至今"}）
+            </span>
+          )}
+          {monthMilestones.map((ms) => (
+            <span key={ms.id} className="pcal__month-ms" title={`${ms.title}（${ms.start_date ?? ""}${ms.end_date ? " ~ " + ms.end_date : ""}）`}>
+              {ms.title}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* 月历（§75：日期 / 任务 x/y / 学习时长 / 最多 2 条任务名；§29：Milestone；点击选中 → 正下方日报） */}
       <div className="pcal__grid">
         {WEEKDAY_NAMES.map((w) => (
           <div key={w} className="pcal__weekday">{w}</div>
@@ -239,9 +343,10 @@ export default function PlanningCalendar({
           const dayTasks = byDate.get(date) ?? [];
           const done = dayTasks.filter((t) => t.status === "completed").length;
           const studySecs = secondsByDate.get(date) ?? 0;
+          const dayMilestones = milestoneByDate.get(date) ?? [];
           const isToday = date === today;
           const isSelected = date === selectedDate;
-          const hasContent = dayTasks.length > 0 || studySecs > 0;
+          const hasContent = dayTasks.length > 0 || studySecs > 0 || dayMilestones.length > 0;
           return (
             <button
               key={i}
@@ -260,6 +365,18 @@ export default function PlanningCalendar({
                   {dayTasks.length > 0 && `任务 ${done}/${dayTasks.length}`}
                   {dayTasks.length > 0 && studySecs > 0 ? " · " : ""}
                   {studySecs > 0 && `学习 ${formatDuration(studySecs)}`}
+                </span>
+              )}
+              {dayMilestones.length > 0 && (
+                <span className="pcal__ms">
+                  {dayMilestones.slice(0, 1).map((ms) => (
+                    <span key={ms.id} className="pcal__ms-item" title={ms.title}>
+                      ◆ {ms.title}
+                    </span>
+                  ))}
+                  {dayMilestones.length > 1 && (
+                    <span className="pcal__more">+{dayMilestones.length - 1}</span>
+                  )}
                 </span>
               )}
               {dayTasks.length > 0 && (

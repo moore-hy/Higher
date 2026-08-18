@@ -82,7 +82,11 @@ fn test_a_migration_v002_applied_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], "v001~v006 都应已执行");
+    assert_eq!(
+        versions,
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+        "全部 migrations 都应已执行"
+    );
 
     // 验证 v002 表已创建
     let tables: Vec<String> = {
@@ -104,7 +108,7 @@ fn test_a_migration_v002_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 18, "幂等性失败：重复执行后不应有新记录");
+    assert_eq!(count, 22, "幂等性失败：重复执行后不应有新记录");
 }
 
 #[test]
@@ -368,7 +372,10 @@ fn test_persistence_full_loop() {
                 .filter_map(|v| v.ok())
                 .collect()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+        assert_eq!(
+            versions,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        );
     }
 
     let _ = std::fs::remove_file(&db_path);

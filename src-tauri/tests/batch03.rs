@@ -69,7 +69,7 @@ fn test_v010_schema_and_old_data_preserved() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 18);
+    assert_eq!(count, 22);
     let cols: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(tasks)").unwrap();
         stmt.query_map([], |r| r.get::<_, String>(1))
@@ -551,18 +551,17 @@ fn test_progress_metrics_formulas() {
     repo.complete(t1.id).unwrap();
     repo.complete(t2.id).unwrap();
 
-    // 本周（today 视为周内某天）：再加昨天 1 个已完成
-    let yesterday = shift_date(&today, -1);
-    let t4 = repo.create(s.item, "y", Some(&yesterday)).unwrap();
+    // 本周（today 视为周内某天）：补 1 个已完成（固定用 today，消除周一运行的周首日敏感性）
+    let t4 = repo.create(s.item, "y", Some(&today)).unwrap();
     repo.complete(t4.id).unwrap();
 
     let insight = InsightRepository::new(&conn);
     let m = insight
         .progress_metrics_by_profile(s.profile, &today, &week_start_of(&today))
         .unwrap();
-    assert_eq!(m.today_completed, 2);
-    assert_eq!(m.today_total, 3);
-    // week 范围 [week_start, today] 至少包含 today+yesterday 的任务
+    assert_eq!(m.today_completed, 3);
+    assert_eq!(m.today_total, 4);
+    // week 范围 [week_start, today] 至少包含今天的全部任务
     assert!(m.week_completed >= 3);
     assert!(m.week_total >= 4);
 

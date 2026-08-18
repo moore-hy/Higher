@@ -20,11 +20,21 @@ import { useActiveProfile } from "../../contexts/ActiveProfileContext";
 
 /** 页面上下文（由各页面通过 setPageContext 上报；Panel 据此显示与传参） */
 export interface AiPageContext {
-  page: "today" | "planning" | "review" | "knowledge" | "learning" | "progress" | "settings";
+  page:
+    | "today"
+    | "planning"
+    | "review"
+    | "knowledge"
+    | "learning"
+    | "progress"
+    | "data"
+    | "settings";
   pageLabel: string;
   goalId?: number | null;
   learningItemId?: number | null;
   sessionId?: number | null;
+  /** DEV-0057 PART N：本次学习标题（aiStartRun 的 sessionTitle 参数来源） */
+  sessionTitle?: string;
   knowledgePath?: string;
   learningName?: string;
   /** 页面级补充说明（如 Review 的观察窗口），显示在 Context Header */
@@ -95,6 +105,8 @@ interface AiPanelState {
   /** 未应用的 Proposal 存在时新建对话需确认（组件内处理） */
   hasPendingProposal: boolean;
   apiKeyMissing: boolean;
+  /** DEV-0058：统一 Planner 待发消息（页面按钮 → AiPanel.send 同路径） */
+  pendingSendRef: React.RefObject<string | null>;
 }
 
 const Ctx = createContext<AiPanelState | null>(null);
@@ -125,6 +137,11 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   const [proposalItems, setProposalItems] = useState<LearningItem[]>([]);
   const [apiKeyMissing, setApiKeyMissing] = useState(false);
   const profileIdRef = useRef<number | null>(null);
+  /** DEV-0058 §51-53：页面入口（AI 生成计划/AI安排）→ 统一 Planner 的待发消息 */
+  const pendingSendRef = useRef<string | null>(null);
+  /** DEV-0058：规划写意图识别（与后端 planning_write_intent 口径对齐的常用子集） */
+  const PLAN_WRITE_INTENT_RE =
+    /(安排|排个|排一下|排进|加入\s*higher|加入higher|做个.{0,6}计划|生成.{0,6}计划|规划)/i;
 
   // 持久化展开状态（ui.ai_panel_open；缺省 false）
   const setOpen = useCallback((v: boolean) => {
@@ -151,7 +168,8 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
 
   const hasPendingProposal = proposal != null;
 
-  /** 组装 assistant_chat 的 scope → 实际 action 与附加参数 */
+  /** 组装 assistant_chat 的 scope → 实际 action 与附加参数
+   *（旧 aiAnalyze 通道：DEV-0057 PART N 后主对话走 aiStartRun，此逻辑保留兼容） */
   const resolveChatRequest = useCallback(
     (text: string) => {
       const ctx = pageContext;
@@ -202,11 +220,22 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
     [scope, pageContext, activeProfile]
   );
 
-  /** 自由对话发送（assistant_chat 结构化协议 + 只读工具 + 上下文重建） */
+/** 自由对话发送（assistant_chat 结构化协议 + 只读工具 + 上下文重建）。
+   *  DEV-0058 §51-53：三入口统一 Planner——页面按钮（Planning「AI 生成计划」/ Today「AI安排」）
+   *  经本函数发送时，若命中规划写意图则交由 AiPanel 主输入的 send()（aiStartRun 新管线：
+   *  intent→conflict→readiness→clarification→draft→validation→retry→compiler→ChangeSet→审批，
+   *  含 conversation 管理 + 流式事件），不再落入旧 aiAnalyze 通道；其余消息维持旧协议。 */
   const sendChat = useCallback(
     async (text: string) => {
-      if (busy || !text.trim()) return;
+      if (!text.trim()) return;
       setOpenState(true);
+      if (PLAN_WRITE_INTENT_RE.test(text.trim())) {
+        // 写意图 → 新管线（AiPanel 监听 pendingSendRef 后自动 send）
+        pendingSendRef.current = text.trim();
+        window.dispatchEvent(new CustomEvent("higher:aipanel-pending-send"));
+        return;
+      }
+      if (busy) return;
       setBusy(true);
       setApiKeyMissing(false);
       const userMsg: AiChatMessage = { role: "user", content: text.trim() };
@@ -378,6 +407,8 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
       setProposalItems,
       hasPendingProposal,
       apiKeyMissing,
+      /** DEV-0058：统一 Planner 待发消息（AiPanel 消费后清空） */
+      pendingSendRef,
     }),
     [
       open, setOpen, pageContext, messages, busy, activeAction, scope,

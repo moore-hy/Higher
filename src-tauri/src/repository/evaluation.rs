@@ -1,6 +1,27 @@
 use rusqlite::{params, Connection};
 
-/// 学习验证记录：一次练习 / 测试 / 回忆 / 应用 / 其他的验证结果。
+/// DEV-0059 §6.7：Evaluation 类型唯一 Canonical 值域。
+pub const EVALUATION_TYPES: [&str; 6] = ["practice", "test", "recall", "application", "project", "other"];
+
+/// §6.7 兼容映射：quiz→test / exercise→practice / interview→application / review→recall / 未知旧值→other。
+/// 返回值为 Canonical 集合内的 &'static str。
+pub fn canonical_evaluation_type(raw: &str) -> &'static str {
+    match raw {
+        "practice" | "exercise" => "practice",
+        "test" | "quiz" => "test",
+        "recall" | "review" => "recall",
+        "application" | "interview" => "application",
+        "project" => "project",
+        _ => "other",
+    }
+}
+
+/// 判断是否为 Canonical 值（§6.7）。
+pub fn is_valid_evaluation_type(raw: &str) -> bool {
+    EVALUATION_TYPES.contains(&raw)
+}
+
+/// 学习验证记录：一次练习 / 测试 / 回忆 / 应用 / 项目 / 其他的验证结果。
 ///
 /// 只记录事实（发生了什么验证 + 结果是什么），不解释原因（Feedback System），不做自动调整（Adjustment System）。
 ///
@@ -34,6 +55,26 @@ pub struct Evaluation {
     pub note: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// v021 §20：Evidence V1 —— 可选关联真实 StudySession（sessions → evaluations）
+    #[serde(default)]
+    pub session_id: Option<i64>,
+    /// v021 §20：user | ai | import
+    #[serde(default = "default_source_kind")]
+    pub source_kind: String,
+    /// v021 §20：来源引用（如 ai_run_id / import 文件路径）
+    #[serde(default)]
+    pub source_ref: String,
+    /// v021 §20：trusted | needs_review（needs_review 不得进入 trusted evidence）
+    #[serde(default = "default_trust_state")]
+    pub trust_state: String,
+}
+
+fn default_source_kind() -> String {
+    "user".into()
+}
+
+fn default_trust_state() -> String {
+    "trusted".into()
 }
 
 pub struct EvaluationRepository<'a> {
@@ -55,6 +96,7 @@ impl<'a> EvaluationRepository<'a> {
     /// 创建 Evaluation。
     ///
     /// 校验：
+    /// - evaluation_type 必须为 Canonical 集合（§6.7）；legacy 值自动映射（quiz→test 等）
     /// - 若 learning_item_id 存在，必须属于指定 goal_id（跨 Goal 拒绝）
     /// - 题数校验（空跳过）：total >= 0 / correct >= 0 / incorrect >= 0 / correct + incorrect <= total
     /// - 分数校验（空跳过）：score >= 0；若 max_score 存在则 max_score > 0 且 score <= max_score
@@ -75,6 +117,51 @@ impl<'a> EvaluationRepository<'a> {
         max_score: Option<f64>,
         outcome: Option<&str>,
         note: Option<&str>,
+    ) -> rusqlite::Result<Evaluation> {
+        self.create_with_evidence(
+            profile_id,
+            goal_id,
+            learning_item_id,
+            title,
+            evaluation_type,
+            source,
+            occurred_at,
+            total_items,
+            correct_items,
+            incorrect_items,
+            score,
+            max_score,
+            outcome,
+            note,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// §5 Evidence V1 完整版：额外写入 session_id / source_kind / source_ref / trust_state。
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with_evidence(
+        &self,
+        profile_id: i64,
+        goal_id: Option<i64>,
+        learning_item_id: Option<i64>,
+        title: &str,
+        evaluation_type: &str,
+        source: Option<&str>,
+        occurred_at: Option<&str>,
+        total_items: Option<i64>,
+        correct_items: Option<i64>,
+        incorrect_items: Option<i64>,
+        score: Option<f64>,
+        max_score: Option<f64>,
+        outcome: Option<&str>,
+        note: Option<&str>,
+        session_id: Option<i64>,
+        source_kind: Option<&str>,
+        source_ref: Option<&str>,
+        trust_state: Option<&str>,
     ) -> rusqlite::Result<Evaluation> {
         // 跨档案防护：learning_item 若存在，其 profile 必须一致
         if let Some(item_id) = learning_item_id {
@@ -100,20 +187,29 @@ impl<'a> EvaluationRepository<'a> {
         )?;
 
         let outcome = outcome.unwrap_or("unrated");
+        // §6.7：legacy 值映射到 Canonical；未知值兜底 other
+        let evaluation_type = canonical_evaluation_type(evaluation_type);
+        // §5 Evidence V1：默认 user/trusted；trust_state 只允许 trusted|needs_review
+        let source_kind = source_kind.unwrap_or("user");
+        let source_ref = source_ref.unwrap_or("");
+        let trust_state = match trust_state {
+            Some("needs_review") => "needs_review",
+            _ => "trusted",
+        };
 
         if occurred_at.is_some() {
             self.conn.execute(
                 "INSERT INTO evaluations (
                     profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     occurred_at, total_items, correct_items, incorrect_items,
-                    score, max_score, outcome, note
+                    score, max_score, outcome, note, session_id, source_kind, source_ref, trust_state
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
                 )",
                 params![
                     profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     occurred_at, total_items, correct_items, incorrect_items,
-                    score, max_score, outcome, note
+                    score, max_score, outcome, note, session_id, source_kind, source_ref, trust_state
                 ],
             )?;
         } else {
@@ -121,14 +217,14 @@ impl<'a> EvaluationRepository<'a> {
                 "INSERT INTO evaluations (
                     profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     occurred_at, total_items, correct_items, incorrect_items,
-                    score, max_score, outcome, note
+                    score, max_score, outcome, note, session_id, source_kind, source_ref, trust_state
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13
+                    ?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
                 )",
                 params![
                     profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     total_items, correct_items, incorrect_items,
-                    score, max_score, outcome, note
+                    score, max_score, outcome, note, session_id, source_kind, source_ref, trust_state
                 ],
             )?;
         }
@@ -142,7 +238,8 @@ impl<'a> EvaluationRepository<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT id, profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     occurred_at, total_items, correct_items, incorrect_items,
-                    score, max_score, outcome, note, created_at, updated_at
+                    score, max_score, outcome, note, created_at, updated_at,
+                    session_id, source_kind, source_ref, trust_state
              FROM evaluations WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![id], |row| parse_evaluation(row))?;
@@ -154,7 +251,8 @@ impl<'a> EvaluationRepository<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT id, profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     occurred_at, total_items, correct_items, incorrect_items,
-                    score, max_score, outcome, note, created_at, updated_at
+                    score, max_score, outcome, note, created_at, updated_at,
+                    session_id, source_kind, source_ref, trust_state
              FROM evaluations ORDER BY occurred_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |row| parse_evaluation(row))?;
@@ -170,7 +268,8 @@ impl<'a> EvaluationRepository<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.profile_id, e.goal_id, e.learning_item_id, e.title, e.evaluation_type, e.source,
                     e.occurred_at, e.total_items, e.correct_items, e.incorrect_items,
-                    e.score, e.max_score, e.outcome, e.note, e.created_at, e.updated_at
+                    e.score, e.max_score, e.outcome, e.note, e.created_at, e.updated_at,
+                    e.session_id, e.source_kind, e.source_ref, e.trust_state
              FROM evaluations e WHERE e.profile_id = ?1
              ORDER BY e.occurred_at DESC LIMIT ?2",
         )?;
@@ -198,7 +297,8 @@ impl<'a> EvaluationRepository<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.profile_id, e.goal_id, e.learning_item_id, e.title, e.evaluation_type, e.source,
                     e.occurred_at, e.total_items, e.correct_items, e.incorrect_items,
-                    e.score, e.max_score, e.outcome, e.note, e.created_at, e.updated_at
+                    e.score, e.max_score, e.outcome, e.note, e.created_at, e.updated_at,
+                    e.session_id, e.source_kind, e.source_ref, e.trust_state
              FROM evaluations e WHERE e.profile_id = ?1 AND date(e.occurred_at, '+8 hours') BETWEEN date(?2) AND date(?3)
              ORDER BY e.occurred_at",
         )?;
@@ -250,7 +350,8 @@ impl<'a> EvaluationRepository<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT id, profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     occurred_at, total_items, correct_items, incorrect_items,
-                    score, max_score, outcome, note, created_at, updated_at
+                    score, max_score, outcome, note, created_at, updated_at,
+                    session_id, source_kind, source_ref, trust_state
              FROM evaluations WHERE goal_id = ?1 ORDER BY occurred_at DESC",
         )?;
         let rows = stmt.query_map(params![goal_id], |row| parse_evaluation(row))?;
@@ -262,7 +363,8 @@ impl<'a> EvaluationRepository<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT id, profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     occurred_at, total_items, correct_items, incorrect_items,
-                    score, max_score, outcome, note, created_at, updated_at
+                    score, max_score, outcome, note, created_at, updated_at,
+                    session_id, source_kind, source_ref, trust_state
              FROM evaluations WHERE learning_item_id = ?1 ORDER BY occurred_at DESC",
         )?;
         let rows = stmt.query_map(params![learning_item_id], |row| parse_evaluation(row))?;
@@ -422,5 +524,9 @@ fn parse_evaluation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Evaluation> {
         note: row.get(14)?,
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
+        session_id: row.get(17)?,
+        source_kind: row.get(18)?,
+        source_ref: row.get(19)?,
+        trust_state: row.get(20)?,
     })
 }

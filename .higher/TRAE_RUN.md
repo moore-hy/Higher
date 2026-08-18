@@ -1,104 +1,134 @@
-# DEV-0054 · TRAE_RUN（施工过程记录）
+# DEV-0059 · Higher Personal Planning Truth & One-Shot Runtime Closure · TRAE_RUN
 
-> 开始时间：2026-08-16 18:00　　结束时间：2026-08-16 20:20
-> 基线：v018（负责人实机确认 `applied v018 daily_dual_tree_loop`，TASK §95）
-> 本轮原则：不堆功能；产品级 UI/UX 收敛 + 运行时修复。**无 Schema 变化（保持 v018 §151）**。
-> TASK.md 只读。禁做清单遵守：无新 Dashboard/统计/AI Agent/Memory/Goal 层级/Knowledge 类型/OCR/云同步/游戏化/Vector DB/图表库/动画系统/UI Framework。
+## DEV-0059.2（Final Human-Path Guardrails · corrective patch 收口 · 2026-08-18 完成）
+- **DEV ID**: DEV-0059.2（只修 DEV-0059/0059.1 最终源码复核确认的真实闭环缺口；禁止新增第二套系统）
+- **Baseline**: DEV-0059.1 final worktree；Schema = **v022**（本轮无 schema 变更）；真实 Provider 0 次自动调用
+- 中断/恢复记录：本段执行中曾因模型 Provider HTTP 502 中断一次 → 已按纪律处理（不 rollback/reset/checkout、不重复已完成工作、低并发、502≠代码错误、不连续重试），从断点恢复完成剩余任务。
+- **§1 P0 Review ChangeSet 可审阅**：PlanningTruthSummary 直接复用现有 ChangeSetReview（waiting_approval + change_set_id →「审阅 AI 调整」入口；Apply/Reject 后关闭 UI + reload + trigger 全局 refresh；不创建第二套审批 UI）。Rust T5 保留，batch0592 #8 验证 change_set_id 从 planning_reviews 可读。
+- **§2 P0 cadence 周期 + 防重复 Review**：新命令 `prepare_current_planning_review(profile_id, trigger_type)` → repo.prepare_current：days=max(1,review_interval_days)；period_start=today-(days-1) 严格覆盖 days 个日历日；同 profile/blueprint 存在 due/running/waiting_approval 复用；waiting_approval 原样返回不再启动 AI。前端 startReview 只走正式路径。
+- **§3 P0 structured facts 进 AI Context**：`context_builder::flatten_structured` 对象数组递归（text/kind/source 可读事实行）；共享 `personal_profile_structured_summary(structured_json, budget)` 按字段优先级（availability>constraints>current_state>strengths>weaknesses>unresolved>…）截断，杜绝半截 JSON；Dedicated Planner 同用（1800 预算）。
+- **§4 P0 PersonalProfile 与 GoalTarget 边界**：`build_personal_structured` 中「最终学习目标」→ unresolved kind=goal_observation + note「不是正式目标」；basics 不再携带准正式目标。
+- **§5 P0 GoalTarget data_json 直接进 Planner Truth**：`goal_target_detail_summary` 解析院校/学院/专业/专业代码/考试年份/考试科目/学位类型/学习方式/目标日期；exam_subjects 支持 string/array；不允许只靠 title 猜。
+- **§6 P0 考研 GoalTarget UI 表单化**：GoalTargetPanel 考研字段表单（institution_name/program_name 必填；exam_subjects 逗号拆分；取消手写 JSON）；UI 自动 serialize data_json；generic 高级 JSON 折叠；编辑不显示不可改的 role 控件。
+- **§7 P0 Blueprint scenario_type 继承**：BlueprintDraft 加 scenario_type；`resolve_blueprint_scenario(conn,profile,bp,prefer_active_blueprint)`：Review 继承 active Blueprint；主生成继承 active GoalTarget 主场景（postgraduate REACH→postgraduate）；无则 generic；compile/validator 同步。
+- **§8 P1 source_review 结构化「为什么改」**：BlueprintDraft.source_review[]（source_id/source_name/decision[keep|modify|conflict|missing]/original/suggested/reason/evidence）；validator：modify 必须 reason+suggested 非空、decision 必须合法；compiler 写入 content_md + structured_json；不自动改 GoalTarget。
+- **§9 P1 Source 选择诚实 + 分页**：system 区块改名「Available Planning Sources」；UI 审查请求写 `[source_id=12] 文件名`；`read_planning_source` 扩展 start_char(默认0)/max_chars(默认12000,上限16000)，返回 text/start_char/next_start_char/has_more/total_chars；审查必须读到 has_more=false 或明说未完整读取。
+- **§10 P1 无 AI 创建第一份 Blueprint**：无 active 时显示「手工新建规划」表单（title/content/interval/scenario 建议）→ createPlanningBlueprint(status=draft) → Phase/Milestone CRUD → 激活草稿。
+- **§11 P1 reality_change 建议复盘（不调 AI）**：`planning_review.rs::ensure_reality_change_due`（无 active Blueprint 直接返回；已有 due/running/waiting_approval 不重复；create_due trigger_type=reality_change）；**lib.rs 接线**：confirm_personalization_profile / edit_personalization_profile 成功后调用。
+- **§12 Governance**：ENVIRONMENT.md 更新为 v022 / 当前 Gate / Human Runtime 未验证；未动 TASK.md；未写 Runtime Verified。
+- **§13 Tests**：新增 `tests/batch0592.rs` **12/12 通过**（cadence 7/14/30 exact period / open review dedupe / 对象数组进 context / 优先级截断保 availability / goal_observation 非 active GoalTarget / data_json 进 truth / scenario 继承 / change_set_id 可读 / source_review modify 缺 reason fail / 分页 has_more / 手工首蓝图 / reality_change 不堆叠）。
+- **§14 Gate 全绿**：cargo check -j 2 **0 errors**；batch0592 **12/12**；全量 `RUST_TEST_THREADS=1 cargo test -j 1` **366 passed / 0 failed**；`npx tsc --noEmit` **0 errors**；`npm run build` **通过**。真实 DeepSeek **0 次自动调用**。
+- **Blocker**: 无（一次 Provider 502 已恢复；未再出现）。**下一步 = Human Runtime H1-H11（用户实机验证）**，不再新增功能。
 
-## 遇到的问题与修复（全程记录）
-- **P0 效率假 100%（§61）**：负责人截图"0m+1未估时、暂无日目标、1/1 完成 → 综合效率 100%"。**根因**：旧 compute_efficiency 只要有一个维度就归一显示（单维 100% 冒充综合）。**修复**：① §64 计划时间完整性——当天任一任务未估时 → time_execution_rate=None；② §65 最低证据——dims<2 → overall=None。batch054 Case A 断言 None。
-- **多 Active Session 隐患（§25）**：审计真实代码——旧 start_quick/start_for_task 无任何 active 检查（连续开始会积累 active 记录；负责人截图多条"进行中"与此一致）。**修复**：Repository start_full 层 COUNT guard（SQLITE_CONSTRAINT 人话错误，覆盖 quick/task/item 全入口）+ 命令层返回 `ActiveSessionConflict:{json}`（含 sessions 列表与 multiple 标志）+ list_active_sessions 命令。**历史脏数据未自动修改（§29）**——多条场景由前端列表让用户逐条 打开/结束/删除。
-- **batch053 旧断言被新规则打破（3F）**：旧测试同 Profile 连开 3 session / 断言 61.11% 时间执行度。**根因**：本轮单-active 规则 + 未估时规则属预期行为变化。**修复**：测试改为逐个 end 再开；61.11% 断言改为 None+双维归一 50%（保留 4 任务含 1 未估时的种子，恰好验证新规则）。
-- **幻影编辑**：本轮子代理再次遇到 3 处（AiPanel/Planning/LearningWorkspace import 与渲染替换报告成功但磁盘未变）——均已 Read 校验后重发修复。此为本环境 PowerShell 写回与工具编辑竞争的已知问题，纪律=关键编辑后必 Read。
-- **transformCallback 报错（§94）**：浏览器 preview 中 AiPanel listen() 走 @tauri-apps/api/event → internals.transformCallback 不存在。**根因**：AiPanel 在浏览器（vite dev）也注册 listener；且项目 mock shim 注入了 __TAURI_INTERNALS__（使 isTauriRuntime=true）但缺 transformCallback。**修复**：① AiPanel listen 包 `if (!isTauriRuntime()) return`（§97-99 从调用路径避免）；② mock shim 补 transformCallback（冒烟环境完整化）。冒烟复测 TRANSFORM_ERR=0。
+## DEV-0059.1（Truth Wiring & Human-Path Closure · corrective patch）
+- **DEV ID**: DEV-0059.1（只补 DEV-0059 最终源码复核发现的真实缺口，不增加产品功能）
+- **Baseline**: DEV-0059 final worktree；Schema = v021；Purpose = Truth Wiring / Missing Human Paths
+- 禁止 rollback/reset DEV-0059；不重新做 v021；不创建 PlannerV2/ChangeSetV2/EvidenceV2
+- §1 P0 Planner Truth Context；§2 P0 Planning Source 进 AI；§3 P0 Review AI 全链；§4 P0 Task 手改保护；§5 P0 Evaluation Evidence 接入；§6-9 P1 PersonalProfile（snapshot/contract/export/xlsx）；§10-13 P1 Manual Planning/Cadence/Horizon/Reimport；§14 T1-T10；§15 Gate（batch0591）；§16 Human Runtime；§17 DONE
+- 真实 DeepSeek 不在自动 Gate 调用（§15/§16）
 
-## 后端实施（2 文件 + 1 命令）
-- daily_report.rs：§64 计划时间完整性 + §65 dims<2→None。
-- study_session.rs start_full：单 Profile 单 active Guard（§26-28）。
-- lib.rs：start_quick_session/start_task_session 命令层冲突返回 + **list_active_sessions** 命令（§30）。
+## DEV-0059.1 施工记录（2026-08-18 完成全部代码 + 自动 Gate）
 
-## 前端实施（子代理，tsc 0）
-- **Markdown（PHASE O）**：react-markdown@10 + remark-gfm@4（仅此两个轻量依赖 §120）；新 Markdown.tsx（h1-3→15px 加粗 §86；table 横滚包层 §85；a=_blank；**无 rehypeRaw** §84）；AiPanel assistant 消息（含流式）走 Markdown；[[S1]] 预处理为 `[1](#cite-S1)` → components.a 拦截渲染可点击上标（历史消息降级纯上标不炸版）。
-- **Today（D/E）**：Header 双行（标题/`完成 X/Y · 已结束学习 Xm · 1 项学习进行中`——active elapsed 不混入统计 §19）；按钮层级 + 新建任务 Primary/快速学习 Secondary/AI Ghost；Active Session 改 **Compact Banner 单行**（开始 HH:mm · 已进行 13h05m 格式 §24，删大卡 §23）。
-- **Start Guard UI（F）**：ActiveSessionConflictModal + useActiveSessionConflict hook；单条三操作（继续/结束/取消 §28）、多条列表逐条 打开/结束/删除（§30）；接入 Today/DailyTasks/DailyActs/Planning(NextStep)/LearningWorkspace 全 start 调用点。
-- **任务行（G）**：min-height 62px；Title15/600 + Meta `核心 · 预计 60min · 路径`；直接按钮 开始学习(primary)+编辑(ghost)；completed 查看+编辑；⋯=调整(日期/目标/知识/类型→同一编辑 Modal)+删除（**删除不直接显示 §17**）；组标题改轻量 `核心 · 2`（§39）。
-- **活动行（H/I）**：**移除四个大分组** → 时间倒序单列表（§53-54）+ Filter chips 全部|核心|常规|积累|计划外（§55）；行 52px：Badge(13px 文字)+Title 可点击+`10:20 · 52m|进行中`+**按状态直接动作**（active→进入学习/结束；ended 已归类→打开/继续学习；未归类→打开/整理进知识；accumulation→打开/继续 §46-50）+⋯（编辑标题/分类/目标/知识/后续任务/删除——**打开不在 ⋯ §127**）。
-- **Calendar 日报（J）**：第一行 4 核心卡（计划学习+未估时小字/实际/任务完成 `4/5`+80%/综合效率 `78%` 或 `暂不可计算`+`仅有任务完成数据` §59/§66）；第二行轻量 Summary 文本（日目标/活动次数/计划执行；缺失=暂无日目标 §60）；计算依据小链接+展开含`有效维度 N/3`（§70）；1024→2×2（auto-fit）。
-- **Planning（N）**：最终目标正常态纯文本（编辑走 Modal 深色 input）；全局 input/select/textarea 深色兜底——**0 白底 input（冒烟断言）**。
-- **AI Panel（P）**：Header 图标 tooltip；用户=轻 accent 气泡/AI=surface（§89）；.md 段落 14/22 稳定段距（§90）；Debug 折叠确认；Sources 底部；生成中=■ 停止。
-- **Settings（R）**：Tab 序=学习档案/AI设置/私人化部署/联网搜索/学习提醒/数据管理/保险箱（§101）；`启用联网搜索`中文化+Brave 说明（§103-104）；清空档案等移底部红边 **Danger Zone**（§105-106）；私人化按钮层级（draft 主=确认并保存/继续补充；添加资料/重新分析普通；查看/编辑/下载/模板收 更多 ▾ §107-108）。
-- **Preview Guard（Q）**：utils/tauriEnv.ts isTauriRuntime；AiPanel listen 包裹（浏览器不注册 §97-98；无 try/catch 刷屏 §99）。
-- **Tokens/S/U**：styles.css 头部 tokens 注释+变量（字号 13/14/15/16/24；spacing 4-32；radius 10）；.btn 32/28 + .btn--ghost；DEV-0053 段半档字号归一；空态带下一步按钮（§109-110）；活动行窄屏 flex-wrap 保留 ≥2 直接动作+⋯（§117）。
+### 已完成（代码 + 验证）
+1. **§1 P0 Planner Truth Context**：`ai/planner.rs::build_planning_truth_context` 读 confirmed PersonalProfile / active GoalTargets / ready PlanningSources / active Blueprint / trusted evidence，输出 5 区块 instruction；GoalTarget=正式目标主源，旧 Final Goal 仅 legacy fallback（lib.rs planning 分支：无 active GoalTarget 才启用冲突/missing gate）。
+2. **§2 P0 Planning Source 进 AI**：`ai/tools.rs` 增 4 个只读工具（list_planning_sources / read_planning_source / list_active_goal_targets / read_active_planning_blueprint）+ 中文标签；PlanningTruthSummary.tsx 显示 source 列表（checkbox 参与审查）+「审查并整理规划」按钮；Direct Write 仍=0。
+3. **§3 P0 Review AI 全链**：`planning_review.rs` 增 prepare_running / build_snapshot（Active Blueprint+Phase/Milestone+period Tasks+trusted sessions+trusted evaluations+confirmed PersonalProfile+active GoalTarget）/ complete_no_change_with / save_assessment_with_result；lib.rs 增 prepare_planning_review_ai（不调 Provider）+ run_planning_review_ai（用户确认后一次调用；NO_CHANGE→completed+刷新 cadence；ADJUSTMENT_PROPOSAL→Blueprint vN+1→ChangeSet waiting_approval→apply 自动 completed（changeset.rs apply 内联动）；Provider 失败→failed 不后台 retry）；核心判定抽为 `planner.rs::apply_review_assessment`（Provider 无关，T4/T5 直测）。前端 PlanningTruthSummary 增加证据快照摘要 +「确认并启动 AI 评估」。
+4. **§4 P0 Blueprint Task 手改保护**：`task.rs` Task struct/TASK_COLUMNS/parse_task 扩到 21 列（origin/planning_blueprint_id/planning_phase_id/projection_key/user_modified_at）；update_v2 对 origin='blueprint' 动态写 `user_modified_at=datetime('now')`；types.ts Task 同步。
+5. **§5 P0 Evaluation Evidence V1 接入**：`evaluation.rs` Evaluation 扩 4 字段 + create_with_evidence（session_id/source_kind/source_ref/trust_state）+ 6 处 SELECT 列 + parse；lib.rs create_evaluation 加 4 参数；ai/tools.rs list_recent_evaluations 加 trust_state 过滤；types.ts/api.ts 同步；`trust_state='needs_review'` 不进 trusted evidence（§3 snapshot 亦过滤）。
+6. **§6 P1 PersonalProfile source snapshot**：`personalization.rs` 增 save_draft_with_sources（Draft 落库并写 personalization_profile_sources snapshot relation；confirm 后保持；新 Source→vN+1 不改变 vN）+ list_sources_for_version；compile 命令改用 build_personal_structured；lib.rs 增 list_sources_for_personal_profile_version 命令。
+7. **§7 P1 structured_json contract**：`personalization.rs::build_personal_structured` 输出 schema_version:1（basics/capabilities/strengths/weaknesses/habits/preferences/constraints/availability/current_state/unresolved/field_provenance）；无法归类进 unresolved；禁止猜值；compile 时 conflicts 进 unresolved；Context Builder 已 structured_json 优先。
+8. **§8 P1 PersonalProfile Export 修复**：exporters.ts gather 增加 personalSources（listSourcesForPersonalProfileVersion）；Personal DOCX/XLSX 的 Source 区改用 Personal Sources（Planning Sources 只留 Blueprint export）。
+9. **§9 P1 Personal Source 支持 XLSX**：import_personalization_files 增加 xlsx 分支（复用 source_ingest::extract_xlsx_text）；Settings file picker 同步；新增 **v022 migration**（重建 personalization_sources 表，file_type CHECK 加 'xlsx'，保留数据与索引）。
+10. **§10 P1 Manual Planning UI**：planning.rs 增 update_blueprint_meta / update_review_cadence / update_phase / delete_phase / update_milestone / delete_milestone + 6 个 lib.rs 命令；PlanningTruthSummary「手工维护规划」面板：蓝图 title/content、Phase/Milestone CRUD、Draft 激活。
+11. **§11 P1 Review Cadence UI**：7/14/30/自定义 N/关闭 chips；只改 review_enabled/review_interval_days/next_review_at；不调 AI。
+12. **§12 Rolling Horizon 提示**：未来 7 天 blueprint 任务 <3 显示「近期计划不足 7 天」只读提示（不生成）。
+13. **§13 Re-import Source Kind**：「重新导入（Higher 导出）」入口 → importPlanningSource(...,"export_reimport")；普通导入仍 user_file。
+14. **§14 Tests T1-T10**：`tests/batch0591.rs`（10/10 通过，含 T4/T5 fixture 直测 apply_review_assessment、T9 最小 xlsx zip 构造、T3 正常 update_v2 手改保护）。
+15. **§15 Gate 全部通过**：cargo check -j 2 ✓；batch0591 10/10 ✓；batch058/049/052 回归 ✓；npx tsc --noEmit ✓；npm run build ✓；完整 `RUST_TEST_THREADS=1 cargo test -j 1` 全绿 ✓（版本断言随 v022 批量更新 21→22）。
+16. **Schema 变更**：v021 → **v022**（personalization_sources.file_type 支持 xlsx；重建表保留数据）。其余无 schema 变更。
 
-## Runtime 冒烟（vite+mock 浏览器）
-- transformCallback 错误 **0**（修复后复测）✓；Today 两区无第三区 ✓ .btn--ghost ✓ .actrow ✓
-- Planning `.planning__first/.gtree input` **白底 input = 0** ✓
-- Settings：`启用联网搜索`中文 ✓；数据管理 Danger Zone+清空 ✓
-- **NOT VERIFIED（实机）**：真实 Markdown 渲染效果（需 AI 回复）；Start Guard 冲突弹窗真实触发；Activity 按钮状态分布（mock 无多状态数据）；1024/1280/1440/1920 逐尺寸；AI Panel 开启叠加。
+### Blocker
+- 无。真实 DeepSeek Provider 未在自动 Gate 调用（按 §15/§16 留到 Human Runtime H6/H9/H10）。
 
-## Gate（PHASE AD）
-| 项 | 结果 |
-|---|---|
-| npx tsc --noEmit | **0 error** |
-| cargo check | **0 error / 0 warning** |
-| cargo test | **229 passed / 0 failed / 0 SAC**（batch054 新 4：Case A/B/C + Start Guard §131-134；batch053 适配后 9/9；全量含跳过套件重试后无 SAC） |
-| npm run tauri dev | 未执行（同环境 SAC 经验）→ **NOT VERIFIED**：负责人已能实机启动 v018（§95 证明），请复验本轮 UI |
-| Schema | **保持 v018**（无必要不升 §151；本轮零 DDL） |
+- **Timestamp Source: SYSTEM**（`Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"`）
+- **DEV ID**: DEV-0059（个人事实 → 目标事实 → 规划蓝图 → 安全投影 → 周期复盘 → 导入导出 · 一次性收口）
+- **Start**: 2026-08-18T15:53:15+08:00 ｜ **End**:（进行中）
+- **Baseline Context**: HGCTX-0004（读取）→ 目标 **HGCTX-0005**
+- **Baseline Schema**: v020（本轮新增 **v021**）
+- **Git**: main @ 457fe5e；dirty（不 reset/clean/rollback）
+- **DEV-0058 处置（§2）**: **SUPERSEDED_IN_PLACE_BY_DEV-0059** / NOT ACCEPTED AS STANDALONE DEV —— 不 rollback、不 reset、不删除；兼容部分吸收复用，冲突部分在当前源码上收敛。
 
----
+## PART 0 · Preflight Code-Truth Mapping（§0 强制，施工前）
 
-# §153 · 56 项最终回答
+### 需求 → 当前实现映射（需求行 = DEV-0059 冻结产品事实）
 
-1. **Today Header** 左标题+下一行 `完成 X/Y · 已结束学习 Xm`（不含 active elapsed）+有 active 追加 `· 1 项学习进行中`；右按钮层级 新建(Primary)/快速(Secondary)/AI×2(Ghost)。
-2. **Active Session** Compact Banner 单行（名称+开始 HH:mm+已进行 13h05m）+ 进入/结束；删大卡。
-3. **是否发现多 Active** 是（代码审计：旧实现无任何检查，负责人截图多条进行中与此吻合；未改历史数据）。
-4. **Start Guard** Repository start_full COUNT(active)>0→CONSTRAINT 人话错误（覆盖全入口）+ 命令层 ActiveSessionConflict:{json}。
-5. **历史多 Active 处理** 不自动修改（§29）；list_active_sessions+前端列表逐条 打开/结束/删除（§30）。
-6. **Task Row** 62px；Checkbox|Title(15/600)+Meta(核心·预计60min·路径)|右侧直接动作+⋯。
-7. **Task 直接显示** 开始学习(primary)+编辑(ghost)；completed=查看+编辑。
-8. **Task ⋯** 调整日期/目标/知识/类型（同一编辑 Modal）+删除（删除不直接显示）。
-9. **Activity Row** 52px；Badge(13px 文字)+可点击 Title|时间+按状态直接动作+⋯。
-10. **Activity 直接显示** active=进入学习/结束；ended已归类=打开/继续学习；未归类=打开/整理进知识；accumulation=打开/继续。
-11. **Activity ⋯** 编辑标题/修改分类/调整目标关联/调整知识关联/生成后续任务/删除（打开已移出 ⋯）。
-12. **移除四分组** 是（§53）→ 时间倒序单列表。
-13. **Activity Filter** chips 全部|核心|常规|积累|计划外（默认全部，带计数）。
-14. **Calendar 布局** 第一行 4 核心卡；第二行轻量 Summary 文本行；不再 7 同权卡。
-15. **效率旧逻辑问题** 单维度归一冒充综合（0m+未估时+1/1→100%）。
-16. **最低证据要求** 有效维度 ≥2 才计算；<2 → null（前端"暂不可计算"+原因小字）。
-17. **0m+未估时案例** 综合效率=**暂不可计算**（batch054 Case A 断言 None；不能 100%）。
-18. **Planning 白 Input** 修复：正常态纯文本；全局 input/select/textarea 深色兜底；冒烟 0 白底。
-19. **Markdown Renderer** react-markdown@10.1.0。
-20. **GFM Table** remark-gfm@4.0.1；表格包横滚层禁撑爆。
-21. **Raw HTML 安全** 未启用 rehypeRaw；script 作为文本。
-22. **AI Panel spacing** .md 段落 14/22 稳定段距；气泡用户 accent/AI surface。
-23. **AI Stop** 生成中发送按钮明确 `■ 停止`（保持）。
-24. **Preview Guard** isTauriRuntime()；浏览器不注册 listen（调用路径避免，非 try/catch）；mock shim 补 transformCallback；冒烟 0 错误。
-25. **Settings Tab 序** 学习档案/AI设置/私人化部署/联网搜索/学习提醒/数据管理/保险箱。
-26. **联网搜索中文化** `启用联网搜索`；Brave Key+`用于 Higher AI 联网搜索。`。
-27. **Dangerous Zone** 清空当前档案全部数据 → 底部红边独立区。
-28. **Personalization 层级** draft=确认并保存(P)+继续补充；添加资料/重新分析=普通；查看/编辑/下载/模板=更多 ▾。
-29. **Typography Tokens** 24/16/15/14/13 五级；按钮 13-14 同页一致。
-30. **Spacing Tokens** 4/8/12/16/24/32；DEV-0053 段半档已归一。
-31. **Button Hierarchy** Primary≤1/区；Secondary；Ghost(新增)；Danger 仅确认态；.btn 32px/small28px。
-32-35. **Responsive 1024/1280/1440/1920** CSS 结构保证（日报 auto-fit minmax 200px→1024 自动 2×2；行 flex-wrap 保 ≥2 直接动作）；逐尺寸实测 **NOT VERIFIED**。
-36. **AI Panel Open** 布局未改结构（主区内滚动）；叠加实测 NOT VERIFIED。
-37. **RAM 影响** 无新常驻；react-markdown 仅渲染时；Activity 列表仍轻量列（§121 保持）。
-38. **增加依赖** 是。
-39. **新依赖** react-markdown@10.1.0、remark-gfm@4.0.1（前端；后端零新依赖）。
-40. **tsc** 0 error。
-41. **cargo check** 0 error/0 warning。
-42. **cargo test** 229 passed 0 failed 0 SAC。
-43. **tauri dev** 未执行（SAC 经验）→ ENV 历史受限；负责人已实机 v018（§95），请复验本轮。
-44. **ENV_BLOCKED** 本轮无（测试全放行）；tauri dev 未尝试（连续前轮被拦，本轮不重复触发）。
-45. **NOT VERIFIED** 真实 Markdown 渲染效果；Start Guard 冲突弹窗实机触发；多状态 Activity 按钮分布；四尺寸逐点；AI Panel 叠加；Danger Zone 实机视觉。
-46. **NOT DONE** ① Knowledge 页 startSession 调用点未接冲突弹窗（任务范围外，建议下轮补）；② listActiveSessions API 已备未调用（冲突 Err 已含数据）；③ styles.css DEV-0053 段外历史半档字号（~77 处）按指示未动。
-47. **NEED DECISION** 无。
-48. **PROJECT 旧状态** 已清理（Current=v018/249Commands；DEV-0054 行已加；DEV-0053 状态改"负责人实机确认 v018"）。
-49. **ENVIRONMENT 旧状态** 已清理（Header v018；Commands/API/Repositories 计数按真实源码更新 249/207/26）。
-50. **PRODUCT Manual Only** 已修正为 **User Controlled Knowledge**（手动 或 AI 提案→ChangeSet→批准；非 Manual Only）。
-51. **最终 Schema** **v018**（本轮零变化 §151）。
-52. **修改文件** 后端：daily_report.rs、study_session.rs、lib.rs；前端：AiPanel/Today/DailyTasksSection/DailyActivitiesSection/Planning/LearningWorkspace/Settings/api/types/styles；测试：batch054(新)、batch053(适配)；mock/inject.js。
-53. **新文件** batch054.rs、src/utils/tauriEnv.ts、src/components/ai/Markdown.tsx、src/components/ActiveSessionConflictModal.tsx。
-54. **删除文件** 无。
-55. **结束时间** 2026-08-16 20:20。
-56. **最终状态** 产品级收敛完成：效率真实性（证据规则）+ 单 active 运行时保障 + AI Markdown + Today/Calendar/Planning/Settings/AI Panel 全部按 TASK 层级重构 + Preview Guard + Tokens 收敛；Gate 全绿（tsc 0/check 0-0/test 229-0-0）；冒烟通过（transformCallback=0/白 input=0/两区/中文化/Danger Zone）。Schema 保持 v018。**STOP——未开始 DEV-0055；未做 §153 禁做清单任何项。等待负责人真实 UI 截图/使用反馈/ChatGPT 人工验收（§155）。**
+| 需求 | 当前 DB 表 / 列 | 当前 Rust Domain / Repository | 当前 Tauri Command | 当前 src/api.ts wrapper | 当前 Frontend Page / Component | 当前 AI Planner / Context / ChangeSet | 分类 |
+|---|---|---|---|---|---|---|---|
+| PersonalProfile 三层正式事实（StudyProfile=容器） | study_profiles（v013；target_* 列保留但不再 canonical） | repository/study_profile.rs | list/get/create/update_study_profile | api.ts 对应 | Settings 档案 Tab | — | [修改] |
+| PersonalProfile = 我是谁（version rows） | personalization_profiles（v017：profile_id UNIQUE，status draft/confirmed，version，md_content，structured_json，dirty） | repository/personalization.rs（insert_source/update_source_status/list_sources/get_source/delete_source/store_chunks/all_chunks/get_profile/save_draft/confirm/user_edit/mark_dirty + extract_docx/extract_pdf/decode_text） | personalization 命令族（lib.rs） | api.ts personalization 族 | Settings→私人化 Tab | Context Builder L2 私人化段落 | [修改]（v021 演进为 version rows + sources 快照表） |
+| GoalTarget = 我要去哪（generic core + postgraduate REACH/SAFETY） | goals.goal_brief_json（final 行，v019/v020 canonical）；goals.goal_level/period 树 | repository/goal.rs（GoalBrief/detect_goal_conflicts/readiness/read_goal_state） | save_final_goal_brief / goal CRUD | api.ts goal 族 | FinalGoalCard / GoalTreePanel（Planning） | planner.rs read_goal_state（readiness 门） | [新增 goal_targets 表 + 保留旧 goals] |
+| PlanningBlueprint / Phase / Milestone = 我准备怎么去 | 无（legacy：study_stages/plans 保留不写新） | repository/study_stage.rs / plan.rs（legacy 保留） | plan/stage 命令（legacy） | api.ts（legacy 0 调用） | Planning 页（GoalTree 为主） | ai/planner.rs（GoalTree-centric draft：year/month/day goals） | [新增 planning_blueprints/phases/milestones] |
+| Planning Source（导入/外部 AI） | personalization_sources 模式可复用（txt/md/docx/pdf；sha256/chunks） | personalization.rs extract_docx/extract_pdf（手写 ZIP/PDF） | personalization import 命令 | api.ts | Settings→私人化（无规划源 UI） | Context Builder | [新增 planning_sources/chunks + 复用 extract 抽 source_ingest.rs] |
+| Task = 近期准备做什么（origin/blueprint ownership） | tasks（goal_id+learning_item_id 双 FK；planned_date/status/estimated_minutes） | repository/task.rs | task CRUD/materialize_recurring | api.ts task 族 | Today/Planning 任务 | planner.rs 生成 task ops | [修改]（v021 加 origin/planning_*_id/projection_key/user_modified_at） |
+| StudySession = 实际做了什么（trusted 统一） | study_sessions.duration_review_state（normal/needs_review/confirmed/corrected，v020） | repository/study_session.rs | confirm_session_duration/correct_session_time/end | api.ts | Today/Workspace/Data | planner.rs time_of_day_distribution | [修改]（v021 trusted view + repo trusted 路径；time-of-day 区间算术） |
+| Evaluation/Evidence V1 | evaluations（v004：RESTRICT FK session） | repository/evaluation.rs | evaluation CRUD | api.ts | Evaluations 组件 | list_recent_evaluations（§20.1 需 profile-first 修复） | [修改]（v021 session_id NULL/source_kind/source_ref/trust_state + enum 收敛） |
+| ChangeSet = AI 正式写入唯一协议 | ai_change_sets（status 已 6 态 canonical）/ ai_change_operations（action CHECK 已收敛） | repository/changeset.rs（create/apply/undo/selective/refs；apply_one 支持 task/goal/knowledge/document/session/evaluation） | propose/apply/undo | api.ts | ChangeSetReview.tsx | planner.rs compile_to_changeset_ops | [修改]（§6.6 registry 单一源 + §25 新增 entity/action + activation transaction） |
+| AI Planner workflow state（clarification 续跑状态机） | ai_runs（无 workflow 列） | ai/planner.rs（planning_gate/is_clarification_reply 文案启发式 §6.8 禁止继续） | run_chat_turn | api.ts ai 族 | AiPanel/AiPanelContext | planner.rs | [修改]（v021 ai_runs +workflow_type/state/json） |
+| AI Context 中文 PersonalProfile | personalization_profiles.structured_json/md_content | ai/context_builder.rs（L2 私人化命中段落） | — | — | — | Context Builder | [修改]（§6.9 structured_json 优先） |
+| Knowledge Goal Optional | learning_items.goal_id **已可空**（FK ON DELETE SET NULL） | repository/learning_item.rs | list_learning_items_by_profile | api.ts | Knowledge.tsx | — | [修改]（UI 空态/筛选语义；§6.10） |
+| Import/Export（docx/exceljs） | 无（依赖：react/dialog 已有） | 无 write_export_file | 无 | 无 | 无 | — | [新增] |
+
+### 关键事实核对结论（§5.2 baseline 一致，直接继续）
+- Schema v020 / 20 migrations 完整 ✓；React+Tauri+Rust+SQLite ✓；Personalization 多文件导入已存在 ✓；Planner 已存在 ✓；ChangeSet 已存在 ✓；Knowledge backend goal_id nullable ✓；DEV-0058 current worktree partial（planning_gate/is_clarification_reply/readonly needs_assistant/ai://applied 等保留吸收）✓
+- 差异记录：ai_change_sets status 已是 6 态（§6.5 DB 层已满足，需前端收敛）；learning_items.goal_id 已可空（§6.10 DB 层已满足，需 UI 空态与 child 继承验证）
+
+## PART 1 · P0 Correctness（§6）执行记录
+
+（随施工更新）
+
+## PART 2 · 执行进度（2026-08-18 续跑；此前因 Provider 402 中断一次，余额恢复后从断点继续）
+
+### 已完成
+1. **PART 0 preflight 映射**（§0/§5）：写入本文件顶部；baseline 与 §5.2 一致。
+2. **PHASE 1 P0（§6 全 10 项）**：
+   - §6.1 trusted 统一：time_of_day/knowledge_workspace/learning_item.stats/learning_data.stats/study_profile calendar 全部排除 needs_review（lib.rs 三处与 daily_report 原本已排除）；v021 建 `trusted_study_sessions` VIEW。
+   - §6.2 time_of_day 区间算术（按天切分 × bucket 重叠，替代逐秒循环；结果与逐秒一致）。
+   - §6.3 utils.ts 新增 splitDurationSeconds/formatDurationTimer/formatDurationCompact/formatDurationDetail；替换 Data/LearningWorkspace/Knowledge/DailyActivities 主路径 formatter。
+   - §6.4 LearningWorkspace Timer 依赖 tick 每秒真实更新。
+   - §6.5 ChangeSetReview isSettled 改 canonical 6 态；仅 waiting_approval 可审查交互；STATUS_LABELS 去 pending。
+   - §6.6 tool schema==apply_one 核对一致；§25 新实体已同步进 schema。
+   - §6.7 Evaluation enum 收敛：evaluation.rs canonical_evaluation_type/is_valid_evaluation_type + 6 值；changeset/ai schema/types.ts 同步；repo create 自动映射 legacy。
+   - §6.8 Planner workflow 显式状态机：planner.rs workflow_* 常量+helpers；lib.rs 各分支写 workflow_state（collecting/clarifying/failed/waiting_approval/applied）；文案启发式降为 legacy 兜底；v021 ai_runs 加列。
+   - §6.9 Context Builder structured_json 优先 + 中文 2-gram 检索 + 不再头 1500 字兜底。
+   - §6.10 Knowledge Goal Optional：无 Goal 加载全部/建根/建子（child 继承 parent.goal_id）；goal 筛选可选含「全部」；空态文案更新。
+3. **PHASE 2 v021**：`v021_personal_planning_truth.rs` 注册（trusted view / ai_runs workflow 列 / personalization version rows 重建+legacy 迁移 / profile_sources 快照 / goal_targets+考研 partial unique / planning_sources/chunks / blueprints/phases/milestones / reviews / evaluations Evidence V1 列 / tasks origin+projection UNIQUE 索引）。
+4. **PHASE 3-4**：personalization.rs 重写 version rows（get_confirmed/get_draft/list_versions/save_draft vN+1/confirm 事务/user_edit/mark_dirty→draft 提示 + user_edit_in_tx）；goal_target.rs（create/activate(+in_tx)/replace/dismiss/list_legacy_candidates/postgraduate JSON 校验）；commands+api.ts+types 全注册。
+5. **PHASE 5-6**：source_ingest.rs（ZIP EOCD+central directory 解析 / list_zip_entries / read_zip_entry / extract_xlsx_text，支持 data descriptor）；planning_source.rs；planning.rs（Blueprint/Phase/Milestone + activate 事务 + project_tasks_in_tx §22 幂等 + today_utc8）；planning_review.rs（due/running/waiting_approval/completed + is_review_due + latest_risk_state + complete_no_change）；Cargo.toml +base64。
+6. **PHASE 7/9 ChangeSet 扩展（§25）**：apply_one 新实体（goal_target create/update/status_change；planning_blueprint create+active 同事务激活；planning_phase/milestone create）；通用 ref 键解析；undo 支持；activate_blueprint_in_tx（不嵌套事务）；ai/tools.rs schema 同步。
+7. **测试 batch058（20 项）**：v021 迁移幂等/新表列/legacy confirmed→v1/PersonalProfile 版本约束/GoalTarget 考研 reach/safety 替换+JSON 校验+legacy 候选不自动激活/Task origin=manual/Blueprint 激活投影+手工保护+幂等+单 active/trusted view 6h/time_of_day 区间+trusted/Planner workflow state/Goal Optional 全链/Evaluation enum 映射+repo 迁移/ChangeSet goal_target create+status_change/v021 无数据丢失/Review due。**20/20 通过**（2.55s；SAC 未拦截本轮测试可执行）。
+8. **UI 阶段（§26-30）**：
+   - §27 GoalTargetPanel（新组件）：考研 REACH/SAFETY 槽位 + 通用目标；编辑/替换（版本+1 old→historical）/历史/来源；空态 + legacy 候选「据此创建」（不自动激活旧 Goal）；接入 Planning 顶部。
+   - §28 PlanningTruthSummary 重写：GoalTargetPanel + Active Blueprint 摘要（版本/复盘间隔/下次复盘/risk 标记）+ Review 状态（due/进行中/上次完成）+ 操作区（生成规划→AI 面板 blueprint 模式 / 导入规划资料 txt·md·docx·pdf·xlsx / 开始复盘 create_planning_review_due）；修复此前只 import 未渲染的问题。
+   - §29 PlanningCalendar：加载 active blueprint 的 phases/milestones；exact milestone 进 cell（◆ 标题）、month-only milestone 显示在月级摘要（不伪装某一天）、current phase 显示在月历上方。
+   - §30 Today：Review Reminder 卡（「该进行阶段复盘了」[开始复盘][稍后]）+ Risk Banner（near_safety/below_safety/off_reach → 「查看依据」；不自动调 AI）。
+   - §26 Settings：statusText 适配 draft/superseded/confirmed；updatedText=confirmed_at??updated_at；主卡「版本 vN · 来源 N 份」；「更多」菜单新增导出 Word/Excel（§32）。
+9. **Import/Export（§31-35）**：安装 docx/exceljs（无依赖冲突）；新建 `src/lib/exporters.ts`（§32 个人档案 DOCX/XLSX、§33 蓝图 Word 15 章节、§34 蓝图 Excel 10 sheets：Overview/Targets/Phases/Milestones/Monthly/Subject/14-day/Risks/Sources/Changelog；全部 dynamic import docx/exceljs）；save dialog → write_export_file（§31.3 只写用户所选路径）；`npm run build` 确认 docx/exceljs 均为独立 lazy chunk（不进 Today 初始 bundle）。
+10. **Planner 演进（§23）**：PlanDraft 增加 `blueprint: Option<BlueprintDraft>`（blueprint/phases/milestones/future_tasks/assumptions/unresolved/external_facts/suggested_target_changes）；PLAN_DRAFT_INSTRUCTION 扩展 blueprint 模式（B1-B6 规则）；validate_plan_draft 蓝图分支（标题/复盘间隔/阶段日期/里程碑精度 month 允许 YYYY-MM/任务窗口 ≤21 天/suggested role 校验）；compile_to_changeset_ops 蓝图分支（blueprint create status=active → 同事务激活+安全投影 + phases/milestones create，`blueprint_ref`/`phase_ref` 通用 ref 解析（resolve_refs+check_forward_refs+apply_one 扩展），suggested_target_changes 只进 content_md 不自动改目标，goal-tree 模式完全兼容）。
+11. **测试 batch058 扩展（§23，原 batch059 因 SAC 拦截新 exe 合并入 batch058 运行）**：+7 项蓝图测试（编译结构/不触碰 goal_targets/roundtrip+goal-tree 兼容/校验 ok/校验 errors/超窗口/ChangeSet apply 全链+幂等/替换 supersede）。**修复 bp_add_days 儒略日算法 bug**（原算法把"一年第 N 天"当"当月第 N 天"递减导致 future_tasks 日期错到 2027-03 → 投影 0 条；改用 civil_days/civil_from_days 后投影 2/2 通过）。**28/28 通过**。
+12. **全量回归 + 测试断言同步（v020→v021）**：22 处版本断言更新（adjustment_system/attachments/batch03/batch049/feedback_system/insight_review/learning_loop/knowledge_workspace/learning_hierarchy/profile_system/stage_b_core 的 `vec![1..20]`→`[1..21]`、`count,20`→`21`、`latest_version()==20`→`21`、attachments `last()==Some(&21)`）；batch052 `test_personalization_chunks_and_user_edit_confirm` 断言适配 §8 新语义（新库首次 confirm = v1，user_edit 后 v2，旧 v1→superseded）。
+13. **最终 Gate 全绿（SAC 已由用户关闭，低并发 RUST_TEST_THREADS=1 + cargo test -j 1）**：全量 **344 个测试通过**（30 个 test 套件 + lib 3；含 batch058 28 项蓝图全链）；cargo check 0 errors；tsc 0 errors；npm run build 通过（docx/exceljs/exporters 独立 lazy chunk）。
+
+### Gate 状态（最终）
+- cargo check：**0 errors**
+- cargo test（全量，低并发）：**344 passed / 0 failed**
+- tsc --noEmit：**0 errors**
+- npm run build：**通过**（11.75s）
+- package.json metadata：`Higher - 本地个人学习系统` ✓
+- SAC：用户已在开发期间关闭 Smart App Control（不再阻塞）；此前 ENV_BLOCKED_SAC 记录作废
+
+### 未完成（Human Runtime Required，§61）
+- H1 Migration / H2 Zero Barrier / H3 Time / H4 Personal Sources / H5 GoalTarget / H6 Planning Source / H7 Plan Apply / H8 Protection / H9 AI Clarification（真实 Provider）/ H10 Review / H11 Export —— 清单已写入 ENVIRONMENT.md，全部需用户实机验证
+- 真实 DeepSeek Provider 验证（按纪律留到最终 Human Runtime，不烧余额）
+
+### Blocker
+- 无（SAC 已关闭；无 Provider 阻塞；402/429/502 未再现，若再现 → PROVIDER_BLOCKED 记录不重试）

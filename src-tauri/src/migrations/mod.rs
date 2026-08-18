@@ -19,6 +19,10 @@ pub mod v015_goal_tree_mastery;
 pub mod v016_knowledge_documents;
 pub mod v017_personal_intelligence;
 pub mod v018_daily_dual_tree_loop;
+pub mod v019_goal_brief;
+pub mod v020_goal_truth_convergence;
+pub mod v021_personal_planning_truth;
+pub mod v022_personal_xlsx;
 
 /// 单个 Migration 定义。
 ///
@@ -124,6 +128,26 @@ const MIGRATIONS: &[Migration] = &[
         version: 18,
         name: "daily_dual_tree_loop",
         up: v018_daily_dual_tree_loop::up,
+    },
+    Migration {
+        version: 19,
+        name: "goal_brief",
+        up: v019_goal_brief::up,
+    },
+    Migration {
+        version: 20,
+        name: "goal_truth_convergence",
+        up: v020_goal_truth_convergence::up,
+    },
+    Migration {
+        version: 21,
+        name: "personal_planning_truth",
+        up: v021_personal_planning_truth::up,
+    },
+    Migration {
+        version: 22,
+        name: "personal_xlsx",
+        up: v022_personal_xlsx::up,
     },
 ];
 

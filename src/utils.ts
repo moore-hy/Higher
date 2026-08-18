@@ -37,6 +37,50 @@ export function formatDuration(seconds: number | null | undefined): string {
   return `${h}h ${mm}m`;
 }
 
+/** DEV-0057 PART R：分钟 → 人类格式 "19h37m" / "2h08m" / "43m"（>1h 分钟补零）。 */
+export function formatDurationMinutes(minutes: number | null | undefined): string {
+  if (minutes == null) return "—";
+  const m = Math.max(0, Math.round(minutes));
+  const h = Math.floor(m / 60);
+  if (h > 0) return `${h}h${String(m % 60).padStart(2, "0")}m`;
+  return `${m}m`;
+}
+
+// =============== DEV-0059 §6.3 统一时长工具（禁止各页自行 round / floor 出不同结果） ===============
+
+/** 秒 → {小时, 分钟, 秒}（负值/NaN 视为 0；不 round，只 floor）。 */
+export function splitDurationSeconds(seconds: number | null | undefined): {
+  hours: number;
+  minutes: number;
+  seconds: number;
+} {
+  const s = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds ?? 0)) : 0;
+  return { hours: Math.floor(s / 3600), minutes: Math.floor((s % 3600) / 60), seconds: s % 60 };
+}
+
+/** Timer: HH:MM:SS（小时可 > 24；如 79:38:00）。 */
+export function formatDurationTimer(seconds: number | null | undefined): string {
+  if (seconds == null) return "00:00:00";
+  const { hours, minutes, seconds: sec } = splitDurationSeconds(seconds);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+/** Compact: 79小时38分；不足 1 小时 → 38分；不足 1 分 → 25秒。 */
+export function formatDurationCompact(seconds: number | null | undefined): string {
+  if (seconds == null) return "进行中";
+  const { hours, minutes, seconds: sec } = splitDurationSeconds(seconds);
+  if (hours > 0) return `${hours}小时${minutes}分`;
+  if (minutes > 0) return `${minutes}分`;
+  return `${sec}秒`;
+}
+
+/** Detail: 79小时38分00秒。 */
+export function formatDurationDetail(seconds: number | null | undefined): string {
+  if (seconds == null) return "—";
+  const { hours, minutes, seconds: sec } = splitDurationSeconds(seconds);
+  return `${hours}小时${String(minutes).padStart(2, "0")}分${String(sec).padStart(2, "0")}秒`;
+}
+
 /** 返回今天日期 YYYY-MM-DD（本地时区）。 */
 export function todayDate(): string {
   const d = new Date();
@@ -44,6 +88,13 @@ export function todayDate(): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/** 今天 + N 天（YYYY-MM-DD；DEV-0059 §16/§17 复盘周期与里程碑计算用）。 */
+export function addDaysISO(base: string, n: number): string {
+  const d = new Date(base + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /** 本周一（YYYY-MM-DD，本地时区）。 */

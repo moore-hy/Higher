@@ -62,7 +62,7 @@ fn test_migration_v007_applied_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
 
     let columns: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(feedbacks)").unwrap();
@@ -83,7 +83,7 @@ fn test_migration_v007_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 18);
+    assert_eq!(count, 22);
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn test_v006_to_v007_upgrade_preserves_old_data() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
     let goals: i64 = conn
         .query_row("SELECT COUNT(*) FROM goals", [], |r| r.get(0))
         .unwrap();

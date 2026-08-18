@@ -216,6 +216,16 @@ impl<'a> ChangeSetRepository<'a> {
             params![id],
         )
         .map_err(|e| e.to_string())?;
+        // DEV-0059.1 §3：复盘调整 ChangeSet 应用成功 → 关联的 waiting_approval Review 自动 completed，
+        // 并回填 resulting_blueprint_id（apply 引擎已把新蓝图置 active、旧蓝图 superseded）
+        let _ = tx.execute(
+            "UPDATE planning_reviews SET status='completed', user_decision='change_applied',
+               completed_at=datetime('now'), updated_at=datetime('now'),
+               resulting_blueprint_id=COALESCE(resulting_blueprint_id,
+                 (SELECT id FROM planning_blueprints WHERE profile_id=?1 AND status='active' ORDER BY version DESC LIMIT 1))
+             WHERE profile_id=?1 AND change_set_id=?2 AND status='waiting_approval'",
+            params![profile_id, id],
+        );
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -309,6 +319,15 @@ fn s(v: &J, key: &str) -> String {
 fn opt_s(v: &J, key: &str) -> Option<String> {
     let x = s(v, key);
     if x.is_empty() { None } else { Some(x) }
+}
+/// 取字段值：字符串原样；对象/数组/数字序列化为 JSON 字符串（DEV-0059：data_json 等嵌套字段）。
+fn opt_sj(v: &J, key: &str) -> Option<String> {
+    let val = v.get(key)?;
+    match val {
+        J::String(x) if !x.is_empty() => Some(x.clone()),
+        J::Null => None,
+        other => Some(other.to_string()),
+    }
 }
 fn opt_i(v: &J, key: &str) -> Option<i64> {
     v.get(key).and_then(|x| x.as_i64())
@@ -518,6 +537,49 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
             Ok(serde_json::json!({"id": id}).to_string())
         }
         ("goal", "update") => {
+            // DEV-0057 §52：Before Snapshot Conflict Verification（goal，含 brief 路径）
+            if let Some(id) = op.entity_id {
+                let before = fetch_goal(tx, profile_id, id)?;
+                verify_before(op, &before)?;
+            }
+            // DEV-0055 §198：goal_brief（Final Goal Brief 更新走 ChangeSet）
+            // DEV-0057 §27：brief.title 非空 → 同步 goals.name（Canonical Title，单事务）
+            if let Some(brief) = after_v.get("goal_brief") {
+                let json = serde_json::to_string(brief).map_err(|e| e.to_string())?;
+                let title = brief.get("title").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+                let n = if let Some(id) = op.entity_id {
+                    if title.is_empty() {
+                        tx.execute(
+                            "UPDATE goals SET goal_brief_json=?1, updated_at=datetime('now')
+                             WHERE id=?2 AND profile_id=?3 AND goal_level='final'",
+                            params![json, id, profile_id],
+                        )
+                    } else {
+                        tx.execute(
+                            "UPDATE goals SET goal_brief_json=?1, name=?4, updated_at=datetime('now')
+                             WHERE id=?2 AND profile_id=?3 AND goal_level='final'",
+                            params![json, id, profile_id, title],
+                        )
+                    }
+                } else if title.is_empty() {
+                    tx.execute(
+                        "UPDATE goals SET goal_brief_json=?1, updated_at=datetime('now')
+                         WHERE profile_id=?2 AND goal_level='final'",
+                        params![json, profile_id],
+                    )
+                } else {
+                    tx.execute(
+                        "UPDATE goals SET goal_brief_json=?1, name=?3, updated_at=datetime('now')
+                         WHERE profile_id=?2 AND goal_level='final'",
+                        params![json, profile_id, title],
+                    )
+                }
+                .map_err(|e| e.to_string())?;
+                if n == 0 {
+                    return Err("最终目标不存在（无法更新目标 Brief）".to_string());
+                }
+                return Ok(after_v.to_string());
+            }
             let id = op.entity_id.ok_or("update 需要 entity_id")?;
             let name = s(&after_v, "name");
             let n = tx
@@ -607,6 +669,9 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
         }
         ("knowledge", "update") => {
             let id = op.entity_id.ok_or("update 需要 entity_id")?;
+            // DEV-0057 §52：Before Snapshot Conflict Verification（knowledge）
+            let before_snap = fetch_knowledge(tx, profile_id, id)?;
+            verify_before(op, &before_snap)?;
             let name = opt_s(&after_v, "name");
             let n = match &name {
                 Some(n) => tx
@@ -654,6 +719,9 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
             if owner != profile_id {
                 return Err("跨档案文档被拒绝".to_string());
             }
+            // DEV-0057 §52：Before Snapshot Conflict Verification（document）
+            let before = fetch_document(tx, profile_id, id)?;
+            verify_before(op, &before)?;
             let title = opt_s(&after_v, "title");
             let text = opt_s(&after_v, "content_text");
             let doc_json = opt_s(&after_v, "content_document_json");
@@ -724,13 +792,13 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
             index_remove(tx, "session", id)?;
             Ok("{}".to_string())
         }
-        // ---- Evaluation（§126：AI 不能伪造通过；结果值域校验） ----
+        // ---- Evaluation（§126：AI 不能伪造通过；结果值域校验；§6.7 canonical enum） ----
         ("evaluation", "create") => {
             let item = opt_i(&after_v, "learning_item_id");
             let title = s(&after_v, "title");
-            let etype = s(&after_v, "evaluation_type");
+            let etype = super::evaluation::canonical_evaluation_type(&s(&after_v, "evaluation_type"));
             let outcome = s(&after_v, "outcome");
-            if !["test", "quiz", "exercise", "interview", "project", "review"].contains(&etype.as_str()) {
+            if !super::evaluation::is_valid_evaluation_type(etype) {
                 return Err(format!("非法验证类型：{etype}"));
             }
             if !["passed", "partial", "failed", "unrated"].contains(&outcome.as_str()) {
@@ -746,32 +814,203 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
             index_upsert(tx, "evaluation", id, profile_id, &title, "")?;
             Ok(serde_json::json!({"id": id}).to_string())
         }
-        // ---- Personalization ----
+        // ---- Personalization（DEV-0059 §8：version rows；AI 批准的更新 → 新 confirmed 版本） ----
         ("personalization", "update") => {
             let md = s(&after_v, "md_content");
-            tx.execute(
-                "INSERT INTO personalization_profiles (profile_id, md_content, status, version, last_updated_at, dirty)
-                 VALUES (?1,?2,'confirmed',1,datetime('now'),0)
-                 ON CONFLICT(profile_id) DO UPDATE SET md_content=excluded.md_content,
-                   status='confirmed', last_updated_at=datetime('now'), dirty=0",
-                params![profile_id, md],
+            super::personalization::user_edit_in_tx(tx, profile_id, &md)
+                .map_err(|e| e.to_string())?;
+            Ok(after_v.to_string())
+        }
+        // ---- DEV-0059 §25：GoalTarget / PlanningBlueprint / Phase / Milestone ----
+        ("goal_target", "create") => {
+            let scenario = s(&after_v, "scenario_type");
+            let role = s(&after_v, "role");
+            let title = s(&after_v, "title");
+            let data_json = opt_sj(&after_v, "data_json").unwrap_or_else(|| "{}".to_string());
+            let provenance = opt_sj(&after_v, "provenance_json").unwrap_or_else(|| "{}".to_string());
+            let target_date = opt_s(&after_v, "target_date");
+            let status = opt_s(&after_v, "status").unwrap_or_else(|| "draft".to_string());
+            let gt = super::goal_target::GoalTargetRepository::new(tx)
+                .create(profile_id, &scenario, &role, &title, target_date.as_deref(),
+                    &data_json, &provenance, &status)
+                .map_err(|e| e.to_string())?;
+            let out = serde_json::json!({ "id": gt.id }).to_string();
+            let _ = index_upsert(tx, "goal_target", gt.id, profile_id, &title, "");
+            Ok(out)
+        }
+        ("goal_target", "update") => {
+            let id = op.entity_id.ok_or("goal_target update 缺少 entity_id")?;
+            let title = s(&after_v, "title");
+            let data_json = opt_sj(&after_v, "data_json").unwrap_or_else(|| "{}".to_string());
+            let target_date = opt_s(&after_v, "target_date");
+            let n = tx.execute(
+                "UPDATE goal_targets SET title=?1, target_date=?2, data_json=?3, updated_at=datetime('now')
+                 WHERE id=?4 AND profile_id=?5 AND status!='active'",
+                params![title, target_date, data_json, id, profile_id],
             )
             .map_err(|e| e.to_string())?;
-            Ok(after_v.to_string())
+            if n == 0 {
+                return Err("目标不存在、不属于当前档案或处于 active（替换请用 activate/replace）".to_string());
+            }
+            Ok(serde_json::json!({"id": id}).to_string())
+        }
+        ("goal_target", "status_change") => {
+            // 支持 after.id（来自通用 ref 解析）或 op.entity_id
+            let id = after_v
+                .get("id")
+                .and_then(|x| x.as_i64())
+                .or(op.entity_id)
+                .ok_or("goal_target status_change 缺少 entity_id")?;
+            let st = s(&after_v, "status");
+            if st == "active" {
+                let _ = super::goal_target::activate_in_tx(tx, profile_id, id)
+                    .map_err(|e| e.to_string())?;
+            } else if st == "dismissed" {
+                let _ = super::goal_target::GoalTargetRepository::new(tx)
+                    .dismiss(profile_id, id)
+                    .map_err(|e| e.to_string())?;
+            } else {
+                let n = tx.execute(
+                    "UPDATE goal_targets SET status=?1, updated_at=datetime('now') WHERE id=?2 AND profile_id=?3",
+                    params![st, id, profile_id],
+                )
+                .map_err(|e| e.to_string())?;
+                if n == 0 {
+                    return Err("目标不存在或不属于当前档案".to_string());
+                }
+            }
+            Ok(serde_json::json!({"id": id}).to_string())
+        }
+        ("planning_blueprint", "create") => {
+            // draft 蓝图；after.status == "active" → 同事务内直接激活（§25.1）
+            let scenario = opt_s(&after_v, "scenario_type").unwrap_or_else(|| "generic".to_string());
+            let title = s(&after_v, "title");
+            let content_md = opt_s(&after_v, "content_md").unwrap_or_default();
+            let structured = opt_s(&after_v, "structured_json");
+            let snapshot = opt_s(&after_v, "source_snapshot_json").unwrap_or_else(|| "{}".to_string());
+            let provenance = opt_s(&after_v, "provenance_json").unwrap_or_else(|| "{}".to_string());
+            let interval = after_v.get("review_interval_days").and_then(|v| v.as_i64()).unwrap_or(14);
+            let bp = super::planning::PlanningRepository::new(tx)
+                .create_blueprint(profile_id, &scenario, &title, &content_md,
+                    structured.as_deref(), &snapshot, &provenance, interval)
+                .map_err(|e| e.to_string())?;
+            let wants_active = opt_s(&after_v, "status").map(|st| st == "active").unwrap_or(false);
+            if wants_active {
+                // 同事务内激活：supersede + active + 安全投影（不可嵌套新事务）
+                let today = super::planning::today_utc8();
+                let _ = activate_blueprint_in_tx(tx, profile_id, bp.id, &today, 14)
+                    .map_err(|e| e.to_string())?;
+            }
+            let out = serde_json::json!({ "id": bp.id }).to_string();
+            let _ = index_upsert(tx, "planning_blueprint", bp.id, profile_id, &title, "");
+            Ok(out)
+        }
+        ("planning_phase", "create") => {
+            // blueprint_id 来自 op.entity_id 或 after.blueprint_id（§23 蓝图 ref 解析）
+            let blueprint_id = op
+                .entity_id
+                .or_else(|| after_v.get("blueprint_id").and_then(|v| v.as_i64()))
+                .ok_or("planning_phase create 缺少 blueprint_id")?;
+            let key = opt_s(&after_v, "phase_key").unwrap_or_default();
+            let title = s(&after_v, "title");
+            let start = opt_s(&after_v, "start_date");
+            let end = opt_s(&after_v, "end_date");
+            let objective = opt_s(&after_v, "objective_md").unwrap_or_default();
+            let order = after_v.get("sort_order").and_then(|v| v.as_i64()).unwrap_or(0);
+            let pid = super::planning::PlanningRepository::new(tx)
+                .add_phase(blueprint_id, &key, &title, start.as_deref(), end.as_deref(),
+                    &objective, order)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"id": pid}).to_string())
+        }
+        ("planning_milestone", "create") => {
+            let blueprint_id = op
+                .entity_id
+                .or_else(|| after_v.get("blueprint_id").and_then(|v| v.as_i64()))
+                .ok_or("planning_milestone create 缺少 blueprint_id")?;
+            let phase_id = opt_i(&after_v, "phase_id");
+            let key = opt_s(&after_v, "milestone_key").unwrap_or_default();
+            let title = s(&after_v, "title");
+            let start = opt_s(&after_v, "start_date");
+            let end = opt_s(&after_v, "end_date");
+            let precision = opt_s(&after_v, "date_precision").unwrap_or_else(|| "unknown".to_string());
+            let dstatus = opt_s(&after_v, "date_status").unwrap_or_else(|| "estimated".to_string());
+            let provenance = opt_s(&after_v, "provenance_json").unwrap_or_else(|| "{}".to_string());
+            let mid = super::planning::PlanningRepository::new(tx)
+                .add_milestone(blueprint_id, phase_id, &key, &title, start.as_deref(),
+                    end.as_deref(), &precision, &dstatus, &provenance)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"id": mid}).to_string())
         }
         (other_type, other_action) => Err(format!("不支持的实体/操作：{other_type}/{other_action}")),
     }
 }
 
+/// §25.1：在 ChangeSet 外层事务内直接激活 Blueprint（不嵌套新事务）。
+fn activate_blueprint_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    profile_id: i64,
+    id: i64,
+    today: &str,
+    horizon_days: i64,
+) -> Result<(), String> {
+    let row: Option<(String, String)> = tx
+        .query_row(
+            "SELECT structured_json, scenario_type FROM planning_blueprints
+             WHERE id=?1 AND profile_id=?2 AND status='draft'",
+            params![id, profile_id],
+            |r| Ok((r.get(0).unwrap_or_default(), r.get(1).unwrap_or_default())),
+        )
+        .ok();
+    let Some((structured, scenario)) = row else {
+        return Err("蓝图不存在、不属于当前档案或不是 draft 状态".to_string());
+    };
+    tx.execute(
+        "UPDATE planning_blueprints SET status='superseded', updated_at=datetime('now')
+         WHERE profile_id=?1 AND status='active'",
+        params![profile_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE planning_blueprints SET status='active', activated_at=datetime('now'),
+             next_review_at=datetime('now', printf('+%d days',
+               (SELECT review_interval_days FROM planning_blueprints WHERE id=?1))),
+             updated_at=datetime('now')
+         WHERE id=?1",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
+    let _ = super::planning::project_tasks_in_tx(tx, profile_id, id, &scenario, structured.as_str(), today, horizon_days)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Undo 单操作（逆序调用）：验证当前==AFTER 后恢复 BEFORE。
 fn undo_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperation) -> Result<(), String> {
-    // create 无 before（原本不存在）→ 直接按 AFTER.id 删除即可
+    // create 无 before（原本不存在）→ 按 AFTER.id 处理
     if op.action == "create" {
         let id = op
             .after_json
             .get("id")
             .and_then(|x| x.as_i64())
             .ok_or("create 的 AFTER 缺少 id，无法撤销")?;
+        // DEV-0057 §55-57：Final Goal 任何路径不得真正删除——undo create final
+        // 改为恢复安全占位（清 brief/名称归位"未设置最终目标"），保留行。
+        if op.entity_type == "goal" {
+            let level: String = tx
+                .query_row("SELECT goal_level FROM goals WHERE id=?1", params![id], |r| r.get(0))
+                .unwrap_or_default();
+            if level == "final" {
+                tx.execute(
+                    "UPDATE goals SET goal_brief_json = NULL, name = '未设置最终目标', updated_at = datetime('now')
+                     WHERE id = ?1 AND profile_id = ?2",
+                    params![id, profile_id],
+                )
+                .map_err(|e| e.to_string())?;
+                let _ = index_remove(tx, "goal", id);
+                return Ok(());
+            }
+        }
         let table = table_of(&op.entity_type);
         let n = tx
             .execute(
@@ -793,8 +1032,26 @@ fn undo_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperatio
         .clone();
     let after_v: J = J::Object(after);
     match (op.entity_type.as_str(), op.action.as_str()) {
-        ("task", "create") | ("knowledge", "create") | ("evaluation", "create") | ("goal", "create") => {
+        ("task", "create") | ("knowledge", "create") | ("evaluation", "create") | ("goal", "create")
+        | ("goal_target", "create") | ("planning_blueprint", "create") => {
             let id = after_v.get("id").and_then(|x| x.as_i64()).ok_or("create 的 AFTER 缺少 id，无法撤销")?;
+            // DEV-0057 §55-57：Final Goal 任何路径不得真正删除——undo create final
+            // 改为恢复安全占位（清 brief/名称归位"未设置最终目标"），保留行。
+            if op.entity_type == "goal" {
+                let level: String = tx
+                    .query_row("SELECT goal_level FROM goals WHERE id=?1", params![id], |r| r.get(0))
+                    .unwrap_or_default();
+                if level == "final" {
+                    tx.execute(
+                        "UPDATE goals SET goal_brief_json = NULL, name = '未设置最终目标', updated_at = datetime('now')
+                         WHERE id = ?1 AND profile_id = ?2",
+                        params![id, profile_id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let _ = index_remove(tx, "goal", id);
+                    return Ok(());
+                }
+            }
             let table = table_of(&op.entity_type);
             let n = tx
                 .execute(
@@ -806,6 +1063,20 @@ fn undo_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperatio
                 return Err("数据已被后续修改（实体不存在），拒绝直接撤销".to_string());
             }
             let _ = index_remove(tx, &op.entity_type, id);
+            Ok(())
+        }
+        // phase/milestone 无 profile_id 列（FK 归属 blueprint）→ 按 id 删除
+        ("planning_phase", "create") | ("planning_milestone", "create") => {
+            let id = after_v.get("id").and_then(|x| x.as_i64()).ok_or("create 的 AFTER 缺少 id，无法撤销")?;
+            let n = tx
+                .execute(
+                    &format!("DELETE FROM {} WHERE id=?1", table_of(&op.entity_type)),
+                    params![id],
+                )
+                .map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Err("数据已被后续修改（实体不存在），拒绝直接撤销".to_string());
+            }
             Ok(())
         }
         ("task", "update") | ("knowledge", "update") | ("document", "update") | ("session", "update") => {
@@ -860,6 +1131,11 @@ fn table_of(entity: &str) -> &'static str {
         "session" => "study_sessions",
         "evaluation" => "evaluations",
         "document" => "knowledge_documents",
+        // DEV-0059 §25 新实体
+        "goal_target" => "goal_targets",
+        "planning_blueprint" => "planning_blueprints",
+        "planning_phase" => "planning_phases",
+        "planning_milestone" => "planning_milestones",
         _ => "tasks",
     }
 }
@@ -1160,6 +1436,49 @@ fn fetch_session(tx: &rusqlite::Transaction<'_>, profile_id: i64, id: i64) -> Re
     .map_err(|_| "学习记录不存在或不属于当前档案".to_string())
 }
 
+/// DEV-0057 §52：goal/knowledge/document 当前快照（verify_before 用；字段与 snapshot_before 对齐）。
+fn fetch_goal(tx: &rusqlite::Transaction<'_>, profile_id: i64, id: i64) -> Result<J, String> {
+    tx.query_row(
+        "SELECT name, day_kind FROM goals WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+        |r| {
+            Ok(serde_json::json!({
+                "name": r.get::<_, String>(0)?,
+                "day_kind": r.get::<_, String>(1)?,
+            }))
+        },
+    )
+    .map_err(|_| "目标不存在或不属于当前档案".to_string())
+}
+
+fn fetch_knowledge(tx: &rusqlite::Transaction<'_>, profile_id: i64, id: i64) -> Result<J, String> {
+    tx.query_row(
+        "SELECT name, content FROM learning_items WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+        |r| {
+            Ok(serde_json::json!({
+                "name": r.get::<_, String>(0)?,
+                "content": r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            }))
+        },
+    )
+    .map_err(|_| "知识节点不存在或不属于当前档案".to_string())
+}
+
+fn fetch_document(tx: &rusqlite::Transaction<'_>, profile_id: i64, id: i64) -> Result<J, String> {
+    tx.query_row(
+        "SELECT title, content_text FROM knowledge_documents WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+        |r| {
+            Ok(serde_json::json!({
+                "title": r.get::<_, String>(0)?,
+                "content_text": r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            }))
+        },
+    )
+    .map_err(|_| "文档不存在或不属于当前档案".to_string())
+}
+
 fn index_upsert(tx: &rusqlite::Transaction<'_>, etype: &str, id: i64, profile: i64, title: &str, content: &str) -> Result<(), String> {
     tx.execute(
         "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES (?1,?2,?3,?4,?5)
@@ -1219,7 +1538,7 @@ fn parse_op(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChangeOperation> {
 /// 必须能在它之前的操作里找到带该 operation_ref 的 create。
 fn check_forward_refs(ops: &[ProposedOp], idx: usize) -> Option<String> {
     let after = &ops[idx].after;
-    for key in ["parent_ref", "goal_ref", "learning_item_ref"] {
+    for key in ["parent_ref", "goal_ref", "learning_item_ref", "ref", "blueprint_ref", "phase_ref"] {
         if let Some(v) = after.get(key).and_then(|x| x.as_str()) {
             let ok = ops[..idx]
                 .iter()
@@ -1241,17 +1560,20 @@ fn resolve_refs(after: &J, id_map: &std::collections::HashMap<String, i64>) -> R
         Some(o) => o.clone(),
         None => return Ok(after.clone()),
     };
-    for (key, col) in [("parent_ref", "parent_col"), ("goal_ref", "g"), ("learning_item_ref", "l")] {
-        let _ = col;
+    for (key, real_key) in [
+        ("parent_ref", "parent_real_id"),
+        ("goal_ref", "goal_real_id"),
+        ("learning_item_ref", "learning_item_real_id"),
+        // DEV-0059 §25：通用 ref → id（status_change/update 引用本集内前序 create 的实体）
+        ("ref", "id"),
+        // DEV-0059 §23：蓝图内 phase/milestone 引用 blueprint create 的 ref
+        ("blueprint_ref", "blueprint_id"),
+        ("phase_ref", "phase_id"),
+    ] {
         if let Some(v) = obj.get(key).and_then(|x| x.as_str()) {
             match id_map.get(v) {
                 Some(id) => {
                     obj.remove(key);
-                    let real_key = match key {
-                        "parent_ref" => "parent_real_id",
-                        "goal_ref" => "goal_real_id",
-                        _ => "learning_item_real_id",
-                    };
                     obj.insert(real_key.to_string(), serde_json::json!(id));
                 }
                 None => {

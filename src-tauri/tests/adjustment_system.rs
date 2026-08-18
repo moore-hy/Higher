@@ -63,7 +63,8 @@ fn test_migration_v008_applied_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    // DEV-0059.1 §9：v022（personalization_sources 支持 xlsx）已追加
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
 
     let columns: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(adjustments)").unwrap();
@@ -85,7 +86,7 @@ fn test_migration_v008_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 18);
+    assert_eq!(count, 22);
 }
 
 #[test]

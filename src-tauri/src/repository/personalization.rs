@@ -24,17 +24,19 @@ pub struct PersonalizationSource {
     pub updated_at: String,
 }
 
+/// DEV-0059 §8：PersonalProfile version rows（v021 重建后结构）。
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct PersonalizationProfile {
     pub id: i64,
     pub profile_id: i64,
+    pub version: i64,
     pub md_content: String,
     pub structured_json: Option<String>,
     pub status: String,
-    pub version: i64,
-    pub last_compiled_at: Option<String>,
-    pub last_updated_at: Option<String>,
-    pub dirty: bool,
+    pub based_on_version_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub confirmed_at: Option<String>,
 }
 
 pub struct PersonalizationRepository<'a> {
@@ -152,59 +154,233 @@ impl<'a> PersonalizationRepository<'a> {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
-    // ---- Profile ----
+    // ---- Profile（DEV-0059 §8：version rows） ----
 
+    /// 兼容取法：confirmed 优先，否则最新 draft（旧调用方语义）。
     pub fn get_profile(&self, profile_id: i64) -> Result<Option<PersonalizationProfile>, String> {
+        if let Some(p) = self.get_confirmed_profile(profile_id)? {
+            return Ok(Some(p));
+        }
+        self.get_draft_profile(profile_id)
+    }
+
+    /// 当前正式（confirmed）版本。
+    pub fn get_confirmed_profile(&self, profile_id: i64) -> Result<Option<PersonalizationProfile>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, profile_id, md_content, structured_json, status, version, last_compiled_at, last_updated_at, dirty
-                      FROM personalization_profiles WHERE profile_id=?1")
+            .prepare(
+                "SELECT id, profile_id, version, md_content, structured_json, status, based_on_version_id, created_at, updated_at, confirmed_at
+                 FROM personalization_profiles WHERE profile_id=?1 AND status='confirmed' ORDER BY version DESC LIMIT 1",
+            )
             .map_err(|e| e.to_string())?;
         let mut rows = stmt.query_map(params![profile_id], parse_profile).map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
-    pub fn save_draft(&self, profile_id: i64, md: &str, structured: Option<&str>) -> Result<(), String> {
-        self.conn
-            .execute(
-                "INSERT INTO personalization_profiles (profile_id, md_content, structured_json, status, version, last_compiled_at)
-                 VALUES (?1,?2,?3,'draft',1,datetime('now'))
-                 ON CONFLICT(profile_id) DO UPDATE SET md_content=excluded.md_content,
-                   structured_json=excluded.structured_json, status='draft',
-                   last_compiled_at=datetime('now'), dirty=0",
-                params![profile_id, md, structured],
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    /// §78：Draft 确认 → 正式。
-    pub fn confirm(&self, profile_id: i64) -> Result<(), String> {
-        let n = self
+    /// 当前 draft 版本（每 profile 最多 1 条，v021 partial unique 约束）。
+    pub fn get_draft_profile(&self, profile_id: i64) -> Result<Option<PersonalizationProfile>, String> {
+        let mut stmt = self
             .conn
-            .execute(
-                "UPDATE personalization_profiles SET status='confirmed', version=version+1,
-                 last_updated_at=datetime('now'), dirty=0 WHERE profile_id=?1",
-                params![profile_id],
+            .prepare(
+                "SELECT id, profile_id, version, md_content, structured_json, status, based_on_version_id, created_at, updated_at, confirmed_at
+                 FROM personalization_profiles WHERE profile_id=?1 AND status='draft' ORDER BY version DESC LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
-        if n == 0 {
-            return Err("还没有生成私人化档案".to_string());
-        }
-        Ok(())
+        let mut rows = stmt.query_map(params![profile_id], parse_profile).map_err(|e| e.to_string())?;
+        rows.next().transpose().map_err(|e| e.to_string())
     }
 
-    /// §80：用户编辑（最高优先级；source_kind = user_edit 记忆）。
-    pub fn user_edit(&self, profile_id: i64, md: &str) -> Result<(), String> {
-        self.conn
-            .execute(
-                "INSERT INTO personalization_profiles (profile_id, md_content, status, version, last_updated_at)
-                 VALUES (?1,?2,'confirmed',1,datetime('now'))
-                 ON CONFLICT(profile_id) DO UPDATE SET md_content=excluded.md_content,
-                   status='confirmed', last_updated_at=datetime('now'), dirty=0",
-                params![profile_id, md],
+    /// 全部版本（含 superseded；历史可查）。
+    pub fn list_profile_versions(&self, profile_id: i64) -> Result<Vec<PersonalizationProfile>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, profile_id, version, md_content, structured_json, status, based_on_version_id, created_at, updated_at, confirmed_at
+                 FROM personalization_profiles WHERE profile_id=?1 ORDER BY version DESC",
             )
             .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![profile_id], parse_profile).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    /// §8/§10.1：保存 Draft——已有 draft 则原地更新；否则新建 vN+1
+    /// （based_on_version_id = 当前 confirmed id；旧 confirmed 不动）。
+    pub fn save_draft(&self, profile_id: i64, md: &str, structured: Option<&str>) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let existing_draft: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='draft'",
+                params![profile_id],
+                |r| r.get(0),
+            )
+            .ok();
+        let confirmed_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='confirmed' ORDER BY version DESC LIMIT 1",
+                params![profile_id],
+                |r| r.get(0),
+            )
+            .ok();
+        match existing_draft {
+            Some(did) => {
+                tx.execute(
+                    "UPDATE personalization_profiles SET md_content=?1, structured_json=?2, updated_at=datetime('now')
+                     WHERE id=?3",
+                    params![md, structured, did],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            None => {
+                let next_ver: i64 = tx
+                    .query_row(
+                        "SELECT COALESCE(MAX(version),0)+1 FROM personalization_profiles WHERE profile_id=?1",
+                        params![profile_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                tx.execute(
+                    "INSERT INTO personalization_profiles (profile_id, version, md_content, structured_json, status, based_on_version_id)
+                     VALUES (?1,?2,?3,?4,'draft',?5)",
+                    params![profile_id, next_ver, md, structured, confirmed_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// §8/§25.2：Draft 确认 → 正式（一个 transaction）：
+    /// old confirmed → superseded；new draft → confirmed + confirmed_at。
+    pub fn confirm(&self, profile_id: i64) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let draft_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='draft' ORDER BY version DESC LIMIT 1",
+                params![profile_id],
+                |r| r.get(0),
+            )
+            .ok();
+        let Some(did) = draft_id else {
+            return Err("还没有待确认的草稿".to_string());
+        };
+        tx.execute(
+            "UPDATE personalization_profiles SET status='superseded', updated_at=datetime('now')
+             WHERE profile_id=?1 AND status='confirmed'",
+            params![profile_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE personalization_profiles SET status='confirmed', confirmed_at=datetime('now'), updated_at=datetime('now')
+             WHERE id=?1",
+            params![did],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// DEV-0059.1 §6：Draft 落库并写入「版本-来源」snapshot relation
+    /// （personalization_profile_sources）。Confirm 后 relation 保持；新 Source
+    /// 后重新 Compile 产生 vN+1 的新 snapshot，不改变 vN 的历史 snapshot。
+    /// source_ids 为空时仅更新 Draft 内容，保持原 snapshot。
+    pub fn save_draft_with_sources(
+        &self,
+        profile_id: i64,
+        md: &str,
+        structured: Option<&str>,
+        source_ids: &[i64],
+    ) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let existing_draft: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='draft'",
+                params![profile_id],
+                |r| r.get(0),
+            )
+            .ok();
+        let confirmed_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='confirmed' ORDER BY version DESC LIMIT 1",
+                params![profile_id],
+                |r| r.get(0),
+            )
+            .ok();
+        let draft_id: i64 = match existing_draft {
+            Some(did) => {
+                tx.execute(
+                    "UPDATE personalization_profiles SET md_content=?1, structured_json=?2, updated_at=datetime('now')
+                     WHERE id=?3",
+                    params![md, structured, did],
+                )
+                .map_err(|e| e.to_string())?;
+                did
+            }
+            None => {
+                let next_ver: i64 = tx
+                    .query_row(
+                        "SELECT COALESCE(MAX(version),0)+1 FROM personalization_profiles WHERE profile_id=?1",
+                        params![profile_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                tx.execute(
+                    "INSERT INTO personalization_profiles (profile_id, version, md_content, structured_json, status, based_on_version_id)
+                     VALUES (?1,?2,?3,?4,'draft',?5)",
+                    params![profile_id, next_ver, md, structured, confirmed_id],
+                )
+                .map_err(|e| e.to_string())?;
+                tx.last_insert_rowid()
+            }
+        };
+        if !source_ids.is_empty() {
+            tx.execute(
+                "DELETE FROM personalization_profile_sources WHERE profile_version_id=?1",
+                params![draft_id],
+            )
+            .map_err(|e| e.to_string())?;
+            for sid in source_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO personalization_profile_sources (profile_version_id, source_id) VALUES (?1,?2)",
+                    params![draft_id, sid],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// DEV-0059.1 §6：某 PersonalProfile 版本使用的 Source snapshot（只读）。
+    pub fn list_sources_for_version(
+        &self,
+        version_id: i64,
+        profile_id: i64,
+    ) -> Result<Vec<PersonalizationSource>, String> {
+        let owned: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM personalization_profiles WHERE id=?1 AND profile_id=?2",
+                params![version_id, profile_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if owned == 0 {
+            return Err("版本不存在或不属于当前档案".to_string());
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT s.id, s.profile_id, s.file_name, s.file_type, s.relative_path, s.sha256, s.extracted_text_path, s.status, s.created_at, s.updated_at
+                 FROM personalization_sources s
+                 JOIN personalization_profile_sources ps ON ps.source_id = s.id
+                 WHERE ps.profile_version_id=?1 ORDER BY s.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![version_id], parse_src).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+    pub fn user_edit(&self, profile_id: i64, md: &str) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let _ = user_edit_in_tx(&tx, profile_id, md)?;
+        tx.commit().map_err(|e| e.to_string())?;
         let _ = self.conn.execute(
             "INSERT INTO memory_records (profile_id, memory_type, category, memory_key, memory_value, source_kind, source_excerpt, importance, confidence)
              VALUES (?1,'user_fact','personalization','私人化档案（用户编辑）',?2,'user_edit',?3,5,'high')",
@@ -213,16 +389,61 @@ impl<'a> PersonalizationRepository<'a> {
         Ok(())
     }
 
+    /// §10.1/§41：新信息提示（dirty 列已在 v021 移除）——若 confirmed 存在且无 draft，
+    /// 创建基于 confirmed 的 draft vN+1（UI 显示"有更新，建议重新整合"）。
     pub fn mark_dirty(&self, profile_id: i64) -> Result<(), String> {
+        if self.get_confirmed_profile(profile_id)?.is_none() {
+            return Ok(());
+        }
+        if self.get_draft_profile(profile_id)?.is_some() {
+            return Ok(());
+        }
+        let confirmed = self.get_confirmed_profile(profile_id)?.unwrap();
+        let next_ver = confirmed.version + 1;
         self.conn
             .execute(
-                "INSERT INTO personalization_profiles (profile_id, dirty) VALUES (?1,1)
-                 ON CONFLICT(profile_id) DO UPDATE SET dirty=1",
-                params![profile_id],
+                "INSERT INTO personalization_profiles (profile_id, version, md_content, structured_json, status, based_on_version_id)
+                 VALUES (?1,?2,?3,?4,'draft',?5)",
+                params![profile_id, next_ver, confirmed.md_content, confirmed.structured_json, confirmed.id],
             )
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+}
+
+/// §10.1/§25.2 用户编辑核心（供 ChangeSet apply 外层事务内复用；不嵌套新事务）。
+pub fn user_edit_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    profile_id: i64,
+    md: &str,
+) -> Result<(), String> {
+    tx.execute(
+        "UPDATE personalization_profiles SET status='superseded', updated_at=datetime('now')
+         WHERE profile_id=?1 AND status='confirmed'",
+        params![profile_id],
+    )
+    .map_err(|e| e.to_string())?;
+    let next_ver: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(version),0)+1 FROM personalization_profiles WHERE profile_id=?1",
+            params![profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let confirmed_id: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='superseded' ORDER BY version DESC LIMIT 1",
+            params![profile_id],
+            |r| r.get(0),
+        )
+        .ok();
+    tx.execute(
+        "INSERT INTO personalization_profiles (profile_id, version, md_content, status, based_on_version_id, confirmed_at)
+         VALUES (?1,?2,?3,'confirmed',?4,datetime('now'))",
+        params![profile_id, next_ver, md, confirmed_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn parse_src(r: &rusqlite::Row<'_>) -> rusqlite::Result<PersonalizationSource> {
@@ -244,17 +465,23 @@ fn parse_profile(r: &rusqlite::Row<'_>) -> rusqlite::Result<PersonalizationProfi
     Ok(PersonalizationProfile {
         id: r.get(0)?,
         profile_id: r.get(1)?,
-        md_content: r.get(2)?,
-        structured_json: r.get(3)?,
-        status: r.get(4)?,
-        version: r.get(5)?,
-        last_compiled_at: r.get(6)?,
-        last_updated_at: r.get(7)?,
-        dirty: r.get::<_, i64>(8)? == 1,
+        version: r.get(2)?,
+        md_content: r.get(3)?,
+        structured_json: r.get(4)?,
+        status: r.get(5)?,
+        based_on_version_id: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+        confirmed_at: r.get(9)?,
     })
 }
 
 fn chunk_text(text: &str, cap: usize) -> Vec<String> {
+    chunk_text_pub(text, cap)
+}
+
+/// 分块（DEV-0059 §13：planning_source 复用同一分块语义）。
+pub fn chunk_text_pub(text: &str, cap: usize) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     for para in text.split("\n\n") {
@@ -626,4 +853,85 @@ pub fn section_title(i: usize) -> &'static str {
 /// §73 Compile 用：1-14 节序（15-19 由系统/AI 单独生成）。
 pub fn section_title_seq() -> Vec<&'static str> {
     (1..=14).map(section_title).collect()
+}
+
+/// DEV-0059.1 §7：structured_json contract 的 schema_version。
+pub const PERSONAL_STRUCTURED_SCHEMA_VERSION: i64 = 1;
+
+/// DEV-0059.1 §7：raw `facts[]` → structured_json contract（schema_version:1）。
+///
+/// 字段：
+/// - basics（basic_info + goal）/ capabilities / strengths / weaknesses / habits /
+///   preferences（含 requirements）/ constraints / availability（time_conditions）/
+///   current_state（state + progress）/ unresolved
+/// - field_provenance：每个 bucket 的资料来源（section → source 列表）
+///
+/// 无法可靠归类的条目进 unresolved；冲突/待确认进 unresolved（extra）；禁止猜值。
+/// Markdown（md_content）仍保留完整人类可读档案；本函数只产出机器输入。
+pub fn build_personal_structured(facts: &[serde_json::Value], unresolved_extra: &[String]) -> String {
+    let mut basic_info: Vec<serde_json::Value> = Vec::new();
+    let mut capabilities: Vec<serde_json::Value> = Vec::new();
+    let mut strengths: Vec<serde_json::Value> = Vec::new();
+    let mut weaknesses: Vec<serde_json::Value> = Vec::new();
+    let mut habits: Vec<serde_json::Value> = Vec::new();
+    let mut preferences: Vec<serde_json::Value> = Vec::new();
+    let mut constraints: Vec<serde_json::Value> = Vec::new();
+    let mut time_conditions: Vec<serde_json::Value> = Vec::new();
+    let mut state: Vec<serde_json::Value> = Vec::new();
+    let mut progress: Vec<serde_json::Value> = Vec::new();
+    let mut unresolved: Vec<serde_json::Value> = Vec::new();
+    let mut provenance: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+
+    for f in facts {
+        let section = f.get("section").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let text = f.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let kind = f.get("kind").and_then(|x| x.as_str()).unwrap_or("fact").to_string();
+        let source = f.get("source").and_then(|x| x.as_str()).unwrap_or("?").to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let item = serde_json::json!({ "text": text, "kind": kind, "source": source.clone() });
+        provenance.entry(section.clone()).or_default().push(source.clone());
+        match section.as_str() {
+            "基本情况" => basic_info.push(item),
+            // DEV-0059.2 §4：个人资料中的目标描述只能作为 source observation / candidate，
+            // 不得成为 PersonalProfile 的正式 Goal（GoalTarget 才是 Canonical）
+            "最终学习目标" => unresolved.push(serde_json::json!({
+                "text": text,
+                "kind": "goal_observation",
+                "source": source,
+                "note": "个人资料中的目标描述，仅供 GoalTarget 确认参考，不是正式目标",
+            })),
+            "学历与专业背景" | "当前能力基础" | "既往学习经历" => capabilities.push(item),
+            "优势" => strengths.push(item),
+            "明显短板" => weaknesses.push(item),
+            "学习习惯" => habits.push(item),
+            "学习偏好" | "用户明确要求" => preferences.push(item),
+            "重要限制条件" => constraints.push(item),
+            "时间条件" => time_conditions.push(item),
+            "当前状态" => state.push(item),
+            "当前学习进度" => progress.push(item),
+            _ => unresolved.push(serde_json::json!({
+                "text": text, "kind": kind, "source": source.clone(), "note": "无法可靠归类的资料条目"
+            })),
+        }
+    }
+    for u in unresolved_extra {
+        unresolved.push(serde_json::json!({ "text": u, "kind": "conflict", "source": "compile", "note": "冲突/待确认" }));
+    }
+    serde_json::json!({
+        "schema_version": PERSONAL_STRUCTURED_SCHEMA_VERSION,
+        "basics": { "basic_info": basic_info },
+        "capabilities": capabilities,
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+        "habits": habits,
+        "preferences": preferences,
+        "constraints": constraints,
+        "availability": { "time_conditions": time_conditions },
+        "current_state": { "state": state, "progress": progress },
+        "unresolved": unresolved,
+        "field_provenance": serde_json::to_value(provenance).unwrap_or(serde_json::json!({})),
+    })
+    .to_string()
 }

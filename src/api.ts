@@ -10,6 +10,7 @@ import type {
   KnowledgeDocument,
   KnowledgeWorkspaceData,
   LearningStats,
+  LightLearningItem,
   MasteryAssessment,
   MasteryView,
   TrendPoint,
@@ -32,14 +33,24 @@ import type {
   EvaluationStats,
   Feedback,
   Goal,
+  GoalState,
   KnowledgeNodeStats,
+  KnowledgeTimeSlice,
   LearningAttachment,
   LearningItem,
+  LearningTotals,
   MemoryRecord,
   NextAction,
   PersonalizationProfile,
   PersonalizationSource,
   Plan,
+  GoalTarget,
+  LegacyGoalCandidate,
+  PlanningBlueprint,
+  PlanningPhase,
+  PlanningMilestone,
+  PlanningReview,
+  PlanningSource,
   ProfileCalendarDay,
   ProgressMetrics,
   RecurringRule,
@@ -350,6 +361,24 @@ export const listLearningItemsByGoal = (goalId: number) =>
 /** 列出指定档案下的全部 Learning Item（Profile Scope） */
 export const listLearningItemsByProfile = (profileId: number) =>
   invoke<LearningItem[]>("list_learning_items_by_profile", { profileId });
+
+// =============== DEV-0057 · Reliability / Data Trust / Performance ===============
+
+/** §153-155 轻量知识列表（树/导航/知识图；不含 content 正文——正文按需加载） */
+export const listLearningItemsLight = (profileId: number) =>
+  invoke<LightLearningItem[]>("list_learning_items_light", { profileId });
+
+/** §133-136 附件沙箱绝对路径（前端 convertFileSrc → WebView 按需加载，主路径不再整文件 base64） */
+export const getAttachmentAssetPath = (profileId: number, attachmentId: number) =>
+  invoke<string>("get_attachment_asset_path", { profileId, attachmentId });
+
+/** §107 确认时长无误：needs_review → confirmed（不改任何时间数据） */
+export const confirmSessionDuration = (id: number) =>
+  invoke<StudySession>("confirm_session_duration", { id });
+
+/** §68 手动重建搜索索引（返回重建条数） */
+export const rebuildSearchIndex = (profileId: number) =>
+  invoke<number>("rebuild_search_index", { profileId });
 
 /** 创建根 Learning Item（v013 Profile First：profile 必填；goal 可选） */
 export const createRootLearningItem = (
@@ -1054,6 +1083,11 @@ export const createEvaluation = (args: {
   maxScore?: number | null;
   outcome?: string | null;
   note?: string | null;
+  // DEV-0059.1 §5：Evidence V1（可选）
+  sessionId?: number | null;
+  sourceKind?: string | null;
+  sourceRef?: string | null;
+  trustState?: string | null;
 }) =>
   invoke<Evaluation>("create_evaluation", {
     profileId: args.profileId,
@@ -1070,6 +1104,10 @@ export const createEvaluation = (args: {
     maxScore: args.maxScore ?? null,
     outcome: args.outcome ?? null,
     note: args.note ?? null,
+    sessionId: args.sessionId ?? null,
+    sourceKind: args.sourceKind ?? null,
+    sourceRef: args.sourceRef ?? null,
+    trustState: args.trustState ?? null,
   });
 
 export const getEvaluation = (id: number) =>
@@ -1271,6 +1309,305 @@ export const editPersonalizationProfile = (profileId: number, mdContent: string)
 export const getRequirementTemplate = () =>
   invoke<string>("get_requirement_template");
 
+// =============== DEV-0059 · PersonalProfile / GoalTarget / Planning / Review ===============
+
+/** §8：PersonalProfile 版本历史 */
+export const listPersonalizationProfileVersions = (profileId: number) =>
+  invoke<PersonalizationProfile[]>("list_personalization_profile_versions", { profileId });
+
+/** §11：GoalTarget */
+export const createGoalTarget = (args: {
+  profileId: number;
+  scenarioType: string;
+  role: string;
+  title: string;
+  targetDate?: string | null;
+  dataJson: string;
+  provenanceJson: string;
+  status: string;
+}) =>
+  invoke<GoalTarget>("create_goal_target", {
+    profileId: args.profileId,
+    scenarioType: args.scenarioType,
+    role: args.role,
+    title: args.title,
+    targetDate: args.targetDate ?? null,
+    dataJson: args.dataJson,
+    provenanceJson: args.provenanceJson,
+    status: args.status,
+  });
+
+export const listGoalTargets = (profileId: number) =>
+  invoke<GoalTarget[]>("list_goal_targets", { profileId });
+
+export const listActiveGoalTargets = (
+  profileId: number,
+  scenarioType?: string,
+  role?: string
+) =>
+  invoke<GoalTarget[]>("list_active_goal_targets", {
+    profileId,
+    scenarioType: scenarioType ?? null,
+    role: role ?? null,
+  });
+
+export const activateGoalTarget = (profileId: number, id: number) =>
+  invoke<GoalTarget>("activate_goal_target", { profileId, id });
+
+export const replaceGoalTarget = (args: {
+  profileId: number;
+  id: number;
+  title: string;
+  targetDate?: string | null;
+  dataJson: string;
+  provenanceJson: string;
+}) =>
+  invoke<GoalTarget>("replace_goal_target", {
+    profileId: args.profileId,
+    id: args.id,
+    title: args.title,
+    targetDate: args.targetDate ?? null,
+    dataJson: args.dataJson,
+    provenanceJson: args.provenanceJson,
+  });
+
+export const dismissGoalTarget = (profileId: number, id: number) =>
+  invoke<void>("dismiss_goal_target", { profileId, id });
+
+export const listLegacyGoalCandidates = (profileId: number) =>
+  invoke<LegacyGoalCandidate[]>("list_legacy_goal_candidates", { profileId });
+
+/** §14-16：PlanningBlueprint / Phase / Milestone */
+export const createPlanningBlueprint = (args: {
+  profileId: number;
+  scenarioType: string;
+  title: string;
+  contentMd: string;
+  structuredJson?: string | null;
+  sourceSnapshotJson: string;
+  provenanceJson: string;
+  reviewIntervalDays: number;
+}) =>
+  invoke<PlanningBlueprint>("create_planning_blueprint", {
+    profileId: args.profileId,
+    scenarioType: args.scenarioType,
+    title: args.title,
+    contentMd: args.contentMd,
+    structuredJson: args.structuredJson ?? null,
+    sourceSnapshotJson: args.sourceSnapshotJson,
+    provenanceJson: args.provenanceJson,
+    reviewIntervalDays: args.reviewIntervalDays,
+  });
+
+export const listPlanningBlueprints = (profileId: number) =>
+  invoke<PlanningBlueprint[]>("list_planning_blueprints", { profileId });
+
+export const getPlanningBlueprint = (profileId: number, id: number) =>
+  invoke<PlanningBlueprint | null>("get_planning_blueprint", { profileId, id });
+
+export const getActivePlanningBlueprint = (profileId: number) =>
+  invoke<PlanningBlueprint | null>("get_active_planning_blueprint", { profileId });
+
+/** §25.1：激活（事务 + 安全 14 天投影） */
+export const activatePlanningBlueprint = (profileId: number, id: number) =>
+  invoke<PlanningBlueprint>("activate_planning_blueprint", { profileId, id });
+
+export const addPlanningPhase = (args: {
+  blueprintId: number;
+  phaseKey: string;
+  title: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  objectiveMd: string;
+  sortOrder: number;
+}) =>
+  invoke<number>("add_planning_phase", {
+    blueprintId: args.blueprintId,
+    phaseKey: args.phaseKey,
+    title: args.title,
+    startDate: args.startDate ?? null,
+    endDate: args.endDate ?? null,
+    objectiveMd: args.objectiveMd,
+    sortOrder: args.sortOrder,
+  });
+
+export const listPlanningPhases = (blueprintId: number) =>
+  invoke<PlanningPhase[]>("list_planning_phases", { blueprintId });
+
+export const addPlanningMilestone = (args: {
+  blueprintId: number;
+  phaseId?: number | null;
+  milestoneKey: string;
+  title: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  datePrecision: string;
+  dateStatus: string;
+  provenanceJson: string;
+}) =>
+  invoke<number>("add_planning_milestone", {
+    blueprintId: args.blueprintId,
+    phaseId: args.phaseId ?? null,
+    milestoneKey: args.milestoneKey,
+    title: args.title,
+    startDate: args.startDate ?? null,
+    endDate: args.endDate ?? null,
+    datePrecision: args.datePrecision,
+    dateStatus: args.dateStatus,
+    provenanceJson: args.provenanceJson,
+  });
+
+export const listPlanningMilestones = (blueprintId: number) =>
+  invoke<PlanningMilestone[]>("list_planning_milestones", { blueprintId });
+
+// ---- DEV-0059.1 §10/§11：Manual Planning + Review Cadence ----
+
+/** §10：手工编辑 Blueprint 基础信息（title + content_md） */
+export const updatePlanningBlueprintMeta = (
+  profileId: number,
+  id: number,
+  title: string,
+  contentMd: string
+) =>
+  invoke<PlanningBlueprint>("update_planning_blueprint_meta", {
+    profileId,
+    id,
+    title,
+    contentMd,
+  });
+
+/** §11：Review Cadence——只改 review_enabled / review_interval_days / next_review_at（不调 AI） */
+export const updatePlanningReviewCadence = (
+  profileId: number,
+  id: number,
+  reviewEnabled: boolean,
+  reviewIntervalDays: number | null
+) =>
+  invoke<PlanningBlueprint>("update_planning_review_cadence", {
+    profileId,
+    id,
+    reviewEnabled,
+    reviewIntervalDays,
+  });
+
+/** §10：Phase 更新 */
+export const updatePlanningPhase = (args: {
+  blueprintId: number;
+  phaseId: number;
+  title: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  objectiveMd: string;
+  sortOrder: number;
+}) =>
+  invoke<void>("update_planning_phase", {
+    blueprintId: args.blueprintId,
+    phaseId: args.phaseId,
+    title: args.title,
+    startDate: args.startDate ?? null,
+    endDate: args.endDate ?? null,
+    objectiveMd: args.objectiveMd,
+    sortOrder: args.sortOrder,
+  });
+
+/** §10：Phase 删除 */
+export const deletePlanningPhase = (blueprintId: number, phaseId: number) =>
+  invoke<void>("delete_planning_phase", { blueprintId, phaseId });
+
+/** §10：Milestone 更新 */
+export const updatePlanningMilestone = (args: {
+  blueprintId: number;
+  milestoneId: number;
+  title: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  datePrecision: string;
+  dateStatus: string;
+}) =>
+  invoke<void>("update_planning_milestone", {
+    blueprintId: args.blueprintId,
+    milestoneId: args.milestoneId,
+    title: args.title,
+    startDate: args.startDate ?? null,
+    endDate: args.endDate ?? null,
+    datePrecision: args.datePrecision,
+    dateStatus: args.dateStatus,
+  });
+
+/** §10：Milestone 删除 */
+export const deletePlanningMilestone = (blueprintId: number, milestoneId: number) =>
+  invoke<void>("delete_planning_milestone", { blueprintId, milestoneId });
+
+/** §17-18：PlanningReview */
+export const createPlanningReviewDue = (args: {
+  profileId: number;
+  blueprintId?: number | null;
+  periodStart: string;
+  periodEnd: string;
+  triggerType: string;
+}) =>
+  invoke<number>("create_planning_review_due", {
+    profileId: args.profileId,
+    blueprintId: args.blueprintId ?? null,
+    periodStart: args.periodStart,
+    periodEnd: args.periodEnd,
+    triggerType: args.triggerType,
+  });
+
+export const listPlanningReviews = (profileId: number) =>
+  invoke<PlanningReview[]>("list_planning_reviews", { profileId });
+
+export const setPlanningReviewStatus = (profileId: number, id: number, status: string) =>
+  invoke<void>("set_planning_review_status", { profileId, id, status });
+
+export const isPlanningReviewDue = (profileId: number) =>
+  invoke<boolean>("is_planning_review_due", { profileId });
+
+export const getPlanningReviewRisk = (profileId: number) =>
+  invoke<string>("get_planning_review_risk", { profileId });
+
+/** DEV-0059.1 §3：准备复盘 AI——置 running + 构建 evidence snapshot（不调 Provider）；返回快照 JSON */
+export const preparePlanningReviewAi = (profileId: number, reviewId: number) =>
+  invoke<Record<string, unknown>>("prepare_planning_review_ai", { profileId, reviewId });
+
+/** DEV-0059.2 §2：当前周期复盘（cadence 周期 + open review dedupe；后端计算 period） */
+export const prepareCurrentPlanningReview = (
+  profileId: number,
+  triggerType: string
+) =>
+  invoke<{
+    review_id: number;
+    status: string;
+    change_set_id: number | null;
+    snapshot: Record<string, unknown> | null;
+  }>("prepare_current_planning_review", { profileId, triggerType });
+
+/** DEV-0059.1 §3：用户确认后启动 AI 评估；返回 completed / waiting_approval */
+export const runPlanningReviewAi = (profileId: number, reviewId: number) =>
+  invoke<string>("run_planning_review_ai", { profileId, reviewId });
+
+
+/** DEV-0059.1 §6：某 PersonalProfile 版本使用的 Personal Source snapshot（只读） */
+export const listSourcesForPersonalProfileVersion = (profileId: number, versionId: number) =>
+  invoke<PersonalizationSource[]>("list_sources_for_personal_profile_version", { profileId, versionId });
+
+/** §13：Planning Source */
+export const importPlanningSource = (profileId: number, path: string, sourceKind: string) =>
+  invoke<{ id: number; name: string; file_type: string; sha256: string; chars: number }>(
+    "import_planning_source",
+    { profileId, path, sourceKind }
+  );
+
+export const listPlanningSources = (profileId: number) =>
+  invoke<PlanningSource[]>("list_planning_sources", { profileId });
+
+export const getPlanningSourceText = (profileId: number, sourceId: number) =>
+  invoke<string>("get_planning_source_text", { profileId, sourceId });
+
+/** §31.3：导出文件写入（用户明确 save path） */
+export const writeExportFile = (path: string, contentBase64: string) =>
+  invoke<void>("write_export_file", { path, contentBase64 });
+
 // ---- 联网搜索（§95-97） ----
 
 /** [enabled, hasKey]；Key 不回显 */
@@ -1445,3 +1782,39 @@ export const updateTaskV2 = (args: {
 /** §11：Apply 成功后的真实结果行（如「✓ 已创建任务「背10个英语单词」」；由后端结果生成） */
 export const getChangeSetApplySummary = (profileId: number, changeSetId: number) =>
   invoke<string[]>("get_change_set_apply_summary", { profileId, changeSetId });
+
+// =============== DEV-0055 · Final Goal Brief / /data 聚合 ===============
+
+/** §18 Final Goal Card：读 Brief + 冲突 + Readiness 缺项 */
+export const getFinalGoalState = (profileId: number) =>
+  invoke<GoalState>("get_final_goal_state", { profileId });
+
+/** §198 用户确认后保存 Brief（表单直写 = 人工确认；brief 字段为 serde 原样 snake_case） */
+export const saveFinalGoalBrief = (profileId: number, brief: GoalState["brief"]) =>
+  invoke<void>("save_final_goal_brief", { profileId, brief });
+
+/** §104-109 累计三数 + 今日两数（后端单条聚合） */
+export const getLearningTotals = (profileId: number) =>
+  invoke<LearningTotals>("get_learning_totals", { profileId });
+
+/** §112-117 Knowledge 时间分布：[slices, unassignedSeconds]；parentItemId=null → root children */
+export const getKnowledgeTimeDistribution = (
+  profileId: number,
+  parentItemId?: number | null
+) =>
+  invoke<[KnowledgeTimeSlice[], number]>("get_knowledge_time_distribution", {
+    profileId,
+    parentItemId: parentItemId ?? null,
+  });
+
+/** §118-119 学习时段分布：[bucket, seconds][]（UTC+8 七段） */
+export const getTimeOfDayDistribution = (profileId: number) =>
+  invoke<[string, number][]>("get_time_of_day_distribution", { profileId });
+
+/** §121 计划 vs 实际：[date, plannedMin, actualMin, taskTotal, taskCompleted][]（不含综合效率 §122） */
+export const getPlanVsActual = (profileId: number, start: string, end: string) =>
+  invoke<[string, number, number, number, number][]>("get_plan_vs_actual", {
+    profileId,
+    start,
+    end,
+  });

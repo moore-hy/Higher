@@ -17,7 +17,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { getUiSetting, listSessionsByLearningItem, setUiSetting } from "../api";
-import type { LearningItem, MasteryStatus, StudySession } from "../types";
+import type { LightLearningItem, MasteryStatus, StudySession } from "../types";
 import { MASTERY_LABELS } from "../types";
 import { formatDateTime, formatDuration } from "../utils";
 
@@ -56,7 +56,8 @@ const MENU_W = 156;
 const MENU_H = 5 * 30 + 10;
 
 type KnowledgeFlowData = {
-  item: LearningItem;
+  /** DEV-0057 §153-155：light 数据（id/name/parent/mastery…；无 content 正文） */
+  item: LightLearningItem;
   childCount: number;
   isCurrent: boolean;
   onMenu: (id: number, anchor: { x: number; y: number; top: number }) => void;
@@ -65,8 +66,8 @@ type KnowledgeFlowData = {
 export type KnowledgeFlowNode = Node<KnowledgeFlowData, "knowledge">;
 
 /** 左→右树布局：x = depth * (NODE_W + H_GAP)；同层兄弟 y 依次累加；父取子树中点。 */
-function computeAutoLayout(items: LearningItem[]): Map<number, { x: number; y: number }> {
-  const byParent = new Map<number | null, LearningItem[]>();
+function computeAutoLayout(items: LightLearningItem[]): Map<number, { x: number; y: number }> {
+  const byParent = new Map<number | null, LightLearningItem[]>();
   for (const it of items) {
     const key = it.parent_id ?? null;
     if (!byParent.has(key)) byParent.set(key, []);
@@ -78,7 +79,7 @@ function computeAutoLayout(items: LearningItem[]): Map<number, { x: number; y: n
   const heightCache = new Map<number, number>();
 
   /** 子树总高度（先递归算高度再定位；父高度 = max(NODE_H, 子树高度和 + 间隙)）。 */
-  const heightOf = (item: LearningItem): number => {
+  const heightOf = (item: LightLearningItem): number => {
     const cached = heightCache.get(item.id);
     if (cached != null) return cached;
     const kids = byParent.get(item.id) ?? [];
@@ -93,7 +94,7 @@ function computeAutoLayout(items: LearningItem[]): Map<number, { x: number; y: n
     return h;
   };
 
-  const place = (item: LearningItem, depth: number, top: number): void => {
+  const place = (item: LightLearningItem, depth: number, top: number): void => {
     const h = heightOf(item);
     pos.set(item.id, { x: depth * (NODE_W + H_GAP), y: top + (h - NODE_H) / 2 });
     let cursor = top;
@@ -112,7 +113,7 @@ function computeAutoLayout(items: LearningItem[]): Map<number, { x: number; y: n
 }
 
 /** 后代集合（Reparent / 移动目标排除）。 */
-function descendantsOf(items: LearningItem[], id: number): Set<number> {
+function descendantsOf(items: LightLearningItem[], id: number): Set<number> {
   const out = new Set<number>();
   const stack = [id];
   while (stack.length) {
@@ -196,14 +197,16 @@ function KnowledgeCard({ data, selected }: NodeProps<KnowledgeFlowNode>) {
 const nodeTypes = { knowledge: KnowledgeCard };
 
 export default function KnowledgeFlow(props: {
-  items: LearningItem[];
+  items: LightLearningItem[];
+  /** 布局持久化 KV 的 key 用（light 数据无 profile_id 字段，由外层传入） */
+  profileId: number | null;
   currentId?: number | null;
   onOpen: (itemId: number) => void;
   onCreateRoot: (name: string) => Promise<void>;
-  onCreateChild: (parent: LearningItem, name: string) => Promise<void>;
-  onRename: (item: LearningItem, name: string) => Promise<void>;
-  onMove: (item: LearningItem, newParentId: number | null) => Promise<void>;
-  onDelete: (item: LearningItem) => Promise<void>;
+  onCreateChild: (parent: LightLearningItem, name: string) => Promise<void>;
+  onRename: (item: LightLearningItem, name: string) => Promise<void>;
+  onMove: (item: LightLearningItem, newParentId: number | null) => Promise<void>;
+  onDelete: (item: LightLearningItem) => Promise<void>;
 }) {
   return (
     <ReactFlowProvider>
@@ -214,6 +217,7 @@ export default function KnowledgeFlow(props: {
 
 function KnowledgeFlowInner({
   items,
+  profileId,
   currentId,
   onOpen,
   onCreateRoot,
@@ -222,14 +226,15 @@ function KnowledgeFlowInner({
   onMove,
   onDelete,
 }: {
-  items: LearningItem[];
+  items: LightLearningItem[];
+  profileId: number | null;
   currentId?: number | null;
   onOpen: (itemId: number) => void;
   onCreateRoot: (name: string) => Promise<void>;
-  onCreateChild: (parent: LearningItem, name: string) => Promise<void>;
-  onRename: (item: LearningItem, name: string) => Promise<void>;
-  onMove: (item: LearningItem, newParentId: number | null) => Promise<void>;
-  onDelete: (item: LearningItem) => Promise<void>;
+  onCreateChild: (parent: LightLearningItem, name: string) => Promise<void>;
+  onRename: (item: LightLearningItem, name: string) => Promise<void>;
+  onMove: (item: LightLearningItem, newParentId: number | null) => Promise<void>;
+  onDelete: (item: LightLearningItem) => Promise<void>;
 }) {
   const instance = useReactFlow<KnowledgeFlowNode>();
   const [nodes, setNodes, onNodesChange] = useNodesState<KnowledgeFlowNode>([]);
@@ -252,15 +257,13 @@ function KnowledgeFlowInner({
 
   type Dialog =
     | { kind: "root"; name: string }
-    | { kind: "child"; item: LearningItem; name: string }
-    | { kind: "rename"; item: LearningItem; name: string }
-    | { kind: "move"; item: LearningItem; search: string }
+    | { kind: "child"; item: LightLearningItem; name: string }
+    | { kind: "rename"; item: LightLearningItem; name: string }
+    | { kind: "move"; item: LightLearningItem; search: string }
     | null;
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  const profileId = items.length > 0 ? items[0].profile_id : null;
 
   /** 已从 KV 加载完成的 profile（避免加载前把空 map 写回去覆盖已保存布局）。 */
   const loadedProfileRef = useRef<number | null>(null);
@@ -588,14 +591,7 @@ function KnowledgeFlowInner({
               previewItem.mastery_status}
             {childCountOf(previewItem.id) > 0 ? ` · ${childCountOf(previewItem.id)} 子知识` : ""}
           </div>
-          {previewItem.content.trim() ? (
-            <p className="kflow__preview-content">
-              {previewItem.content.trim().slice(0, 200)}
-              {previewItem.content.trim().length > 200 ? "…" : ""}
-            </p>
-          ) : (
-            <p className="kflow__preview-content kflow__preview-content--empty">（还没有正文）</p>
-          )}
+          {/* DEV-0057 §153-155：light 数据不含 content 正文——正文在工作区按需加载 */}
           <div className="kflow__preview-session">
             {previewSession ? (
               <>

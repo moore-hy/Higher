@@ -174,6 +174,8 @@ fn test_profile_analysis_context_isolation() {
     let conn = setup();
     let (pa, pb) = build_two_profiles(&conn);
 
+    // DEV-0057 统一 Builder：档案名不再默认注入（profile_block 已并入统一 Builder）。
+    // 隔离语义改为：B 档案上下文不含 A 的知识/笔记/名称。
     let ctx_b = ai::context::build_context(
         &conn,
         &ai::context::ContextInput {
@@ -186,8 +188,8 @@ fn test_profile_analysis_context_isolation() {
         },
     )
     .unwrap();
-    assert!(ctx_b.contains("B档案"));
     assert!(!ctx_b.contains("A档案"), "profile_analysis 不泄露其他 Profile");
+    assert!(!ctx_b.contains("A知识"), "不泄露其他 Profile 知识");
     assert!(!ctx_b.contains("SECRET"), "不泄露其他 Profile 笔记");
 
     let _ = pa;

@@ -98,6 +98,14 @@ export default function DailyTasksSection({
 
   const itemOf = (id: number | null) => (id == null ? undefined : items.find((i) => i.id === id));
 
+  /** §83：知识轻量显示「父 / 子」两级，不做全条 Breadcrumb */
+  function knowledgeLabel(t: DailyTaskRow): string | null {
+    const it = itemOf(t.learning_item_id);
+    if (!it) return t.knowledge_name ?? null;
+    const parent = it.parent_id != null ? itemOf(it.parent_id) : undefined;
+    return parent ? `${parent.name} / ${it.name}` : it.name;
+  }
+
   /** §23：完成 / 取消完成（现有 complete/uncomplete 命令） */
   async function toggle(t: DailyTaskRow) {
     setError("");
@@ -164,19 +172,14 @@ export default function DailyTasksSection({
         (["core", "normal", "accumulation"] as const).map((key) =>
           groups[key].length === 0 ? null : (
             <div key={key} className="today__group">
-              <div className="today__group-title">
-                {GROUP_LABELS[key]}
-                <span className="muted"> · {groups[key].length}</span>
-              </div>
+              <div className="today__group-title">{GROUP_LABELS[key]}</div>
               <ul className="today__tasklist">
                 {groups[key].map((t) => {
                   const done = t.status === "completed";
-                  const kName = t.knowledge_name ?? itemOf(t.learning_item_id)?.name ?? null;
-                  /** §34 Meta：组名 · 预计 Xmin · 知识归属（缺失项跳过） */
+                  /** §81-84 Meta：预计 Xmin · 知识归属（轻量两级；缺失项跳过） */
                   const meta = [
-                    GROUP_LABELS[taskGroupOf(t)],
-                    t.estimated_minutes != null ? `预计 ${t.estimated_minutes}min` : null,
-                    kName,
+                    t.estimated_minutes != null ? `预计 ${t.estimated_minutes}m` : null,
+                    knowledgeLabel(t),
                   ]
                     .filter((x): x is string => x != null)
                     .join(" · ");
@@ -191,7 +194,7 @@ export default function DailyTasksSection({
                       </button>
                       <button className="today__task-main" onClick={() => setEditing(t)} title="编辑任务">
                         <span className="today__task-title">{t.title}</span>
-                        <span className="today__task-meta">{meta}</span>
+                        {meta && <span className="today__task-meta">{meta}</span>}
                       </button>
                       <div className="today__task-acts">
                         {done ? (
@@ -203,12 +206,9 @@ export default function DailyTasksSection({
                             className="btn btn--small btn--primary"
                             onClick={() => void start(t)}
                           >
-                            开始学习
+                            开始
                           </button>
                         )}
-                        <button className="btn btn--small btn--ghost" onClick={() => setEditing(t)}>
-                          编辑
-                        </button>
                         <div className="taskmenu">
                           <button
                             className="taskmenu__btn"
@@ -224,6 +224,9 @@ export default function DailyTasksSection({
                             <>
                               <div className="actrow__backdrop" onClick={() => setMenuFor(null)} />
                               <div className="taskmenu__pop">
+                                <button onClick={() => { setMenuFor(null); setEditing(t); }}>
+                                  编辑
+                                </button>
                                 <button onClick={() => { setMenuFor(null); setEditing(t); }}>
                                   调整日期
                                 </button>

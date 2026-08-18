@@ -110,12 +110,13 @@ impl<'a> KnowledgeWorkspaceRepository<'a> {
             .list_legacy_by_item(item_id)
             .map_err(|e| e.to_string())?;
 
-        // 统计
+        // 统计（DEV-0059 §6.1：可信统计排除 needs_review）
         let (session_count, study_seconds, last_studied): (i64, i64, Option<String>) = self
             .conn
             .query_row(
                 "SELECT COUNT(*), COALESCE(SUM(duration_seconds),0), MAX(started_at)
-                 FROM study_sessions WHERE learning_item_id = ?1 AND profile_id = ?2 AND status = 'completed'",
+                 FROM study_sessions WHERE learning_item_id = ?1 AND profile_id = ?2 AND status = 'completed'
+                   AND duration_review_state != 'needs_review'",
                 params![item_id, profile_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )

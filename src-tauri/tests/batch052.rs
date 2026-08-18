@@ -263,9 +263,13 @@ fn test_personalization_chunks_and_user_edit_confirm() {
     assert_eq!(repo.get_profile(p).unwrap().unwrap().status, "draft");
     repo.confirm(p).unwrap();
     let prof = repo.get_profile(p).unwrap().unwrap();
-    assert_eq!((prof.status.as_str(), prof.version), ("confirmed", 2));
+    // DEV-0059 §8：新库无 legacy → 首次 save_draft 为 v1 draft → confirm 后 v1 confirmed
+    assert_eq!((prof.status.as_str(), prof.version), ("confirmed", 1));
     repo.user_edit(p, "# 手工编辑版").unwrap();
     assert!(repo.get_profile(p).unwrap().unwrap().md_content.contains("手工编辑版"));
+    // user_edit 建 v2（旧 v1 → superseded）
+    let prof2 = repo.get_profile(p).unwrap().unwrap();
+    assert_eq!((prof2.status.as_str(), prof2.version), ("confirmed", 2));
     // user_edit 记为 user_fact 记忆
     let mems = MemoryRepository::new(&conn).list_active(p).unwrap();
     assert!(mems.iter().any(|m| m.source_kind == "user_edit" && m.memory_value.contains("手工编辑版")));

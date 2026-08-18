@@ -184,6 +184,46 @@ pub fn tool_definitions() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "list_planning_sources",
+                "description": "（DEV-0059.1 §2）列出当前档案已导入的规划资料（Planning Sources：txt/md/docx/pdf/xlsx），返回文件名/类型/来源/状态/字数",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_planning_source",
+                "description": "（DEV-0059.1 §2 / DEV-0059.2 §9）分页读取某份规划资料。审查时必须读到 has_more=false 才算读完；若 context 预算不足，明确告诉用户本次未完整读取，禁止声称已读全文",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source_id": { "type": "integer", "description": "规划资料 id（来自 list_planning_sources）" },
+                        "start_char": { "type": "integer", "description": "起始字符位置（默认 0）" },
+                        "max_chars": { "type": "integer", "description": "本次读取最大字符数（默认 12000，最大 16000）" }
+                    },
+                    "required": ["source_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_active_goal_targets",
+                "description": "（DEV-0059.1 §2）列出当前档案的 active 正式目标（GoalTarget：考研 REACH/SAFETY 或通用目标；正式规划目标主源）",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_active_planning_blueprint",
+                "description": "（DEV-0059.1 §2）读取当前 active 学习蓝图（Blueprint：标题/版本/复盘间隔/正文，以及其 Phases/Milestones）",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "propose_change_set",
                 "description": "（仅助手模式）提交数据修改提案。只是 Draft，用户审查批准前不会修改任何数据。一次性提交完整修改集。规划类请求应同时覆盖 Goal Tree（时间结构）与 Knowledge Tree（知识结构），用 operation_ref/parent_ref/goal_ref/learning_item_ref 串联",
                 "parameters": {
@@ -196,11 +236,11 @@ pub fn tool_definitions() -> serde_json::Value {
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "entity_type": { "type": "string", "enum": ["goal","task","knowledge","document","session","evaluation","personalization"] },
+                                    "entity_type": { "type": "string", "enum": ["goal","task","knowledge","document","session","evaluation","personalization","goal_target","planning_blueprint","planning_phase","planning_milestone"] },
                                     "entity_id": { "type": "integer", "description": "create 时省略" },
                                     "action": { "type": "string", "enum": ["create","update","delete","status_change"] },
                                     "operation_ref": { "type": "string", "description": "本提案内唯一引用键（如 G1/K1/T1）；供后续操作引用" },
-                                    "after": { "type": "object", "description": "目标状态字段。task: title/goal_id|goal_ref/planned_date/planned_time/estimated_minutes/task_kind(structured|accumulation)/priority(core|normal)/learning_item_id|learning_item_ref/status；goal create: goal_level(final|year|month|day)/parent_goal_id|parent_ref/name/period（year=\"YYYY-MM-DD..YYYY-MM-DD\" 可跨年 / month=\"YYYY-MM\" / day=\"YYYY-MM-DD\"）/day_kind(study|rest)；knowledge: name/parent_id|parent_ref；document: title/content_text；session: title/learning_item_id/started_at/ended_at；evaluation: title/evaluation_type/outcome" },
+                                    "after": { "type": "object", "description": "目标状态字段。task: title/goal_id|goal_ref/planned_date/planned_time/estimated_minutes/task_kind(structured|accumulation)/priority(core|normal)/learning_item_id|learning_item_ref/status；goal create: goal_level(final|year|month|day)/parent_goal_id|parent_ref/name/period（year=\"YYYY-MM-DD..YYYY-MM-DD\" 可跨年 / month=\"YYYY-MM\" / day=\"YYYY-MM-DD\"）/day_kind(study|rest)；knowledge: name/parent_id|parent_ref；document: title/content_text；session: title/learning_item_id/started_at/ended_at；evaluation: title/evaluation_type(practice|test|recall|application|project|other，§6.7 canonical)/outcome(passed|partial|failed|unrated)；goal_target: scenario_type/role/title/target_date/data_json/status(candidate|draft|active|historical|dismissed)；planning_blueprint: title/content_md/structured_json/source_snapshot_json/provenance_json/review_interval_days/status(draft|active，active=批准即激活并安全投影)；planning_phase(需 blueprint_ref→entity_id): phase_key/title/start_date/end_date/objective_md/sort_order；planning_milestone(需 blueprint_ref→entity_id): milestone_key/title/start_date/end_date/date_precision(day|range|month|unknown)/date_status(estimated|official|user_confirmed|outdated|needs_review)/provenance_json；personalization: md_content" },
                                     "reason": { "type": "string" }
                                 },
                                 "required": ["entity_type", "action", "after"]
@@ -239,9 +279,13 @@ pub fn execute_read_tool(
             row.to_string()
         }
         "get_current_goal" => {
+            // DEV-0057 §38-39：必须按 Canonical Final Goal 语义读取（profile_id + goal_level='final' + 未 archived）。
+            // 不存在 → 返回 null 提示（不得随便找一个 active goal）。
             let row = conn.query_row(
-                "SELECT id, name, status, COALESCE(description,'') FROM goals
-                 WHERE profile_id = ?1 AND status = 'active' LIMIT 1",
+                "SELECT id, name, status, COALESCE(description,''), COALESCE(goal_brief_json,'')
+                 FROM goals
+                 WHERE profile_id = ?1 AND goal_level = 'final' AND status != 'archived'
+                 LIMIT 1",
                 params![profile_id],
                 |r| {
                     Ok(json!({
@@ -249,10 +293,13 @@ pub fn execute_read_tool(
                         "name": r.get::<_, String>(1)?,
                         "status": r.get::<_, String>(2)?,
                         "description": r.get::<_, String>(3)?,
+                        "brief_json": r.get::<_, String>(4)?,
+                        "canonical": "final_goal",
                     }))
                 },
             );
-            row.map(|v| v.to_string()).unwrap_or_else(|_| json!({"goal": null}).to_string())
+            row.map(|v| v.to_string())
+                .unwrap_or_else(|_| json!({"goal": null, "note": "该档案尚未设置最终目标"}).to_string())
         }
         "get_current_stage" => {
             let row = conn.query_row(
@@ -321,19 +368,26 @@ pub fn execute_read_tool(
             row.to_string()
         }
         "list_recent_sessions" => {
+            // DEV-0057 §59-61：AI 必须看到该 Profile 全部真实 Session；Goal/Knowledge 只是
+            // 可选附加信息 → INNER JOIN 改 LEFT JOIN（Quick 未关联学习不再被遗漏）。
             let mut stmt = conn.prepare(
-                "SELECT ss.id, li.name, ss.started_at, COALESCE(ss.duration_seconds,0)
+                "SELECT ss.id, li.name, ss.started_at, COALESCE(ss.duration_seconds,0),
+                        ss.title, ss.activity_kind, ss.status, ss.duration_review_state
                  FROM study_sessions ss
-                 JOIN learning_items li ON ss.learning_item_id = li.id
-                 JOIN goals g ON li.goal_id = g.id
-                 WHERE g.profile_id = ?1 ORDER BY ss.id DESC LIMIT 20",
+                 LEFT JOIN learning_items li ON ss.learning_item_id = li.id
+                 WHERE ss.profile_id = ?1 ORDER BY ss.id DESC LIMIT 20",
             ).map_err(|e| e.to_string())?;
             let rows: Vec<serde_json::Value> = stmt.query_map(params![profile_id], |r| {
+                let knowledge: Option<String> = r.get(1).ok();
                 Ok(json!({
                     "id": r.get::<_, i64>(0)?,
-                    "knowledge": r.get::<_, String>(1)?,
+                    "knowledge": knowledge,
                     "started_at": r.get::<_, String>(2)?,
                     "duration_seconds": r.get::<_, i64>(3)?,
+                    "title": r.get::<_, String>(4)?,
+                    "activity_kind": r.get::<_, String>(5)?,
+                    "status": r.get::<_, String>(6)?,
+                    "duration_review_state": r.get::<_, String>(7)?,
                 }))
             }).map_err(|e| e.to_string())?.filter_map(|v| v.ok()).collect();
             json!(rows).to_string()
@@ -365,13 +419,15 @@ pub fn execute_read_tool(
             row.to_string()
         }
         "list_recent_evaluations" => {
+            // DEV-0059.1 §5：trust_state='needs_review' 不得进入 AI trusted evidence
             let mut stmt = conn.prepare(
                 "SELECT e.evaluation_type, COALESCE(e.outcome,''), COALESCE(e.correct_items,-1),
                         COALESCE(e.total_items,-1), li.name, date(e.occurred_at)
                  FROM evaluations e
                  JOIN goals g ON e.goal_id = g.id
                  LEFT JOIN learning_items li ON e.learning_item_id = li.id
-                 WHERE g.profile_id = ?1 ORDER BY e.id DESC LIMIT 20",
+                 WHERE g.profile_id = ?1 AND (e.trust_state IS NULL OR e.trust_state != 'needs_review')
+                 ORDER BY e.id DESC LIMIT 20",
             ).map_err(|e| e.to_string())?;
             let rows: Vec<serde_json::Value> = stmt.query_map(params![profile_id], |r| {
                 Ok(json!({
@@ -487,6 +543,104 @@ pub fn execute_read_tool(
                 None => json!({"status": "none", "md": ""}).to_string(),
             }
         }
+        "list_planning_sources" => {
+            let repo = crate::repository::planning_source::PlanningSourceRepository::new(conn);
+            let rows: Vec<serde_json::Value> = repo
+                .list(profile_id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|s| s.status == "ready" || s.status == "imported")
+                .map(|s| {
+                    let chars = repo.joined_text(profile_id, s.id).unwrap_or_default().chars().count();
+                    json!({
+                        "id": s.id,
+                        "name": s.original_name,
+                        "file_type": s.file_type,
+                        "source_kind": s.source_kind,
+                        "status": s.status,
+                        "chars": chars,
+                    })
+                })
+                .collect();
+            json!(rows).to_string()
+        }
+        "read_planning_source" => {
+            let source_id = arguments
+                .get("source_id")
+                .and_then(|v| v.as_i64())
+                .ok_or("缺少 source_id")?;
+            // DEV-0059.2 §9：分页读取（start_char/max_chars；has_more=false 才读完）
+            let start_char = arguments
+                .get("start_char")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .max(0) as usize;
+            let max_chars = arguments
+                .get("max_chars")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(12000)
+                .clamp(1, 16000) as usize;
+            let repo = crate::repository::planning_source::PlanningSourceRepository::new(conn);
+            let text = repo.joined_text(profile_id, source_id).map_err(|e| e.to_string())?;
+            let total_chars = text.chars().count();
+            let start = start_char.min(total_chars);
+            let chunk: String = text.chars().skip(start).take(max_chars).collect();
+            let next = start + chunk.chars().count();
+            json!({
+                "source_id": source_id,
+                "text": chunk,
+                "start_char": start,
+                "next_start_char": next,
+                "has_more": next < total_chars,
+                "total_chars": total_chars,
+            })
+            .to_string()
+        }
+        "list_active_goal_targets" => {
+            let rows = crate::repository::goal_target::GoalTargetRepository::new(conn)
+                .list_active(profile_id, None, None)
+                .map_err(|e| e.to_string())?;
+            let vals: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|t| json!({
+                    "id": t.id,
+                    "scenario_type": t.scenario_type,
+                    "role": t.role,
+                    "title": t.title,
+                    "target_date": t.target_date,
+                    "status": t.status,
+                    "data_json": t.data_json,
+                }))
+                .collect();
+            json!(vals).to_string()
+        }
+        "read_active_planning_blueprint" => {
+            let bp = crate::repository::planning::PlanningRepository::new(conn)
+                .get_active(profile_id)
+                .map_err(|e| e.to_string())?;
+            match bp {
+                Some(b) => {
+                    let phases = crate::repository::planning::PlanningRepository::new(conn)
+                        .list_phases(b.id)
+                        .unwrap_or_default();
+                    let milestones = crate::repository::planning::PlanningRepository::new(conn)
+                        .list_milestones(b.id)
+                        .unwrap_or_default();
+                    json!({
+                        "id": b.id,
+                        "title": b.title,
+                        "version": b.version,
+                        "review_interval_days": b.review_interval_days,
+                        "next_review_at": b.next_review_at,
+                        "content_md": b.content_md,
+                        "structured_json": b.structured_json,
+                        "phases": phases,
+                        "milestones": milestones,
+                    }).to_string()
+                }
+                None => json!({"blueprint": null}).to_string(),
+            }
+        }
         other => return Err(format!("未知工具：{}（仅只读工具可用）", other)),
     };
     Ok(out)
@@ -517,6 +671,10 @@ pub fn tool_label(name: &str) -> &'static str {
         "search_higher" => "搜索 Higher 数据",
         "search_memory" => "检索长期记忆",
         "read_personalization" => "读取私人化档案",
+        "list_planning_sources" => "列出规划资料",
+        "read_planning_source" => "读取规划资料",
+        "list_active_goal_targets" => "查看正式目标",
+        "read_active_planning_blueprint" => "查看当前蓝图",
         "web_search" => "联网搜索",
         "web_open" => "读取网页",
         "propose_change_set" => "生成修改提案",

@@ -15,20 +15,20 @@ import ActiveSessionConflictModal, {
   useActiveSessionConflict,
 } from "./ActiveSessionConflictModal";
 import type { DailyActivityRow, Goal, LearningItem } from "../types";
-import { todayDate } from "../utils";
+import { formatDurationCompact, todayDate } from "../utils";
 
 /**
- * 今日活动区（DEV-0053 §24-36 / DEV-0054 §42-52）。
+ * 今日活动区（DEV-0053 §24-36 / DEV-0054 §42-52 → DEV-0055 PART 24 §86-92 减法）。
  *
  * Today 与 Calendar Daily Report 共用同一 StudySession View（§72-73 不复制数据）：
- * - DEV-0054 §53-54：移除四个大分组 → 默认时间倒序单列表（最新在上）
- * - §55：Section Header 右侧 Filter chips 全部|核心|常规|积累|计划外
- * - 行（§42-52）：轻量文字 Badge + Title（可点击打开）+ 右 `HH:mm · Xm` / `进行中`
- *   + 按状态直接显示动作（§46-50）：
- *     active→进入学习/结束；ended+已归类→打开/继续学习；ended+未归类→打开/整理进知识；
- *     accumulation→打开/继续
+ * - 时间倒序单列表（最新在上）
+ * - §87/§92：分类 Filter 默认不显示；仅 activities>8 时出现「筛选」按钮，点击展开 chips
+ * - 行（DEV-0057 PART T 再减法）：Title（可点击打开）+ 右 `52m` / `进行中`
+ *   + 按状态直接动作：active→继续/结束；ended→打开（primary）；
+ *     未归类→整理（不加标签）；accumulation→继续
+ *   - 每行分类 Badge 已移除（分类只在 Filter 与 ⋯ 详情）
+ *   - 例外：duration_review_state==="needs_review" 行显示「时间待确认」小标签（点击打开）
  * - ⋯（§51）：编辑标题 / 修改分类 / 调整目标关联 / 调整知识关联 / 生成后续任务 / 删除
- *   （「打开」为直接动作，不再进 ⋯ §127）
  */
 
 /** §68：UTC SQLite datetime → UTC+8 HH:mm（与后端 date(started_at,'+8 hours') 同一语义） */
@@ -39,13 +39,9 @@ export function studyClockHHMM(raw: string): string {
   return `${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`;
 }
 
-/** 秒 → "XhYm" / "Xm"；null = 进行中（§33） */
+/** 秒 → Compact 中文（"79小时38分"/"38分"/"25秒"；null = 进行中；§6.3 统一实现） */
 export function durationShort(seconds: number | null | undefined): string {
-  if (seconds == null) return "进行中";
-  const m = Math.floor(seconds / 60);
-  const h = Math.floor(m / 60);
-  if (h > 0) return `${h}h${m % 60}m`;
-  return `${m}m`;
+  return formatDurationCompact(seconds);
 }
 
 const KIND_ORDER = ["core", "regular", "accumulation", "unplanned"] as const;
@@ -95,6 +91,8 @@ export default function DailyActivitiesSection({
   const navigate = useNavigate();
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<ActFilter>("all");
+  /** §87/§92：分类 Filter 默认不显示；仅 activities>8 时出现「筛选」按钮，点击展开 */
+  const [filterOpen, setFilterOpen] = useState(false);
   const [menuFor, setMenuFor] = useState<number | null>(null);
   const [renameFor, setRenameFor] = useState<DailyActivityRow | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -190,24 +188,34 @@ export default function DailyActivitiesSection({
         </div>
       ) : (
         <>
-          {/* §55 Filter chips（默认全部；active chip accent） */}
-          <div className="today__acts-filter">
-            {(["all", ...KIND_ORDER] as ActFilter[]).map((f) => {
-              const label = f === "all" ? "全部" : KIND_SHORT[f];
-              const count = f === "all" ? activities.length : kindCount.get(f) ?? 0;
-              if (f !== "all" && count === 0) return null;
-              return (
-                <button
-                  key={f}
-                  className={"chip today__acts-chip" + (filter === f ? " chip--active" : "")}
-                  onClick={() => setFilter(f)}
-                >
-                  {label}
-                  <span className="today__acts-chipcount">{count}</span>
-                </button>
-              );
-            })}
-          </div>
+          {/* §87/§92：Filter 默认收起（不占视觉空间）；>8 条时提供「筛选」入口 */}
+          {activities.length > 8 && (
+            <div className="today__acts-filter">
+              <button
+                className="chip"
+                onClick={() => setFilterOpen((v) => !v)}
+              >
+                筛选{filter !== "all" ? ` · ${KIND_SHORT[filter]}` : ""}
+                <span className="today__acts-chipcount">{filterOpen ? " ▴" : " ▾"}</span>
+              </button>
+              {filterOpen &&
+                (["all", ...KIND_ORDER] as ActFilter[]).map((f) => {
+                  const label = f === "all" ? "全部" : KIND_SHORT[f];
+                  const count = f === "all" ? activities.length : kindCount.get(f) ?? 0;
+                  if (f !== "all" && count === 0) return null;
+                  return (
+                    <button
+                      key={f}
+                      className={"chip today__acts-chip" + (filter === f ? " chip--active" : "")}
+                      onClick={() => setFilter(f)}
+                    >
+                      {label}
+                      <span className="today__acts-chipcount">{count}</span>
+                    </button>
+                  );
+                })}
+            </div>
+          )}
 
           {rows.length === 0 ? (
             <p className="muted today__empty">这个分类下没有学习记录。</p>
@@ -218,9 +226,17 @@ export default function DailyActivitiesSection({
                 const isActive = a.duration_seconds == null;
                 return (
                   <li key={a.id} className="actrow">
-                    <span className={"actrow__kind actrow__kind--" + kind}>
-                      {KIND_SHORT[kind]}
-                    </span>
+                    {/* DEV-0057 PART T：默认行去掉分类 Badge（分类只在 Filter 与 ⋯ 详情）；
+                        唯一例外：needs_review 行必须显示可点击的「时间待确认」小标签 */}
+                    {a.duration_review_state === "needs_review" && (
+                      <button
+                        className="actrow__review"
+                        title="这条记录时长较长，点击打开确认或修正"
+                        onClick={() => navigate(`/learn/${a.id}`)}
+                      >
+                        时间待确认
+                      </button>
+                    )}
                     <button
                       className="actrow__title"
                       onClick={() => navigate(`/learn/${a.id}`)}
@@ -229,9 +245,8 @@ export default function DailyActivitiesSection({
                       {a.title || `学习记录 #${a.id}`}
                     </button>
                     <div className="actrow__right">
-                      <span className="actrow__time">
-                        {studyClockHHMM(a.started_at)} · {durationShort(a.duration_seconds)}
-                      </span>
+                      {/* §88：只显示时长（52m）；进行中显示「进行中」 */}
+                      <span className="actrow__time">{durationShort(a.duration_seconds)}</span>
                       <div className="actrow__acts">
                         {isActive ? (
                           <>
@@ -239,7 +254,7 @@ export default function DailyActivitiesSection({
                               className="btn btn--small btn--primary"
                               onClick={() => navigate(`/learn/${a.id}`)}
                             >
-                              进入学习
+                              继续
                             </button>
                             <button
                               className="btn btn--small"
@@ -251,14 +266,13 @@ export default function DailyActivitiesSection({
                           </>
                         ) : (
                           <>
-                            <button className="btn btn--small" onClick={() => navigate(`/learn/${a.id}`)}>
+                            <button
+                              className="btn btn--small btn--primary"
+                              onClick={() => navigate(`/learn/${a.id}`)}
+                            >
                               打开
                             </button>
-                            {kind === "accumulation" ? (
-                              <button className="btn btn--small" onClick={() => void continueStudy(a)}>
-                                继续
-                              </button>
-                            ) : a.learning_item_id == null ? (
+                            {a.learning_item_id == null ? (
                               <button
                                 className="btn btn--small"
                                 onClick={() => {
@@ -266,13 +280,16 @@ export default function DailyActivitiesSection({
                                   setKnowSearch("");
                                 }}
                               >
-                                整理进知识
+                                整理
                               </button>
-                            ) : (
-                              <button className="btn btn--small" onClick={() => void continueStudy(a)}>
-                                继续学习
+                            ) : kind === "accumulation" ? (
+                              <button
+                                className="btn btn--small"
+                                onClick={() => void continueStudy(a)}
+                              >
+                                继续
                               </button>
-                            )}
+                            ) : null}
                           </>
                         )}
                       </div>

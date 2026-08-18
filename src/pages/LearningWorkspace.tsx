@@ -2,18 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   attachSession,
+  confirmSessionDuration,
   correctSessionTime,
   createChildLearningItem,
   createRootLearningItem,
   deleteSession,
   endSession,
   getLearningItemPath,
+  getLearningTotals,
   getSession,
   listAllTasksByProfile,
   listAttachmentsBySession,
   listLearningItemsByProfile,
   listGoalsByProfile,
   listTodayTasksByProfile,
+  organizeSessionIntoKnowledge,
   startQuickSession,
   startTaskSession,
   updateLearningItemContent,
@@ -24,6 +27,8 @@ import AttachmentList from "../components/AttachmentList";
 import ActiveSessionConflictModal, {
   useActiveSessionConflict,
 } from "../components/ActiveSessionConflictModal";
+import { durationShort } from "../components/DailyActivitiesSection";
+import { minutesShort } from "../components/DailyTasksSection";
 import RichDocEditor, {
   documentToPlainText,
   noteToDocument,
@@ -31,8 +36,8 @@ import RichDocEditor, {
 import type { JSONContent } from "@tiptap/react";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
-import type { Goal, LearningAttachment, LearningItem, StudySession, Task } from "../types";
-import { formatDuration } from "../utils";
+import type { Goal, LearningAttachment, LearningItem, LearningTotals, StudySession, Task } from "../types";
+import { formatDurationCompact, formatDurationTimer } from "../utils";
 
 type SaveStatus = "saved" | "dirty" | "saving" | "error";
 
@@ -103,6 +108,10 @@ export default function LearningWorkspace() {
   const [endSheetOpen, setEndSheetOpen] = useState(false);
   const [sheetTab, setSheetTab] = useState<SheetTab>("none");
   const [busy, setBusy] = useState(false);
+
+  /** DEV-0055 §93-99 Completion 反馈：结束后聚合（今天累计 / 今日任务 / 知识归属两级） */
+  const [endTotals, setEndTotals] = useState<LearningTotals | null>(null);
+  const [endPath, setEndPath] = useState<string | null>(null);
 
   /** End Sheet：整理候选与新建表单 */
   const [items, setItems] = useState<LearningItem[]>([]);
@@ -196,6 +205,7 @@ export default function LearningWorkspace() {
         pageLabel: "学习工作区",
         learningItemId: s.learning_item_id,
         sessionId: s.id,
+        sessionTitle: s.title,
         knowledgePath: pathLabel,
         learningName: it?.name,
       });
@@ -294,8 +304,52 @@ export default function LearningWorkspace() {
       setJustEnded(true);
       setEndSheetOpen(true);
       void loadNextCandidates();
+      void loadEndFeedback(s);
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  /** §95-97：结束后拉取今天累计 + 今日任务 + 知识归属（最多两级） */
+  async function loadEndFeedback(s: StudySession) {
+    if (!activeProfile) return;
+    try {
+      setEndTotals(await getLearningTotals(activeProfile.id));
+    } catch {
+      setEndTotals(null);
+    }
+    await refreshEndPath(s.learning_item_id);
+  }
+
+  /** item 完整路径 → 最多两级（§97：`数学 / 高等数学`） */
+  async function refreshEndPath(itemId: number | null) {
+    if (itemId == null) {
+      setEndPath(null);
+      return;
+    }
+    try {
+      const full = await getLearningItemPath(itemId);
+      setEndPath(full.split(" > ").slice(0, 2).join(" / "));
+    } catch {
+      setEndPath(null);
+    }
+  }
+
+  /** §98「现在整理」：现有知识选择器（organize_session_into_knowledge，只建关联） */
+  async function organizeCompletion(itemId: number) {
+    if (!session || !activeProfile) return;
+    setBusy(true);
+    setError("");
+    try {
+      await organizeSessionIntoKnowledge(activeProfile.id, session.id, itemId);
+      const s = await getSession(session.id);
+      if (s) setSession(s);
+      setItem(items.find((i) => i.id === itemId) ?? null);
+      await refreshEndPath(itemId);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -307,24 +361,6 @@ export default function LearningWorkspace() {
       return;
     }
     navigate(-1);
-  }
-
-  /** B 关联到已有知识（§62）：只建关系，不改 content */
-  async function linkExisting(itemId: number) {
-    if (!session) return;
-    setBusy(true);
-    setError("");
-    try {
-      await attachSession(session.id, itemId, null);
-      const s = await getSession(session.id);
-      if (s) setSession(s);
-      setItem(items.find((i) => i.id === itemId) ?? null);
-      closeSheet();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
   }
 
   /** C 新建知识（§63）：名称* + 父节点可选 + Goal 可选（默认不关联） */
@@ -422,6 +458,29 @@ export default function LearningWorkspace() {
     }
   }
 
+  /** DEV-0057 §107：>12h 结束 → needs_review；用户确认「无误」→ confirmed（时间数据不动） */
+  async function confirmDuration() {
+    if (!session) return;
+    setBusy(true);
+    setError("");
+    try {
+      const s = await confirmSessionDuration(session.id);
+      setSession(s);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** §107「修正时间」：直接打开既有修正 Modal（预填当前起止时间） */
+  function openTimeFix() {
+    if (!session) return;
+    setFixStart(utcToLocalInput(session.started_at));
+    setFixEnd(utcToLocalInput(session.ended_at));
+    setTimeFixOpen(true);
+  }
+
   /** 删除这条学习记录（§70）：确认后删除，回学习规划 */
   async function removeSession() {
     if (!session) return;
@@ -436,23 +495,22 @@ export default function LearningWorkspace() {
     }
   }
 
-  const elapsedLabel = useMemo(() => {
-    if (!session) return "";
-    if (isHistory || justEnded) return formatDuration(session.duration_seconds);
-    const start = new Date(session.started_at.replace(" ", "T") + "Z").getTime();
-    const secs = Math.max(0, Math.floor((Date.now() - start) / 1000));
-    const h = String(Math.floor(secs / 3600)).padStart(2, "0");
-    const m = String(Math.floor((secs % 3600) / 60)).padStart(2, "0");
-    const s = String(secs % 60).padStart(2, "0");
-    return `${h}:${m}:${s}`;
-  }, [session, isHistory, justEnded]);
-
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (isHistory || justEnded || !session) return;
     const t = window.setInterval(() => setTick((x) => x + 1), 1000);
     return () => window.clearInterval(t);
   }, [isHistory, justEnded, session]);
+
+  // DEV-0059 §6.3/§6.4：活跃 Session Timer 每秒真实更新（HH:MM:SS 统一格式）；
+  // 历史/刚结束 Session 不跳动，显示 Compact 中文。
+  const elapsedLabel = useMemo(() => {
+    if (!session) return "";
+    if (isHistory || justEnded) return formatDurationCompact(session.duration_seconds);
+    const start = new Date(session.started_at.replace(" ", "T") + "Z").getTime();
+    const secs = Math.max(0, Math.floor((Date.now() - start) / 1000));
+    return formatDurationTimer(secs);
+  }, [session, isHistory, justEnded, tick]);
 
   if (loading) {
     return (
@@ -519,6 +577,88 @@ export default function LearningWorkspace() {
       )}
     </div>
   );
+
+  /**
+   * §95-99 Completion 第一层反馈（End Sheet 顶部 + 结束后视图共用）。
+   * 禁止烟花 / XP / 排名 / 努力分（§99）——只显示事实。
+   * inSheet=true 时「以后整理」直接关闭 Sheet；结束后视图只提供「现在整理」。
+   * DEV-0057 §101-107：刚结束且 needs_review（>12h）→ 不祝贺，改确认/修正分支。
+   */
+  const durationNeedsReview =
+    justEnded && session?.duration_review_state === "needs_review";
+
+  const renderCompletion = (inSheet: boolean) =>
+    durationNeedsReview ? (
+      <div className="completefb completefb--review">
+        <div className="completefb__title completefb__title--review">学习已结束</div>
+        {session && <div className="completefb__name">{session.title}</div>}
+        <div className="completefb__duration">
+          记录时长 {durationShort(session?.duration_seconds ?? 0)}
+        </div>
+        <div className="alert completefb__review-alert">
+          这个时长较长，请确认是否准确。
+        </div>
+        <div className="btn-row">
+          <button
+            className="btn btn--small btn--primary"
+            disabled={busy}
+            onClick={() => void confirmDuration()}
+          >
+            {busy ? "确认中…" : "确认无误"}
+          </button>
+          <button className="btn btn--small" onClick={openTimeFix}>
+            修正时间
+          </button>
+        </div>
+        {inSheet && (
+          <button
+            className="btn btn--small completefb__review-later"
+            onClick={closeSheet}
+          >
+            暂不处理
+          </button>
+        )}
+      </div>
+    ) : (
+      <div className="completefb">
+        <div className="completefb__title">学习完成 ✓</div>
+        {session && <div className="completefb__name">{session.title}</div>}
+        <div className="completefb__duration">
+          {Math.max(1, Math.round((session?.duration_seconds ?? 0) / 60))} 分钟
+        </div>
+        <div className="completefb__row">
+          <span>
+            今天累计 {minutesShort(Math.round((endTotals?.today_seconds ?? 0) / 60))}
+          </span>
+          <span>
+            今日任务 {endTotals?.today_tasks_completed ?? 0}/{endTotals?.today_tasks_total ?? 0}
+          </span>
+        </div>
+        {endPath ? (
+          <div className="completefb__path">已记录到 {endPath}</div>
+        ) : (
+          <div className="completefb__unassigned">
+            <span>这次学习还没有整理进知识体系</span>
+            <div className="btn-row">
+              {inSheet && (
+                <button className="btn btn--small" onClick={closeSheet}>
+                  以后整理
+                </button>
+              )}
+              <button
+                className="btn btn--small btn--primary"
+                onClick={() => {
+                  setEndSheetOpen(true);
+                  setSheetTab("link");
+                }}
+              >
+                现在整理
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
 
   return (
     <div className="page page--wide lw">
@@ -620,11 +760,10 @@ export default function LearningWorkspace() {
       />
 
       {justEnded ? (
-        /* ===== 结束后视图（§61 默认 Primary 关闭 Sheet 后）===== */
+        /* ===== 结束后视图（§61 默认 Primary 关闭 Sheet 后；§95-99 Completion 第一层）===== */
         <section className="card lw-ended">
-          <div className="badge badge--done">本次学习已保存</div>
+          {renderCompletion(false)}
           <div className="lw-ended__stats">
-            <span>学习 {formatDuration(session?.duration_seconds ?? 0)}</span>
             <span>笔记 {noteLen} 字</span>
             <span>
               图片 {imgCount} 张{vidCount > 0 ? ` · 视频 ${vidCount}` : ""}
@@ -632,11 +771,11 @@ export default function LearningWorkspace() {
             <span>附件 {attachments.length} 个</span>
           </div>
           <div className="btn-row">
-            <button className="btn btn--primary" onClick={() => setNextOpen(!nextOpen)}>
-              开始下一个
+            <button className="btn btn--primary" onClick={() => navigate("/")}>
+              返回今日
             </button>
-            <button className="btn" onClick={() => navigate("/")}>
-              返回今日任务
+            <button className="btn" onClick={() => setNextOpen(!nextOpen)}>
+              开始下一个
             </button>
           </div>
           {nextOpen && nextList}
@@ -725,29 +864,24 @@ export default function LearningWorkspace() {
         />
       </section>
 
-      {/* ============ End Sheet（§59-66：Session 已永久保存后的整理选择） ============ */}
+      {/* ============ End Sheet（§59-66 + DEV-0055 §93-99 Completion 反馈） ============ */}
       {endSheetOpen && session && (
         <div className="modal-overlay" onClick={closeSheet}>
           <div className="modal modal--endsheet" onClick={(e) => e.stopPropagation()}>
-            <div className="endsheet__saved">
-              <span className="badge badge--done">本次学习完成</span>
-            </div>
-            <div className="endsheet__stats">
-              <span>学习 {formatDuration(session.duration_seconds)}</span>
-              <span>笔记 {noteLen} 字</span>
-              <span>图片 {imgCount}</span>
-            </div>
+            {/* §95-99：Completion 第一层（学习完成 ✓ + 名称 + 分钟 + 今天累计/任务 + 知识归属） */}
+            {renderCompletion(true)}
+
             <div className="endsheet__title">你想如何整理本次学习？</div>
             <p className="evmodal__note muted">
               学习记录已经保存。不整理也完全可以——之后仍可在学习规划中找到它并整理。
             </p>
 
-            {/* A 默认 Primary（§61）：不强迫 Knowledge */}
+            {/* A 默认 Primary（§61 + §98）：返回今日（不强迫整理） */}
             <button className="btn btn--primary btn--block" onClick={closeSheet}>
-              不整理，保留学习记录（完成并返回）
+              返回今日
             </button>
 
-            {/* B 关联到已有知识（§62） */}
+            {/* B 关联到已有知识（§62 / §98「现在整理」= organize_session_into_knowledge） */}
             <button
               className={"btn btn--block" + (sheetTab === "link" ? " endsheet__opt--open" : "")}
               onClick={() => setSheetTab(sheetTab === "link" ? "none" : "link")}
@@ -768,7 +902,7 @@ export default function LearningWorkspace() {
                       key={i.id}
                       className="taskmodal__item"
                       disabled={busy}
-                      onClick={() => void linkExisting(i.id)}
+                      onClick={() => void organizeCompletion(i.id)}
                     >
                       {i.name}
                     </button>
@@ -964,7 +1098,7 @@ export default function LearningWorkspace() {
               <li>
                 时间：{utcHHMM(session.started_at)}
                 {session.ended_at ? ` - ${utcHHMM(session.ended_at)}` : ""} ·{" "}
-                {formatDuration(session.duration_seconds)}
+                {formatDurationCompact(session.duration_seconds)}
               </li>
               <li>附件：{attachments.length} 个（只属于本次学习的附件会一并删除）</li>
             </ul>

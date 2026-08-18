@@ -106,6 +106,42 @@ impl<'a> LearningItemRepository<'a> {
         self.create_for_profile(profile_id, Some(goal_id), name, description, Some(parent_id))
     }
 
+    /// DEV-0059 §6.10：Goal Optional 建根——goal_id 可空（None = 无 Goal 档案也正常建）。
+    pub fn create_root_for_profile(
+        &self,
+        profile_id: i64,
+        goal_id: Option<i64>,
+        name: &str,
+        description: Option<&str>,
+    ) -> rusqlite::Result<LearningItem> {
+        self.create_for_profile(profile_id, goal_id, name, description, None)
+    }
+
+    /// DEV-0059 §6.10：Goal Optional 建子——goal_id 为 None 时默认继承 Parent.goal_id
+    /// （parent goal null → child goal null）。
+    pub fn create_child_for_profile(
+        &self,
+        profile_id: i64,
+        goal_id: Option<i64>,
+        parent_id: i64,
+        name: &str,
+        description: Option<&str>,
+    ) -> rusqlite::Result<LearningItem> {
+        let inherited: Option<i64> = match goal_id {
+            Some(g) => Some(g),
+            None => self
+                .conn
+                .query_row(
+                    "SELECT goal_id FROM learning_items WHERE id=?1",
+                    params![parent_id],
+                    |r| r.get(0),
+                )
+                .ok()
+                .flatten(),
+        };
+        self.create_for_profile(profile_id, inherited, name, description, Some(parent_id))
+    }
+
     fn profile_of_goal(&self, goal_id: i64) -> rusqlite::Result<i64> {
         self.conn
             .query_row(
@@ -218,11 +254,13 @@ impl<'a> LearningItemRepository<'a> {
 
     /// 知识节点学习数据概览：从 StudySession / Evaluation 自动聚合（用户不能填写）。
     /// study_seconds 只统计已完成 Session 的真实时长；last_studied_at 为最近一次 Session 开始时间。
+    /// DEV-0059 §6.1：可信统计排除 needs_review。
     pub fn stats(&self, id: i64) -> rusqlite::Result<KnowledgeNodeStats> {
         let (study_seconds, session_count, last_studied_at): (i64, i64, Option<String>) =
             self.conn.query_row(
                 "SELECT COALESCE(SUM(duration_seconds), 0), COUNT(*), MAX(started_at)
-                 FROM study_sessions WHERE learning_item_id = ?1",
+                 FROM study_sessions WHERE learning_item_id = ?1
+                   AND duration_review_state != 'needs_review'",
                 params![id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;

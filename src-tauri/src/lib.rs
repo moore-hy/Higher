@@ -240,9 +240,11 @@ fn create_goal(
     description: Option<String>,
 ) -> Result<repository::goal::Goal, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    GoalRepository::new(&conn)
+    let g = GoalRepository::new(&conn)
         .create(profile_id, &name, description.as_deref())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    repository::search::sync_goal(&conn, profile_id, g.id); // DEV-0057 §66
+    Ok(g)
 }
 
 #[tauri::command]
@@ -276,7 +278,14 @@ fn update_goal(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     GoalRepository::new(&conn)
         .update(id, &name, description.as_deref())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let pid: Option<i64> = conn
+        .query_row("SELECT profile_id FROM goals WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .ok();
+    if let Some(pid) = pid {
+        repository::search::sync_goal(&conn, pid, id); // DEV-0057 §66
+    }
+    Ok(())
 }
 
 /// 归档 Goal（status -> archived，不删除关联数据）。
@@ -363,6 +372,7 @@ fn create_root_learning_item(
 }
 
 /// 创建子 Learning Item（Profile First；Repository 内校验跨档案 parent 防护）。
+/// DEV-0059 §6.10：goal_id 为 None 时默认继承 Parent.goal_id（parent null → child null）。
 #[tauri::command]
 fn create_child_learning_item(
     state: tauri::State<'_, db::DbState>,
@@ -374,7 +384,7 @@ fn create_child_learning_item(
 ) -> Result<repository::learning_item::LearningItem, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     LearningItemRepository::new(&conn)
-        .create_for_profile(profile_id, goal_id, &name, description.as_deref(), Some(parent_id))
+        .create_child_for_profile(profile_id, goal_id, parent_id, &name, description.as_deref())
         .map_err(|e| e.to_string())
 }
 
@@ -402,7 +412,14 @@ fn update_learning_item(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     LearningItemRepository::new(&conn)
         .update(id, &name, description.as_deref())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let pid: Option<i64> = conn
+        .query_row("SELECT profile_id FROM learning_items WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .ok();
+    if let Some(pid) = pid {
+        repository::search::sync_knowledge(&conn, pid, id); // DEV-0057 §66
+    }
+    Ok(())
 }
 
 /// 安全删除 Learning Item（仅当无子项、无 Task、无 Session 时删除）。
@@ -414,7 +431,9 @@ fn delete_learning_item(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     LearningItemRepository::new(&conn)
         .safe_delete(id)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    repository::search::remove_knowledge(&conn, id); // DEV-0057 §66
+    Ok(())
 }
 
 /// 获取 Learning Item 的完整层级路径（如 "数学 > 高等数学 > 极限"）。
@@ -475,7 +494,7 @@ fn create_task(
 ) -> Result<repository::task::Task, String> {
     let task = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        TaskRepository::new(&conn)
+        let t = TaskRepository::new(&conn)
             .create_for_profile(
                 profile_id,
                 goal_id,
@@ -485,7 +504,9 @@ fn create_task(
                 learning_item_id,
                 plan_id,
             )
-            .map_err(humanize_repo_err)?
+            .map_err(humanize_repo_err)?;
+        repository::search::sync_task(&conn, profile_id, t.id); // DEV-0057 §66（V1 建任务补索引）
+        t
     };
     notifications::resync(&app); // 学习提醒对齐（DEV-0042）
     Ok(task)
@@ -589,6 +610,12 @@ fn update_task(
                 learning_item_id,
             )
             .map_err(|s| s)?;
+        let pid: Option<i64> = conn
+            .query_row("SELECT profile_id FROM tasks WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+            .ok();
+        if let Some(pid) = pid {
+            repository::search::sync_task(&conn, pid, id); // DEV-0057 §66（V1 更新补索引）
+        }
     }
     notifications::resync(&app);
     Ok(())
@@ -605,7 +632,11 @@ fn delete_task(
     let deleted = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let repo = TaskRepository::new(&conn);
-        repo.delete(id).map_err(|s| s)?
+        let d = repo.delete(id).map_err(|s| s)?;
+        if d {
+            repository::search::remove_task(&conn, id); // DEV-0057 §66
+        }
+        d
     };
     notifications::resync(&app);
     Ok(repository::DeleteTaskOutcome {
@@ -814,6 +845,17 @@ fn start_session(
     task_id: Option<i64>,
 ) -> Result<repository::study_session::StudySession, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // DEV-0057 §47：Knowledge 入口统一 Active Session Conflict contract（与 Quick/Task 同前缀协议）
+    let profile_id: i64 = conn
+        .query_row(
+            "SELECT profile_id FROM learning_items WHERE id = ?1",
+            rusqlite::params![learning_item_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "知识节点不存在".to_string())?;
+    if let Some(conflict) = active_session_conflict(&conn, profile_id) {
+        return Err(format!("ActiveSessionConflict:{}", serde_json::to_string(&conflict).unwrap_or_default()));
+    }
     StudySessionRepository::new(&conn)
         .start(learning_item_id, task_id)
         .map_err(|e| e.to_string())
@@ -976,6 +1018,7 @@ fn get_day_detail(
 }
 
 /// 结束学习：记录 ended_at、自动计算 duration、可选 note。不自动完成 Task。
+/// DEV-0057 §95：ended 时长 >12h → duration_review_state='needs_review'（真实原始时间不动）。
 #[tauri::command]
 fn end_session(
     state: tauri::State<'_, db::DbState>,
@@ -983,9 +1026,20 @@ fn end_session(
     note: Option<String>,
 ) -> Result<repository::study_session::StudySession, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    StudySessionRepository::new(&conn)
+    let s = StudySessionRepository::new(&conn)
         .end(id, note.as_deref())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if s.duration_seconds.unwrap_or(0) > 43200 {
+        conn.execute(
+            "UPDATE study_sessions SET duration_review_state='needs_review' WHERE id=?1",
+            rusqlite::params![id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    StudySessionRepository::new(&conn)
+        .get(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "学习记录不存在".to_string())
 }
 
 /// 更新 Session 标题（§54 Header 可改；§68 历史编辑）。
@@ -998,7 +1052,14 @@ fn update_session_title(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     StudySessionRepository::new(&conn)
         .update_title(id, &title)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let pid: Option<i64> = conn
+        .query_row("SELECT profile_id FROM study_sessions WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .ok();
+    if let Some(pid) = pid {
+        repository::search::sync_session(&conn, pid, id); // DEV-0057 §66
+    }
+    Ok(())
 }
 
 /// §10 富文本文档保存：note 纯文本投影 + note_document_json 同一事务原子写入。
@@ -1015,10 +1076,18 @@ fn update_session_document(
     StudySessionRepository::new(&tx)
         .update_document(session_id, &note, note_document_json.as_deref())
         .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    let pid: Option<i64> = tx
+        .query_row("SELECT profile_id FROM study_sessions WHERE id=?1", rusqlite::params![session_id], |r| r.get(0))
+        .ok();
+    tx.commit().map_err(|e| e.to_string())?;
+    if let Some(pid) = pid {
+        repository::search::sync_session(&conn, pid, session_id); // DEV-0057 §66（笔记全文变更刷索引）
+    }
+    Ok(())
 }
 
 /// 手动修正学习时间（§69）：改 started_at/ended_at → 重算 duration → 标记 corrected。
+/// DEV-0057 §107-108：修正同时置 duration_review_state='corrected'（时长可信度系统）。
 #[tauri::command]
 fn correct_session_time(
     state: tauri::State<'_, db::DbState>,
@@ -1027,9 +1096,42 @@ fn correct_session_time(
     ended_at: Option<String>,
 ) -> Result<repository::study_session::StudySession, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    StudySessionRepository::new(&conn)
+    let s = StudySessionRepository::new(&conn)
         .correct_time(id, &started_at, ended_at.as_deref())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE study_sessions SET duration_review_state='corrected' WHERE id=?1",
+        rusqlite::params![id],
+    )
+    .map_err(|e| e.to_string())?;
+    repository::search::sync_session(&conn, s.profile_id, id);
+    StudySessionRepository::new(&conn)
+        .get(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "学习记录不存在".to_string())
+}
+
+/// DEV-0057 §107 确认无误：needs_review → confirmed（不改任何时间数据；用户已审核）。
+#[tauri::command]
+fn confirm_session_duration(
+    state: tauri::State<'_, db::DbState>,
+    id: i64,
+) -> Result<repository::study_session::StudySession, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let n = conn
+        .execute(
+            "UPDATE study_sessions SET duration_review_state='confirmed', updated_at=datetime('now')
+             WHERE id=?1 AND duration_review_state='needs_review'",
+            rusqlite::params![id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("仅待确认状态的学习记录可以确认".to_string());
+    }
+    StudySessionRepository::new(&conn)
+        .get(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "学习记录不存在".to_string())
 }
 
 /// 解除 Session 的知识关联（§132 Unlink）。
@@ -1069,6 +1171,7 @@ fn delete_session(
     match result {
         Ok(()) => {
             conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+            repository::search::remove_session(&conn, id); // DEV-0057 §66
             // commit 后清理物理文件（失败不回滚 DB：文件残留可接受，反之不可）
             for rel in paths {
                 let _ = std::fs::remove_file(adir.0.join(&rel));
@@ -1697,10 +1800,15 @@ fn create_evaluation(
     max_score: Option<f64>,
     outcome: Option<String>,
     note: Option<String>,
+    // DEV-0059.1 §5：Evidence V1（可选）
+    session_id: Option<i64>,
+    source_kind: Option<String>,
+    source_ref: Option<String>,
+    trust_state: Option<String>,
 ) -> Result<repository::evaluation::Evaluation, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    EvaluationRepository::new(&conn)
-        .create(
+    let ev = EvaluationRepository::new(&conn)
+        .create_with_evidence(
             profile_id,
             goal_id,
             learning_item_id,
@@ -1715,8 +1823,14 @@ fn create_evaluation(
             max_score,
             outcome.as_deref(),
             note.as_deref(),
+            session_id,
+            source_kind.as_deref(),
+            source_ref.as_deref(),
+            trust_state.as_deref(),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    repository::search::sync_evaluation(&conn, profile_id, ev.id); // DEV-0057 §66
+    Ok(ev)
 }
 
 #[tauri::command]
@@ -1809,7 +1923,14 @@ fn update_evaluation(
             &outcome,
             note.as_deref(),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let pid: Option<i64> = conn
+        .query_row("SELECT profile_id FROM evaluations WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .ok();
+    if let Some(pid) = pid {
+        repository::search::sync_evaluation(&conn, pid, id); // DEV-0057 §66
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1817,7 +1938,9 @@ fn delete_evaluation(state: tauri::State<'_, db::DbState>, id: i64) -> Result<()
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     EvaluationRepository::new(&conn)
         .delete(id)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    repository::search::remove_evaluation(&conn, id); // DEV-0057 §66
+    Ok(())
 }
 
 // =============== AI 设置（DEV-0016） ===============
@@ -2224,6 +2347,22 @@ fn backups_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
+/// DEV-0057 §163-164：真实运行 DB 路径（dev = 项目 .data；prod = app_data_dir）。
+/// 修复：vault 快照/备份源路径不再硬编码 CARGO_MANIFEST_DIR（prod 恒 size=0 的 Bug）。
+fn runtime_db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+    if cfg!(debug_assertions) {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db")
+    } else {
+        use tauri::Manager;
+        app.path()
+            .app_data_dir()
+            .map(|d| d.join("higher.db"))
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db")
+            })
+    }
+}
+
 /// 备份数据库 → higher-YYYYMMDD-HHmmss.db；保留最近 10 个（只操作 Higher 自己的 backups 目录）。
 fn backup_database(app: &tauri::AppHandle, db_path: &std::path::Path) -> Result<std::path::PathBuf, String> {
     let dir = backups_dir(app)?;
@@ -2315,14 +2454,16 @@ fn create_goal_node(
     period: Option<String>,
 ) -> Result<repository::goal::Goal, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    GoalRepository::new(&conn).create_tree_node(
+    let g = GoalRepository::new(&conn).create_tree_node(
         profile_id,
         &goal_level,
         parent_goal_id,
         &name,
         description.as_deref(),
         period.as_deref(),
-    )
+    )?;
+    repository::search::sync_goal(&conn, profile_id, g.id); // DEV-0057 §66
+    Ok(g)
 }
 
 /// 删除目标节点（final 禁删；有子禁删；Task 保留 goal_id 置 NULL）。
@@ -2332,7 +2473,9 @@ fn delete_goal_node(
     id: i64,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    GoalRepository::new(&conn).delete_tree_node(id)
+    GoalRepository::new(&conn).delete_tree_node(id)?;
+    repository::search::remove_goal(&conn, id); // DEV-0057 §66
+    Ok(())
 }
 
 /// legacy Stage/Plan 计数（§29：>0 时 Planning 底部轻提示）。
@@ -2717,8 +2860,10 @@ fn create_knowledge_document(
     title: Option<String>,
 ) -> Result<repository::knowledge_document::KnowledgeDocument, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
-        .create(profile_id, learning_item_id, title.as_deref().unwrap_or("未命名文档"))
+    let d = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
+        .create(profile_id, learning_item_id, title.as_deref().unwrap_or("未命名文档"))?;
+    repository::search::sync_document(&conn, profile_id, d.id); // DEV-0057 §66
+    Ok(d)
 }
 
 #[tauri::command]
@@ -2754,8 +2899,10 @@ fn update_knowledge_document(
     content_document_json: Option<String>,
 ) -> Result<repository::knowledge_document::KnowledgeDocument, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
-        .update(id, profile_id, &title, &content_text, content_document_json.as_deref())
+    let d = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
+        .update(id, profile_id, &title, &content_text, content_document_json.as_deref())?;
+    repository::search::sync_document(&conn, profile_id, d.id); // DEV-0057 §66
+    Ok(d)
 }
 
 #[tauri::command]
@@ -2766,8 +2913,10 @@ fn rename_knowledge_document(
     title: String,
 ) -> Result<repository::knowledge_document::KnowledgeDocument, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
-        .rename(id, profile_id, &title)
+    let d = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
+        .rename(id, profile_id, &title)?;
+    repository::search::sync_document(&conn, profile_id, d.id); // DEV-0057 §66
+    Ok(d)
 }
 
 /// §20：先删 Sandbox 文件（PathGuard 解析），全部成功才删附件行与文档行；失败明确报错不静默。
@@ -2807,6 +2956,7 @@ fn delete_knowledge_document(
         let _ = att_repo.delete(a.id);
     }
     repo.delete(id, profile_id)?;
+    repository::search::remove_document(&conn, id); // DEV-0057 §66
     Ok(())
 }
 
@@ -3107,12 +3257,41 @@ fn apply_ai_change_set(
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::changeset::ChangeSetRepository::new(&conn).apply(id, profile_id, only_selected)?;
+    // §6.8：ChangeSet 应用成功 → planning workflow applied（同事务内无 run 时忽略）
+    let run_ref: Option<String> = conn
+        .query_row(
+            "SELECT run_id FROM ai_change_sets WHERE id=?1 AND profile_id=?2",
+            rusqlite::params![id, profile_id],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+    if let Some(run_id) = run_ref {
+        let conversation_ref: Option<i64> = conn
+            .query_row(
+                "SELECT conversation_id FROM ai_change_sets WHERE id=?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        if let Some(cid) = conversation_ref {
+            ai::planner::set_workflow_state(
+                &conn, &run_id, profile_id, cid,
+                ai::planner::WORKFLOW_STATE_APPLIED, None,
+            );
+        }
+    }
     vault.record_user("changeset_applied", "ai_change_set", Some(id), if only_selected { "selected" } else { "all" });
-    // §171：ChangeSet 应用后自动快照
-    let db_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db");
+    // §171：ChangeSet 应用后自动快照（DEV-0057 §164：真实运行 DB 路径）
+    let db_path = runtime_db_path(&app);
     let real = if db_path.exists() { Some(db_path.as_path()) } else { None };
     let _ = vault.snapshot("changeset", real);
-    let _ = app;
+    // DEV-0058 §144-148：Apply 后全系统同步——广播事件（前端据此刷新
+    // Planning/Today/Calendar/Knowledge；同源数据，非复制计划）
+    ai::run::emit(Some(&app), "ai://applied", &format!("cs-{id}"), serde_json::json!({
+        "change_set_id": id, "profile_id": profile_id
+    }));
     Ok(())
 }
 
@@ -3157,10 +3336,11 @@ fn import_personalization_files(
             "md" | "markdown" => "md",
             "docx" => "docx",
             "pdf" => "pdf",
+            "xlsx" => "xlsx",
             "doc" => {
                 return Err(format!("「{}」是旧版 .doc 格式，请转换为 .docx / .pdf / .txt 后重新导入。", name));
             }
-            _ => return Err(format!("「{}」格式不支持（仅 txt / md / docx / pdf）", name)),
+            _ => return Err(format!("「{}」格式不支持（仅 txt / md / docx / pdf / xlsx）", name)),
         };
         // 提取（流式 → 文本）
         let text = match ftype {
@@ -3172,6 +3352,8 @@ fn import_personalization_files(
             }
             "docx" => repository::personalization::extract_docx(&src)?,
             "pdf" => repository::personalization::extract_pdf(&src)?,
+            // DEV-0059.1 §9：Personal Source 支持 XLSX（复用 source_ingest，不建第二套 parser）
+            "xlsx" => repository::source_ingest::extract_xlsx_text(&src)?,
             _ => unreachable!(),
         };
         // sha256
@@ -3366,10 +3548,13 @@ async fn compile_personalization(
         md.push_str(&format!("- 《{}》（source#{}）\n", name, sid));
     }
     md.push_str(&format!("\n## 19. 更新历史\n- {}：首次 Compile 生成 Draft（{} 份资料）\n", chrono_now(), by_source.len()));
-    // 5) Draft 落库
+    // 5) Draft 落库（DEV-0059.1 §6/§7：版本-来源 snapshot + structured_json contract；
+    //    conflicts 进 unresolved，不猜值）
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let source_ids: Vec<i64> = by_source.keys().cloned().collect();
+    let structured_json = repository::personalization::build_personal_structured(&facts, &conflicts);
     repository::personalization::PersonalizationRepository::new(&conn)
-        .save_draft(profile_id, &md, Some(&serde_json::to_string(&facts).unwrap_or_default()))?;
+        .save_draft_with_sources(profile_id, &md, Some(&structured_json), &source_ids)?;
     repository::personalization::PersonalizationRepository::new(&conn)
         .get_profile(profile_id)?
         .ok_or("生成失败".to_string())
@@ -3398,18 +3583,599 @@ fn chrono_now() -> String {
 #[tauri::command]
 fn confirm_personalization_profile(state: tauri::State<'_, db::DbState>, profile_id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::personalization::PersonalizationRepository::new(&conn).confirm(profile_id)
+    let repo = repository::personalization::PersonalizationRepository::new(&conn);
+    repo.confirm(profile_id)?;
+    // DEV-0059.2 §11：PersonalProfile confirmed 版本变化 + active Blueprint → 建议复盘（reality_change due，不调 AI）。
+    repository::planning_review::PlanningReviewRepository::new(&conn)
+        .ensure_reality_change_due(profile_id)
 }
 
 #[tauri::command]
 fn edit_personalization_profile(state: tauri::State<'_, db::DbState>, profile_id: i64, md_content: String) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::personalization::PersonalizationRepository::new(&conn).user_edit(profile_id, &md_content)
+    let repo = repository::personalization::PersonalizationRepository::new(&conn);
+    repo.user_edit(profile_id, &md_content)?;
+    // DEV-0059.2 §11：用户直接编辑形成新 confirmed version + active Blueprint → 建议复盘（reality_change due，不调 AI）。
+    repository::planning_review::PlanningReviewRepository::new(&conn)
+        .ensure_reality_change_due(profile_id)
 }
 
 #[tauri::command]
 fn get_requirement_template() -> Result<String, String> {
     Ok(repository::personalization::REQUIREMENT_TEMPLATE_MD.to_string())
+}
+
+// =============== DEV-0059 · PersonalProfile Versioning / GoalTarget / Planning / Review ===============
+
+/// §8：PersonalProfile 版本历史（含 superseded；历史可查）。
+#[tauri::command]
+fn list_personalization_profile_versions(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<repository::personalization::PersonalizationProfile>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::personalization::PersonalizationRepository::new(&conn).list_profile_versions(profile_id)
+}
+
+/// DEV-0059.1 §6：某 PersonalProfile 版本使用的 Personal Source snapshot（只读）。
+#[tauri::command]
+fn list_sources_for_personal_profile_version(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    version_id: i64,
+) -> Result<Vec<repository::personalization::PersonalizationSource>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::personalization::PersonalizationRepository::new(&conn)
+        .list_sources_for_version(version_id, profile_id)
+}
+
+// ---- GoalTarget（§11） ----
+
+#[tauri::command]
+fn create_goal_target(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    scenario_type: String,
+    role: String,
+    title: String,
+    target_date: Option<String>,
+    data_json: String,
+    provenance_json: String,
+    status: String,
+) -> Result<repository::goal_target::GoalTarget, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal_target::GoalTargetRepository::new(&conn)
+        .create(profile_id, &scenario_type, &role, &title, target_date.as_deref(),
+            &data_json, &provenance_json, &status)
+}
+
+#[tauri::command]
+fn list_goal_targets(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<repository::goal_target::GoalTarget>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal_target::GoalTargetRepository::new(&conn).list_by_profile(profile_id)
+}
+
+#[tauri::command]
+fn list_active_goal_targets(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    scenario_type: Option<String>,
+    role: Option<String>,
+) -> Result<Vec<repository::goal_target::GoalTarget>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal_target::GoalTargetRepository::new(&conn)
+        .list_active(profile_id, scenario_type.as_deref(), role.as_deref())
+}
+
+/// §11.3：激活（同 scenario+role 其他 active → historical）。
+#[tauri::command]
+fn activate_goal_target(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<repository::goal_target::GoalTarget, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal_target::GoalTargetRepository::new(&conn).activate(profile_id, id)
+}
+
+/// §11.3：替换 active 目标（旧 → historical，新版本 → active）。
+#[tauri::command]
+fn replace_goal_target(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    title: String,
+    target_date: Option<String>,
+    data_json: String,
+    provenance_json: String,
+) -> Result<repository::goal_target::GoalTarget, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal_target::GoalTargetRepository::new(&conn)
+        .replace_with(profile_id, id, &title, target_date.as_deref(), &data_json, &provenance_json)
+}
+
+#[tauri::command]
+fn dismiss_goal_target(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal_target::GoalTargetRepository::new(&conn).dismiss(profile_id, id)
+}
+
+/// §11.4：Legacy 目标源候选（只读；不自动激活）。
+#[tauri::command]
+fn list_legacy_goal_candidates(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<repository::goal_target::LegacyTargetCandidate>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal_target::GoalTargetRepository::new(&conn).list_legacy_candidates(profile_id)
+}
+
+// ---- PlanningBlueprint / Phase / Milestone（§14-16/§25.1） ----
+
+#[tauri::command]
+fn create_planning_blueprint(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    scenario_type: String,
+    title: String,
+    content_md: String,
+    structured_json: Option<String>,
+    source_snapshot_json: String,
+    provenance_json: String,
+    review_interval_days: i64,
+) -> Result<repository::planning::PlanningBlueprint, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn)
+        .create_blueprint(profile_id, &scenario_type, &title, &content_md,
+            structured_json.as_deref(), &source_snapshot_json, &provenance_json, review_interval_days)
+}
+
+#[tauri::command]
+fn list_planning_blueprints(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<repository::planning::PlanningBlueprint>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn).list_by_profile(profile_id)
+}
+
+#[tauri::command]
+fn get_planning_blueprint(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<Option<repository::planning::PlanningBlueprint>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn).get_blueprint(id, profile_id)
+}
+
+#[tauri::command]
+fn get_active_planning_blueprint(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Option<repository::planning::PlanningBlueprint>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn).get_active(profile_id)
+}
+
+/// §25.1：激活（事务：supersede + active + 安全投影；投影 14 天）。
+#[tauri::command]
+fn activate_planning_blueprint(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<repository::planning::PlanningBlueprint, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let today = chrono_today();
+    repository::planning::PlanningRepository::new(&conn).activate(profile_id, id, &today, 14)
+}
+
+#[tauri::command]
+fn add_planning_phase(
+    state: tauri::State<'_, db::DbState>,
+    blueprint_id: i64,
+    phase_key: String,
+    title: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    objective_md: String,
+    sort_order: i64,
+) -> Result<i64, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn)
+        .add_phase(blueprint_id, &phase_key, &title, start_date.as_deref(), end_date.as_deref(),
+            &objective_md, sort_order)
+}
+
+#[tauri::command]
+fn list_planning_phases(
+    state: tauri::State<'_, db::DbState>,
+    blueprint_id: i64,
+) -> Result<Vec<repository::planning::PlanningPhase>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn).list_phases(blueprint_id)
+}
+
+#[tauri::command]
+fn add_planning_milestone(
+    state: tauri::State<'_, db::DbState>,
+    blueprint_id: i64,
+    phase_id: Option<i64>,
+    milestone_key: String,
+    title: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    date_precision: String,
+    date_status: String,
+    provenance_json: String,
+) -> Result<i64, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn)
+        .add_milestone(blueprint_id, phase_id, &milestone_key, &title, start_date.as_deref(),
+            end_date.as_deref(), &date_precision, &date_status, &provenance_json)
+}
+
+#[tauri::command]
+fn list_planning_milestones(
+    state: tauri::State<'_, db::DbState>,
+    blueprint_id: i64,
+) -> Result<Vec<repository::planning::PlanningMilestone>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn).list_milestones(blueprint_id)
+}
+
+// ---- DEV-0059.1 §10/§11：Manual Planning + Review Cadence ----
+
+/// §10：手工编辑 Blueprint 基础信息（title + content_md）。
+#[tauri::command]
+fn update_planning_blueprint_meta(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    title: String,
+    content_md: String,
+) -> Result<repository::planning::PlanningBlueprint, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn)
+        .update_blueprint_meta(profile_id, id, &title, &content_md)
+}
+
+/// §11：Review Cadence——只改 review_enabled / review_interval_days / next_review_at（不调 AI）。
+#[tauri::command]
+fn update_planning_review_cadence(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    review_enabled: bool,
+    review_interval_days: Option<i64>,
+) -> Result<repository::planning::PlanningBlueprint, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn)
+        .update_review_cadence(profile_id, id, review_enabled, review_interval_days)
+}
+
+/// §10：Phase 更新。
+#[tauri::command]
+fn update_planning_phase(
+    state: tauri::State<'_, db::DbState>,
+    blueprint_id: i64,
+    phase_id: i64,
+    title: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    objective_md: String,
+    sort_order: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn)
+        .update_phase(blueprint_id, phase_id, &title, start_date.as_deref(), end_date.as_deref(), &objective_md, sort_order)
+}
+
+/// §10：Phase 删除。
+#[tauri::command]
+fn delete_planning_phase(
+    state: tauri::State<'_, db::DbState>,
+    blueprint_id: i64,
+    phase_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn).delete_phase(blueprint_id, phase_id)
+}
+
+/// §10：Milestone 更新。
+#[tauri::command]
+fn update_planning_milestone(
+    state: tauri::State<'_, db::DbState>,
+    blueprint_id: i64,
+    milestone_id: i64,
+    title: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    date_precision: String,
+    date_status: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn)
+        .update_milestone(blueprint_id, milestone_id, &title, start_date.as_deref(),
+            end_date.as_deref(), &date_precision, &date_status)
+}
+
+/// §10：Milestone 删除。
+#[tauri::command]
+fn delete_planning_milestone(
+    state: tauri::State<'_, db::DbState>,
+    blueprint_id: i64,
+    milestone_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning::PlanningRepository::new(&conn).delete_milestone(blueprint_id, milestone_id)
+}
+
+// ---- PlanningReview（§17-18/§39） ----
+
+#[tauri::command]
+fn create_planning_review_due(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    blueprint_id: Option<i64>,
+    period_start: String,
+    period_end: String,
+    trigger_type: String,
+) -> Result<i64, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning_review::PlanningReviewRepository::new(&conn)
+        .create_due(profile_id, blueprint_id, &period_start, &period_end, &trigger_type)
+}
+
+#[tauri::command]
+fn list_planning_reviews(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<repository::planning_review::PlanningReview>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning_review::PlanningReviewRepository::new(&conn).list_by_profile(profile_id)
+}
+
+#[tauri::command]
+fn set_planning_review_status(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    status: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning_review::PlanningReviewRepository::new(&conn).set_status(id, profile_id, &status)
+}
+
+/// §18：是否该进行阶段复盘了（只读，不调 AI）。
+#[tauri::command]
+fn is_planning_review_due(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<bool, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let today = chrono_today();
+    repository::planning_review::PlanningReviewRepository::new(&conn).is_review_due(profile_id, &today)
+}
+
+/// §30：最新已确认 Review 的 risk_state（Today 风险 Banner；启动只读）。
+#[tauri::command]
+fn get_planning_review_risk(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning_review::PlanningReviewRepository::new(&conn).latest_risk_state(profile_id)
+}
+
+// ---- DEV-0059.1 §3：Planning Review AI 全链（用户确认后才调用 Provider） ----
+
+/// DEV-0059.2 §2：当前周期复盘（cadence 周期 + open review dedupe）。
+/// 周期由后端按 active Blueprint 的 review_interval_days 计算（前端禁止硬编码 14）；
+/// 同 profile/blueprint 已存在 open review（due/running/waiting_approval）时复用，不重复创建。
+#[tauri::command]
+fn prepare_current_planning_review(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    trigger_type: String,
+) -> Result<serde_json::Value, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let (rid, status, cs_id, snapshot) =
+        repository::planning_review::PlanningReviewRepository::new(&conn)
+            .prepare_current(profile_id, &trigger_type)?;
+    let snapshot_json: serde_json::Value = if snapshot.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_str(&snapshot).unwrap_or(serde_json::Value::Null)
+    };
+    Ok(serde_json::json!({
+        "review_id": rid,
+        "status": status,
+        "change_set_id": cs_id,
+        "snapshot": snapshot_json,
+    }))
+}
+
+/// §3 step 1：准备复盘——置 running + 构建 evidence snapshot（不调 Provider）。
+/// 返回 snapshot JSON 供前端展示摘要（蓝图/周期任务/可信学习/可信验证/档案/目标）。
+#[tauri::command]
+fn prepare_planning_review_ai(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    review_id: i64,
+) -> Result<serde_json::Value, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let repo = repository::planning_review::PlanningReviewRepository::new(&conn);
+    let rev = repo.get(review_id, profile_id)?.ok_or("复盘记录不存在或不属于当前档案")?;
+    let snapshot = repository::planning_review::PlanningReviewRepository::build_snapshot(
+        &conn, profile_id, rev.blueprint_id, &rev.period_start, &rev.period_end)?;
+    repo.prepare_running(review_id, profile_id, &snapshot)?;
+    serde_json::from_str(&snapshot).map_err(|e| e.to_string())
+}
+
+/// §3 step 3：用户确认后启动 AI 评估（真实 Provider；本命令内一次调用）。
+///
+/// - AI 输出 NO_CHANGE → review completed + cadence 刷新（无 ChangeSet）
+/// - AI 输出 ADJUSTMENT_PROPOSAL → Blueprint vN+1 draft 编译为 ChangeSet waiting_approval
+///   （用户后续 Review → Apply → vN superseded / vN+1 active / review 自动 completed）
+/// - Provider 失败 / 输出不可用 → review failed，正式数据不变，不后台 retry
+#[tauri::command]
+async fn run_planning_review_ai(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    review_id: i64,
+) -> Result<String, String> {
+    use ai::client::{AiClient, ChatMessage};
+    // 1) 读 review + snapshot（必须 running）
+    let snapshot_json = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let rev = repository::planning_review::PlanningReviewRepository::new(&conn)
+            .get(review_id, profile_id)?
+            .ok_or("复盘记录不存在或不属于当前档案")?;
+        if rev.status != "running" {
+            return Err(format!("复盘当前状态为 {}，请先准备后再启动 AI 评估", rev.status));
+        }
+        if rev.evidence_snapshot_json.trim().is_empty() {
+            return Err("复盘缺少证据快照，请先准备".to_string());
+        }
+        rev.evidence_snapshot_json
+    };
+    // 2) AI 配置 + client
+    let settings = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        ai::load_ai_settings(&conn).map_err(|e| e.to_string())?
+    };
+    let client = AiClient::new(settings);
+    // 3) 组装消息（json_mode；只读评估，不给工具）
+    let system = "你是学习规划阶段复盘评估助手。基于提供的真实证据快照评估该周期学习执行情况。\
+        只输出一个 JSON 对象（不要 markdown 代码块、不要解释文字），结构：\
+        {\"decision\":\"NO_CHANGE\"|\"ADJUSTMENT_PROPOSAL\",\"assessment_md\":\"对本周期的评估与建议（可读文本）\",\
+        \"risk_state\":\"normal|attention|off_reach|near_safety|below_safety\",\
+        \"recommendation\":\"调整建议要点（数组或字符串）\",\
+        \"blueprint\":{标题/阶段/里程碑/未来任务…}或null}。\
+        规则：decision=NO_CHANGE 时 blueprint 必须为 null；decision=ADJUSTMENT_PROPOSAL 时必须给出调整后的完整蓝图。\
+        蓝图格式：{\"title\":\"…\",\"summary\":\"…\",\"review_interval_days\":14,\
+        \"phases\":[{\"phase_key\":\"P1\",\"title\":\"…\",\"start_date\":\"YYYY-MM-DD 或 null\",\"end_date\":\"YYYY-MM-DD 或 null\",\"objective_md\":\"…\",\"sort_order\":1}],\
+        \"milestones\":[{\"milestone_key\":\"M1\",\"title\":\"…\",\"start_date\":\"…\",\"end_date\":\"…\",\"date_precision\":\"day|range|month|unknown\",\"date_status\":\"estimated|official|user_confirmed|outdated|needs_review\"}],\
+        \"future_tasks\":[{\"title\":\"具体任务（科目：内容+量）\",\"planned_date\":\"YYYY-MM-DD\",\"estimated_minutes\":60}],\
+        \"assumptions\":[],\"unresolved\":[],\"external_facts\":[],\
+        \"source_review\":[{\"source_id\":12,\"source_name\":\"老师规划.docx\",\"decision\":\"keep|modify|conflict|missing\",\"original\":\"原规划内容摘要\",\"suggested\":\"建议内容\",\"reason\":\"为什么\",\"evidence\":\"依据\"}],\
+        \"suggested_target_changes\":[]}。\
+        任务名必须具体可执行（如「高数：极限计算基础题 15 题」），禁止占位词。\
+        日期不得晚于快照周期结束 +14 天。无法确定的信息写入 unresolved，禁止编造。\
+        若快照中提供了规划资料且你对资料有修改/冲突/缺失判断，必须填写 source_review（modify 必须给 reason 与 suggested）；无资料或无需审查时可留空。";
+    let user = format!(
+        "【当前日期】{}\n【周期复盘证据快照】\n{}",
+        crate::repository::planning::today_utc8(),
+        snapshot_json
+    );
+    let messages = vec![ChatMessage::system(system.to_string()), ChatMessage::user(user)];
+    let completion = client.chat(messages, true, None, Some(4096)).await.map_err(|e| {
+        // Provider 失败 → review failed，正式数据不变
+        if let Ok(conn) = state.0.lock() {
+            let _ = repository::planning_review::PlanningReviewRepository::new(&conn)
+                .set_status(review_id, profile_id, "failed");
+        }
+        format!("AI 评估失败：{}", e)
+    })?;
+    let raw = completion.content.unwrap_or_default();
+    // 4) 应用 AI 评估输出（NO_CHANGE → completed；ADJUSTMENT_PROPOSAL → ChangeSet waiting_approval；
+    //    输出不可用 → review failed；本函数 Provider 无关，测试可直测）
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    ai::planner::apply_review_assessment(&conn, profile_id, review_id, &raw).map_err(|e| {
+        let _ = repository::planning_review::PlanningReviewRepository::new(&conn)
+            .set_status(review_id, profile_id, "failed");
+        e
+    })
+}
+
+// ---- Planning Source（§13） ----
+
+#[tauri::command]
+fn import_planning_source(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    path: String,
+    source_kind: String,
+) -> Result<serde_json::Value, String> {
+    use sha2::{Digest, Sha256};
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let src = sandbox::resolve_import_source(&path)?;
+    let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("source").to_string();
+    let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+    let ftype = match ext.as_str() {
+        "txt" | "md" | "docx" | "pdf" | "xlsx" => ext,
+        _ => return Err(format!("不支持的规划资料格式：{ext}（支持 txt/md/docx/pdf/xlsx）")),
+    };
+    // 复制原件到附件沙箱
+    let root = adir.0.join("planning_sources").join(profile_id.to_string());
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let stored = root.join(&name);
+    std::fs::copy(&src, &stored).map_err(|e| format!("复制规划资料失败：{e}"))?;
+    let bytes = std::fs::read(&stored).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let sha = format!("{:x}", hasher.finalize());
+    // 提取文本（扫描 PDF 明确报错）
+    let text = match ftype.as_str() {
+        "txt" | "md" => repository::personalization::decode_text(bytes)?,
+        "docx" => repository::personalization::extract_docx(&stored)?,
+        "pdf" => repository::personalization::extract_pdf(&stored)?,
+        "xlsx" => repository::source_ingest::extract_xlsx_text(&stored)?,
+        _ => return Err("不支持的格式".to_string()),
+    };
+    if text.trim().is_empty() {
+        return Err("无法从该文件中提取文字（扫描版 PDF 请先 OCR 后另存为文本）".to_string());
+    }
+    let repo = repository::planning_source::PlanningSourceRepository::new(&conn);
+    let sid = repo.insert(profile_id, &source_kind, &name, &ftype, &stored.to_string_lossy(), &sha)?;
+    repo.store_chunks(sid, profile_id, &text)?;
+    repo.set_status(sid, "ready")?;
+    Ok(serde_json::json!({ "id": sid, "name": name, "file_type": ftype, "sha256": sha, "chars": text.chars().count() }))
+}
+
+#[tauri::command]
+fn list_planning_sources(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<repository::planning_source::PlanningSource>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning_source::PlanningSourceRepository::new(&conn).list(profile_id)
+}
+
+#[tauri::command]
+fn get_planning_source_text(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    source_id: i64,
+) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::planning_source::PlanningSourceRepository::new(&conn).joined_text(profile_id, source_id)
+}
+
+// ---- Import/Export（§31.3：用户明确 save path；只写所选路径） ----
+
+#[tauri::command]
+fn write_export_file(path: String, content_base64: String) -> Result<(), String> {
+    use base64::Engine as _;
+    let p = std::path::PathBuf::from(&path);
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    if name.is_empty() {
+        return Err("未指定有效导出路径".to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(content_base64)
+        .map_err(|e| format!("导出数据编码错误：{e}"))?;
+    std::fs::write(&p, bytes).map_err(|e| format!("写入导出文件失败：{e}"))?;
+    Ok(())
 }
 
 // ---------- Web（PHASE K） ----------
@@ -3478,9 +4244,11 @@ fn vault_list_snapshots(vault: tauri::State<'_, crate::ai::vault::VaultState>) -
 
 #[tauri::command]
 fn vault_create_snapshot(
+    app: tauri::AppHandle,
     vault: tauri::State<'_, crate::ai::vault::VaultState>,
 ) -> Result<i64, String> {
-    let db_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db");
+    // DEV-0057 §164：真实运行 DB 路径（prod 不再恒 size=0）
+    let db_path = runtime_db_path(&app);
     let real = if db_path.exists() { Some(db_path.as_path()) } else { None };
     vault.snapshot("manual", real)
 }
@@ -3631,7 +4399,145 @@ async fn run_chat_turn(
         .join("\n\n");
 
     // ---- 消息组装（readonly 修改意图走专门协议） ----
-    let instruction = if is_assistant {
+    // DEV-0055 PART 9：Assistant + 明确 Planning Write Intent → 专用 Planning Pipeline
+    // （不再赌模型自己调 propose_change_set —— PART 8 故障根因）。
+    // DEV-0058 §53-57：planning_gate 确定性三态（readonly 写意图→NeedsAssistant 确定分支，
+    // 不再依赖模型自愿输出 needs_assistant JSON）；§78-79：上一条是 Planner 澄清提问时，
+    // 用户本轮回答无条件续跑 Planning（禁止重开独立规划）。
+    // DEV-0059 §6.8：续跑判定以 ai_runs workflow_state 显式状态为主（不再以文案开头作状态机）；
+    // 仅无 workflow 记录的旧会话走 is_clarification_reply 兼容兜底。
+    let (last_assistant, workflow_state) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let last = repository::conversation::ConversationRepository::new(&conn)
+            .list_messages(conversation_id, profile_id, 1, 0)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|m| m.role == "assistant" && !m.content.trim().is_empty())
+            .map(|m| m.content)
+            .unwrap_or_default();
+        let wf = ai::planner::read_workflow_state(&conn, profile_id, conversation_id);
+        (last, wf)
+    };
+    let gate = ai::planner::planning_gate(user_message, is_assistant);
+    // §6.8：显式 workflow 状态 → 无条件续跑（用户回答"每天3小时"等无关键词回复仍继续原 Planner）
+    let continuing_planning = is_assistant
+        && workflow_state
+            .as_deref()
+            .map(ai::planner::workflow_active)
+            .unwrap_or(false);
+    // 兼容兜底：旧会话（无 workflow 记录）且上一条是澄清提问
+    let legacy_clarification = is_assistant
+        && workflow_state.is_none()
+        && ai::planner::is_clarification_reply(&last_assistant);
+    let is_planning_request = continuing_planning || legacy_clarification || gate == ai::planner::PlanningGate::Planning;
+
+    // DEV-0058 §56-57：readonly + 确定性写意图 → 直接 needs_assistant（提示切换助手模式并续接原请求）
+    if gate == ai::planner::PlanningGate::NeedsAssistant {
+        let intent_text = user_message.chars().take(120).collect::<String>();
+        let msg = format!("[需要助手模式] {intent_text}");
+        {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            let _ = repository::conversation::ConversationRepository::new(&conn)
+                .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+            let _ = conn.execute(
+                "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                 VALUES (?1,?2,?3,'readonly','planning','completed','needs_assistant')
+                 ON CONFLICT(id) DO UPDATE SET status='completed'",
+                rusqlite::params![run_id, profile_id, conversation_id],
+            );
+            // §6.8：记录 planning workflow（readonly 写意图 → collecting_context，切换助手模式后续接）
+            ai::planner::set_workflow_state(
+                &conn, run_id, profile_id, conversation_id,
+                ai::planner::WORKFLOW_STATE_COLLECTING, Some(&intent_text),
+            );
+        }
+        ai::run::emit(Some(app), "ai://run-status", run_id, serde_json::json!({
+            "status": "waiting_approval", "needs_assistant": true,
+            "message": "这个请求需要助手模式才能生成可应用的计划。"
+        }));
+        vault.record_ai("run_completed", run_id, "needs_assistant");
+        return Ok("needs_assistant");
+    }
+
+    let instruction = if is_planning_request {
+        // DEV-0059.1 §1：GoalTarget 为正式目标主源；旧 Final Goal Brief 仅 legacy fallback
+        let (goal_state, truth) = {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            (
+                ai::planner::read_goal_state(&conn, profile_id),
+                ai::planner::build_planning_truth_context(&conn, profile_id),
+            )
+        };
+        // 冲突/missing 只在「没有 active GoalTarget」时作为旧 Brief 的 legacy gate；
+        // 已有完整 GoalTarget 时不得因旧 Brief 不完整阻塞（DEV-0059.1 §1 Goal rules）
+        if !truth.has_active_goal_target {
+            if !goal_state.conflicts.is_empty() {
+                // §16/§197：冲突 → 必须提示确认，禁止自动选择/生成
+                let list = goal_state.conflicts.join("；");
+                let conflict_text = format!(
+                    "当前目标信息存在冲突，需要确认。\n\n- {}\n\n请先在「规划 → 最终目标 → 完善目标」中确认唯一目标，我再生成正式计划。",
+                    list
+                );
+                // 直接落库并返回（不经工具循环）
+                {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    let _ = repository::conversation::ConversationRepository::new(&conn)
+                        .add_message(conversation_id, profile_id, "assistant", &conflict_text, Some(run_id));
+                    let _ = conn.execute(
+                        "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                         VALUES (?1,?2,?3,'assistant','planning','completed','goal_conflict')
+                         ON CONFLICT(id) DO UPDATE SET status='completed'",
+                        rusqlite::params![run_id, profile_id, conversation_id],
+                    );
+                    // §6.8：冲突确认期 → clarifying（用户解决后继续原 Planner）
+                    ai::planner::set_workflow_state(
+                        &conn, run_id, profile_id, conversation_id,
+                        ai::planner::WORKFLOW_STATE_CLARIFYING, None,
+                    );
+                }
+                vault.record_ai("run_completed", run_id, "goal_conflict");
+                return Ok("goal_conflict");
+            }
+            if !goal_state.missing.is_empty() {
+                // PART 11 §41：Goal 不完整 → Clarification（最多 5 问 §29；同会话继续）
+                let qs: Vec<String> = goal_state
+                    .missing
+                    .iter()
+                    .take(ai::planner::MAX_BLOCKING_QUESTIONS)
+                    .map(|m| format!("- {}", m))
+                    .collect();
+                let clarify_text = format!(
+                    "在生成正式计划前，需要确认 {} 项：\n{}\n\n请直接回复以上问题，我会继续为你生成计划。",
+                    goal_state.missing.len().min(ai::planner::MAX_BLOCKING_QUESTIONS),
+                    qs.join("\n")
+                );
+                {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    let _ = repository::conversation::ConversationRepository::new(&conn)
+                        .add_message(conversation_id, profile_id, "assistant", &clarify_text, Some(run_id));
+                    let _ = conn.execute(
+                        "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                         VALUES (?1,?2,?3,'assistant','planning','completed','clarification')
+                         ON CONFLICT(id) DO UPDATE SET status='completed'",
+                        rusqlite::params![run_id, profile_id, conversation_id],
+                    );
+                    // §6.8：澄清提问期 → clarifying（用户回答无关键词也继续原 Planner）
+                    ai::planner::set_workflow_state(
+                        &conn, run_id, profile_id, conversation_id,
+                        ai::planner::WORKFLOW_STATE_CLARIFYING, None,
+                    );
+                }
+                vault.record_ai("run_completed", run_id, "clarification");
+                return Ok("clarification");
+            }
+        }
+        // Goal Ready / GoalTarget Ready → §43 结构化 PlanDraft 指令（正式事实正文；蓝图模式见指令 B1-B6）
+        let brief = serde_json::to_string(&goal_state.brief).unwrap_or_default();
+        format!(
+            "{}\n\n【当前最终目标 Brief（legacy 参考，不得覆盖 active GoalTarget）】{}\n\n{}",
+            ai::planner::PLAN_DRAFT_INSTRUCTION, brief, truth.instruction
+        )
+    } else if is_assistant {
         ai::prompts::ASSISTANT_CHAT_INSTRUCTION.to_string()
     } else {
         format!("{}\n\n{}", ai::prompts::READONLY_INTENT, "以上为只读协议。若用户消息并不涉及修改数据（纯咨询/分析），忽略该协议，正常回答（但不得调用任何修改类工具）。")
@@ -3824,6 +4730,202 @@ async fn run_chat_turn(
         return Ok("cancelled");
     }
 
+    // ---- DEV-0055 PART 12/15/16：Planning Pipeline 收尾（Deterministic Compile） ----
+    // 规划请求：模型输出 PlanDraft JSON → Backend 验证 → Compiler 转 ChangeSet
+    // （不依赖模型调 propose_change_set —— §33/§58）。
+    if is_planning_request && changeset_ids.is_empty() {
+        let trimmed = final_text
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+        match serde_json::from_str::<ai::planner::PlanDraft>(trimmed) {
+            Ok(mut draft) => {
+                // DEV-0057 §88-90：Validation 失败 → 模型自动重试**一次**（错误回喂）；
+                // 第二次仍失败 → 显示具体错误（不循环）。
+                let mut validation = {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    // DEV-0059.2 §7：Blueprint 场景继承 active GoalTarget 主场景（compile 前 resolve）
+                    if let Some(bp) = draft.blueprint.as_mut() {
+                        bp.scenario_type =
+                            ai::planner::resolve_blueprint_scenario(&conn, profile_id, bp, false);
+                    }
+                    ai::planner::validate_plan_draft(&conn, profile_id, &draft)
+                };
+                if !validation.errors.is_empty() && !cancelled {
+                    let err_list = validation.errors.join("；");
+                    let retry_prompt = format!(
+                        "你上一版计划草稿未通过系统校验：{}\n\n请修正以上全部问题后，重新输出完整 JSON（同一 schema，不要解释文字）。",
+                        err_list
+                    );
+                    messages.push(ChatMessage::assistant(trimmed.to_string()));
+                    messages.push(ChatMessage::user(retry_prompt));
+                    if token.is_cancelled() { cancelled = true; }
+                    if !cancelled {
+                        if let Ok(retry) = client
+                            .chat(messages.clone(), false, None, Some(4096))
+                            .await
+                        {
+                            usage_total.prompt_tokens += retry.usage.prompt_tokens;
+                            usage_total.completion_tokens += retry.usage.completion_tokens;
+                            usage_total.total_tokens += retry.usage.total_tokens;
+                            let rtext = retry
+                                .content
+                                .unwrap_or_default()
+                                .trim()
+                                .trim_start_matches("```json")
+                                .trim_start_matches("```")
+                                .trim_end_matches("```")
+                                .trim()
+                                .to_string();
+                            if let Ok(d2) = serde_json::from_str::<ai::planner::PlanDraft>(&rtext) {
+                                draft = d2;
+                                validation = {
+                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                    if let Some(bp) = draft.blueprint.as_mut() {
+                                        bp.scenario_type =
+                                            ai::planner::resolve_blueprint_scenario(&conn, profile_id, bp, false);
+                                    }
+                                    ai::planner::validate_plan_draft(&conn, profile_id, &draft)
+                                };
+                            }
+                        }
+                    }
+                }
+                let (validation, ops, _final_id) = {
+                    let v = validation;
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    let fid: Option<i64> = conn
+                        .query_row(
+                            "SELECT id FROM goals WHERE profile_id=?1 AND goal_level='final'",
+                            rusqlite::params![profile_id],
+                            |r| r.get(0),
+                        )
+                        .ok();
+                    (v, ai::planner::compile_to_changeset_ops(fid, &draft), fid)
+                };
+                if !validation.errors.is_empty() {
+                    // §55 验证失败 → 拒绝入库；提示重新生成（一次内联修复机会：把错误回喂重试一轮）
+                    let err_list = validation.errors.join("；");
+                    final_text = format!(
+                        "计划草稿未通过校验，暂未生成可应用方案：{}\n\n请回复「重新生成」，我会修正后重新提交。",
+                        err_list
+                    );
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    let _ = repository::conversation::ConversationRepository::new(&conn)
+                        .add_message(conversation_id, profile_id, "assistant", &final_text, Some(run_id));
+                    let _ = conn.execute(
+                        "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                         VALUES (?1,?2,?3,'assistant','planning','failed','plan_validation')
+                         ON CONFLICT(id) DO UPDATE SET status='failed'",
+                        rusqlite::params![run_id, profile_id, conversation_id],
+                    );
+                    // §6.8：校验失败 → workflow failed（用户回复"重新生成"将重开规划）
+                    ai::planner::set_workflow_state(
+                        &conn, run_id, profile_id, conversation_id,
+                        ai::planner::WORKFLOW_STATE_FAILED, None,
+                    );
+                    vault.record_ai("run_completed", run_id, "plan_validation_failed");
+                    return Ok("plan_validation_failed");
+                }
+                if !validation.overloaded_days.is_empty() {
+                    // §57 OVERLOADED：标记提示（本轮接受一次降载重试不可行——直接告知）
+                    let od = validation.overloaded_days.join("；");
+                    final_text.push_str(&format!("\n\n（部分日期计划量超出可用时间：{}。可在审查中取消超载任务。）", od));
+                }
+                if !ai::planner::ops_within_limit(&ops) {
+                    final_text = "生成的计划规模过大（超过单次修改上限 120 项）。长期计划会随着学习进度变化，建议按月或 14 天滚动生成。".to_string();
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    let _ = repository::conversation::ConversationRepository::new(&conn)
+                        .add_message(conversation_id, profile_id, "assistant", &final_text, Some(run_id));
+                    // §6.8：超限 → workflow failed
+                    ai::planner::set_workflow_state(
+                        &conn, run_id, profile_id, conversation_id,
+                        ai::planner::WORKFLOW_STATE_FAILED, None,
+                    );
+                    vault.record_ai("run_completed", run_id, "plan_too_large");
+                    return Ok("plan_too_large");
+                }
+                // §58-59：Compiler → ChangeSet（ForwardRef 由 create 期 Guard 兜底）
+                let cs_title = format!("学习计划（{} 项）", ops.len());
+                // DEV-0058 §103-104：summary 只显示非零项（零项不展示）；§121 休息日计数
+                let goal_count =
+                    draft.year_goals.len() + draft.month_goals.len() + draft.day_goals.len();
+                let rest_count = draft.day_goals.iter().filter(|d| d.rest_day).count();
+                let mut summary_parts: Vec<String> = Vec::new();
+                if goal_count > 0 {
+                    summary_parts.push(format!("阶段目标 +{}", goal_count));
+                }
+                if draft.knowledge_nodes.len() > 0 {
+                    summary_parts.push(format!("知识节点 +{}", draft.knowledge_nodes.len()));
+                }
+                if draft.tasks.len() > 0 {
+                    summary_parts.push(format!("学习任务 +{}", draft.tasks.len()));
+                }
+                if rest_count > 0 {
+                    summary_parts.push(format!("休息日 {}", rest_count));
+                }
+                let summary = summary_parts.join(" · ");
+                // 日期范围（§103/§113）
+                let mut plan_dates: Vec<&str> = draft
+                    .day_goals
+                    .iter()
+                    .map(|d| d.period.as_str())
+                    .chain(draft.tasks.iter().map(|t| t.date.as_str()))
+                    .collect();
+                plan_dates.sort_unstable();
+                plan_dates.dedup();
+                let range_line = match (plan_dates.first(), plan_dates.last()) {
+                    (Some(a), Some(b)) if a != b => format!("计划范围：{} → {}", fmt_md(a), fmt_md(b)),
+                    (Some(a), _) => format!("计划范围：{}", fmt_md(a)),
+                    _ => String::new(),
+                };
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                match repository::changeset::ChangeSetRepository::new(&conn)
+                    .create(profile_id, Some(conversation_id), Some(run_id), &cs_title, &summary, &ops)
+                {
+                    Ok(cs_id) => {
+                        changeset_ids.push(cs_id);
+                        // §66/§106：AI 只能说"已准备好计划"，不说"已加入"；零项行不展示（§104）
+                        let mut lines: Vec<String> = vec!["已经准备好一份可执行计划。".into()];
+                        if !range_line.is_empty() {
+                            lines.push(range_line);
+                        }
+                        lines.push("本次将：".into());
+                        if goal_count > 0 {
+                            lines.push(format!("新增 {} 个阶段目标", goal_count));
+                        }
+                        if draft.knowledge_nodes.len() > 0 {
+                            lines.push(format!("新增 {} 个知识节点", draft.knowledge_nodes.len()));
+                        }
+                        if draft.tasks.len() > 0 {
+                            lines.push(format!("安排 {} 个学习任务", draft.tasks.len()));
+                        }
+                        if rest_count > 0 {
+                            lines.push(format!("包含 {} 个休息日", rest_count));
+                        }
+                        lines.push("点击「查看计划」审查后应用；未应用前 Higher 数据不会变化。".into());
+                        final_text = lines.join("\n");
+                        ai::run::emit(Some(app), "ai://changeset", run_id, serde_json::json!({
+                            "change_set_id": cs_id, "title": cs_title, "count": ops.len()
+                        }));
+                    }
+                    Err(e) => {
+                        final_text = format!("计划转换失败：{e}\n\n请回复「重新生成」。");
+                    }
+                }
+            }
+            Err(_) => {
+                // 模型未按格式输出 → 引导重试（不假装成功 §66-68）
+                final_text = format!(
+                    "{}\n\n（系统提示：本次未生成结构化计划草稿，正式数据没有变化。请回复「重新生成计划」。）",
+                    if final_text.is_empty() { "（无内容）" } else { &final_text }
+                );
+            }
+        }
+    }
+
     // ---- Citation 校验（§115-116） ----
     let mut citation_warning = None;
     if used_web {
@@ -3913,6 +5015,13 @@ async fn run_chat_turn(
                 if guard_appended { "no_changeset_guard" } else { "" },
                 usage_total.prompt_tokens, usage_total.completion_tokens, usage_total.total_tokens],
         );
+        // §6.8：规划成功生成 ChangeSet → workflow waiting_approval（用户应用后 → applied）
+        if is_planning_request && !changeset_ids.is_empty() {
+            ai::planner::set_workflow_state(
+                &conn, run_id, profile_id, conversation_id,
+                ai::planner::WORKFLOW_STATE_WAITING_APPROVAL, None,
+            );
+        }
     }
     vault.record_ai("run_completed", run_id, &format!("tokens={}", usage_total.total_tokens));
 
@@ -3955,13 +5064,29 @@ async fn run_chat_turn(
                     let repo = repository::memory::MemoryRepository::new(&conn);
                     let before_count = repo.count_since(profile_id, "2000-01-01").unwrap_or(0);
                     for m in arr.iter().take(5) {
+                        // DEV-0057 §209/§214：新 Extractor 只生成实际支持类型
+                        //（system_observation / goal_context 无 writer → 不入库，§42-43）
+                        let mtype_raw = m.get("memory_type").and_then(|x| x.as_str()).unwrap_or("user_fact");
+                        let mtype = match mtype_raw {
+                            "user_fact" | "user_opinion" | "user_preference" | "user_constraint" | "ai_inference" => mtype_raw,
+                            _ => "user_fact",
+                        };
+                        // DEV-0057 §214-215：key 不再由模型自由决定——
+                        // category + normalized subject 稳定生成（去空白/标点/小写截断），
+                        // 同一事实重复 → supersede 而非无限重复。
+                        let category = m.get("category").and_then(|x| x.as_str()).unwrap_or("chat");
+                        let subject = m
+                            .get("memory_key")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or_else(|| m.get("memory_value").and_then(|x| x.as_str()).unwrap_or(""));
+                        let normalized_key = normalize_memory_key(category, subject);
                         let rec = repository::memory::MemoryRecord {
                             id: 0, profile_id,
-                            memory_type: m.get("memory_type").and_then(|x| x.as_str()).unwrap_or("user_fact").to_string(),
-                            category: "chat".into(),
-                            memory_key: m.get("memory_key").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            memory_type: mtype.to_string(),
+                            category: category.to_string(),
+                            memory_key: normalized_key,
                             memory_value: m.get("memory_value").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                            source_kind: if m.get("memory_type").and_then(|x| x.as_str()) == Some("ai_inference") { "ai_inference" } else { "user_message" }.to_string(),
+                            source_kind: if mtype == "ai_inference" { "ai_inference" } else { "user_message" }.to_string(),
                             source_ref: format!("conversation:{}", conversation_id),
                             source_excerpt: m.get("source_excerpt").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                             importance: m.get("importance").and_then(|x| x.as_i64()).unwrap_or(3).clamp(1, 5),
@@ -3989,6 +5114,58 @@ async fn run_chat_turn(
 /// §110 citation 正则替代（手工扫描 [[Sx]]）。
 struct CitationIter;
 fn citation_re(_s: &str) -> CitationIter { CitationIter }
+
+/// DEV-0057 §214：memory_key 归一——`{category}::{subject 规范化}`。
+/// 规范化：小写 + 仅保留字母数字（标点/空白直接删除）+ 截断 60 字符。
+/// 稳定可重现：同事实的任意书写差异（空格/标点/大小写）→ 同 key（supersede 生效前提）。
+pub fn normalize_memory_key(category: &str, subject: &str) -> String {
+    let mut norm = String::new();
+    for ch in subject.chars() {
+        if ch.is_alphanumeric() {
+            norm.extend(ch.to_lowercase());
+        }
+    }
+    let norm: String = norm.chars().take(60).collect();
+    format!("{}::{}", category.to_lowercase(), norm)
+}
+
+/// DEV-0055：UTC+8 学习日 YYYY-MM-DD（Planning Pipeline 注入当前日期）。
+fn chrono_today() -> String {
+    // 学习日 = UTC+8（与 StudySession 学习日不变量一致）
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| {
+            let secs = d.as_secs() as i64 + 8 * 3600;
+            days_to_iso(secs / 86400)
+        })
+        .unwrap_or_else(|_| "1970-01-01".to_string())
+}
+
+/// DEV-0058 §103/§120：`YYYY-MM-DD` → `M月D日`（用户可读；非法输入原样返回）。
+pub fn fmt_md(d: &str) -> String {
+    if d.len() == 10 && d.as_bytes()[4] == b'-' && d.as_bytes()[7] == b'-' {
+        let m: i64 = d[5..7].parse().unwrap_or(0);
+        let day: i64 = d[8..10].parse().unwrap_or(0);
+        format!("{}月{}日", m, day)
+    } else {
+        d.to_string()
+    }
+}
+
+/// Unix epoch day → ISO 日期（无外部依赖；civil-from-days 算法）。
+fn days_to_iso(z: i64) -> String {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
 
 impl CitationIter {
     fn find_iter<'a>(&self, text: &'a str) -> Vec<(usize, &'a str)> {
@@ -4018,6 +5195,341 @@ impl CitationIter {
 fn ai_cancel_run(runs: tauri::State<'_, ai::run::RunManager>, run_id: String) -> Result<bool, String> {
     Ok(runs.cancel(&run_id))
 }
+
+// =============== DEV-0055 · Final Goal Brief（PART 5-6） ===============
+
+/// §18 Final Goal Card：读 Brief + 冲突 + Readiness。
+#[tauri::command]
+fn get_final_goal_state(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<ai::planner::GoalState, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(ai::planner::read_goal_state(&conn, profile_id))
+}
+
+/// §198：用户确认后保存 Brief（Manual 表单路径；经用户点击 = 人工确认，允许直写）。
+#[tauri::command]
+fn save_final_goal_brief(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    brief: repository::goal::GoalBrief,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal::GoalRepository::new(&conn).set_final_brief(profile_id, &brief)
+}
+
+// =============== DEV-0055 · /data 聚合（PART 26-33，Backend aggregate §163） ===============
+
+#[derive(Debug, serde::Serialize)]
+struct LearningTotals {
+    /// §105 有 ended Session 的学习日 distinct 数
+    learning_days: i64,
+    /// §106 累计秒
+    total_seconds: i64,
+    /// §107 日均分钟（累计/学习天数）
+    daily_avg_minutes: i64,
+    /// 今天学习秒（含进行中 elapsed？§74 已结束统计 → 只算 ended）
+    today_seconds: i64,
+    today_tasks_total: i64,
+    today_tasks_completed: i64,
+    /// DEV-0057 §102：待确认时长条数（默认统计排除 needs_review；UI 提示"有 N 条待确认"）
+    needs_review_count: i64,
+}
+
+/// §104-109：累计三数 + 今日两数（单条聚合 SQL；RAM-light）。
+/// DEV-0057 §101：可信统计排除 needs_review（confirmed/corrected 计入）。
+#[tauri::command]
+fn get_learning_totals(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<LearningTotals, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let (days, total): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT date(started_at,'+8 hours')), COALESCE(SUM(duration_seconds),0)
+             FROM study_sessions
+             WHERE profile_id=?1 AND ended_at IS NOT NULL AND duration_seconds > 0
+               AND duration_review_state != 'needs_review'",
+            rusqlite::params![profile_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let today = chrono_today();
+    let today_secs: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(duration_seconds),0) FROM study_sessions
+             WHERE profile_id=?1 AND date(started_at,'+8 hours')=?2 AND ended_at IS NOT NULL
+               AND duration_review_state != 'needs_review'",
+            rusqlite::params![profile_id, today],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let (tt, tc): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0)
+             FROM tasks WHERE profile_id=?1 AND planned_date=?2 AND archived_at IS NULL",
+            rusqlite::params![profile_id, today],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let nrc: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM study_sessions
+             WHERE profile_id=?1 AND ended_at IS NOT NULL AND duration_review_state='needs_review'",
+            rusqlite::params![profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(LearningTotals {
+        learning_days: days,
+        total_seconds: total,
+        daily_avg_minutes: if days > 0 { total / days / 60 } else { 0 },
+        today_seconds: today_secs,
+        today_tasks_total: tt,
+        today_tasks_completed: tc,
+        needs_review_count: nrc,
+    })
+}
+
+#[derive(Debug, serde::Serialize)]
+struct KnowledgeTimeSlice {
+    name: String,
+    seconds: i64,
+    item_id: i64,
+    child_count: i64,
+}
+
+/// §112-117：Knowledge 时间分布（Backend 递归归并到指定层；默认 root children；
+/// parent_item_id=Some → 该节点的 children 分布）。未归单独"未归类学习"。
+/// DEV-0057 §160：N+1 消除——child×(递归CTE+COUNT) 改为**一条**递归 CTE grouped 归并 +
+/// 一条 children COUNT grouped；排除 needs_review（§101）。
+#[tauri::command]
+fn get_knowledge_time_distribution(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    parent_item_id: Option<i64>,
+) -> Result<(Vec<KnowledgeTimeSlice>, i64), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // 目标层 children（parent=None → root children）
+    let children: Vec<(i64, String)> = {
+        let sql = match parent_item_id {
+            None => "SELECT id, name FROM learning_items WHERE profile_id=?1 AND parent_id IS NULL ORDER BY sort_order, id",
+            Some(_) => "SELECT id, name FROM learning_items WHERE profile_id=?1 AND parent_id=?2 ORDER BY sort_order, id",
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, String)> { Ok((r.get(0)?, r.get(1)?)) };
+        let rows = if let Some(p) = parent_item_id {
+            stmt.query_map(rusqlite::params![profile_id, p], map).map_err(|e| e.to_string())?
+        } else {
+            stmt.query_map(rusqlite::params![profile_id], map).map_err(|e| e.to_string())?
+        };
+        rows.filter_map(|x| x.ok()).collect()
+    };
+    let want_parent: Option<i64> = parent_item_id;
+    // 一条递归 CTE：每个 item 的 (id, 顶层祖先 in 目标层, 直接父) → 按目标层 children 分组 SUM
+    let secs_map: std::collections::HashMap<i64, i64> = {
+        let sql = "
+            WITH RECURSIVE tree(id, root) AS (
+                SELECT id, id FROM learning_items
+                 WHERE profile_id=?1 AND parent_id IS ?2
+                UNION ALL
+                SELECT li.id, tree.root FROM learning_items li JOIN tree ON li.parent_id = tree.id
+            )
+            SELECT tree.root, COALESCE(SUM(ss.duration_seconds),0)
+            FROM tree
+            JOIN study_sessions ss ON ss.learning_item_id = tree.id
+              AND ss.profile_id=?1 AND ss.ended_at IS NOT NULL
+              AND ss.duration_review_state != 'needs_review'
+            GROUP BY tree.root";
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![profile_id, want_parent], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|v| v.ok()).collect()
+    };
+    let cc_map: std::collections::HashMap<i64, i64> = {
+        let mut stmt = conn
+            .prepare("SELECT parent_id, COUNT(*) FROM learning_items WHERE profile_id=?1 AND parent_id IS NOT NULL GROUP BY parent_id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![profile_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|v| v.ok()).collect()
+    };
+    let mut out = Vec::new();
+    for (id, name) in children {
+        let secs = secs_map.get(&id).copied().unwrap_or(0);
+        let cc = cc_map.get(&id).copied().unwrap_or(0);
+        out.push(KnowledgeTimeSlice { name, seconds: secs, item_id: id, child_count: cc });
+    }
+    // 未归类（同样排除 needs_review）
+    let unassigned: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(duration_seconds),0) FROM study_sessions
+             WHERE profile_id=?1 AND learning_item_id IS NULL AND ended_at IS NOT NULL
+               AND duration_review_state != 'needs_review'",
+            rusqlite::params![profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok((out, unassigned))
+}
+
+/// §118-119：Time-of-Day 分布（核心逻辑在 ai::planner，测试复用）。
+#[tauri::command]
+fn get_time_of_day_distribution(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<(String, i64)>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(ai::planner::time_of_day_distribution(&conn, profile_id))
+}
+
+/// §121：计划 vs 实际汇总（range 内每天 planned/actual/completed；不含综合效率 §122）。
+#[tauri::command]
+fn get_plan_vs_actual(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    start: String,
+    end: String,
+) -> Result<Vec<(String, i64, i64, i64, i64)>, String> {
+    // DEV-0057 §160-161：N+1 消除——day×query 改两条 grouped SQL + 内存合并；
+    // 同时排除 needs_review（§101 可信统计排除待确认时长）。
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut planned_map: std::collections::HashMap<String, (i64, i64, i64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT planned_date,
+                        COALESCE(SUM(estimated_minutes),0),
+                        COUNT(*),
+                        COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0)
+                 FROM tasks
+                 WHERE profile_id=?1 AND planned_date BETWEEN ?2 AND ?3 AND archived_at IS NULL
+                 GROUP BY planned_date",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![profile_id, start, end], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|v| v.ok())
+            .map(|(d, p, t, c)| (d, (p, t, c)))
+            .collect()
+    };
+    let mut actual_map: std::collections::HashMap<String, i64> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT date(started_at,'+8 hours'), COALESCE(SUM(duration_seconds),0)/60
+                 FROM study_sessions
+                 WHERE profile_id=?1 AND date(started_at,'+8 hours') BETWEEN ?2 AND ?3
+                   AND ended_at IS NOT NULL AND duration_review_state != 'needs_review'
+                 GROUP BY date(started_at,'+8 hours')",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![profile_id, start, end], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|v| v.ok()).collect()
+    };
+    let mut out = Vec::new();
+    let mut d = start.clone();
+    while d <= end {
+        let (planned, tt, tc) = planned_map.remove(&d).unwrap_or((0, 0, 0));
+        let actual = actual_map.remove(&d).unwrap_or(0);
+        out.push((d.clone(), planned, actual, tt, tc));
+        d = next_date(&d);
+    }
+    Ok(out)
+}
+
+fn next_date(d: &str) -> String {
+    let p: Vec<i64> = d.split('-').filter_map(|x| x.parse().ok()).collect();
+    if p.len() != 3 {
+        return d.to_string();
+    }
+    let epoch = ai::planner::sqlite_dt_to_epoch(&format!("{:04}-{:02}-{:02} 00:00:00", p[0], p[1], p[2]))
+        .unwrap_or(0);
+    days_to_iso(epoch / 86400 + 1)
+}
+
+// =============== DEV-0057 · Reliability / Data Trust / Performance ===============
+
+/// §68 手动重建搜索索引（从 Canonical tables 完整重建当前 profile）。
+#[tauri::command]
+fn rebuild_search_index(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<usize, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::search::rebuild_profile(&mut conn, profile_id)
+}
+
+/// §153-155 Knowledge 轻量列表（树/导航用；不含 content 正文——正文按需加载）。
+#[tauri::command]
+fn list_learning_items_light(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, goal_id, parent_id, name, mastery_status, sort_order, created_at, updated_at
+             FROM learning_items WHERE profile_id = ?1 ORDER BY sort_order, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![profile_id], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "goal_id": r.get::<_, Option<i64>>(1)?,
+                "parent_id": r.get::<_, Option<i64>>(2)?,
+                "name": r.get::<_, String>(3)?,
+                "mastery_status": r.get::<_, String>(4)?,
+                "sort_order": r.get::<_, i64>(5)?,
+                "created_at": r.get::<_, String>(6)?,
+                "updated_at": r.get::<_, String>(7)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+/// §133-136 媒体安全 URL：返回沙箱内附件的绝对路径（前端 convertFileSrc → 按需加载，
+/// 主路径不再整文件 base64）。Backend 仍验证附件归属当前 App Attachment Sandbox。
+#[tauri::command]
+fn get_attachment_asset_path(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    attachment_id: i64,
+) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let rel: String = conn
+        .query_row(
+            "SELECT relative_path FROM learning_attachments WHERE id=?1 AND profile_id=?2",
+            rusqlite::params![attachment_id, profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "附件不存在或不属于当前档案".to_string())?;
+    let full = sandbox::resolve_in_sandbox(&adir.0, &rel)?;
+    full.to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "附件路径非法".to_string())
+}
+
 
 #[tauri::command]
 fn ai_active_run_count(runs: tauri::State<'_, ai::run::RunManager>) -> Result<usize, String> {
@@ -4682,6 +6194,22 @@ pub fn run() {
             let db_path = db_dir.join("higher.db");
             // open 内部会自动执行待处理的 Migration
             let db_state = db::DbState::open(&db_path)?;
+
+            // DEV-0057 §71-72：Search Index 版本门——版本缺失/变化才一次性 rebuild（不默认每次全重建）。
+            {
+                if let Ok(mut guard) = db_state.0.lock() {
+                    if let Ok(active) = guard.query_row(
+                        "SELECT value FROM settings WHERE key='active_profile_id'",
+                        [],
+                        |r| r.get::<_, String>(0),
+                    ) {
+                        if let Ok(pid) = active.parse::<i64>() {
+                            let _ = repository::search::ensure_index_version(&mut guard, pid);
+                        }
+                    }
+                }
+            }
+
             app.manage(db_state);
 
             // 附件根目录
@@ -4907,6 +6435,43 @@ pub fn run() {
             confirm_personalization_profile,
             edit_personalization_profile,
             get_requirement_template,
+            // DEV-0059 新增命令
+            list_personalization_profile_versions,
+            list_sources_for_personal_profile_version,
+            create_goal_target,
+            list_goal_targets,
+            list_active_goal_targets,
+            activate_goal_target,
+            replace_goal_target,
+            dismiss_goal_target,
+            list_legacy_goal_candidates,
+            create_planning_blueprint,
+            list_planning_blueprints,
+            get_planning_blueprint,
+            get_active_planning_blueprint,
+            activate_planning_blueprint,
+            add_planning_phase,
+            list_planning_phases,
+            add_planning_milestone,
+            list_planning_milestones,
+            update_planning_blueprint_meta,
+            update_planning_review_cadence,
+            update_planning_phase,
+            delete_planning_phase,
+            update_planning_milestone,
+            delete_planning_milestone,
+            create_planning_review_due,
+            list_planning_reviews,
+            set_planning_review_status,
+            is_planning_review_due,
+            get_planning_review_risk,
+            prepare_current_planning_review,
+            prepare_planning_review_ai,
+            run_planning_review_ai,
+            import_planning_source,
+            list_planning_sources,
+            get_planning_source_text,
+            write_export_file,
             get_web_search_settings,
             set_web_search_settings,
             vault_status,
@@ -4933,6 +6498,18 @@ pub fn run() {
             get_change_set_apply_summary,
             // DEV-0054 Active Session
             list_active_sessions,
+            // DEV-0055 Goal Brief / Planning Pipeline / Data
+            get_final_goal_state,
+            save_final_goal_brief,
+            get_learning_totals,
+            get_knowledge_time_distribution,
+            get_time_of_day_distribution,
+            get_plan_vs_actual,
+            // DEV-0057 Reliability / Data Trust / Performance
+            confirm_session_duration,
+            rebuild_search_index,
+            list_learning_items_light,
+            get_attachment_asset_path,
             // AI 分析统一入口（DEV-0019/0020/0021）
             ai_analyze,
             // Progress 指标 / Knowledge Move（BATCH-03）

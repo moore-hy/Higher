@@ -113,6 +113,7 @@ fn test_goal_free_full_loop() {
     assert_eq!(found[0].title, "数学");
 
     // AI Context 上下文可读（无任何 Goal Error）
+    // DEV-0057 统一 Builder：goal_block 不再默认注入 → 断言 L1 页面标签 + session 详情仍在
     use app_lib::ai::{self, context::ContextInput};
     let ctx = ai::context::build_context(
         &conn,
@@ -126,7 +127,8 @@ fn test_goal_free_full_loop() {
         },
     )
     .unwrap();
-    assert!(ctx.contains("当前未设置长期目标") || ctx.contains("长期目标"));
+    assert!(ctx.contains("档案分析"), "统一 Builder L1 页面标签");
+    assert!(ctx.contains("数学"), "session_detail 注入会话数据");
 }
 
 /// §142 Quick Study Full Loop：Profile 无 Goal/Task/Knowledge → 一键学习 → 附件 → 保留历史。

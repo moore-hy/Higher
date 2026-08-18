@@ -184,7 +184,8 @@ fn test_assistant_chat_cross_profile_rejected() {
     )
     .is_err());
 
-    // A 自己 → 成功且包含自身数据、不包含 B
+    // A 自己 → 成功且隔离（DEV-0057 统一 Builder：档案名不再默认注入，
+    // 改断言自身知识可检索出现、B 档案知识不出现）
     let ctx = ai::context::build_context(
         &conn,
         &ai::context::ContextInput {
@@ -192,12 +193,12 @@ fn test_assistant_chat_cross_profile_rejected() {
             profile_id: pa,
             action: ai::AiAction::AssistantChat,
             session_id: None,
-            learning_item_id: None,
+            learning_item_id: Some(limit),
             user_instruction: Some("最近学得怎么样".into()),
         },
     )
     .unwrap();
-    assert!(ctx.contains("A档案"));
+    assert!(ctx.contains("函数极限"), "自身知识经 action 块/L1 注入");
     assert!(!ctx.contains("B档案"));
 }
 

@@ -231,6 +231,7 @@ impl<'a> StudyProfileRepository<'a> {
                 WHERE ss.profile_id = ?1
                   AND date(ss.started_at, '+8 hours') BETWEEN date(?2) AND date(?3)
                   AND ss.status = 'completed'
+                  AND ss.duration_review_state != 'needs_review'
                 GROUP BY date(ss.started_at, '+8 hours')
 
                 UNION ALL

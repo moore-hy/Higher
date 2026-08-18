@@ -11,15 +11,17 @@ import type { ProfileType, StudyProfile } from "./types";
 /**
  * Higher V2 Shell（DEV-0011）。
  *
- * 一级导航最终收敛（BATCH-04 / DEV-0041）：
- * 今日任务 / 学习规划 / 知识体系；设置保留在 Sidebar footer。
+ * 一级导航最终收敛（DEV-0055 PART 19 §69-71）：
+ * 今日 / 规划 / 知识 / 数据；设置保留在 Sidebar footer。
  * 「学习复盘」入口删除（/review 兼容重定向到 /planning?date=…）；
- * 「整体进度」并入「学习规划」（/progress 兼容路由重定向）。
+ * 「整体进度」并入「学习规划」（/progress 兼容路由重定向）；
+ * 学习数据成为一级页面（/data，DEV-0055 PART 26）。
  */
 const NAV_ITEMS = [
-  { to: "/", label: "今日任务", end: true, icon: "📅" },
-  { to: "/planning", label: "学习规划", end: false, icon: "🧭" },
-  { to: "/knowledge", label: "知识体系", end: false, icon: "🗂" },
+  { to: "/", label: "今日", end: true, icon: "📅" },
+  { to: "/planning", label: "规划", end: false, icon: "🧭" },
+  { to: "/knowledge", label: "知识", end: false, icon: "🗂" },
+  { to: "/data", label: "数据", end: false, icon: "📊" },
 ];
 
 function Layout() {
@@ -38,6 +40,7 @@ function Layout() {
       if (p.startsWith("/learn/")) return "learning" as const;
       if (p === "/planning") return "planning" as const;
       if (p === "/knowledge") return "knowledge" as const;
+      if (p === "/data") return "data" as const;
       if (p === "/settings") return "settings" as const;
       return "today" as const;
     })();
@@ -46,6 +49,7 @@ function Layout() {
       planning: "学习规划",
       knowledge: "知识体系",
       learning: "学习工作区",
+      data: "学习数据",
       settings: "设置",
     } as const;
     if (pageKey === "settings") {

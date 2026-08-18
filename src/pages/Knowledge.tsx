@@ -24,6 +24,7 @@ import {
   listFeedbacksByLearningItem,
   listGoalsByProfile,
   listLearningItemsByGoal,
+  listLearningItemsLight,
   listUnassignedSessions,
   moveLearningItem,
   organizeSessionIntoKnowledge,
@@ -37,6 +38,9 @@ import {
   updateSessionTitle,
 } from "../api";
 import AttachmentList from "../components/AttachmentList";
+import ActiveSessionConflictModal, {
+  useActiveSessionConflict,
+} from "../components/ActiveSessionConflictModal";
 import EvaluationModal from "../components/EvaluationModal";
 import FeedbackCard from "../components/FeedbackCard";
 import FeedbackModal from "../components/FeedbackModal";
@@ -55,7 +59,7 @@ import type {
   Goal,
   KnowledgeDocument,
   KnowledgeWorkspaceData,
-  LearningItem,
+  LightLearningItem,
   StudySession,
 } from "../types";
 import {
@@ -65,10 +69,10 @@ import {
   OUTCOME_LABELS,
 } from "../types";
 import type { MasteryStatus, EvaluationType, Outcome } from "../types";
-import { formatDateTime, formatDuration, studyDayOf, todayDate } from "../utils";
+import { formatDateTime, formatDurationCompact, studyDayOf, todayDate } from "../utils";
 
 /** 后代集合（移动目标排除；DEV-0034）。 */
-function descendantsOf(items: LearningItem[], id: number): Set<number> {
+function descendantsOf(items: LightLearningItem[], id: number): Set<number> {
   const out = new Set<number>();
   const stack = [id];
   while (stack.length) {
@@ -83,13 +87,13 @@ function descendantsOf(items: LearningItem[], id: number): Set<number> {
   return out;
 }
 
-/** 树节点（LearningItem + children）。 */
-interface TreeNode extends LearningItem {
+/** 树节点（LightLearningItem + children；DEV-0057 §153-155 树不再携带 content 正文）。 */
+interface TreeNode extends LightLearningItem {
   children: TreeNode[];
 }
 
 /** 把扁平列表组装成森林（按 parent_id）。 */
-function buildTree(items: LearningItem[]): TreeNode[] {
+function buildTree(items: LightLearningItem[]): TreeNode[] {
   const byId = new Map<number, TreeNode>();
   items.forEach((i) => byId.set(i.id, { ...i, children: [] }));
   const roots: TreeNode[] = [];
@@ -106,8 +110,8 @@ function buildTree(items: LearningItem[]): TreeNode[] {
 }
 
 /** 客户端计算节点完整层级路径（如 "数学 > 高等数学 > 极限"）。 */
-function computeFullPath(items: LearningItem[], id: number): string {
-  const byId = new Map<number, LearningItem>();
+function computeFullPath(items: LightLearningItem[], id: number): string {
+  const byId = new Map<number, LightLearningItem>();
   items.forEach((i) => byId.set(i.id, i));
   const chain: string[] = [];
   let current = byId.get(id);
@@ -217,7 +221,8 @@ function Knowledge() {
   const { activeProfile, refreshKey } = useActiveProfile();
 
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [items, setItems] = useState<LearningItem[]>([]);
+  /** DEV-0057 §153-155：树数据源 = light 列表（无 content；正文仅在打开 item 时加载） */
+  const [items, setItems] = useState<LightLearningItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -270,6 +275,10 @@ function Knowledge() {
   // DEV-0022：AI 统一进入右侧 Panel；并上报当前知识上下文
   const { runAction: aiRunAction, setPageContext } = useAiPanel();
 
+  // DEV-0055 §172：开始学习 Start Guard（与 Today/Planning 同一 ActiveSessionConflict 模式）
+  const { conflict: startConflict, guard: guardStart, close: closeStart } =
+    useActiveSessionConflict();
+
   // DEV-0041：小屏（<900px）知识树切换为 Drawer
   const [treeDrawerOpen, setTreeDrawerOpen] = useState(false);
 
@@ -278,7 +287,7 @@ function Knowledge() {
   const [search, setSearch] = useState("");
   const [menuForId, setMenuForId] = useState<number | null>(null);
   // DEV-0034 §65：树节点「移动到…」
-  const [treeMoveFor, setTreeMoveFor] = useState<LearningItem | null>(null);
+  const [treeMoveFor, setTreeMoveFor] = useState<LightLearningItem | null>(null);
   // DEV-0305：拖拽排序/改父子
   const [dragOverId, setDragOverId] = useState<number | null>(null);
   const [creatingRoot, setCreatingRoot] = useState(false);
@@ -463,20 +472,19 @@ function Knowledge() {
   // ---- 数据加载 ----
   // 注意：goals 必须无条件加载（否则无 ?goal= 参数直接进入时
   // 会因 goals 为空而误显示"没有学习目标"——DEV-0011 修复的真实 Bug）。
+  // DEV-0057 §153-155：树数据源 = list_learning_items_light（不含 content 正文）。
   const refresh = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const goalList = await listGoalsByProfile(activeProfile!.id);
       setGoals(goalList);
-      if (goalId == null) {
-        setItems([]);
-        return;
-      }
-      const itemList = await listLearningItemsByGoal(goalId);
-      setItems(itemList);
+      // DEV-0059 §6.10：Goal 是可筛选维度，不是权限门——无 goal 参数时加载该档案全部
+      // learning_items（含 goal_id=NULL 的节点）
+      const lightList = await listLearningItemsLight(activeProfile!.id);
+      setItems(goalId == null ? lightList : lightList.filter((i) => i.goal_id === goalId));
       // 当前选中节点失效（被删 / 切档）时清空工作区
-      if (selectedId != null && !itemList.some((i) => i.id === selectedId)) {
+      if (selectedId != null && !lightList.some((i) => i.id === selectedId)) {
         setSelectedId(null);
         setTitle("");
         setWorkspace(null);
@@ -526,13 +534,8 @@ function Knowledge() {
     }
   }
 
-  // 无 goal 参数时默认选中第一个 active goal（单目标不强迫用户选择）
-  useEffect(() => {
-    if (goalId == null && goals.length > 0) {
-      const first = goals.find((g) => g.status === "active") ?? goals[0];
-      setSearchParams({ goal: String(first.id) }, { replace: true });
-    }
-  }, [goals, goalId, setSearchParams]);
+  // DEV-0059 §6.10：Goal 筛选为可选维度；无 goal 参数时显示全部（含 goal_id=NULL 节点），
+  // 不再强制自动选中第一个 goal（避免把 Goal 当成 Knowledge 权限门）。
 
   // ?item= 参数：自动定位并打开指定知识节点（今日任务"打开知识"入口）
   // DEV-0051 §43：?from=knowledge&item=N（学习后回来）→ 选中后清掉导航参数（保留 goal）
@@ -559,8 +562,9 @@ function Knowledge() {
   // ---- 树操作 ----
   async function handleCreateRoot() {
     const name = rootName.trim();
-    if (!name || goalId == null || !activeProfile) return;
+    if (!name || !activeProfile) return;
     try {
+      // §6.10：goalId 可为 null（无 Goal 档案 → goal_id NULL）
       const created = await createRootLearningItem(activeProfile.id, goalId, name);
       setRootName("");
       setCreatingRoot(false);
@@ -573,8 +577,9 @@ function Knowledge() {
 
   async function handleCreateChild(parentId: number) {
     const name = childName.trim();
-    if (!name || goalId == null || !activeProfile) return;
+    if (!name || !activeProfile) return;
     try {
+      // §6.10：goalId 可为 null（后端 create_child_for_profile 继承 parent.goal_id）
       const created = await createChildLearningItem(activeProfile.id, parentId, goalId, name);
       setChildName("");
       setAddingChildFor(null);
@@ -601,6 +606,23 @@ function Knowledge() {
     }
   }
 
+  /**
+   * DEV-0057 §153-155：light 树没有 description 字段，而 update_learning_item
+   * 会整字段覆盖 description（null = 清空）——重命名提交前按需取回一次原值。
+   */
+  async function renameItemPreservingDesc(id: number, name: string) {
+    let description: string | undefined;
+    if (goalId != null) {
+      try {
+        const full = await listLearningItemsByGoal(goalId);
+        description = full.find((i) => i.id === id)?.description ?? undefined;
+      } catch {
+        /* 取回失败不阻塞重命名 */
+      }
+    }
+    await updateLearningItem(id, name, description);
+  }
+
   async function handleRename(id: number) {
     const name = renameValue.trim();
     const item = items.find((i) => i.id === id);
@@ -609,7 +631,7 @@ function Knowledge() {
       return;
     }
     try {
-      await updateLearningItem(id, name, item.description ?? undefined);
+      await renameItemPreservingDesc(id, name);
       setRenamingId(null);
       if (selectedId === id) setTitle(name);
       await refresh();
@@ -622,13 +644,9 @@ function Knowledge() {
     const item = items.find((i) => i.id === id);
     setMenuForId(null);
     if (!item) return;
-    const hasContent = item.content.trim().length > 0;
-    const confirmed = hasContent
-      ? window.confirm(
-          `该知识中存在你记录的内容。\n\n删除「${item.name}」后这些内容将无法恢复。\n\n确认删除？`
-        )
-      : window.confirm(`确认删除「${item.name}」？`);
-    if (!confirmed) return;
+    // DEV-0057 §153-155：light 树无 content，旧的 hasContent 二次确认随之移除；
+    // 正文事实仍由后端 safe_delete 的关联数据保护。
+    if (!window.confirm(`确认删除「${item.name}」？`)) return;
     try {
       await deleteLearningItem(id);
       if (selectedId === id) {
@@ -649,7 +667,7 @@ function Knowledge() {
     const name = title.trim();
     if (!name || name === selectedItem.name) return;
     try {
-      await updateLearningItem(selectedItem.id, name, selectedItem.description ?? undefined);
+      await renameItemPreservingDesc(selectedItem.id, name);
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -681,6 +699,8 @@ function Knowledge() {
       const s = await startSession(selectedItem.id);
       navigate(`/learn/${s.id}`);
     } catch (e) {
+      // §172：已有进行中学习 → Start Guard 弹窗（继续/结束/取消），不再裸抛错误
+      if (guardStart(e)) return;
       setError(String(e));
     }
   }
@@ -913,23 +933,8 @@ function Knowledge() {
     return rows;
   }, [workspace]);
 
-  // 无 Goal 空状态
-  if (!loading && goals.length === 0) {
-    return (
-      <div className="page">
-        <header className="page__header">
-          <h1 className="page__title">知识体系</h1>
-        </header>
-        <div className="knowledge__empty">
-          <p className="knowledge__empty-title">你的这个学习档案还没有学习目标。</p>
-          <p className="muted">先建立一个目标，Higher 才能帮助你组织知识体系。</p>
-          <button className="btn btn--primary" onClick={() => navigate("/goals")}>
-            创建学习目标
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // DEV-0059 §6.10：Goal 不再是 Knowledge 权限门——无 Goal 档案也正常渲染知识树
+  // （items 已含 goal_id=NULL 节点；树空态见下方"还没有知识内容"）
 
   return (
     <div className="knowledge">
@@ -947,9 +952,10 @@ function Knowledge() {
           "knowledge__tree" + (treeDrawerOpen ? " knowledge__tree--drawer" : "")
         }
       >
-        {goals.length > 1 && (
+        {/* §6.10：Goal 是可选筛选维度；有 Goal 才显示选择器（含「全部」） */}
+        {goals.length > 0 && (
           <div className="knowledge__goal">
-            <span className="knowledge__goal-label">当前目标</span>
+            <span className="knowledge__goal-label">筛选目标</span>
             <select
               className="knowledge__goal-select"
               value={goalId ?? ""}
@@ -957,9 +963,17 @@ function Knowledge() {
                 setSelectedId(null);
                 setWorkspace(null);
                 setEditingDoc(null);
-                setSearchParams({ goal: e.target.value });
+                const v = e.target.value;
+                if (v === "") {
+                  const next = new URLSearchParams(searchParams);
+                  next.delete("goal");
+                  setSearchParams(next, { replace: true });
+                } else {
+                  setSearchParams({ goal: v });
+                }
               }}
             >
+              <option value="">全部（含无目标）</option>
               {goals.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name}
@@ -1023,9 +1037,9 @@ function Knowledge() {
             )
           ) : items.length === 0 ? (
             <div className="knowledge__tree-empty">
-              <p className="knowledge__empty-title">开始建立你的知识体系</p>
+              <p className="knowledge__empty-title">还没有知识内容</p>
               <p className="muted">
-                你可以从最粗的分类开始，以后边学习边补充。
+                你可以先新建一个主题，也可以先去快速学习，稍后再整理。
                 <br />
                 例如：数学、英语、数据结构、Linux、摄影……
               </p>
@@ -1061,7 +1075,6 @@ function Knowledge() {
             <button
               className="knowledge__new-root"
               onClick={() => setCreatingRoot(true)}
-              disabled={goalId == null}
             >
               + 新建知识
             </button>
@@ -1153,6 +1166,7 @@ function Knowledge() {
         ) : viewMode === "graph" ? (
           <KnowledgeFlow
             items={items}
+            profileId={activeProfile?.id ?? null}
             currentId={selectedId}
             onOpen={(itemId) => {
               setViewMode("workspace");
@@ -1174,7 +1188,7 @@ function Knowledge() {
               await refresh();
             }}
             onRename={async (item, name) => {
-              await updateLearningItem(item.id, name, item.description ?? undefined);
+              await renameItemPreservingDesc(item.id, name);
               await refresh();
             }}
             onMove={async (item, newParentId) => {
@@ -1240,7 +1254,7 @@ function Knowledge() {
             </div>
             <RichDocEditor
               key={"kdoc-" + editingDoc.id}
-              profileId={selectedItem.profile_id}
+              profileId={activeProfile?.id ?? 0}
               learningItemId={selectedItem.id}
               sessionId={null}
               initialDocument={editingDocInitial}
@@ -1281,7 +1295,7 @@ function Knowledge() {
               {workspace != null &&
                 (workspace.session_count > 0 || workspace.documents.length > 0) && (
                   <div className="kws__stats">
-                    累计学习 {formatDuration(workspace.study_seconds)} · 学习{" "}
+                    累计学习 {formatDurationCompact(workspace.study_seconds)} · 学习{" "}
                     {workspace.session_count} 次 · 文档 {workspace.documents.length} 篇 · 最近{" "}
                     {fmtFullDateTime(workspace.last_studied_at)}
                   </div>
@@ -1387,7 +1401,7 @@ function Knowledge() {
                                 {s.title || selectedItem.name}
                               </div>
                               <div className="kws__card-sub">
-                                学习 {formatDuration(s.duration_seconds)}
+                                学习 {formatDurationCompact(s.duration_seconds)}
                               </div>
                               {note ? (
                                 <>
@@ -1713,7 +1727,7 @@ function Knowledge() {
       {/* 统一验证 Modal（自动带入当前 Profile/Goal + 选中 LearningItem） */}
       {showEvalModal && selectedItem && (
         <EvaluationModal
-          profileId={selectedItem.profile_id}
+          profileId={activeProfile?.id ?? 0}
           goalId={selectedItem.goal_id}
           learningItemId={selectedItem.id}
           defaultTitle={`${selectedItem.name}验证`}
@@ -1874,6 +1888,13 @@ function Knowledge() {
           </div>
         </div>
       )}
+
+      {/* DEV-0055 §172：开始学习 Start Guard 冲突弹窗（与 Today/Planning 同模式） */}
+      <ActiveSessionConflictModal
+        conflict={startConflict}
+        onClose={closeStart}
+        onResolved={() => void refresh()}
+      />
     </div>
   );
 

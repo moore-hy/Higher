@@ -17,6 +17,13 @@ pub struct DailyActivityRow {
     pub learning_item_id: Option<i64>,
     pub task_id: Option<i64>,
     pub deep_link: String,
+    /// DEV-0057 §106/§126：normal|needs_review|confirmed|corrected（UI 显示"时间待确认"标签）
+    #[serde(default = "default_review_state")]
+    pub duration_review_state: String,
+}
+
+fn default_review_state() -> String {
+    "normal".into()
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -60,6 +67,8 @@ pub struct DailyReport {
     pub overall_efficiency: Option<f64>,
     /// §82：计划执行稳定/部分偏离计划/计划执行偏低/自由学习
     pub learning_status: String,
+    /// DEV-0057 §101：当天待确认时长条数（actual 统计已排除；UI 轻提示）
+    pub needs_review_count: i64,
     pub tasks: Vec<DailyTaskRow>,
     pub activities: Vec<DailyActivityRow>,
 }
@@ -120,7 +129,8 @@ impl<'a> DailyReportRepository<'a> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, title, started_at, duration_seconds, activity_kind, learning_item_id, task_id
+                "SELECT id, title, started_at, duration_seconds, activity_kind, learning_item_id, task_id,
+                        duration_review_state
                  FROM study_sessions
                  WHERE profile_id = ?1 AND date(started_at, '+8 hours') = ?2
                  ORDER BY started_at",
@@ -137,18 +147,29 @@ impl<'a> DailyReportRepository<'a> {
                     learning_item_id: r.get(5)?,
                     task_id: r.get(6)?,
                     deep_link: format!("higher://session/{}", r.get::<_, i64>(0)?),
+                    duration_review_state: r.get(7)?,
                 })
             })
             .map_err(|e| e.to_string())?;
         let activities: Vec<DailyActivityRow> = rows_collect(act_rows)?;
 
-        // §67：全部真实学习（Task + Quick）
-        let actual_seconds: i64 = activities.iter().filter_map(|a| a.duration_seconds).sum();
+        // DEV-0057 §101/§106：needs_review 不进可信统计（但行仍在 activities 中带"时间待确认"标签）
+        let needs_review_count = activities
+            .iter()
+            .filter(|a| a.duration_review_state == "needs_review")
+            .count() as i64;
+        let trusted: Vec<&DailyActivityRow> = activities
+            .iter()
+            .filter(|a| a.duration_review_state != "needs_review")
+            .collect();
+
+        // §67：全部真实学习（Task + Quick；排除 needs_review）
+        let actual_seconds: i64 = trusted.iter().filter_map(|a| a.duration_seconds).sum();
         let actual_minutes = actual_seconds / 60;
 
-        // §75：只算关联"当天计划 Task"的 Session
+        // §75：只算关联"当天计划 Task"的 Session（同样排除 needs_review）
         let task_ids: Vec<i64> = tasks.iter().map(|t| t.id).collect();
-        let planned_seconds: i64 = activities
+        let planned_seconds: i64 = trusted
             .iter()
             .filter(|a| a.task_id.map(|t| task_ids.contains(&t)).unwrap_or(false))
             .filter_map(|a| a.duration_seconds)
@@ -246,6 +267,7 @@ impl<'a> DailyReportRepository<'a> {
             time_execution_rate,
             overall_efficiency,
             learning_status,
+            needs_review_count,
             tasks,
             activities,
         })

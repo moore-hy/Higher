@@ -38,12 +38,14 @@ impl<'a> LearningDataRepository<'a> {
     }
 
     /// 单周期统计（start/end 为学习日 YYYY-MM-DD，含两端）。
+    /// DEV-0059 §6.1：可信统计必须排除 needs_review（confirmed/corrected 计入）。
     pub fn stats(&self, profile_id: i64, start: &str, end: &str) -> Result<LearningStats, String> {
         let study_seconds: i64 = self
             .conn
             .query_row(
                 "SELECT COALESCE(SUM(duration_seconds),0) FROM study_sessions
                  WHERE profile_id = ?1 AND status = 'completed'
+                   AND duration_review_state != 'needs_review'
                    AND date(started_at, '+8 hours') BETWEEN date(?2) AND date(?3)",
                 params![profile_id, start, end],
                 |r| r.get(0),

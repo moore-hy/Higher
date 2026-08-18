@@ -21,7 +21,7 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.3", features = [] }
+tauri = { version = "2.11.3", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
@@ -42,3 +42,5 @@ quick-xml = "0.36"
 # ZIP/HTML/PDF parsing. No security bypass.
 miniz_oxide = { version = "0.8", default-features = false, features = ["std", "with-alloc"] }
 tauri-plugin-opener = "2"
+# DEV-0059 §31.3：导出文件 base64 编码传输（已在依赖树中，显式声明以便直接引用）
+base64 = "0.22"

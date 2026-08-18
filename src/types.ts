@@ -410,6 +410,22 @@ export interface LearningItem {
   updated_at: string;
 }
 
+/**
+ * DEV-0057 §153-155 轻量知识条目（Knowledge 树 / 导航 / 知识图数据源）。
+ * 与 LearningItem 同 id 空间，但 **不含 content / description**——
+ * 正文只在打开具体 item 时经 get_knowledge_workspace 按需加载。
+ */
+export interface LightLearningItem {
+  id: number;
+  goal_id: number | null;
+  parent_id: number | null;
+  name: string;
+  mastery_status: string; // not_started | learning | mastered
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 /** 知识节点学习数据概览（自动从 Session / Evaluation 聚合，用户不能填写） */
 export interface KnowledgeNodeStats {
   study_seconds: number;
@@ -440,6 +456,16 @@ export interface Task {
   task_kind?: "structured" | "accumulation";
   /** DEV-0053 §20：core=核心 / normal=常规（旧数据默认 normal） */
   priority?: "core" | "normal";
+  /** v021 §21：manual | blueprint（蓝图投影生成的任务） */
+  origin?: "manual" | "blueprint";
+  /** v021：来源蓝图（投影任务） */
+  planning_blueprint_id?: number | null;
+  /** v021：来源蓝图阶段 */
+  planning_phase_id?: number | null;
+  /** v021：蓝图投影幂等键（{blueprint_id}:{idx}） */
+  projection_key?: string;
+  /** DEV-0059.1 §4：用户主动编辑 Blueprint 任务的时间（保护标记） */
+  user_modified_at?: string | null;
 }
 
 /** delete_task 结果（DEV-0031：有历史时前端改走 archive） */
@@ -522,6 +548,8 @@ export interface StudySession {
   time_corrected: number;
   /** DEV-0053 §27：core | regular | accumulation | unplanned（旧数据默认 unplanned） */
   activity_kind?: "core" | "regular" | "accumulation" | "unplanned";
+  /** DEV-0057 §95-99：时长可信度（>12h 结束 → needs_review；确认 → confirmed；修正 → corrected） */
+  duration_review_state?: "normal" | "needs_review" | "confirmed" | "corrected";
 }
 
 /** DEV-0054 Start Guard：进行中 Session 简要（ActiveSessionConflict:{json} 负载 / list_active_sessions） */
@@ -587,6 +615,8 @@ export interface DailyActivityRow {
   learning_item_id: number | null;
   task_id: number | null;
   deep_link: string;
+  /** DEV-0057 §99/§126：时长可信度（needs_review 行必须显示「时间待确认」小标签） */
+  duration_review_state: "normal" | "needs_review" | "confirmed" | "corrected";
 }
 
 /** 单日学习报告（Today date=today / Calendar date=selected_date 共用 §90） */
@@ -616,6 +646,8 @@ export interface DailyReport {
   learning_status: string;
   tasks: DailyTaskRow[];
   activities: DailyActivityRow[];
+  /** DEV-0057 §102：当天待确认时长的学习记录数（这些记录暂不计入本页统计） */
+  needs_review_count: number;
 }
 
 export interface DbStatus {
@@ -679,14 +711,23 @@ export interface Evaluation {
   note: string | null;
   created_at: string;
   updated_at: string;
+  /** v021 §20 Evidence V1：可选关联真实 StudySession */
+  session_id?: number | null;
+  /** v021 §20：user | ai | import */
+  source_kind?: string;
+  /** v021 §20：来源引用（ai_run_id / 导入路径） */
+  source_ref?: string;
+  /** v021 §20：trusted | needs_review（needs_review 不进 trusted evidence） */
+  trust_state?: string;
 }
 
-// Evaluation 类型选项（与 evaluation_type 列值一一对应）
+// Evaluation 类型选项（与 evaluation_type 列值一一对应；§6.7 canonical）
 export const EVALUATION_TYPES = [
   "practice",
   "test",
   "recall",
   "application",
+  "project",
   "other",
 ] as const;
 export type EvaluationType = (typeof EVALUATION_TYPES)[number];
@@ -696,6 +737,7 @@ export const EVALUATION_TYPE_LABELS: Record<EvaluationType, string> = {
   test: "测试",
   recall: "回忆",
   application: "应用",
+  project: "项目",
   other: "其他",
 };
 
@@ -812,7 +854,7 @@ export interface ChangeSet {
   run_id: string | null;
   title: string;
   summary: string;
-  status: string; // pending | applied | rejected | undone
+  status: string; // §6.5 canonical: draft | waiting_approval | applied | rejected | cancelled | undone
   created_at: string;
   applied_at: string | null;
   rejected_at: string | null;
@@ -850,17 +892,135 @@ export interface PersonalizationSource {
   updated_at: string;
 }
 
-/** 私人化档案（PHASE I：19 节 Markdown Draft → Confirm） */
+/** 私人化档案（DEV-0059 §8：version rows；draft/confirmed/superseded） */
 export interface PersonalizationProfile {
   id: number;
   profile_id: number;
+  version: number;
   md_content: string;
   structured_json: string | null;
-  status: string; // draft | confirmed
+  status: string; // draft | confirmed | superseded
+  based_on_version_id: number | null;
+  created_at: string;
+  updated_at: string;
+  confirmed_at: string | null;
+}
+
+// =============== DEV-0059：GoalTarget / PlanningBlueprint / Phase / Milestone / Review / PlanningSource ===============
+
+/** GoalTarget（§11：通用目标核心；postgraduate role=reach|safety） */
+export interface GoalTarget {
+  id: number;
+  profile_id: number;
+  scenario_type: string;
+  role: string;
+  title: string;
+  target_date: string | null;
+  data_json: string;
+  provenance_json: string;
+  status: string; // candidate | draft | active | historical | dismissed
   version: number;
-  last_compiled_at: string | null;
-  last_updated_at: string | null;
-  dirty: boolean;
+  supersedes_id: number | null;
+  created_at: string;
+  updated_at: string;
+  activated_at: string | null;
+}
+
+/** §11.4 Legacy 目标源候选（未确认；不自动激活） */
+export interface LegacyGoalCandidate {
+  source: string;
+  title: string;
+  target_date: string | null;
+  detail: string;
+}
+
+/** PlanningBlueprint（§14） */
+export interface PlanningBlueprint {
+  id: number;
+  profile_id: number;
+  scenario_type: string;
+  version: number;
+  status: string; // draft | active | superseded | rejected
+  title: string;
+  content_md: string;
+  structured_json: string | null;
+  source_snapshot_json: string;
+  provenance_json: string;
+  review_enabled: boolean;
+  review_interval_days: number;
+  last_review_at: string | null;
+  next_review_at: string | null;
+  supersedes_id: number | null;
+  created_at: string;
+  updated_at: string;
+  activated_at: string | null;
+}
+
+/** PlanningPhase（§15） */
+export interface PlanningPhase {
+  id: number;
+  blueprint_id: number;
+  phase_key: string;
+  title: string;
+  start_date: string | null;
+  end_date: string | null;
+  objective_md: string;
+  sort_order: number;
+  status: string;
+  data_json: string;
+}
+
+/** PlanningMilestone（§16） */
+export interface PlanningMilestone {
+  id: number;
+  blueprint_id: number;
+  phase_id: number | null;
+  milestone_key: string;
+  title: string;
+  start_date: string | null;
+  end_date: string | null;
+  date_precision: string; // day | range | month | unknown
+  date_status: string; // estimated | official | user_confirmed | outdated | needs_review
+  status: string;
+  provenance_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** PlanningReview（§17） */
+export interface PlanningReview {
+  id: number;
+  profile_id: number;
+  blueprint_id: number | null;
+  period_start: string;
+  period_end: string;
+  trigger_type: string;
+  status: string; // due | running | waiting_approval | completed | skipped | failed
+  evidence_snapshot_json: string;
+  assessment_md: string;
+  recommendation_json: string;
+  risk_state: string; // unknown | normal | attention | off_reach | near_safety | below_safety
+  change_set_id: number | null;
+  user_decision: string;
+  resulting_blueprint_id: number | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+/** PlanningSource（§13） */
+export interface PlanningSource {
+  id: number;
+  profile_id: number;
+  source_kind: string; // user_file | higher_ai | external_ai | manual | export_reimport
+  original_name: string;
+  file_type: string;
+  original_path: string;
+  sha256: string;
+  status: string; // imported | ready | failed | archived
+  metadata_json: string;
+  created_at: string;
+  updated_at: string;
 }
 
 /** 联网搜索来源（§95；Source Registry sid=S1/S2…） */
@@ -898,3 +1058,50 @@ export interface VaultStatus {
 
 /** vault_list_snapshots 返回：[id, kind, db_size, created_at] */
 export type VaultSnapshot = [number, string, number, string];
+
+// =============== DEV-0055 · Final Goal Brief / /data 聚合 ===============
+
+/**
+ * §19 通用最终目标 Brief（与 Rust repository::goal::GoalBrief 对应；
+ * 字段名为 serde 原样 snake_case，不经 camelCase 转换）。
+ */
+export interface GoalBrief {
+  /** 简短标题（如 "2027 考研"） */
+  title: string;
+  /** 最终想实现什么（一句话） */
+  outcome: string;
+  /** YYYY-MM-DD；null = 明确无 deadline */
+  deadline: string | null;
+  success_criteria: string[];
+  scope: string[];
+  constraints: string[];
+  /** 未决事项 */
+  unresolved: string[];
+}
+
+/** §18 Final Goal Card 状态：Brief + 冲突清单 + Readiness 缺项 */
+export interface GoalState {
+  brief: GoalBrief;
+  conflicts: string[];
+  missing: string[];
+}
+
+/** §104-109 累计三数 + 今日两数（后端单条聚合 SQL） */
+export interface LearningTotals {
+  learning_days: number;
+  total_seconds: number;
+  daily_avg_minutes: number;
+  today_seconds: number;
+  today_tasks_total: number;
+  today_tasks_completed: number;
+  /** DEV-0057 §102：待确认时长的学习记录数（暂不计入本页统计） */
+  needs_review_count: number;
+}
+
+/** §112-117 Knowledge 时间分布切片（seconds 含全部后代） */
+export interface KnowledgeTimeSlice {
+  name: string;
+  seconds: number;
+  item_id: number;
+  child_count: number;
+}

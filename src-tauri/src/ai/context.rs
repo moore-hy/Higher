@@ -64,23 +64,55 @@ fn validate_optional_ids(
 }
 
 /// 组装上下文（返回发送给模型的 user 消息正文）。
+///
+/// DEV-0057 PART M §75-79：本函数降级为 **Compatibility Adapter**——
+/// 检索/记忆/私人化等"通用上下文算法"统一来自 `context_builder::build`（唯一正式 Builder）；
+/// 这里仅保留：①归属校验 ②action 专属数据块（daily/mastery/session_detail 等范围注入）。
+/// 不再拥有独立的 profile/goal/knowledge/memory 拼装算法（禁两套记忆/两套 Search Context）。
 pub fn build_context(conn: &Connection, input: &ContextInput) -> Result<String, String> {
     let mut parts: Vec<String> = Vec::new();
 
     // 统一归属校验（所有 action；包括 Panel 自由对话附带的可选 ID）
     validate_optional_ids(conn, input.profile_id, input.session_id, input.learning_item_id)?;
 
-    // ---- 公共头部：Profile / Active Goal / Current Stage / Knowledge Tree 结构 ----
-    // DEV-0046：daily_review 聚焦当天；DEV-0050：mastery_assessment 走专用 mastery_block。
-    parts.push(profile_block(conn, input.profile_id)?);
-    if !matches!(
-        input.action,
-        AiAction::DailyReview | AiAction::MasteryAssessment
-    ) {
-        parts.push(goal_block(conn, input.profile_id)?);
-        parts.push(stage_block(conn, input.profile_id)?);
-        parts.push(knowledge_tree_block(conn, input.profile_id));
-        parts.push(recent_sessions_block(conn, input.profile_id));
+    // ---- 统一 Builder（L1 当前上下文 / L2 私人化 / L3 Higher 检索 / L4 Memory+历史）----
+    let action_label = match input.action {
+        AiAction::SessionAnalysis => "会话分析",
+        AiAction::KnowledgeAnalysis | AiAction::KnowledgeOrganize => "知识分析",
+        AiAction::PlanningAnalysis | AiAction::TodaySuggestion => "学习建议",
+        AiAction::ProfileAnalysis => "档案分析",
+        AiAction::AssistantChat => "自由对话",
+        AiAction::DailyReview => "每日复盘",
+        AiAction::MasteryAssessment => "掌握度评估",
+    };
+    let query = input
+        .user_instruction
+        .clone()
+        .unwrap_or_else(|| action_label.to_string());
+    let page = super::context_builder::PageContext {
+        page_label: action_label.to_string(),
+        knowledge_path: input
+            .learning_item_id
+            .and_then(|iid| knowledge_path(conn, input.profile_id, iid).ok())
+            .unwrap_or(None),
+        session_title: input
+            .session_id
+            .and_then(|sid| session_title(conn, input.profile_id, sid).ok())
+            .unwrap_or(None),
+        date: input.date.clone(),
+        conversation_id: None,
+    };
+    let report = super::context_builder::build(
+        conn,
+        input.profile_id,
+        &query,
+        &page,
+        "readonly",
+    )?;
+    for layer in &report.layers {
+        if !layer.text.trim().is_empty() {
+            parts.push(layer.text.clone());
+        }
     }
 
     match input.action {
@@ -111,8 +143,7 @@ pub fn build_context(conn: &Connection, input: &ContextInput) -> Result<String, 
         }
         AiAction::AssistantChat => {
             // 全局助手（DEV-0023 §11/§34/§35）：页面附带的 session/item 作为默认理解对象
-            // 优先注入（"这里"= 当前知识节点；"这次学习"= 当前会话）；
-            // 页面 Context 不是权限——档案级工具仍全部可用（§12）。
+            // 优先注入（"这里"= 当前知识节点；"这次学习"= 当前会话）。
             if let Some(sid) = input.session_id {
                 parts.push(session_detail_block(conn, input.profile_id, sid)?);
             }
@@ -142,6 +173,30 @@ pub fn build_context(conn: &Connection, input: &ContextInput) -> Result<String, 
     }
 
     Ok(parts.join("\n\n"))
+}
+
+/// Adapter 辅助：item 名称（作为 L1 knowledge_path）。
+fn knowledge_path(conn: &Connection, profile_id: i64, iid: i64) -> Result<Option<String>, String> {
+    let name: Option<String> = conn
+        .query_row(
+            "SELECT name FROM learning_items WHERE id=?1 AND profile_id=?2",
+            params![iid, profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(name)
+}
+
+/// Adapter 辅助：session 标题（作为 L1 session_title）。
+fn session_title(conn: &Connection, profile_id: i64, sid: i64) -> Result<Option<String>, String> {
+    let t: Option<String> = conn
+        .query_row(
+            "SELECT title FROM study_sessions WHERE id=?1 AND profile_id=?2",
+            params![sid, profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(t)
 }
 
 /// MasteryAssessment 的周期（period_start/period_end 借道 date 字段传入：date="start..end"）。

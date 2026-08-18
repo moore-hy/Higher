@@ -36,10 +36,17 @@ pub struct StudySession {
     /// v018（DEV-0053 §27-29）：core | regular | accumulation | unplanned
     #[serde(default = "default_activity_kind")]
     pub activity_kind: String,
+    /// v020（DEV-0057 §99）：normal | needs_review | confirmed | corrected
+    #[serde(default = "default_review_state")]
+    pub duration_review_state: String,
 }
 
 fn default_activity_kind() -> String {
     "unplanned".into()
+}
+
+fn default_review_state() -> String {
+    "normal".into()
 }
 
 /// 学习日归属不变量（DEV-0049 §11.4，全项目统一）：
@@ -47,7 +54,7 @@ fn default_activity_kind() -> String {
 /// - Higher 学习日 = **UTC+8** 日历日；
 /// - 因此任何"某学习日 D 的 Session"过滤必须使用
 ///   `date(started_at, '+8 hours') = D`（或 BETWEEN），禁止裸 `date(started_at)`。
-const SESSION_COLUMNS: &str = "id, profile_id, goal_id, task_id, learning_item_id, title, started_at, ended_at, duration_seconds, status, note, note_document_json, created_at, updated_at, time_corrected, activity_kind";
+const SESSION_COLUMNS: &str = "id, profile_id, goal_id, task_id, learning_item_id, title, started_at, ended_at, duration_seconds, status, note, note_document_json, created_at, updated_at, time_corrected, activity_kind, duration_review_state";
 
 fn cols(alias: &str) -> String {
     SESSION_COLUMNS
@@ -214,20 +221,18 @@ impl<'a> StudySessionRepository<'a> {
     pub fn list_by_goal(&self, profile_id: i64, goal_id: i64, limit: i64) -> Result<Vec<StudySession>, String> {
         let mut stmt = self
             .conn
-            .prepare(
+            .prepare(&format!(
                 "WITH RECURSIVE sub(id) AS (
                      SELECT id FROM goals WHERE id = ?2 AND profile_id = ?1
                      UNION ALL
                      SELECT g.id FROM goals g JOIN sub s ON g.parent_goal_id = s.id
                  )
-                 SELECT s.id, s.profile_id, s.goal_id, s.task_id, s.learning_item_id, s.title,
-                        s.started_at, s.ended_at, s.duration_seconds, s.status, s.note,
-                        s.note_document_json, s.created_at, s.updated_at, s.time_corrected, s.activity_kind
-                 FROM study_sessions s
+                 SELECT {} FROM study_sessions s
                  WHERE s.profile_id = ?1 AND s.goal_id IN (SELECT id FROM sub)
                  ORDER BY s.started_at DESC
                  LIMIT ?3",
-            )
+                cols("s")
+            ))
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![profile_id, goal_id, limit.clamp(1, 200)], parse_session)
@@ -239,15 +244,13 @@ impl<'a> StudySessionRepository<'a> {
     pub fn list_unassigned(&self, profile_id: i64, limit: i64) -> Result<Vec<StudySession>, String> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, profile_id, goal_id, task_id, learning_item_id, title,
-                        started_at, ended_at, duration_seconds, status, note,
-                        note_document_json, created_at, updated_at, time_corrected, activity_kind
-                 FROM study_sessions
+            .prepare(&format!(
+                "SELECT {} FROM study_sessions
                  WHERE profile_id = ?1 AND learning_item_id IS NULL
                  ORDER BY started_at DESC
                  LIMIT ?2",
-            )
+                SESSION_COLUMNS
+            ))
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![profile_id, limit.clamp(1, 200)], parse_session)
@@ -498,5 +501,6 @@ fn parse_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<StudySession> {
         updated_at: row.get(13)?,
         time_corrected: row.get(14)?,
         activity_kind: row.get(15)?,
+        duration_review_state: row.get(16)?,
     })
 }

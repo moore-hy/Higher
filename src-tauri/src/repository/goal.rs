@@ -28,10 +28,64 @@ pub struct Goal {
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
+    /// v019（DEV-0055 PART 6）：Final Goal Canonical Brief（JSON；仅 final 行使用）
+    #[serde(default)]
+    pub goal_brief_json: Option<String>,
 }
 
 fn default_goal_level() -> String {
-    "legacy".to_string()
+    "legacy".into()
+}
+
+/// DEV-0055 §19 Generic Goal Brief：通用（非考研专项）七字段结构。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct GoalBrief {
+    /// 简短标题（如 "2027 考研"）
+    #[serde(default)]
+    pub title: String,
+    /// 最终想实现什么（一句话）
+    #[serde(default)]
+    pub outcome: String,
+    /// YYYY-MM-DD 或 null=明确无 deadline
+    #[serde(default)]
+    pub deadline: Option<String>,
+    #[serde(default)]
+    pub success_criteria: Vec<String>,
+    #[serde(default)]
+    pub scope: Vec<String>,
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    /// 未决事项（Goal 不完整的具体清单）
+    #[serde(default)]
+    pub unresolved: Vec<String>,
+}
+
+impl GoalBrief {
+    /// §27 Planning Readiness 最低要求：outcome + (deadline 明确或明确无) + ≥1 success_criteria。
+    /// DEV-0058 §30：文案禁内部字段名（用户直接可见）。
+    pub fn readiness_missing(&self) -> Vec<String> {
+        let mut missing = Vec::new();
+        if self.outcome.trim().is_empty() {
+            missing.push("最终想达到什么".to_string());
+        }
+        if self.deadline.is_none() && !self.no_deadline_confirmed() {
+            missing.push("截止时间（或确认无截止）".to_string());
+        }
+        if self.success_criteria.iter().all(|s| s.trim().is_empty()) {
+            missing.push("至少一条成功标准".to_string());
+        }
+        missing
+    }
+
+    fn no_deadline_confirmed(&self) -> bool {
+        self.constraints
+            .iter()
+            .any(|c| c.contains("无截止") || c.to_lowercase().contains("no deadline"))
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.readiness_missing().is_empty()
+    }
 }
 
 /// 目标树（§25 文件树结构；legacy 节点单列不混入层级）。
@@ -48,7 +102,7 @@ pub struct GoalTree {
     pub legacy_goals: Vec<Goal>,
 }
 
-const GOAL_COLS: &str = "id, name, description, status, profile_id, parent_goal_id, goal_level, period_start, period_end, sort_order, created_at, updated_at";
+const GOAL_COLS: &str = "id, name, description, status, profile_id, parent_goal_id, goal_level, period_start, period_end, sort_order, created_at, updated_at, goal_brief_json";
 
 pub struct GoalRepository<'a> {
     conn: &'a Connection,
@@ -123,6 +177,103 @@ impl<'a> GoalRepository<'a> {
         Ok(())
     }
 
+    // =============== v019 Final Goal Canonical Brief（DEV-0055 PART 5-6） ===============
+
+    /// §19：读 Final Goal Brief（无/解析失败 → 全空 Default；前端显示"目标待确认"）。
+    pub fn get_final_brief(&self, profile_id: i64) -> rusqlite::Result<GoalBrief> {
+        let raw: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT goal_brief_json FROM goals
+                 WHERE profile_id = ?1 AND goal_level = 'final'",
+                params![profile_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
+        Ok(raw
+            .and_then(|s| serde_json::from_str::<GoalBrief>(&s).ok())
+            .unwrap_or_default())
+    }
+
+    /// §198：写 Brief（用户确认路径：Manual 表单 或 AI 提案 ChangeSet apply 后均走此）。
+    /// 校验：id 必须是该 Profile 的 final。
+    /// DEV-0057 §27 Canonical Title：brief.title 非空时同事务同步 goals.name（name=显示投影，
+    /// 不得成为第二事实源）。
+    pub fn set_final_brief(&self, profile_id: i64, brief: &GoalBrief) -> Result<(), String> {
+        let json = serde_json::to_string(brief).map_err(|e| e.to_string())?;
+        let title = brief.title.trim();
+        let n = if title.is_empty() {
+            self.conn
+                .execute(
+                    "UPDATE goals SET goal_brief_json = ?1, updated_at = datetime('now')
+                     WHERE profile_id = ?2 AND goal_level = 'final'",
+                    params![json, profile_id],
+                )
+                .map_err(|e| e.to_string())?
+        } else {
+            self.conn
+                .execute(
+                    "UPDATE goals SET goal_brief_json = ?1, name = ?3, updated_at = datetime('now')
+                     WHERE profile_id = ?2 AND goal_level = 'final'",
+                    params![json, profile_id, title],
+                )
+                .map_err(|e| e.to_string())?
+        };
+        if n == 0 {
+            return Err("该档案还没有最终目标".to_string());
+        }
+        Ok(())
+    }
+
+    /// §16 Goal Conflict Rule：检测目标多源冲突（Canonical Brief vs profile.target_* vs
+    /// goals.description vs Personalization）。返回冲突描述列表（空=无冲突）。
+    /// **不自动选择**（§169）；调用方（AI/UI）必须提示用户确认。
+    pub fn detect_goal_conflicts(&self, profile_id: i64) -> Vec<String> {
+        let mut conflicts = Vec::new();
+        let brief = self.get_final_brief(profile_id).unwrap_or_default();
+        let (prof_desc, prof_date): (Option<String>, Option<String>) = self
+            .conn
+            .query_row(
+                "SELECT target_description, target_date FROM study_profiles WHERE id = ?1",
+                params![profile_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((None, None));
+        let goal_desc: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT description FROM goals WHERE profile_id = ?1 AND goal_level = 'final'",
+                params![profile_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(None);
+
+        // Brief 已有 canonical deadline，而 profile.target_date 是不同日期 → 冲突
+        if let (Some(bd), Some(pd)) = (brief.deadline.as_deref(), prof_date.as_deref()) {
+            if !bd.is_empty() && !pd.is_empty() && bd != pd {
+                conflicts.push(format!(
+                    "截止时间存在两个说法：最终目标「{bd}」 vs 档案信息「{pd}」"
+                ));
+            }
+        }
+        // Brief 有 outcome，profile.target_description 非空且非同一句 → 疑似不同目标表述
+        if !brief.outcome.trim().is_empty() {
+            if let Some(d) = prof_desc.as_deref() {
+                let d = d.trim();
+                if !d.is_empty() && d != brief.outcome.trim() && !d.contains(&brief.outcome) {
+                    conflicts.push("目标描述存在两个不同版本（最终目标 vs 档案目标描述）".to_string());
+                }
+            }
+            if let Some(g) = goal_desc.as_deref() {
+                let g = g.trim();
+                if !g.is_empty() && g != brief.outcome.trim() && !g.contains(&brief.outcome) {
+                    conflicts.push("目标描述存在两个不同版本（最终目标 vs 目标备注）".to_string());
+                }
+            }
+        }
+        conflicts
+    }
+
     pub fn archive(&self, id: i64) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE goals SET status = 'archived', updated_at = datetime('now') WHERE id = ?1",
@@ -193,13 +344,26 @@ impl<'a> GoalRepository<'a> {
             }
             "year" => {
                 let parent = Self::expect_parent(self, parent_goal_id, "year", "final", profile_id)?;
-                let y: i64 = period
-                    .and_then(|s| s.parse().ok())
-                    .ok_or_else(|| "年目标需要年份，如 2026".to_string())?;
-                if !(1900..=2999).contains(&y) {
-                    return Err("年份非法".to_string());
-                }
-                (Some(format!("{y}-01-01")), Some(format!("{y}-12-31")), Some(parent))
+                // DEV-0057 §32-36：Year Goal = 长周期规划阶段，允许跨自然年。
+                // 双格式统一（与 AI/ChangeSet 链一致）："YYYY-MM-DD..YYYY-MM-DD" 区间 或 "YYYY"（自然年=区间特例）。
+                let p = period.ok_or_else(|| {
+                    "年目标需要周期，如 2026 或 2026-08-01..2027-08-01".to_string()
+                })?;
+                let (start, end) = if let Some(idx) = p.find("..") {
+                    let (s, e) = (&p[..idx], &p[idx + 2..]);
+                    let ok = |x: &str| x.len() == 10 && x.as_bytes()[4] == b'-' && x.as_bytes()[7] == b'-';
+                    if !ok(s) || !ok(e) || s >= e {
+                        return Err(format!("年目标周期区间非法：{p}"));
+                    }
+                    (s.to_string(), e.to_string())
+                } else {
+                    let y: i64 = p.parse().map_err(|_| format!("年目标周期非法：{p}"))?;
+                    if !(1900..=2999).contains(&y) {
+                        return Err("年份非法".to_string());
+                    }
+                    (format!("{y}-01-01"), format!("{y}-12-31"))
+                };
+                (Some(start), Some(end), Some(parent))
             }
             "month" => {
                 let parent = Self::expect_parent(self, parent_goal_id, "month", "year", profile_id)?;
@@ -215,13 +379,18 @@ impl<'a> GoalRepository<'a> {
                         _ => return Err("月份非法".to_string()),
                     }
                 };
-                // 月份必须属于 parent Year（§23）：父年 period_start 必须是 {y}-01-01
-                let want_year_start = format!("{y}-01-01");
-                match parent.period_start.as_deref() {
-                    Some(s) if s == want_year_start => {}
-                    _ => return Err("月目标必须创建在其父年目标的年份下".to_string()),
-                }
+                // 月份必须落在 parent Year 区间内（DEV-0057 §34：父年可跨自然年，两链统一为区间包含）
+                let ms = format!("{y}-{m:02}-01");
                 let dim = days_in_month(y, m);
+                let me = format!("{y}-{m:02}-{dim:02}");
+                match (parent.period_start.as_deref(), parent.period_end.as_deref()) {
+                    (Some(ys), Some(ye)) => {
+                        if ms.as_str() < ys || me.as_str() > ye {
+                            return Err("月目标必须创建在其父年目标的周期范围内".to_string());
+                        }
+                    }
+                    _ => return Err("父年目标缺少周期".to_string()),
+                }
                 (
                     Some(format!("{y}-{m:02}-01")),
                     Some(format!("{y}-{m:02}-{dim:02}")),
@@ -408,5 +577,6 @@ fn parse_goal(row: &rusqlite::Row<'_>) -> rusqlite::Result<Goal> {
         sort_order: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+        goal_brief_json: row.get(12)?,
     })
 }

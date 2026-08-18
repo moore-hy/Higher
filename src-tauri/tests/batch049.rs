@@ -253,15 +253,15 @@ fn test_update_session_document_atomic_and_guards() {
         .is_err());
 }
 
-/// 新库直接建到 v014。
+/// 新库直接建到最新版（原 v014 命名；随迁移推进同步）。
 #[test]
 fn test_fresh_db_reaches_v014() {
     let conn = setup();
     let ver: u32 = conn
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(ver, 18);
-    assert_eq!(app_lib::migrations::latest_version(), 18);
+    assert_eq!(ver, 22);
+    assert_eq!(app_lib::migrations::latest_version(), 22);
 }
 
 /// 富文本 Session 的 note 纯文本投影参与既有 note 链路（摘要/AI 仍读 note）。

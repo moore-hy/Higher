@@ -75,6 +75,8 @@ fn setup_v015() -> Connection {
         )
         .unwrap();
     }
+    // v019 goal_brief_json（GoalRepository GOAL_COLS 需要；本测试只关心 v016 行为）
+    conn.execute_batch("ALTER TABLE goals ADD COLUMN goal_brief_json TEXT NULL;").unwrap();
     conn
 }
 
@@ -456,9 +458,13 @@ fn test_mastery_context_reads_documents() {
             None,
         )
         .unwrap();
-    // 关联 session（让 item 进入 mastery 关联集合）
+    // 关联 session（让 item 进入 mastery 关联集合；started_at 固定窗口内消除跨日敏感）
     let s = StudySessionRepository::new(&conn).start(i, None).unwrap();
-    StudySessionRepository::new(&conn).end(s.id, None).unwrap();
+    conn.execute(
+        "UPDATE study_sessions SET started_at='2026-08-16 02:00:00', ended_at='2026-08-16 02:10:00' WHERE id=?1",
+        rusqlite::params![s.id],
+    )
+    .unwrap();
 
     let ctx = app_lib::ai::context::build_context(
         &conn,

@@ -261,7 +261,7 @@ fn test_l_hierarchy_persistence() {
                 .filter_map(|v| v.ok())
                 .collect()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], "schema 版本应为 v006");
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], "schema 版本应为 v006");
     }
 
     let _ = std::fs::remove_file(&db_path);

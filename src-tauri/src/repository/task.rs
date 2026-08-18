@@ -40,6 +40,19 @@ pub struct Task {
     /// v018（§20）：core | normal（accumulation 任务 UI 统一显示「积累」，不读此值）
     #[serde(default = "default_priority")]
     pub priority: String,
+    /// v021（§21）：manual | blueprint（规划投影生成的任务）
+    #[serde(default = "default_origin")]
+    pub origin: String,
+    #[serde(default)]
+    pub planning_blueprint_id: Option<i64>,
+    #[serde(default)]
+    pub planning_phase_id: Option<i64>,
+    /// v021：蓝图投影幂等键（{blueprint_id}:{idx}）
+    #[serde(default)]
+    pub projection_key: String,
+    /// DEV-0059.1 §4：用户主动编辑 Blueprint 任务的时间（保护标记，非 NULL 则重投影不覆盖）
+    #[serde(default)]
+    pub user_modified_at: Option<String>,
 }
 
 fn default_task_kind() -> String {
@@ -50,7 +63,11 @@ fn default_priority() -> String {
     "normal".into()
 }
 
-const TASK_COLUMNS: &str = "id, profile_id, goal_id, learning_item_id, title, planned_date, planned_time, status, archived_at, plan_id, recurring_rule_id, created_at, updated_at, estimated_minutes, task_kind, priority";
+fn default_origin() -> String {
+    "manual".into()
+}
+
+const TASK_COLUMNS: &str = "id, profile_id, goal_id, learning_item_id, title, planned_date, planned_time, status, archived_at, plan_id, recurring_rule_id, created_at, updated_at, estimated_minutes, task_kind, priority, origin, planning_blueprint_id, planning_phase_id, projection_key, user_modified_at";
 
 fn cols(alias: &str) -> String {
     TASK_COLUMNS
@@ -221,11 +238,24 @@ impl<'a> TaskRepository<'a> {
                 return Err("所选知识不属于当前学习档案".to_string());
             }
         }
+        let origin: Option<String> = self
+            .conn
+            .query_row("SELECT origin FROM tasks WHERE id = ?1", params![id], |r| r.get(0))
+            .ok()
+            .flatten();
+        // DEV-0059.1 §4：用户主动编辑 Blueprint 任务内容 → 标记 user_modified_at（保护不被重投影覆盖）
+        let user_modified = if origin.as_deref() == Some("blueprint") {
+            ", user_modified_at=datetime('now')"
+        } else {
+            ""
+        };
         self.conn
             .execute(
-                "UPDATE tasks SET title=?1, planned_date=?2, planned_time=?3, learning_item_id=?4,
-                        goal_id=?5, estimated_minutes=?6, task_kind=?7, priority=?8, updated_at=datetime('now')
-                 WHERE id=?9",
+                &format!(
+                    "UPDATE tasks SET title=?1, planned_date=?2, planned_time=?3, learning_item_id=?4,
+                        goal_id=?5, estimated_minutes=?6, task_kind=?7, priority=?8, updated_at=datetime('now'){user_modified}
+                     WHERE id=?9"
+                ),
                 params![title, planned_date, planned_time, learning_item_id, goal_id, estimated_minutes, kind, pri, id],
             )
             .map_err(|e| e.to_string())?;
@@ -513,5 +543,10 @@ fn parse_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         estimated_minutes: row.get(13)?,
         task_kind: row.get(14)?,
         priority: row.get(15)?,
+        origin: row.get(16)?,
+        planning_blueprint_id: row.get(17)?,
+        planning_phase_id: row.get(18)?,
+        projection_key: row.get(19)?,
+        user_modified_at: row.get(20)?,
     })
 }

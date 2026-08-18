@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { HashRouter, Navigate, Route, Routes, useSearchParams } from "react-router-dom";
 import { ActiveProfileProvider, useActiveProfile } from "./contexts/ActiveProfileContext";
 import { AiPanelProvider } from "./components/ai/AiPanelContext";
@@ -5,8 +6,6 @@ import Layout from "./Layout";
 import Evaluations from "./pages/Evaluations";
 import Goals from "./pages/Goals";
 import History from "./pages/History";
-import Knowledge from "./pages/Knowledge";
-import LearningWorkspace from "./pages/LearningWorkspace";
 import Planning from "./pages/Planning";
 import ProfileSelector from "./pages/ProfileSelector";
 import ProfileWelcome from "./pages/ProfileWelcome";
@@ -31,6 +30,13 @@ function ReviewRedirect() {
   return <Navigate to={`/planning?date=${date}`} replace />;
 }
 
+/** DEV-0055 §125：/data route-level lazy（recharts 不进主 bundle） */
+const DataPage = lazy(() => import("./pages/Data"));
+
+/** DEV-0057 PART Z：Knowledge（Tiptap/知识图重页）与 LearningWorkspace（编辑器）route-level lazy */
+const KnowledgePage = lazy(() => import("./pages/Knowledge"));
+const LearningWorkspacePage = lazy(() => import("./pages/LearningWorkspace"));
+
 /** Profile Gate：根据档案状态决定显示欢迎页/选择页/主应用 */
 function ProfileGate() {
   const { gate } = useActiveProfile();
@@ -52,34 +58,38 @@ function ProfileGate() {
   }
 
   // phase === "active"：进入 V2 主应用
-  // 一级入口（DEV-0041 最终收敛）：/ 今日任务 · /planning 学习规划 · /knowledge 知识体系
+  // 一级入口（DEV-0055 最终收敛）：/ 今日 · /planning 规划 · /knowledge 知识 · /data 数据
   // 「学习复盘」并入学习规划（/review → /planning?date=…）；「整体进度」并入学习规划
   // （/progress 兼容重定向）。旧实体页（goals/tasks/evaluations/history/items）
   // 保留为内部兼容路由，不在主导航展示。
   return (
     <HashRouter>
       <AiPanelProvider>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<Today />} />
-            <Route path="/planning" element={<Planning />} />
-            {/* DEV-0041：学习复盘并入学习规划，兼容重定向 */}
-            <Route path="/review" element={<ReviewRedirect />} />
-            <Route path="/knowledge" element={<Knowledge />} />
-            {/* DEV-0301：整体进度并入学习规划，兼容重定向 */}
-            <Route path="/progress" element={<Navigate to="/planning" replace />} />
-            {/* Learning Workspace（DEV-0017：开始学习进入正式学习工作区） */}
-            <Route path="/learn/:sessionId" element={<LearningWorkspace />} />
-            {/* 设置（DEV-0016：非学习业务模块，位于 Sidebar 底部） */}
-            <Route path="/settings" element={<Settings />} />
-            {/* 内部兼容 / 技术调试路由 */}
-            <Route path="/goals" element={<Goals />} />
-            <Route path="/tasks" element={<Tasks />} />
-            <Route path="/evaluations" element={<Evaluations />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/items" element={<LegacyItemsRedirect />} />
-          </Route>
-        </Routes>
+        <Suspense fallback={<div className="profile-gate"><p className="profile-gate__loading">加载中…</p></div>}>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<Today />} />
+              <Route path="/planning" element={<Planning />} />
+              {/* DEV-0041：学习复盘并入学习规划，兼容重定向 */}
+              <Route path="/review" element={<ReviewRedirect />} />
+              <Route path="/knowledge" element={<KnowledgePage />} />
+              {/* DEV-0055：学习数据一级页面（lazy §125） */}
+              <Route path="/data" element={<DataPage />} />
+              {/* DEV-0301：整体进度并入学习规划，兼容重定向 */}
+              <Route path="/progress" element={<Navigate to="/planning" replace />} />
+              {/* Learning Workspace（DEV-0017：开始学习进入正式学习工作区；DEV-0057 lazy） */}
+              <Route path="/learn/:sessionId" element={<LearningWorkspacePage />} />
+              {/* 设置（DEV-0016：非学习业务模块，位于 Sidebar 底部） */}
+              <Route path="/settings" element={<Settings />} />
+              {/* 内部兼容 / 技术调试路由 */}
+              <Route path="/goals" element={<Goals />} />
+              <Route path="/tasks" element={<Tasks />} />
+              <Route path="/evaluations" element={<Evaluations />} />
+              <Route path="/history" element={<History />} />
+              <Route path="/items" element={<LegacyItemsRedirect />} />
+            </Route>
+          </Routes>
+        </Suspense>
       </AiPanelProvider>
     </HashRouter>
   );

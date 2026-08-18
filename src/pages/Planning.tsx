@@ -6,7 +6,6 @@ import {
   getGoalTree,
   getLegacyPlanningCounts,
   listLearningItemsByProfile,
-  listRecentSessionsByProfile,
   listTasksByRangeByProfile,
   listTodayTasksByProfile,
   startQuickSession,
@@ -16,8 +15,9 @@ import { useActiveProfile } from "../contexts/ActiveProfileContext";
 import ActiveSessionConflictModal, {
   useActiveSessionConflict,
 } from "../components/ActiveSessionConflictModal";
+import FinalGoalCard from "../components/FinalGoalCard";
+import PlanningTruthSummary from "../components/PlanningTruthSummary";
 import GoalTreePanel, { goalPathResolver } from "../components/GoalTreePanel";
-import LearningDataPanel from "../components/LearningDataPanel";
 import NextStep from "../components/NextStep";
 import PlanningCalendar from "../components/PlanningCalendar";
 import TaskModal from "../components/TaskModal";
@@ -31,7 +31,7 @@ import type {
   StudySession,
   Task,
 } from "../types";
-import { formatDuration, friendlyDate, studyDayOf, todayDate } from "../utils";
+import { friendlyDate, todayDate } from "../utils";
 
 /** 今天 + N 天（YYYY-MM-DD）。 */
 function addDaysISO(base: string, n: number): string {
@@ -57,15 +57,14 @@ function ratePct(rate: number | null | undefined): number | null {
 }
 
 /**
- * 学习规划 · Planning V2（DEV-0050 / DEV-0053 §60-62）。
+ * 学习规划 · Planning V2（DEV-0050 / DEV-0053 §60-62 → DEV-0055 PART 36 减肥）。
  *
  * 页面固定顺序：
- *   第一屏：左目标树（GoalTreePanel；选中节点下方显示 目标任务/学习记录 §112-113）
- *           + 右「下一步」（NextStep），宽屏两栏
+ *   第一屏：Final Goal Card（§139-141）+ 左目标树 + 右「下一步」（宽屏两栏）
  *   第二部分：学习日历（点击日期 → 正下方展开 Daily Learning Report，不跳页不叠层 §61-62/§143）
- *   第三部分：学习数据（LearningDataPanel §41-60）
- *   第四部分：最近学习（≤5 条）
  *   页面底部：legacy 旧版规划数据轻提示（§29，仅 count>0）
+ * 移出（§137-138）：长期 Learning Data（→ /data）与 Recent Learning 长列表
+ * （Today Activity 与 Calendar 已覆盖其主要价值）。
  */
 function Planning() {
   const navigate = useNavigate();
@@ -77,7 +76,6 @@ function Planning() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [allItems, setAllItems] = useState<LearningItem[]>([]);
-  const [recentSessions, setRecentSessions] = useState<StudySession[]>([]);
   /** 目标树扁平化（含 final/year/month/day；供 NextStep / TaskModal） */
   const [goals, setGoals] = useState<Goal[]>([]);
   const [activeSession, setActiveSession] = useState<StudySession | null>(null);
@@ -92,8 +90,6 @@ function Planning() {
   );
   const [dayReport, setDayReport] = useState<DailyReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
-  /** §81 计算依据展开 */
-  const [calcOpen, setCalcOpen] = useState(false);
 
   // TaskModal：新建（可预填 goal）/ 编辑
   const [taskCreate, setTaskCreate] = useState<{ goalId?: number } | null>(null);
@@ -102,7 +98,6 @@ function Planning() {
   function selectDate(date: string | null) {
     planningSelectedDate = date;
     setSelectedDate(date);
-    setCalcOpen(false);
   }
 
   /** §166：一次只查选择的一天 */
@@ -135,9 +130,8 @@ function Planning() {
       const t0 = todayDate();
       const tomorrow = addDaysISO(t0, 1);
       const rangeEnd = addDaysISO(t0, 7);
-      const [profileItems, rs, tree, as, tt, ft, legacyCounts] = await Promise.all([
+      const [profileItems, tree, as, tt, ft, legacyCounts] = await Promise.all([
         listLearningItemsByProfile(activeProfile.id).catch(() => [] as LearningItem[]),
-        listRecentSessionsByProfile(activeProfile.id, 5).catch(() => [] as StudySession[]),
         getGoalTree(activeProfile.id),
         getActiveSession().catch(() => null),
         listTodayTasksByProfile(activeProfile.id).catch(() => [] as Task[]),
@@ -145,7 +139,6 @@ function Planning() {
         getLegacyPlanningCounts(activeProfile.id).catch(() => [0, 0] as [number, number]),
       ]);
       setAllItems(profileItems);
-      setRecentSessions(rs);
       setActiveSession(as);
       setTodayTasks(tt.filter((t) => t.status !== "completed"));
       setFutureTasks(ft.filter((t) => t.status !== "completed"));
@@ -165,16 +158,6 @@ function Planning() {
   useEffect(() => {
     refresh();
   }, [refresh]);
-
-  /** started_at（UTC 存储）→ 学习日（UTC+8）→ "今天/昨天/MM-DD"。 */
-  function dayLabel(startedAt: string): string {
-    const today = todayDate();
-    const yesterday = addDaysISO(today, -1);
-    const date = studyDayOf(startedAt);
-    if (date === today) return "今天";
-    if (date === yesterday) return "昨天";
-    return date.slice(5).replace("-", "/");
-  }
 
   /** 日报内任务/活动变更后：刷新当天报告 + 日历/页面数据 */
   async function handleReportChanged() {
@@ -222,23 +205,10 @@ function Planning() {
     []
   );
 
-  // ===== 日报指标 =====
+  // ===== 日报指标（DEV-0057 PART S 再减一层：主指标只留 计划学习/实际学习/任务完成 三卡） =====
   const rep = dayReport;
   const completionPct = ratePct(rep?.task_completion_rate);
-  const executionPct = ratePct(rep?.time_execution_rate);
   const dayGoalPct = ratePct(rep?.day_goal_progress);
-  const efficiencyPct = ratePct(rep?.overall_efficiency);
-  /** §66：有效维度 N/3（完成率 / 执行度 / 日目标；≥2 才综合） */
-  const validDims =
-    (completionPct != null ? 1 : 0) +
-    (executionPct != null ? 1 : 0) +
-    (dayGoalPct != null ? 1 : 0);
-  const efficiencySub =
-    efficiencyPct != null
-      ? `有效维度 ${validDims}/3`
-      : validDims === 1 && completionPct != null
-        ? "仅有任务完成数据"
-        : `有效维度 ${validDims}/3`;
   const { conflict: startConflict, guard: guardStart, close: closeStart } = useActiveSessionConflict();
 
   // ===== 渲染 =====
@@ -251,7 +221,19 @@ function Planning() {
 
       {error && <div className="alert alert--error">{error}</div>}
 
-      {/* ===== 第一屏：左目标树（含选中节点 Detail §112-113）+ 右下一步 ===== */}
+      {/* ===== DEV-0059 §27-28：正式目标与规划（顶部） ===== */}
+      {activeProfile && (
+        <PlanningTruthSummary
+          profileId={activeProfile.id}
+          profileType={activeProfile.profile_type}
+          onChanged={refresh}
+        />
+      )}
+
+      {/* ===== 第一屏：Final Goal Card（§139-141）+ 左目标树 + 右下一步 ===== */}
+      {activeProfile && (
+        <FinalGoalCard profileId={activeProfile.id} />
+      )}
       {activeProfile && (
         <div className="planning__first">
           <GoalTreePanel
@@ -301,7 +283,7 @@ function Planning() {
             <p className="muted">暂无数据。</p>
           ) : (
             <>
-              {/* ---- 第一行：4 个核心指标卡（§59；DEV-0054 不再 7 个同权重 Card） ---- */}
+              {/* ---- 第一行：3 个核心指标卡（DEV-0057 PART S：综合学习效率卡整体移除） ---- */}
               <div className="dlr__sec-title">
                 学习状态指标
                 {rep.learning_status && (
@@ -315,7 +297,9 @@ function Planning() {
                   <span className="dlr__metric-label">计划学习</span>
                   <span className="dlr__metric-value">{minutesShort(rep.planned_minutes)}</span>
                   {rep.unestimated_task_count > 0 && (
-                    <span className="dlr__metric-sub">{rep.unestimated_task_count} 项未估时</span>
+                    <span className="dlr__metric-sub">
+                      {rep.unestimated_task_count}项任务未填写预计时长
+                    </span>
                   )}
                 </div>
                 <div className="dlr__metric">
@@ -331,41 +315,19 @@ function Planning() {
                     {completionPct == null ? "暂无计划任务" : `${completionPct}%`}
                   </span>
                 </div>
-                <div className="dlr__metric">
-                  <span className="dlr__metric-label">综合学习效率</span>
-                  <span className="dlr__metric-value">
-                    {efficiencyPct == null ? "暂不可计算" : `${efficiencyPct}%`}
-                  </span>
-                  <span className="dlr__metric-sub">{efficiencySub}</span>
-                </div>
               </div>
 
-              {/* ---- 第二行：轻量 Summary 文本行（§60） ---- */}
+              {/* ---- 第二行：轻量 Summary（Day Goal 有真实证据才出现，含进度%） ---- */}
               <p className="dlr__summary">
-                日目标进度 {dayGoalPct == null ? "暂无日目标" : `${dayGoalPct}%`}
-                {" · "}学习活动 {rep.activities.length} 次
-                {" · "}计划时间执行{" "}
-                {executionPct == null ? "暂不可计算" : `${executionPct}%`}
-                {rep.day_goal ? ` · ${rep.day_goal}` : ""}
+                {dayGoalPct != null && `日目标 ${rep.day_goal ?? ""} · 进度 ${dayGoalPct}%`}
+                {dayGoalPct != null && " · "}学习活动 {rep.activities.length} 次
               </p>
 
-              {/* §70 计算依据：小文字链接样式；展开内容含有效维度 N/3（§66） */}
-              <button className="dlr__calc-link" onClick={() => setCalcOpen((v) => !v)}>
-                {calcOpen ? "收起计算依据 ▴" : "计算依据 ▾"}
-              </button>
-              {calcOpen && (
-                <div className="dlr__calc">
-                  <div className="dlr__calc-row">
-                    任务完成率 {completionPct == null ? "—" : `${completionPct}%`} · 计划时间执行度{" "}
-                    {executionPct == null ? "—" : `${executionPct}%`} · 日目标进度{" "}
-                    {dayGoalPct == null ? "—" : `${dayGoalPct}%`}
-                  </div>
-                  <div className="dlr__calc-row">有效维度 {validDims}/3</div>
-                  <div className="dlr__calc-formula">
-                    综合学习效率 = 任务完成率 × 40% + 计划时间执行度 × 30% + 日目标进度 × 30%
-                    （无日目标时按 任务完成率 / 计划时间执行度 重新归一化权重；有效维度不足 2 个时不生成分数）
-                  </div>
-                </div>
+              {/* DEV-0057 §102：待确认时长记录不计入本页统计（轻提示） */}
+              {rep.needs_review_count > 0 && (
+                <p className="dlr__review-note">
+                  {rep.needs_review_count}条学习记录时间待确认，本页统计暂未计入。
+                </p>
               )}
 
               {/* ---- 今日任务（§72：与 Today 同一套 Task 渲染） ---- */}
@@ -391,35 +353,6 @@ function Planning() {
                 emptyNote="这一天还没有学习记录。"
               />
             </>
-          )}
-        </section>
-      )}
-
-      {/* ===== 第三部分：学习数据（§41-43；位于日报下方 §61） ===== */}
-      {activeProfile && <LearningDataPanel profileId={activeProfile.id} />}
-
-      {/* ===== 第四部分：最近学习（≤5 条；点击打开 Session） ===== */}
-      {activeProfile && (
-        <section className="card planning-recent">
-          <h2 className="card__title">最近学习</h2>
-          {recentSessions.length === 0 ? (
-            <p className="muted">最近还没有学习记录。</p>
-          ) : (
-            <ul className="recent-learn">
-              {recentSessions.slice(0, 5).map((s) => (
-                <li key={s.id} className="recent-learn__item">
-                  <span className="recent-learn__day">{dayLabel(s.started_at)}</span>
-                  <button
-                    className="recent-learn__name recent-learn__link"
-                    onClick={() => navigate(`/learn/${s.id}`)}
-                    title="打开这条学习记录"
-                  >
-                    {s.title}
-                  </button>
-                  <span className="muted">{formatDuration(s.duration_seconds)}</span>
-                </li>
-              ))}
-            </ul>
           )}
         </section>
       )}

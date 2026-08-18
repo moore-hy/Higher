@@ -15,6 +15,7 @@ pub mod context_builder;
 pub mod prompts;
 pub mod run;
 pub mod tools;
+pub mod planner;
 pub mod vault;
 pub mod web;
 

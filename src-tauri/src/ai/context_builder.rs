@@ -49,6 +49,22 @@ pub fn build(
     if let Some(g) = current_goal_summary(conn, profile_id)? {
         l1.push_str(&format!("当前目标：{}\n", g));
     }
+    // DEV-0058 §63-64：Active Session 只作为「当前有学习进行中」状态上下文，
+    // 不得当作已完成学习证据（elapsed 不计入学习时长）。
+    let active_sess: Option<(String, String)> = conn
+        .query_row(
+            "SELECT started_at, title FROM study_sessions
+             WHERE profile_id=?1 AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
+            params![profile_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .ok();
+    if let Some((started, title)) = active_sess {
+        l1.push_str(&format!(
+            "当前有学习进行中：{}（开始于 {}；进行中时长不算已完成学习量）\n",
+            title, started
+        ));
+    }
     layers.push(Layer { name: "L1 当前上下文", text: l1 });
     chips.push("当前上下文".into());
 
@@ -162,31 +178,177 @@ fn current_goal_summary(conn: &Connection, profile_id: i64) -> Result<Option<Str
     Ok(r)
 }
 
-/// §50：按 query 相关章节加载（关键词命中的 ## 段落 ±上下文），非整个档案。
+/// DEV-0059 §6.9：正式 AI Context = confirmed PersonalProfile.structured_json 优先，
+/// md_content 为人类可读补充。中文检索：结构化字段直接读 key；md 段落用字符级关键词
+/// （中文 2-gram + 英文单词），禁止依赖 query.split_whitespace()；不再"永远 fallback 只取头 1500 字"。
 fn personalization_related(conn: &Connection, profile_id: i64, query: &str) -> Result<Option<String>, String> {
-    let md: Option<String> = conn
+    let row: Option<(Option<String>, Option<String>)> = conn
         .query_row(
-            "SELECT md_content FROM personalization_profiles WHERE profile_id=?1 AND status='confirmed'",
+            "SELECT structured_json, md_content FROM personalization_profiles
+             WHERE profile_id=?1 AND status='confirmed'",
             params![profile_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .ok();
-    let Some(md) = md else { return Ok(None) };
-    if md.trim().is_empty() {
+    let Some((structured, md)) = row else { return Ok(None) };
+
+    let mut out: Vec<String> = Vec::new();
+
+    // 1) 结构化事实优先（key 直接可用，不依赖关键词检索）
+    if let Some(sj) = structured.as_deref() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(sj) {
+            let block = structured_summary(&v);
+            if !block.is_empty() {
+                out.push("## 个人档案（结构化事实）".to_string());
+                out.push(block);
+            }
+        }
+    }
+
+    // 2) md 补充（相关段落；字符级关键词）
+    if let Some(md_text) = md.as_deref() {
+        if !md_text.trim().is_empty() {
+            let md_block = md_sections(md_text, query);
+            if !md_block.is_empty() {
+                out.push(md_block);
+            }
+        }
+    }
+
+    if out.is_empty() {
         return Ok(None);
     }
-    if query.trim().is_empty() {
-        // 无关键词：给前 2000 字概览
-        let brief: String = md.chars().take(2000).collect();
-        return Ok(Some(format!("## 私人化学习档案（概览）\n{}", brief)));
+    let joined = out.join("\n\n");
+    let cut: String = joined.chars().take(10_000).collect();
+    Ok(Some(cut))
+}
+
+/// §6.9：结构化 JSON → 紧凑中文行（跳过 schema_version / field_provenance 内部字段）。
+fn structured_summary(v: &serde_json::Value) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    flatten_structured("", v, &mut lines, 0);
+    lines.join("\n")
+}
+
+/// DEV-0059.2 §3：PersonalProfile structured_json → 可读摘要（共享：Context Builder + Dedicated Planner）。
+///
+/// - 字段按优先级输出：availability / constraints / current_state / strengths / weaknesses /
+///   unresolved 优先，basics / capabilities / habits / preferences 后置；预算不足时截断后置字段，
+///   关键事实不因截断消失。
+/// - 对象数组（text/kind/source）递归为可读事实行，不再 raw 截断 JSON（避免半截 JSON）。
+/// - 只产出文本行（非 JSON），永远不可能输出非法 JSON。
+pub fn personal_profile_structured_summary(structured_json: &str, budget_chars: usize) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(structured_json) else {
+        return String::new();
+    };
+    // 优先级顺序（高优先级在前；预算不足时后置被截断）
+    const PRIORITY: [&str; 10] = [
+        "availability",
+        "constraints",
+        "current_state",
+        "strengths",
+        "weaknesses",
+        "unresolved",
+        "basics",
+        "capabilities",
+        "habits",
+        "preferences",
+    ];
+    let mut lines: Vec<String> = Vec::new();
+    for k in PRIORITY {
+        let Some(vv) = v.get(k) else { continue };
+        flatten_structured(k, vv, &mut lines, 0);
     }
-    // 命中段落
+    // 按预算截断（保留优先字段整体输出顺序）
+    let mut out = String::new();
+    for l in lines {
+        if out.chars().count() + l.chars().count() + 1 > budget_chars {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&l);
+    }
+    out
+}
+
+fn flatten_structured(prefix: &str, v: &serde_json::Value, out: &mut Vec<String>, depth: usize) {
+    if depth > 3 {
+        return;
+    }
+    match v {
+        serde_json::Value::Object(m) => {
+            for (k, vv) in m {
+                if k == "field_provenance" || k == "schema_version" {
+                    continue;
+                }
+                let p = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                flatten_structured(&p, vv, out, depth + 1);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            let mut parts: Vec<String> = Vec::new();
+            for it in items {
+                match it {
+                    serde_json::Value::String(s) if !s.trim().is_empty() => {
+                        parts.push(s.trim().to_string());
+                    }
+                    serde_json::Value::Number(n) => parts.push(n.to_string()),
+                    serde_json::Value::Object(m) => {
+                        // DEV-0059.2 §3：对象数组 → 递归读取 text/kind/source 为可读事实行
+                        let text = m.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+                        if !text.is_empty() {
+                            let kind = m.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                            let source = m.get("source").and_then(|s| s.as_str()).unwrap_or("");
+                            let mut l = format!("{prefix}：{text}");
+                            if !kind.is_empty() || !source.is_empty() {
+                                l.push('（');
+                                if !kind.is_empty() {
+                                    l.push_str(kind);
+                                }
+                                if !source.is_empty() {
+                                    if !kind.is_empty() {
+                                        l.push_str("；");
+                                    }
+                                    l.push_str(&format!("来源 {source}"));
+                                }
+                                l.push('）');
+                            }
+                            out.push(l);
+                        } else {
+                            flatten_structured(prefix, it, out, depth + 1);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !parts.is_empty() {
+                out.push(format!("{prefix}：{}", parts.join("；")));
+            }
+        }
+        serde_json::Value::String(s) if !s.trim().is_empty() => {
+            out.push(format!("{prefix}：{}", s.trim()));
+        }
+        serde_json::Value::Number(n) => out.push(format!("{prefix}：{n}")),
+        serde_json::Value::Bool(b) => out.push(format!("{prefix}：{b}")),
+        _ => {}
+    }
+}
+
+/// §6.9：md 段落检索（字符级关键词）+ 无命中时给结构化之外的结构化 section 概览。
+fn md_sections(md: &str, query: &str) -> String {
+    let tokens = query_tokens(query);
     let mut hits: Vec<String> = Vec::new();
     let mut cur_title = String::new();
     let mut cur_body = String::new();
     for line in md.lines() {
         if line.starts_with("## ") {
-            if !cur_title.is_empty() && section_match(&cur_body, query) {
+            if !cur_title.is_empty() && tokens.is_empty() == false && section_match_tokens(&cur_body, &tokens) {
                 hits.push(format!("{}\n{}", cur_title, cur_body.trim()));
             }
             cur_title = line.to_string();
@@ -196,29 +358,56 @@ fn personalization_related(conn: &Connection, profile_id: i64, query: &str) -> R
             cur_body.push('\n');
         }
     }
-    if !cur_title.is_empty() && section_match(&cur_body, query) {
+    if !cur_title.is_empty() && !tokens.is_empty() && section_match_tokens(&cur_body, &tokens) {
         hits.push(format!("{}\n{}", cur_title, cur_body.trim()));
     }
     if hits.is_empty() {
-        // fallback 概览
-        let brief: String = md.chars().take(1500).collect();
-        return Ok(Some(format!("## 私人化学习档案（概览）\n{}", brief)));
+        return String::new(); // 结构化已给出；无相关段落不强凑
     }
     let joined = hits.join("\n\n");
     let cut: String = joined.chars().take(8000).collect();
-    Ok(Some(format!("## 私人化学习档案（相关章节）\n{}", cut)))
+    format!("## 个人档案（相关章节）\n{}", cut)
 }
 
-fn section_match(body: &str, query: &str) -> bool {
-    let bl = body.to_lowercase();
-    let mut any = false;
-    for w in query.split_whitespace().filter(|w| w.chars().count() >= 2) {
-        let w = w.to_lowercase();
-        if bl.contains(&w) {
-            any = true;
+/// §6.9：中文 2-gram + 英文/数字单词（替代 split_whitespace 的中文不可用检索）。
+fn query_tokens(query: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    // 英文/数字单词（≥2 字符）
+    for w in query.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let lw = w.to_lowercase();
+        if lw.chars().count() >= 2 {
+            tokens.push(lw);
         }
     }
-    any
+    // 中文连续段 → 2-gram
+    let mut run = String::new();
+    for c in query.chars() {
+        if c.is_whitespace() || c.is_ascii() {
+            if run.chars().count() >= 2 {
+                tokens.extend(bigrams(&run));
+            }
+            run.clear();
+        } else {
+            run.push(c);
+        }
+    }
+    if run.chars().count() >= 2 {
+        tokens.extend(bigrams(&run));
+    }
+    tokens
+}
+
+fn bigrams(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() < 2 {
+        return Vec::new();
+    }
+    chars.windows(2).map(|w| w.iter().collect::<String>()).collect()
+}
+
+fn section_match_tokens(body: &str, tokens: &[String]) -> bool {
+    let bl = body.to_lowercase();
+    tokens.iter().any(|t| bl.contains(t))
 }
 
 /// L3：FTS 检索 + 实体摘要（不注入全文）。

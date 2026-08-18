@@ -65,8 +65,9 @@ export default function AiPanel() {
     setProposalItems,
     hasPendingProposal,
     apiKeyMissing,
+    pendingSendRef,
   } = useAiPanel();
-  const { activeProfile } = useActiveProfile();
+  const { activeProfile, triggerRefresh } = useActiveProfile();
   const navigate = useNavigate();
   const [input, setInput] = useState("");
   const [model, setModel] = useState("deepseek-v4-flash");
@@ -259,8 +260,26 @@ export default function AiPanel() {
         void refreshMessages();
       } else if (d.status === "completed") {
         void refreshMessages();
+      } else if (
+        // DEV-0058 §76/§170-173：这些状态后端已落库（澄清提问/冲突/校验失败/超载），
+        // 前端必须刷新会话让用户立即看到（此前不刷新=用户看不到要回答的问题）。
+        d.status === "clarification" ||
+        d.status === "goal_conflict" ||
+        d.status === "plan_validation_failed" ||
+        d.status === "plan_too_large" ||
+        d.status === "needs_assistant"
+      ) {
+        void refreshMessages();
       }
       // failed：由 ai://error 展示
+    });
+    // DEV-0058 §144-152：Apply 后全系统同步——广播事件触发全局数据刷新
+    // （Planning/Today/Calendar/Knowledge 同源重查；非 run 事件，不过滤 runId）
+    void listen<{ change_set_id: number; profile_id: number }>("ai://applied", () => {
+      triggerRefresh();
+    }).then((u) => {
+      if (alive) unsubs.push(u);
+      else u();
     });
     reg<{ error: string }>("ai://error", (d) => {
       setRunBusy(false);
@@ -273,14 +292,20 @@ export default function AiPanel() {
     };
   }, [refreshMessages]);
 
+  /**
+   * DEV-0057 PART N：scope chips 与实际发送字段一致。
+   * aiStartRun 只有 knowledgePath / sessionTitle 两个业务上下文参数：
+   * - 当前页面（page）→ pageLabel + 页面自带 knowledgePath
+   * - 当前知识（knowledge）→ knowledgePath（需 learningItemId）
+   * - 本次学习（session）→ sessionTitle（需 sessionId）
+   * 「当前规划」「整个档案」在 aiStartRun 无对应字段（无真实作用）→ 隐藏。
+   */
   const scopeChips = useMemo(() => {
     const chips: { key: AiScope; label: string }[] = [{ key: "page", label: "当前页面" }];
     if (pageContext?.learningItemId != null)
       chips.push({ key: "knowledge", label: "当前知识" });
     if (pageContext?.sessionId != null)
       chips.push({ key: "session", label: "本次学习" });
-    chips.push({ key: "planning", label: "当前规划" });
-    chips.push({ key: "profile", label: "整个档案" });
     return chips;
   }, [pageContext]);
 
@@ -328,12 +353,23 @@ export default function AiPanel() {
     ]);
     setRunBusy(true);
     try {
+      // DEV-0057 PART N：scope → aiStartRun 的 knowledgePath / sessionTitle 真实映射
+      const ctx = pageContext;
+      let knowledgePath = ctx?.knowledgePath ?? null;
+      let sessionTitle: string | null = null;
+      if (scope === "knowledge" && ctx?.learningItemId != null) {
+        knowledgePath = ctx.knowledgePath ?? ctx.learningName ?? null;
+      } else if (scope === "session" && ctx?.sessionId != null) {
+        knowledgePath = ctx.knowledgePath ?? null;
+        sessionTitle = ctx.sessionTitle ?? ctx.learningName ?? ctx.pageLabel ?? null;
+      }
       const rid = await aiStartRun({
         profileId: pid,
         conversationId: convId,
         userMessage: text,
-        pageLabel: pageContext?.pageLabel ?? "Higher",
-        knowledgePath: pageContext?.knowledgePath ?? null,
+        pageLabel: ctx?.pageLabel ?? "Higher",
+        knowledgePath,
+        sessionTitle,
       });
       runIdRef.current = rid;
       setRunId(rid);
@@ -351,6 +387,21 @@ export default function AiPanel() {
     setInput("");
     void send(text.trim());
   }
+
+  /** DEV-0058 §51-53：页面统一 Planner 入口（AI 生成计划/AI安排）——Context 投递
+   *  pendingSend + 事件 → 本 Panel 以主输入同路径 send()（conversation+流式+ChangeSet 卡全套） */
+  useEffect(() => {
+    const handler = () => {
+      const text = pendingSendRef.current;
+      if (!text) return;
+      pendingSendRef.current = null;
+      if (runBusy) return; // 上一 run 进行中：忽略（用户可稍后手发）
+      void send(text);
+    };
+    window.addEventListener("higher:aipanel-pending-send", handler);
+    return () => window.removeEventListener("higher:aipanel-pending-send", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runBusy, pageContext, conversationId]);
 
   /** §18：停止当前 run（保留已产出内容） */
   async function stopRun() {
@@ -870,7 +921,7 @@ export default function AiPanel() {
           </div>
         )}
 
-        {/* §128：ChangeSet 待审阅入口 */}
+        {/* §128：ChangeSet 待审阅入口（DEV-0058 §105：文案与后端一致「查看计划」） */}
         {pendingChangeSet && !showChangeSet && (
           <div className="aipanel__msg aipanel__msg--assistant">
             <div className="aipanel__msg-content">
@@ -881,7 +932,7 @@ export default function AiPanel() {
               style={{ marginTop: 8 }}
               onClick={() => setShowChangeSet(true)}
             >
-              查看修改
+              查看计划
             </button>
           </div>
         )}

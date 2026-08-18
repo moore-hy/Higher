@@ -12,7 +12,15 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/attachments/**",
+          "$APPDATA/com.higher.desktop/attachments/**",
+          "$APPDATA/**/attachments/**"
+        ]
+      }
     }
   },
   "bundle": {

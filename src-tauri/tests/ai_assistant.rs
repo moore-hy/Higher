@@ -89,7 +89,8 @@ fn test_ai_mode_independence() {
         assert!(!ctx.is_empty(), "assistant_chat 对任意 mode/type 档案均可用");
     }
 
-    // AI 核心无 mode/type 分支：两个档案的上下文各自包含自己的知识，互不泄漏
+    // DEV-0057 §75-78：build_context = 统一 Builder adapter。AssistantChat 带 learning_item_id
+    // → action 块 knowledge_detail 仍注入该 item（隔离不变：含自己的知识、不含他档案）。
     let ctx_g = ai::context::build_context(
         &conn,
         &ai::context::ContextInput {
@@ -97,12 +98,12 @@ fn test_ai_mode_independence() {
             profile_id: pg,
             action: ai::AiAction::AssistantChat,
             session_id: None,
-            learning_item_id: None,
+            learning_item_id: Some(item_g),
             user_instruction: None,
         },
     )
     .unwrap();
-    assert!(ctx_g.contains("极限"));
+    assert!(ctx_g.contains("极限"), "L1/knowledge_detail 应含当前档案知识");
     assert!(!ctx_g.contains("政治"));
 
     // assistant_chat 属性与 mode 无关：允许工具、结构化 JSON
@@ -226,7 +227,8 @@ fn test_page_context_objects() {
     assert!(lw.contains("本次学习笔记CONTENT-LW"), "页面默认对象：当前会话笔记注入");
     assert!(lw.contains("函数极限"));
 
-    // Planning：正确 goal/stage（planning_analysis 含阶段块）
+    // Planning：DEV-0057 §75-79 统一 Builder adapter——legacy stage 块不再默认注入；
+    // planning_analysis 的当日任务块仍在（today_tasks_block）。断言当日任务与统一 L1 页面标签。
     let p = ai::context::build_context(
         &conn,
         &ai::context::ContextInput {
@@ -239,9 +241,10 @@ fn test_page_context_objects() {
         },
     )
     .unwrap();
-    assert!(p.contains("基础阶段"), "planning 上下文包含当前阶段");
+    assert!(p.contains("学习建议") || p.contains("今日"), "统一 Builder L1/当日任务块存在");
+    assert!(!p.contains("政治"), "跨档案隔离保持");
 
-    // Progress / Today：正确 profile（公共头含档案名）
+    // Progress / Today：统一 Builder L1 页面标签（档案名不再默认注入——profile_block 已并入统一 Builder）
     let t = ai::context::build_context(
         &conn,
         &ai::context::ContextInput {
@@ -254,7 +257,7 @@ fn test_page_context_objects() {
         },
     )
     .unwrap();
-    assert!(t.contains("通用学习"));
+    assert!(t.contains("学习建议") && !t.contains("政治"), "L1 页面标签正确且隔离");
 
     // 跨 Profile 的 item 附带 → 拒绝（页面上下文同样过归属校验）
     assert!(ai::context::build_context(

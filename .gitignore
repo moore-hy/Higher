@@ -23,3 +23,11 @@ Thumbs.db
 *.db
 *.db-journal
 src-tauri/.data/
+
+# WebView runtime cache（Tauri debug data dir）
+src-tauri/.webview-data/
+
+# Local secrets
+.env
+.env.*
+!.env.example

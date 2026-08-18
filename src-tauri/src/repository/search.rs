@@ -83,12 +83,16 @@ impl<'a> SearchRepository<'a> {
             words
         };
         let match_expr = match_words.join(" OR ");
-        let type_filter = match entity_types {
+        let (type_filter, type_filter_plain) = match entity_types {
             Some(ts) if !ts.is_empty() => {
                 let quoted: Vec<String> = ts.iter().map(|t| format!("'{}'", t.replace('\'', ""))).collect();
-                format!(" AND si.entity_type IN ({})", quoted.join(","))
+                let list = quoted.join(",");
+                (
+                    format!(" AND si.entity_type IN ({list})"),
+                    format!(" AND entity_type IN ({list})"),
+                )
             }
-            _ => String::new(),
+            _ => (String::new(), String::new()),
         };
         let sql = format!(
             "SELECT si.entity_type, si.entity_id, si.title, si.timestamp,
@@ -137,7 +141,7 @@ impl<'a> SearchRepository<'a> {
             "SELECT entity_type, entity_id, title, timestamp FROM search_index
              WHERE profile_id = ?1 AND (title LIKE ?2 OR content LIKE ?2){}
              ORDER BY entity_id DESC LIMIT ?3",
-            type_filter
+            type_filter_plain
         );
         let mut stmt2 = self.conn.prepare(&sql2).map_err(|e| e.to_string())?;
         let rows2 = stmt2
@@ -306,4 +310,345 @@ pub fn deep_link_of(entity_type: &str, id: i64) -> String {
         "personalization_chunk" => "higher://personalization".to_string(),
         _ => format!("higher://{}/{}", entity_type, id),
     }
+}
+
+// ============ DEV-0057 PART L：Search Index 统一服务 ============
+//
+// §62-72 产品规则：Search Index = Canonical Data 的**派生搜索副本**（非正式数据）。
+// 正式数据更新成功 → Index 必须同步；页面/AI/ChangeSet 不得各自维护一套。
+// 本模块即该统一入口（SearchIndexService 等价物）：
+//   - sync_entity_*：各实体在正式写路径后调用的同步函数（事务安全，可重入）
+//   - rebuild_profile：从 Canonical tables 完整重建一个 profile 的索引
+//   - ensure_index_version：settings KV `search.index.version`；缺失/变化才重建（§71-72）
+
+/// 当前索引格式版本（语义变更时递增以触发一次性 rebuild）。
+pub const SEARCH_INDEX_VERSION: &str = "2";
+
+fn kv_get(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+fn kv_set(conn: &Connection, key: &str, value: &str) {
+    let _ = conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    );
+}
+
+/// §69 rebuild：从 Canonical tables 完整重建当前 profile 全部索引（单事务；幂等）。
+/// 返回（重建条数）。注意 memory/conversation/personalization_chunk 也在此重建
+/// （它们本就有写路径维护；rebuild 保证一致性兜底）。
+pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, String> {
+    let tx = conn
+        .transaction()
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM search_index WHERE profile_id = ?1", params![profile_id])
+        .map_err(|e| e.to_string())?;
+
+    let mut n = 0usize;
+    // goal（含 final；title=name，content=name+description）
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, name, COALESCE(description,'') FROM goals WHERE profile_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, name, desc) in rows {
+            let content = if desc.is_empty() { name.clone() } else { format!("{name} {desc}") };
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('goal',?1,?2,?3,?4)",
+                params![id, profile_id, name, content],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    // task（title；content=title）
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, title FROM tasks WHERE profile_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, title) in rows {
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('task',?1,?2,?3,?3)",
+                params![id, profile_id, title],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    // session（title；content=title+note 纯文本截断 2000）
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, title, COALESCE(note,'') FROM study_sessions WHERE profile_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, title, note) in rows {
+            let note: String = note.chars().take(2000).collect();
+            let content = if note.is_empty() { title.clone() } else { format!("{title} {note}") };
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('session',?1,?2,?3,?4)",
+                params![id, profile_id, title, content],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    // knowledge（name；content=content 截断 2000）
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, name, COALESCE(content,'') FROM learning_items WHERE profile_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, name, content) in rows {
+            let content: String = content.chars().take(2000).collect();
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('knowledge',?1,?2,?3,?4)",
+                params![id, profile_id, name, content],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    // document（title；content=content_text 截断 2000）
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, title, COALESCE(content_text,'') FROM knowledge_documents WHERE profile_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, title, text) in rows {
+            let text: String = text.chars().take(2000).collect();
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('document',?1,?2,?3,?4)",
+                params![id, profile_id, title, text],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    // evaluation（title；content=title+note 截断）
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, title, COALESCE(note,'') FROM evaluations WHERE profile_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, title, note) in rows {
+            let note: String = note.chars().take(1000).collect();
+            let content = if note.is_empty() { title.clone() } else { format!("{title} {note}") };
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('evaluation',?1,?2,?3,?4)",
+                params![id, profile_id, title, content],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    // memory（memory_key；content=value）
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, memory_key, memory_value FROM memory_records WHERE profile_id=?1 AND status!='superseded'")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, key, value) in rows {
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('memory',?1,?2,?3,?4)",
+                params![id, profile_id, key, value],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    // conversation（每条 assistant 消息全文；title=前 40 字）——仅 assistant（用户消息量太大）
+    {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id, substr(content,1,40), content FROM ai_messages
+                 WHERE profile_id=?1 AND role='assistant'",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, title, content) in rows {
+            let content: String = content.chars().take(2000).collect();
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('conversation',?1,?2,?3,?4)",
+                params![id, profile_id, title, content],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    // personalization chunk
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, chunk_index, content FROM personalization_source_chunks WHERE profile_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(i64, i64, String)> = stmt
+            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|v| v.ok())
+            .collect();
+        for (id, idx, content) in rows {
+            let title = format!("资料片段 #{idx}");
+            let content: String = content.chars().take(2000).collect();
+            tx.execute(
+                "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('personalization_chunk',?1,?2,?3,?4)",
+                params![id, profile_id, title, content],
+            )
+            .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+/// §71-72：索引版本门（不默认每次启动全重建）。
+/// 当前 profile 的版本键缺失或不等于 SEARCH_INDEX_VERSION → 执行一次 rebuild 并落版本。
+/// 返回 Some(rebuilt_count) 表示本次实际重建；None = 版本一致跳过。
+pub fn ensure_index_version(conn: &mut Connection, profile_id: i64) -> Result<Option<usize>, String> {
+    let key = format!("search.index.version.{profile_id}");
+    if kv_get(conn, &key).as_deref() == Some(SEARCH_INDEX_VERSION) {
+        return Ok(None);
+    }
+    let n = rebuild_profile(conn, profile_id)?;
+    kv_set(conn, &key, SEARCH_INDEX_VERSION);
+    Ok(Some(n))
+}
+
+// ---- §65-66 统一同步入口：正式写路径成功后调用 ----
+
+/// task 同步（v1/v2 通用；status 变化不需要新索引，仅 title 相关）。
+pub fn sync_task(conn: &Connection, profile_id: i64, task_id: i64) {
+    let repo = SearchRepository::new(conn);
+    if let Ok(row) = conn.query_row(
+        "SELECT title FROM tasks WHERE id=?1 AND profile_id=?2",
+        params![task_id, profile_id],
+        |r| r.get::<_, String>(0),
+    ) {
+        let _ = repo.upsert("task", task_id, profile_id, &row, &row, None);
+    }
+}
+
+pub fn remove_task(conn: &Connection, task_id: i64) {
+    let _ = SearchRepository::new(conn).remove("task", task_id);
+}
+
+/// goal 同步。
+pub fn sync_goal(conn: &Connection, profile_id: i64, goal_id: i64) {
+    if let Ok((name, desc)) = conn.query_row(
+        "SELECT name, COALESCE(description,'') FROM goals WHERE id=?1 AND profile_id=?2",
+        params![goal_id, profile_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        let content = if desc.is_empty() { name.clone() } else { format!("{name} {desc}") };
+        let _ = SearchRepository::new(conn).upsert("goal", goal_id, profile_id, &name, &content, None);
+    }
+}
+
+pub fn remove_goal(conn: &Connection, goal_id: i64) {
+    let _ = SearchRepository::new(conn).remove("goal", goal_id);
+}
+
+/// knowledge item 同步。
+pub fn sync_knowledge(conn: &Connection, profile_id: i64, item_id: i64) {
+    if let Ok((name, content)) = conn.query_row(
+        "SELECT name, COALESCE(content,'') FROM learning_items WHERE id=?1 AND profile_id=?2",
+        params![item_id, profile_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        let content: String = content.chars().take(2000).collect();
+        let _ = SearchRepository::new(conn).upsert("knowledge", item_id, profile_id, &name, &content, None);
+    }
+}
+
+pub fn remove_knowledge(conn: &Connection, item_id: i64) {
+    let _ = SearchRepository::new(conn).remove("knowledge", item_id);
+}
+
+/// document 同步。
+pub fn sync_document(conn: &Connection, profile_id: i64, doc_id: i64) {
+    if let Ok((title, text)) = conn.query_row(
+        "SELECT title, COALESCE(content_text,'') FROM knowledge_documents WHERE id=?1 AND profile_id=?2",
+        params![doc_id, profile_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        let text: String = text.chars().take(2000).collect();
+        let _ = SearchRepository::new(conn).upsert("document", doc_id, profile_id, &title, &text, None);
+    }
+}
+
+pub fn remove_document(conn: &Connection, doc_id: i64) {
+    let _ = SearchRepository::new(conn).remove("document", doc_id);
+}
+
+/// session 同步（title/note 变化都刷新；note 截断 2000）。
+pub fn sync_session(conn: &Connection, profile_id: i64, session_id: i64) {
+    if let Ok((title, note)) = conn.query_row(
+        "SELECT title, COALESCE(note,'') FROM study_sessions WHERE id=?1 AND profile_id=?2",
+        params![session_id, profile_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        let note: String = note.chars().take(2000).collect();
+        let content = if note.is_empty() { title.clone() } else { format!("{title} {note}") };
+        let _ = SearchRepository::new(conn).upsert("session", session_id, profile_id, &title, &content, None);
+    }
+}
+
+pub fn remove_session(conn: &Connection, session_id: i64) {
+    let _ = SearchRepository::new(conn).remove("session", session_id);
+}
+
+/// evaluation 同步。
+pub fn sync_evaluation(conn: &Connection, profile_id: i64, eval_id: i64) {
+    if let Ok((title, note)) = conn.query_row(
+        "SELECT title, COALESCE(note,'') FROM evaluations WHERE id=?1 AND profile_id=?2",
+        params![eval_id, profile_id],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        let note: String = note.chars().take(1000).collect();
+        let content = if note.is_empty() { title.clone() } else { format!("{title} {note}") };
+        let _ = SearchRepository::new(conn).upsert("evaluation", eval_id, profile_id, &title, &content, None);
+    }
+}
+
+pub fn remove_evaluation(conn: &Connection, eval_id: i64) {
+    let _ = SearchRepository::new(conn).remove("evaluation", eval_id);
 }

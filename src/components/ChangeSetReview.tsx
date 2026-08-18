@@ -12,6 +12,13 @@ import {
 import { formatDateTime } from "../utils";
 import type { ChangeOperation, ChangeSet } from "../types";
 
+/** DEV-0058 §113/§120：`YYYY-MM-DD` → `8月18日`（非法原样返回） */
+function fmtDay(d: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (!m) return d;
+  return `${Number(m[2])}月${Number(m[3])}日`;
+}
+
 /**
  * AI ChangeSet 审阅（DEV-0052 §128-133 / DEV-0053 §106-109）：
  * - 头部：title + summary + 按 entity_type×action 聚合的统计行
@@ -89,29 +96,75 @@ export default function ChangeSetReview({
     }));
   }, [ops]);
 
-  /** §106：复杂规划分组（operations>8 或 goal+knowledge 混合） */
+  /** §106：复杂规划分组（operations>8 或 goal+knowledge 混合）。
+   *  DEV-0058 PART AA §117-121：计划类提案按产品信息顺序分组——
+   *  ①阶段规划（year/month goal）②知识结构 ③每日安排（day goal 按日期+task 按日聚合；
+   *  纯 rest_day 的日期显示「休息日」）④目标更新等其他。 */
   const opGroups = useMemo(() => {
     const hasGoal = ops.some((o) => o.entity_type === "goal");
     const hasKnowledge = ops.some(
       (o) => o.entity_type === "knowledge" || o.entity_type === "document"
     );
     const complex = ops.length > 8 || (hasGoal && hasKnowledge);
-    if (!complex) return null;
-    const groups: { key: string; label: string; statName: string; ops: ChangeOperation[] }[] = [
-      { key: "goal", label: "目标结构", statName: "目标", ops: [] },
-      { key: "knowledge", label: "知识结构", statName: "知识节点", ops: [] },
-      { key: "task", label: "今日与近期任务", statName: "任务", ops: [] },
-      { key: "other", label: "其他修改", statName: "其他", ops: [] },
-    ];
+    const isPlan = (cs?.title ?? "").includes("学习计划");
+    if (!complex && !isPlan) return null;
+
+    const afterOf = (op: ChangeOperation): string => {
+      const a = op.after_json as Record<string, unknown> | null;
+      if (!a) return "";
+      const raw = a["planned_date"] ?? a["period"] ?? "";
+      // year period="YYYY-MM-DD..YYYY-MM-DD" 只取起点；day/task 是单日期
+      return String(raw).split("..")[0];
+    };
+    const restOf = (op: ChangeOperation): boolean => {
+      const a = op.after_json as Record<string, unknown> | null;
+      return a?.["day_kind"] === "rest" || a?.["rest_day"] === true;
+    };
+
+    const phase: ChangeOperation[] = []; // year/month goal
+    const knowledge: ChangeOperation[] = [];
+    const days = new Map<string, ChangeOperation[]>(); // date -> ops（day goal+task）
+    const other: ChangeOperation[] = [];
+
     for (const op of ops) {
-      if (op.entity_type === "goal") groups[0].ops.push(op);
-      else if (op.entity_type === "knowledge" || op.entity_type === "document")
-        groups[1].ops.push(op);
-      else if (op.entity_type === "task") groups[2].ops.push(op);
-      else groups[3].ops.push(op);
+      const d = afterOf(op);
+      if (op.entity_type === "goal" && op.action === "create" && /^\d{4}-\d{2}$/.test(d)) {
+        phase.push(op);
+      } else if (op.entity_type === "knowledge" || op.entity_type === "document") {
+        knowledge.push(op);
+      } else if (
+        (op.entity_type === "task" || (op.entity_type === "goal" && /^\d{4}-\d{2}-\d{2}$/.test(d))) &&
+        d
+      ) {
+        const list = days.get(d) ?? [];
+        list.push(op);
+        days.set(d, list);
+      } else {
+        other.push(op);
+      }
     }
-    return groups.filter((g) => g.ops.length > 0);
-  }, [ops]);
+
+    const groups: { key: string; label: string; statName: string; ops: ChangeOperation[] }[] = [];
+    if (phase.length > 0)
+      groups.push({ key: "phase", label: "阶段规划", statName: "阶段", ops: phase });
+    if (knowledge.length > 0)
+      groups.push({ key: "knowledge", label: "知识结构", statName: "知识节点", ops: knowledge });
+    const sortedDays = [...days.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [d, list] of sortedDays) {
+      const dayGoals = list.filter((o) => o.entity_type === "goal");
+      const rest = dayGoals.some(restOf) || list.every((o) => o.entity_type === "goal" && restOf(o));
+      const dayTasks = list.filter((o) => o.entity_type === "task");
+      groups.push({
+        key: "day-" + d,
+        label: rest ? `${fmtDay(d)} · 休息日` : fmtDay(d),
+        statName: dayTasks.length > 0 ? `任务 ${dayTasks.length}` : "安排",
+        ops: list,
+      });
+    }
+    if (other.length > 0)
+      groups.push({ key: "other", label: "其他修改", statName: "其他", ops: other });
+    return groups.length > 0 ? groups : null;
+  }, [ops, cs]);
 
   async function toggleOp(op: ChangeOperation, selected: boolean) {
     setOps((prev) => prev.map((o) => (o.id === op.id ? { ...o, selected } : o)));
@@ -130,15 +183,15 @@ export default function ChangeSetReview({
     try {
       if (kind === "apply-selected") {
         await applyAiChangeSet(profileId, changeSetId, true);
-        setDoneMsg("已应用选中的修改（本次操作已记录到保险箱）");
+        setDoneMsg("✓ 已应用选中的修改");
         await emitApplySummary();
       } else if (kind === "apply-all") {
         await applyAiChangeSet(profileId, changeSetId, false);
-        setDoneMsg("已应用全部修改（本次操作已记录到保险箱）");
+        setDoneMsg("✓ 计划已应用");
         await emitApplySummary();
       } else if (kind === "reject") {
         await rejectAiChangeSet(profileId, changeSetId);
-        setDoneMsg("已拒绝本次全部修改");
+        setDoneMsg("已取消本次修改（正式数据未变化）");
       } else {
         await undoAiChangeSet(profileId, changeSetId);
         setDoneMsg("已撤销本次修改");
@@ -164,8 +217,12 @@ export default function ChangeSetReview({
   }
 
   const status = cs?.status ?? "";
-  const isApplied = status === "applied" || status === "undone_applied";
-  const isSettled = status !== "pending";
+  // DEV-0059 §6.5：ChangeSet backend 状态单一化（draft/waiting_approval/applied/rejected/cancelled/undone）；
+  // 前端不再使用 "pending" 表示 backend state；仅 waiting_approval 允许审查交互。
+  const isApplied = status === "applied";
+  const isSettled =
+    status === "applied" || status === "rejected" || status === "cancelled" || status === "undone";
+  const canReview = status === "waiting_approval";
 
   const opRow = (op: ChangeOperation) => (
     <div key={op.id} className="csr__op">
@@ -273,7 +330,7 @@ export default function ChangeSetReview({
               <div className="csr__list">{ops.map(opRow)}</div>
             )}
 
-            {/* §109：最终操作 */}
+            {/* §109：最终操作（§6.5：仅 waiting_approval 可审查交互） */}
             <div className="csr__actions">
               {isApplied ? (
                 <button
@@ -283,21 +340,21 @@ export default function ChangeSetReview({
                 >
                   {busy ? "处理中…" : "撤销本次修改"}
                 </button>
-              ) : (
+              ) : canReview ? (
                 <>
                   <button
                     className="btn btn--small btn--primary"
                     disabled={busy || ops.length === 0}
                     onClick={() => void run("apply-all")}
                   >
-                    应用全部
+                    应用计划
                   </button>
                   <button
-                    className="btn btn--small btn--primary"
+                    className="btn btn--small"
                     disabled={busy || !ops.some((o) => o.selected)}
                     onClick={() => void run("apply-selected")}
                   >
-                    选择性应用
+                    只应用选中项
                   </button>
                   <button className="btn btn--small" disabled={busy} onClick={onClose}>
                     继续调整
@@ -307,9 +364,13 @@ export default function ChangeSetReview({
                     disabled={busy || ops.length === 0}
                     onClick={() => void run("reject")}
                   >
-                    拒绝
+                    取消
                   </button>
                 </>
+              ) : (
+                <button className="btn btn--small" disabled={busy} onClick={onClose}>
+                  关闭
+                </button>
               )}
             </div>
             <p className="muted csr__note">
@@ -426,9 +487,10 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: "待审阅",
+  draft: "草稿",
+  waiting_approval: "待审阅",
   applied: "已应用",
   rejected: "已拒绝",
+  cancelled: "已取消",
   undone: "已撤销",
-  undone_applied: "已撤销",
 };

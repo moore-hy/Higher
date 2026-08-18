@@ -3,7 +3,7 @@ import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   compilePersonalization,
   confirmPersonalizationProfile,
@@ -76,7 +76,7 @@ export default function Settings() {
     { key: "websearch", label: "联网搜索" },
     { key: "notify", label: "学习提醒" },
     { key: "data", label: "数据管理" },
-    { key: "vault", label: "保险箱" },
+    { key: "vault", label: "审计与备份" },
   ];
 
   return (
@@ -937,7 +937,7 @@ function PersonalizationSection({ profileId }: { profileId: number | null }) {
     const picked = await openDialog({
       multiple: true,
       filters: [
-        { name: "支持的资料（txt / md / docx / pdf）", extensions: ["txt", "md", "docx", "pdf"] },
+        { name: "支持的资料（txt / md / docx / pdf / xlsx）", extensions: ["txt", "md", "docx", "pdf", "xlsx"] },
       ],
     });
     if (!picked) return;
@@ -982,6 +982,35 @@ function PersonalizationSection({ profileId }: { profileId: number | null }) {
       "text/markdown"
     );
     setMessage("已开始下载 .md 文件（保存到浏览器下载目录）。");
+  }
+
+  /** §32：导出个人档案 Word/Excel（docx/exceljs 点击时懒加载；§31.3 只写用户所选路径） */
+  async function exportProfile(kind: "docx" | "xlsx") {
+    if (profileId == null) return;
+    setMessage("");
+    setError("");
+    try {
+      const mod = await import("../lib/exporters");
+      const { bytes, fileName } =
+        kind === "docx"
+          ? await mod.exportPersonalProfileDocx(profileId)
+          : await mod.exportPersonalProfileXlsx(profileId);
+      const path = await saveDialog({
+        defaultPath: fileName,
+        filters: [
+          {
+            name: kind === "docx" ? "Word 文档" : "Excel 工作簿",
+            extensions: [kind],
+          },
+        ],
+      });
+      if (!path) return;
+      const { writeExportFile } = await import("../api");
+      await writeExportFile(path, mod.base64FromBytes(bytes));
+      setMessage(`已导出：${path}`);
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function exportTemplate() {
@@ -1044,8 +1073,10 @@ function PersonalizationSection({ profileId }: { profileId: number | null }) {
       ? "未生成"
       : profile.status === "draft"
         ? "草稿待确认"
-        : `已生成 v${profile.version}`;
-  const updatedText = profile?.last_updated_at ?? profile?.last_compiled_at ?? null;
+        : profile.status === "superseded"
+          ? "已过期版本"
+          : `已生成 v${profile.version}（正式）`;
+  const updatedText = profile?.confirmed_at ?? profile?.updated_at ?? null;
 
   return (
     <>
@@ -1066,7 +1097,7 @@ function PersonalizationSection({ profileId }: { profileId: number | null }) {
             </span>
             <span className="muted pz__main-time">
               {updatedText ? `最后更新：${formatDateTime(updatedText)}` : "还没有生成过档案"}
-              {profile?.dirty ? " · 资料有更新，可重新分析" : ""}
+              {profile != null && ` · 版本 v${profile.version} · 来源 ${sources.length} 份`}
             </span>
           </div>
           <div className="btn-row pz__main-actions">
@@ -1111,6 +1142,24 @@ function PersonalizationSection({ profileId }: { profileId: number | null }) {
                       }}
                     >
                       下载 .md
+                    </button>
+                    <button
+                      disabled={!profile}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        void exportProfile("docx");
+                      }}
+                    >
+                      导出 Word
+                    </button>
+                    <button
+                      disabled={!profile}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        void exportProfile("xlsx");
+                      }}
+                    >
+                      导出 Excel
                     </button>
                     <button
                       onClick={() => {
@@ -1416,14 +1465,14 @@ function VaultSection() {
 
   return (
     <section className="card">
-      <h2 className="card__title">保险箱</h2>
+      <h2 className="card__title">审计与备份</h2>
       {error && <div className="alert alert--error">{error}</div>}
       {message && <div className="alert alert--ok">{message}</div>}
 
       {locked ? (
         <div className="vault__locked">
           <div className="vault__lock-icon">🔒</div>
-          <div className="vault__lock-title">保险箱已锁定</div>
+          <div className="vault__lock-title">已锁定</div>
           <p className="muted vault__lock-hint">{hint || "测试版密码为 root"}</p>
           <div className="vault__unlock-row">
             <input
@@ -1442,7 +1491,7 @@ function VaultSection() {
             </button>
           </div>
           <p className="muted vault__lock-note">
-            保险箱记录所有写入操作（用户与 AI）并保存数据库快照；锁定时不影响 Higher 的正常使用。
+            测试版访问锁，不代表数据加密。审计与备份记录所有写入操作（用户与 AI）并保存数据库快照；锁定时不影响 Higher 的正常使用。
           </p>
         </div>
       ) : (
