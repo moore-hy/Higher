@@ -38,7 +38,7 @@ export default function FinalGoalCard({
   /** 保存成功后通知父级（Planning 无需刷新其他数据，预留） */
   onChanged?: () => void;
 }) {
-  const { sendChat, setOpen } = useAiPanel();
+  const { sendChat } = useAiPanel();
   const [state, setState] = useState<GoalState | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -66,9 +66,8 @@ export default function FinalGoalCard({
     !brief.outcome.trim() ||
     (state?.missing.length ?? 0) > 0;
 
-  /** §159：AI 帮我梳理（打开 AI Panel 发预设消息；Clarification 流程由 AI 侧承接） */
+  /** §159：AI 帮我梳理（发送预设消息；AI 恒驻 + pending-send 事件自动展开；Clarification 由 AI 侧承接） */
   async function askAiClarify() {
-    setOpen(true);
     await sendChat(
       "帮我梳理并完善我的最终目标：请先和我确认「最终想实现什么、截止时间、成功标准、范围与约束」，再帮我整理成一句清晰的目标。"
     );
@@ -76,7 +75,6 @@ export default function FinalGoalCard({
 
   /** DEV-0058 §38/§51/§167：AI 生成计划（三入口统一 Planner；Goal 已 Ready 才显示） */
   async function askAiPlan() {
-    setOpen(true);
     await sendChat(PLAN_REQUEST_MESSAGE);
   }
 

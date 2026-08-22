@@ -20,6 +20,7 @@ import PlanningTruthSummary from "../components/PlanningTruthSummary";
 import GoalTreePanel, { goalPathResolver } from "../components/GoalTreePanel";
 import NextStep from "../components/NextStep";
 import PlanningCalendar from "../components/PlanningCalendar";
+import PlanningWeekBoard from "../components/PlanningWeekBoard";
 import TaskModal from "../components/TaskModal";
 import DailyTasksSection, { minutesShort } from "../components/DailyTasksSection";
 import DailyActivitiesSection from "../components/DailyActivitiesSection";
@@ -50,6 +51,10 @@ function flattenGoalTree(node: GoalTreeNode, acc: Goal[] = []): Goal[] {
 /** §145：离开 Planning 再返回时保持 selectedDate（state 不重置）。 */
 let planningSelectedDate: string | null = null;
 
+/** DEV-0064 §17：周/月视图偏好（纯前端 localStorage，默认 month）。 */
+const PLANNING_VIEW_KEY = "higher.planning.view";
+type PlanningView = "week" | "month";
+
 /** rate（0-1 或 0-100 均兼容）→ 整数百分比。 */
 function ratePct(rate: number | null | undefined): number | null {
   if (rate == null) return null;
@@ -57,14 +62,17 @@ function ratePct(rate: number | null | undefined): number | null {
 }
 
 /**
- * 学习规划 · Planning V2（DEV-0050 / DEV-0053 §60-62 → DEV-0055 PART 36 减肥）。
+ * 学习规划 · Planning V2（DEV-0050 / DEV-0053 §60-62 → DEV-0055 PART 36 减肥
+ * → DEV-0064 §14-§23 Planning UI v2 + Week/Month View）。
  *
- * 页面固定顺序：
- *   第一屏：Final Goal Card（§139-141）+ 左目标树 + 右「下一步」（宽屏两栏）
- *   第二部分：学习日历（点击日期 → 正下方展开 Daily Learning Report，不跳页不叠层 §61-62/§143）
+ * 页面固定顺序（§15）：
+ *   Header + View Switch [周][月]（§17 纯前端偏好 higher.planning.view，默认 月）
+ *   Planning Overview（Final Goal Card + 目标树 + 下一步 + Planning Truth）
+ *   Calendar / Week Board（§18 Week = 同一批 Task/Session/Recurring 的另一种前端展示）
+ *   Selected Date Detail（点击日期 → 正下方展开 Daily Learning Report §61-62/§143）
  *   页面底部：legacy 旧版规划数据轻提示（§29，仅 count>0）
- * 移出（§137-138）：长期 Learning Data（→ /data）与 Recent Learning 长列表
- * （Today Activity 与 Calendar 已覆盖其主要价值）。
+ * Week View（§18-§22）：周一→周日 7 列；Task Start/Edit/Delete/Create 全部复用
+ * 原 handler / TaskModal；禁止 WeekGoal / WeekTask 等任何新数据模型。
  */
 function Planning() {
   const navigate = useNavigate();
@@ -90,6 +98,16 @@ function Planning() {
   );
   const [dayReport, setDayReport] = useState<DailyReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
+
+  // ===== DEV-0064 §17：Week / Month View Switch（纯前端展示，默认 month） =====
+  const [view, setView] = useState<PlanningView>(() =>
+    localStorage.getItem(PLANNING_VIEW_KEY) === "week" ? "week" : "month"
+  );
+
+  function switchView(v: PlanningView) {
+    setView(v);
+    localStorage.setItem(PLANNING_VIEW_KEY, v);
+  }
 
   // TaskModal：新建（可预填 goal）/ 编辑
   const [taskCreate, setTaskCreate] = useState<{ goalId?: number } | null>(null);
@@ -215,8 +233,27 @@ function Planning() {
 
   return (
     <div className="page page--wide">
-      <header className="page__header">
+      <header className="page__header planning__header">
         <h1 className="page__title">学习规划</h1>
+        {/* DEV-0064 §15/§17：View Switch [周][月]（纯前端展示偏好；默认 月） */}
+        <div className="seg" role="tablist" aria-label="日历视图">
+          <button
+            className={"seg__item" + (view === "week" ? " seg__item--active" : "")}
+            role="tab"
+            aria-selected={view === "week"}
+            onClick={() => switchView("week")}
+          >
+            周
+          </button>
+          <button
+            className={"seg__item" + (view === "month" ? " seg__item--active" : "")}
+            role="tab"
+            aria-selected={view === "month"}
+            onClick={() => switchView("month")}
+          >
+            月
+          </button>
+        </div>
       </header>
 
       {error && <div className="alert alert--error">{error}</div>}
@@ -256,8 +293,19 @@ function Planning() {
         </div>
       )}
 
-      {/* ===== 第二部分：学习日历（点击日期 → 正下方日报，不跳页 §62） ===== */}
-      {activeProfile && (
+      {/* ===== 第二部分：学习日历（点击日期 → 正下方日报，不跳页 §62）。
+           DEV-0064 §18：Week View = 同一批 Task/Session/Recurring 的另一种前端展示 ===== */}
+      {activeProfile && view === "week" && (
+        <PlanningWeekBoard
+          profileId={activeProfile.id}
+          items={allItems}
+          goals={goals}
+          selectedDate={selectedDate}
+          onSelectDate={selectDate}
+          onStartTask={(t) => void handleStartTask(t)}
+        />
+      )}
+      {activeProfile && view === "month" && (
         <PlanningCalendar
           profileId={activeProfile.id}
           items={allItems}

@@ -714,11 +714,16 @@ fn r28_menu_above_backdrop() {
 
 #[test]
 fn r29_six_menu_handlers_exist() {
+    // DEV-0063 §22/§24：⋯ 菜单收敛为 编辑 + 分隔线 + 删除（旧四项快捷入口合并进编辑 Modal）
     let sec = read_src("../src/components/DailyTasksSection.tsx");
-    for label in ["编辑", "调整日期", "调整目标", "调整知识", "修改类型", "删除"] {
-        assert!(sec.contains(label), "R29: 菜单项存在：{label}");
-    }
-    // 每个 handler 有真实动作（setEditing / setDeleting 至少存在）
+    assert!(sec.contains("编辑"), "R29: 菜单项存在：编辑");
+    assert!(sec.contains("删除"), "R29: 菜单项存在：删除");
+    assert!(
+        !sec.contains("调整日期") && !sec.contains("调整目标") && !sec.contains("调整知识") && !sec.contains("修改类型"),
+        "R29: 旧快捷入口不再作为独立 visible menu item"
+    );
+    assert!(sec.contains("taskmenu__sep"), "R29: 分组分隔线存在");
+    // 编辑/删除 handler 真实存在（同一 TaskFormModal / 原删除确认流）
     assert!(sec.contains("setEditing(t)") && sec.contains("setDeleting(t)"), "R29: 真实 handler");
 }
 

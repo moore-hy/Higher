@@ -18,15 +18,17 @@ import type { ProfileType, StudyProfile } from "./types";
  * 学习数据成为一级页面（/data，DEV-0055 PART 26）。
  */
 const NAV_ITEMS = [
-  { to: "/", label: "今日", end: true, icon: "📅" },
-  { to: "/planning", label: "规划", end: false, icon: "🧭" },
-  { to: "/knowledge", label: "知识", end: false, icon: "🗂" },
-  { to: "/data", label: "数据", end: false, icon: "📊" },
+  { to: "/", label: "今日", end: true, icon: "📅", group: "学习" },
+  { to: "/planning", label: "规划", end: false, icon: "🧭", group: "学习" },
+  { to: "/knowledge", label: "知识", end: false, icon: "🗂", group: "学习" },
+  { to: "/data", label: "数据", end: false, icon: "📊", group: "洞察" },
 ];
 
 function Layout() {
   const { activeProfile, exitProfile, refreshGate, enterProfile, refreshKey } = useActiveProfile();
-  const { open: aiOpen, setPageContext } = useAiPanel();
+  // DEV-0065.1 §32：AI Panel 恒驻（无 open 态）；Main 宽度由 flex 自动跟随
+  // 340px expanded / 46px collapsed，无 JS 宽度计算
+  const { setPageContext } = useAiPanel();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,19 +133,23 @@ function Layout() {
         {error && <div className="layout__error">{error}</div>}
 
         <nav className="layout__nav">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              title={item.label}
-              className={({ isActive }) =>
-                "layout__nav-item" + (isActive ? " layout__nav-item--active" : "")
-              }
-            >
-              <span className="layout__nav-icon">{item.icon}</span>
-              <span className="layout__nav-label">{item.label}</span>
-            </NavLink>
+          {NAV_ITEMS.map((item, i) => (
+            <span key={item.to} className="layout__nav-slot">
+              {(i === 0 || NAV_ITEMS[i - 1].group !== item.group) && (
+                <span className="layout__nav-group">{item.group}</span>
+              )}
+              <NavLink
+                to={item.to}
+                end={item.end}
+                title={item.label}
+                className={({ isActive }) =>
+                  "layout__nav-item" + (isActive ? " layout__nav-item--active" : "")
+                }
+              >
+                <span className="layout__nav-icon">{item.icon}</span>
+                <span className="layout__nav-label">{item.label}</span>
+              </NavLink>
+            </span>
           ))}
         </nav>
 
@@ -163,10 +169,10 @@ function Layout() {
         </div>
       </aside>
       <div className="layout__body">
-        <main className={"layout__main" + (aiOpen ? " layout__main--with-ai" : "")}>
+        <main className="layout__main">
           <Outlet />
         </main>
-        {/* Higher AI Agent Panel（DEV-0022：全局右栏，固定宽度，可收起） */}
+        {/* Higher AI Agent Panel（DEV-0022 → DEV-0065.1：恒驻右栏两态，340px/46px） */}
         <AiPanel />
       </div>
 

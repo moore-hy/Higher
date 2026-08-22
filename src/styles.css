@@ -8,25 +8,77 @@
      其余次要操作用 .btn--ghost（无边框浅色 hover）
    ============================================================ */
 :root {
-  --bg: #0f1115;
-  --bg-elevated: #171a21;
-  --bg-sidebar: #11141a;
-  --fg: #e6e8eb;
-  --fg-muted: #9aa3af;
-  --accent: #4f8cff;
-  --accent-hover: #6a9eff;
-  --accent-soft: rgba(79, 140, 255, 0.14);
-  --ok: #3fb950;
-  --warn: #d29922;
-  --error: #f85149;
-  --border: #23262e;
-  --border-strong: #2d3139;
-  --radius-card: 10px;
-  --radius-ctl: 6px;
+  /* ============ Higher Design System v1（DEV-0063 §10-§12） ============
+     策略：既有 --bg/--fg/--accent 等变量整体映射到 v1 调色板（全站继承新视觉，
+     不重写各页 selector）；--h-* 为 v1 规范 token（radius/space/层级）。
+     禁止新增半档字号/任意主题色。 */
+  /* DEV-0065.1 §11：桌面标题栏高度（锁定 34px） */
+  --h-titlebar-height: 34px;
+  /* Background（DEV-0064R.2 §22-§23：Solid = 主题真值；Effective = 无壁纸时 = Solid）
+     DEV-0063 直接值存档（R.2 起经 *-solid token 提供，默认主题值不变）：
+     --h-bg: #0b0d12 · --h-sidebar: #0e1118 · --h-surface-1: #121620 ·
+     --h-surface-2: #171c28 · --h-surface-3: #1d2330 */
+  --h-bg-solid: #0b0d12;
+  --h-sidebar-solid: #0e1118;
+  --h-surface-1-solid: #121620;
+  --h-surface-2-solid: #171c28;
+  --h-surface-3-solid: #1d2330;
+  --h-bg: var(--h-bg-solid);
+  --h-sidebar: var(--h-sidebar-solid);
+  --h-surface-1: var(--h-surface-1-solid);
+  --h-surface-2: var(--h-surface-2-solid);
+  --h-surface-3: var(--h-surface-3-solid);
+  /* Border */
+  --h-border: #252c3a;
+  --h-border-strong: #323a4a;
+  /* Text */
+  --h-text: #f4f6fa;
+  --h-text-secondary: #a8b0bf;
+  --h-text-muted: #737c8f;
+  /* Accent */
+  --h-accent: #6d7cff;
+  --h-accent-hover: #7d89ff;
+  --h-accent-soft: rgba(109, 124, 255, 0.14);
+  --h-accent-border: rgba(109, 124, 255, 0.35);
+  /* Semantic */
+  --h-success: #4fcb8d;
+  --h-warning: #f4b860;
+  --h-danger: #f06b78;
+  /* Radius（§11） */
+  --h-radius-sm: 8px;
+  --h-radius-md: 12px;
+  --h-radius-lg: 16px;
+  --h-radius-xl: 20px;
+  /* Spacing（§11） */
+  --h-space-1: 4px;
+  --h-space-2: 8px;
+  --h-space-3: 12px;
+  --h-space-4: 16px;
+  --h-space-5: 20px;
+  --h-space-6: 24px;
+  --h-space-8: 32px;
+  --h-space-10: 40px;
+  /* ---- 既有变量 → v1 调色板（全站继承；不逐页改色） ---- */
+  --bg: var(--h-bg);
+  --bg-elevated: var(--h-surface-1);
+  --bg-sidebar: var(--h-sidebar);
+  --fg: var(--h-text);
+  --fg-muted: var(--h-text-secondary);
+  --fg-faint: var(--h-text-muted);
+  --accent: var(--h-accent);
+  --accent-hover: var(--h-accent-hover);
+  --accent-soft: var(--h-accent-soft);
+  --ok: var(--h-success);
+  --warn: var(--h-warning);
+  --error: var(--h-danger);
+  --border: var(--h-border);
+  --border-strong: var(--h-border-strong);
+  --radius-card: var(--h-radius-md);
+  --radius-ctl: var(--h-radius-sm);
   --btn-h: 32px;
   --btn-h-small: 28px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
-    Roboto, Helvetica, Arial, sans-serif;
+  /* Typography（§12：Inter 栈，不新增字体文件） */
+  font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 * {
@@ -58,11 +110,418 @@ select {
   font-family: inherit;
 }
 
+/* ============ DEV-0064R.2 · Single Global Wallpaper + Translucent Surface System ============
+   产品原则（§0-§1）：整个 Higher WebView 永远只有**一张**壁纸
+   （.h-wallpaper-layer 唯一真实图片消费者；Settings 预览为唯一例外）。
+   所有 UI Surface 只允许 transparent / rgba / color-mix(...transparent) 透出同一张图。
+
+   层级：Global Wallpaper Layer（z:-2）→ Global Dimming Layer（z:-1）→ Higher UI。
+   两层 fixed + inset:0 + pointer-events:none（§19/§75），永不覆盖任何点击区域。
+   图片视觉 = 强度(opacity) × 饱和(saturate) × 压暗(overlay)——无隐藏第四变量（§18）。 */
+
+.h-wallpaper-layer {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  display: none;
+  background-image: var(--h-wallpaper-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--h-wallpaper-visibility, 0.7);
+  /* §18：禁止 brightness——存在感=强度，暗度=压暗，不再有隐藏压亮 */
+  filter: saturate(var(--h-wallpaper-saturation, 0.7));
+}
+
+/* Global Dimming Layer（§15：压暗程度 20..80，默认 45） */
+.h-wallpaper-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  display: none;
+  background: rgb(7, 9, 13);
+  opacity: var(--h-wallpaper-overlay, 0.45);
+}
+
+html[data-h-wallpaper="on"] .h-wallpaper-layer,
+html[data-h-wallpaper="on"] .h-wallpaper-overlay {
+  display: block;
+}
+
+/* ---- §26 Wallpaper On：全局 Effective Tokens（数字锁死，比例不得自改） ----
+   一个 Surface 只做一次透明化（§32）：Token 层 mix，元素层直接消费。 */
+html[data-h-wallpaper="on"] {
+  --h-bg: color-mix(in srgb, var(--h-bg-solid) 68%, transparent);
+  --h-sidebar: color-mix(in srgb, var(--h-sidebar-solid) 66%, transparent);
+  --h-surface-1: color-mix(in srgb, var(--h-surface-1-solid) 72%, transparent);
+  --h-surface-2: color-mix(in srgb, var(--h-surface-2-solid) 78%, transparent);
+  --h-surface-3: color-mix(in srgb, var(--h-surface-3-solid) 84%, transparent);
+  /* §27：Dropdown / Popover / Menu / Floating Preview 需要更强可读性 */
+  --bg-elevated: color-mix(in srgb, var(--h-surface-2-solid) 84%, transparent);
+}
+
+/* §28：壁纸开启时 Body / #root 不得再盖一层全屏深色把壁纸整体吃掉 */
+html[data-h-wallpaper="on"] body,
+html[data-h-wallpaper="on"] #root {
+  background: transparent;
+}
+
+/* Sidebar / AI Panel / Knowledge Tree / Card 等全部直接消费 Effective Tokens
+   （Sidebar=--h-sidebar 66%、Card=--h-surface-1 72%…），同一张壁纸自然连续透出，
+   禁止任何区域再自己 background-image 或二次 color-mix（§2/§30-§33）。 */
+
+/* Phase C · Special Surfaces 的 wallpaper-only override 统一放在本文件**末尾**
+   （原规则之后；见文件底部 §80 施工原则说明）。 */
+
+/* ============ DEV-0064R.2 · Settings 外观 Tab（§62-§65 Preview Truth） ============ */
+
+/* 预览 = 壁纸缩略（唯一允许的第二处 --h-wallpaper-image 消费 §2/§62）。
+   结构（§64）：::before 图片(强度+饱和) → ::after 压暗 → content 文件名+示例 Surface。 */
+.appearance__preview {
+  height: 120px;
+  border: 1px dashed var(--h-border-strong);
+  border-radius: var(--h-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 12px 0;
+  background: var(--h-surface-1-solid);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 图片层：同图 / 同强度 / 同饱和 / 同 cover-center（与主壁纸层一致） */
+.appearance__preview::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--h-wallpaper-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--h-wallpaper-visibility, 0.7);
+  filter: saturate(var(--h-wallpaper-saturation, 0.7));
+  pointer-events: none;
+}
+
+/* 压暗层：同压暗程度 */
+.appearance__preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(7, 9, 13);
+  opacity: var(--h-wallpaper-overlay, 0.45);
+  pointer-events: none;
+}
+
+/* §65：示例 Surface——让用户在 Settings 直接看到 壁纸+半透明 Card+文字 效果 */
+.appearance__preview-sample {
+  position: relative;
+  z-index: 1;
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--h-text);
+  pointer-events: none;
+}
+
+.appearance__preview-empty {
+  position: relative;
+  z-index: 1;
+  color: var(--h-text-muted);
+  font-size: 13px;
+}
+
+.appearance__preview-name {
+  position: absolute;
+  left: 12px;
+  bottom: 8px;
+  z-index: 1;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--h-text);
+  background: rgba(7, 9, 13, 0.72);
+  border-radius: var(--h-radius-sm);
+  padding: 2px 8px;
+}
+
+.appearance__group {
+  margin-top: 24px;
+}
+
+.appearance__group-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--h-text-secondary);
+  margin: 0 0 12px;
+}
+
+.appearance__slider-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 40px;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+}
+
+.appearance__slider-row label {
+  font-size: 13px;
+  color: var(--h-text-secondary);
+}
+
+.appearance__slider-row output {
+  font-size: 12px;
+  color: var(--h-text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.appearance__slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--h-accent);
+}
+
+.appearance__themes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.appearance__theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  background: var(--h-surface-2);
+  color: var(--h-text-secondary);
+  font-size: 13px;
+}
+
+.appearance__theme-btn:hover {
+  border-color: var(--h-border-strong);
+  color: var(--h-text);
+}
+
+.appearance__theme-btn--active {
+  border-color: var(--h-accent-border);
+  background: var(--h-accent-soft);
+  color: var(--h-text);
+}
+
+.appearance__theme-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  flex-shrink: 0;
+}
+
+/* ============ DEV-0064 §34-§35：Today Polish + Global Polish ============ */
+
+/* Global Focus Ring（键盘可达性统一；:focus-visible 仅键盘触发，不干扰鼠标操作） */
+:focus-visible {
+  outline: 2px solid var(--h-accent);
+  outline-offset: 1px;
+}
+
+/* Scrollbar：thin / dark / subtle（统一全站；禁止完全隐藏 §35） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3140 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #2a3140;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #3a4356;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Today：stat typography（数字等宽，层级分明；数据零改动） */
+.today-head__sub {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+}
+
+.today-head__sub b {
+  color: var(--h-text);
+  font-weight: 600;
+}
+
+/* Today：task section spacing 节奏 */
+.today__section {
+  gap: 12px;
+}
+
+/* Today：active session hero——左侧 accent 锚点条（继续/结束 handler 原样） */
+.today-hero {
+  position: relative;
+}
+
+.today-hero::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--h-accent);
+}
+
+/* ============ DEV-0065.1 · Custom Desktop Titlebar + App Shell 几何 ============ */
+
+/* 标题栏（§15-§18）：fixed 顶栏；背景 var(--h-sidebar)——壁纸开启时半透明透出
+   同一全局壁纸（0 background-image §44）；z-index 1200 高于 Modal/Toast（§16） */
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--h-titlebar-height);
+  z-index: 1200;
+  display: flex;
+  align-items: stretch;
+  background: var(--h-sidebar);
+  border-bottom: 1px solid var(--h-border);
+  user-select: none;
+}
+
+/* 拖拽区 = 左侧主区（flex:1；原生 data-tauri-drag-region 行为含双击最大化） */
+.titlebar__drag {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 14px;
+}
+
+.titlebar__app {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--h-text-secondary);
+}
+
+/* 窗口控件 = max-content，drag region 之外（§18/§22） */
+.titlebar__controls {
+  display: flex;
+  align-items: stretch;
+}
+
+.titlebar__btn {
+  width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-secondary);
+  cursor: pointer;
+}
+
+.titlebar__btn:hover {
+  background: var(--h-surface-2);
+  color: var(--h-text);
+}
+
+/* §25：Close = 红 hover + 白图标（桌面软件语义，不是 web CTA） */
+.titlebar__btn--close:hover {
+  background: #e5484d;
+  color: #fff;
+}
+
+.titlebar__btn:focus-visible {
+  outline-offset: -2px;
+}
+
+/* §24：纯 CSS/DOM 图标（线/方/×；无图标包/远程资源） */
+.titlebar__icon-min,
+.titlebar__icon-max,
+.titlebar__icon-close {
+  display: inline-block;
+  box-sizing: border-box;
+}
+
+.titlebar__icon-min {
+  width: 11px;
+  height: 1px;
+  background: currentColor;
+}
+
+.titlebar__icon-max {
+  width: 11px;
+  height: 11px;
+  border: 1px solid currentColor;
+}
+
+.titlebar__icon-close {
+  position: relative;
+  width: 12px;
+  height: 12px;
+}
+
+.titlebar__icon-close::before,
+.titlebar__icon-close::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  width: 12px;
+  height: 1px;
+  background: currentColor;
+}
+
+.titlebar__icon-close::before {
+  transform: rotate(45deg);
+}
+
+.titlebar__icon-close::after {
+  transform: rotate(-45deg);
+}
+
+/* §12：App 内容整体下移一次（titlebar 偏移只在 Shell 层，各页零改动）；
+   全局壁纸 fixed inset:0 不偏移，App UI 才偏移 */
+.app-shell__content {
+  height: calc(100vh - var(--h-titlebar-height));
+  margin-top: var(--h-titlebar-height);
+  overflow: hidden;
+}
+
 /* ============ 布局 ============ */
 
 .layout {
   display: flex;
-  height: 100vh;
+  /* DEV-0065.1 §12：高度由 app-shell__content 承担（100vh - 34px titlebar）；
+     此处 100%（继承），不再二次占满视口 */
+  height: 100%;
   overflow: hidden;
 }
 
@@ -78,35 +537,115 @@ select {
 /* ============ DEV-0022 Higher AI Agent Panel ============ */
 
 .aipanel {
-  width: 360px;
+  /* DEV-0064 §28：Expanded width 固定目标 340px（min 320 / max 380，不超 400） */
+  width: 340px;
   min-width: 320px;
-  max-width: 440px;
+  max-width: 380px;
   flex-shrink: 0;
-  background: var(--bg-sidebar);
-  border-left: 1px solid var(--border);
+  background: var(--h-sidebar);
+  border-left: 1px solid var(--h-border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  z-index: 200;
 }
 
-/* 收起时的悬浮入口按钮 */
-.aipanel-fab {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 40;
-  background: var(--accent);
-  color: #fff;
+/* DEV-0064 §29：Collapsed Rail（宽 44~48px；只显示标识 + 展开按钮；不是关闭） */
+.aipanel--rail {
+  width: 46px;
+  min-width: 46px;
+  max-width: 46px;
+  align-items: center;
+  padding: 12px 0;
+  gap: 14px;
+}
+
+.aipanel__rail-expand {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.aipanel__rail-expand:hover {
+  border-color: var(--h-accent-border);
+}
+
+.aipanel__rail-label {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--h-text-muted);
+  user-select: none;
+}
+
+/* DEV-0065.1 §30：FAB 已删除（AI 两态：Expanded / Collapsed Rail，无 Closed 态） */
+
+/* Collapsed Rail（宽 44~48px；§34：整条 rail = 单个全尺寸按钮；§35 轻量 hover） */
+.aipanel--rail {
+  width: 46px;
+  min-width: 46px;
+  max-width: 46px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.aipanel__rail-hit {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  padding-top: 14px;
   border: 0;
-  border-radius: 999px;
-  padding: 8px 16px;
-  font-size: 13px;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
-.aipanel-fab:hover {
-  filter: brightness(1.1);
+.aipanel__rail-hit:hover {
+  background: var(--h-accent-soft);
+}
+
+.aipanel__rail-hit:focus-visible {
+  outline-offset: -2px;
+}
+
+.aipanel__rail-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.aipanel__rail-hit:hover .aipanel__rail-icon {
+  border-color: var(--h-accent-border);
+}
+
+.aipanel__rail-label {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--h-text-muted);
+  user-select: none;
 }
 
 .aipanel__header {
@@ -219,8 +758,8 @@ select {
 }
 
 .aipanel__msg {
-  border-radius: 10px;
-  padding: 8px 11px;
+  border-radius: var(--h-radius-sm);
+  padding: 8px 12px;
   font-size: 13px;
   line-height: 1.65;
   max-width: 94%;
@@ -228,24 +767,25 @@ select {
   white-space: pre-wrap;
 }
 
-/* DEV-0054 §89：用户=轻量 accent（浅蓝小圆角）；AI=普通 surface */
+/* DEV-0054 §89 → DEV-0063 §30：用户=accent-soft 靠右；AI=surface 靠左；
+   system/deterministic=更弱 meta/surface */
 .aipanel__msg--user {
   align-self: flex-end;
-  background: var(--accent-soft);
-  color: var(--fg);
+  background: var(--h-accent-soft);
+  color: var(--h-text);
   border: 1px solid transparent;
 }
 
 .aipanel__msg--assistant {
   align-self: flex-start;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border);
   white-space: normal;
 }
 
 .aipanel__msg--error {
-  border-color: var(--error);
-  color: var(--error);
+  border-color: var(--h-danger);
+  color: var(--h-danger);
 }
 
 .aipanel__usage {
@@ -390,10 +930,10 @@ select {
 
 .aipanel__input {
   flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  color: var(--fg);
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border-strong);
+  border-radius: var(--h-radius-sm);
+  color: var(--h-text);
   font-size: 12.5px;
   padding: 8px 10px;
   font-family: inherit;
@@ -401,7 +941,7 @@ select {
 
 .aipanel__input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--h-accent);
 }
 
 .aipanel__model-row {
@@ -427,7 +967,7 @@ select {
     right: 0;
     top: 0;
     bottom: 0;
-    z-index: 30;
+    z-index: 200;
     box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
   }
 }
@@ -435,30 +975,60 @@ select {
 .layout__sidebar {
   width: 220px;
   flex-shrink: 0;
-  background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
+  background: var(--h-sidebar);
+  border-right: 1px solid var(--h-border);
   padding: 24px 16px;
   display: flex;
   flex-direction: column;
   gap: 24px;
+  z-index: 20;
 }
 
 .layout__brand {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
   padding: 0 8px;
 }
 
-.layout__brand-name {
-  font-size: 22px;
+.layout__brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--h-radius-sm);
+  background: var(--h-accent-soft);
+  border: 1px solid var(--h-accent-border);
+  color: var(--h-accent);
   font-weight: 700;
-  letter-spacing: 1px;
+  font-size: 13px;
+}
+
+.layout__brand-name {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--h-text);
 }
 
 .layout__brand-tag {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--h-text-muted);
+}
+
+/* DEV-0063 §15：导航分组标签（学习 / 洞察；系统=footer 设置） */
+.layout__nav-group {
+  margin: 8px 0 2px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  color: var(--h-text-muted);
+}
+
+.layout__nav-group:first-child {
+  margin-top: 0;
 }
 
 .layout__nav {
@@ -467,30 +1037,43 @@ select {
   gap: 2px;
 }
 
+/* DEV-0063 §16：40px / padding 12 / radius 10；Default=secondary+transparent，
+   Hover=surface-2+text，Selected=accent-soft+accent-border+accent */
 .layout__nav-item {
-  display: block;
-  padding: 10px 12px;
-  border-radius: 8px;
-  color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: var(--h-text-secondary);
   text-decoration: none;
   font-size: 14px;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .layout__nav-item:hover {
-  background: var(--bg-elevated);
-  color: var(--fg);
+  background: var(--h-surface-2);
+  color: var(--h-text);
 }
 
 .layout__nav-item--active {
-  background: var(--accent);
-  color: #fff;
+  background: var(--h-accent-soft);
+  border-color: var(--h-accent-border);
+  color: var(--h-accent);
+}
+
+.layout__nav-icon {
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
 }
 
 .layout__main {
   flex: 1;
   overflow-y: auto;
-  padding: 32px 40px;
+  padding: var(--h-space-8);
 }
 
 /* ============ 页面通用 ============ */
@@ -504,24 +1087,27 @@ select {
 }
 
 .page__header {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 16px;
+  border-bottom: 1px solid var(--h-border);
+  padding-bottom: var(--h-space-4);
 }
 
 .page__title {
   margin: 0;
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 700;
+  letter-spacing: 0.2px;
 }
 
 .page__subtitle {
   margin: 6px 0 0;
-  color: var(--fg-muted);
+  color: var(--h-text-secondary);
   font-size: 13px;
 }
 
 .card {
-  background: var(--bg-elevated);
+  /* DEV-0064R.2 §33：Card 直接消费 --h-surface-1（无壁纸=solid；壁纸=72% 透出同一壁纸）。
+     不用 --bg-elevated（那是 Dropdown/Menu 的更深 surface，壁纸时 84%）。 */
+  background: var(--h-surface-1);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 20px 24px;
@@ -957,7 +1543,8 @@ select {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 100vh;
+  /* DEV-0065.1 §12：随 app-shell__content（100%），不再单独占满视口 */
+  min-height: 100%;
   padding: 40px 20px;
   gap: 24px;
 }
@@ -1482,6 +2069,31 @@ button.calendar__cell--day:hover {
   background: rgba(79, 140, 255, 0.18);
 }
 
+/* DEV-0064 §27：Tree 视觉 v2（只改视觉：行高/选中/hover/缩进/搜索/节奏；
+   Tree CRUD / Drag / Sort / Parent 全部冻结不动） */
+.knowledge__node-row {
+  min-height: 32px;
+}
+
+.knowledge__node-row--active {
+  background: var(--h-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--h-accent-border);
+}
+
+.knowledge__search-input {
+  border-radius: var(--h-radius-sm);
+}
+
+.knowledge__search-input:focus {
+  border-color: var(--h-accent);
+  box-shadow: 0 0 0 2px var(--h-accent-soft);
+}
+
+.knowledge__nodes--child {
+  padding-left: 12px;
+  margin-left: 12px;
+}
+
 .knowledge__node-toggle {
   width: 22px;
   height: 24px;
@@ -1636,6 +2248,26 @@ button.calendar__cell--day:hover {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* DEV-0064 §26：成熟空态（标题/说明/Primary+Secondary，复用现有 handler） */
+.knowledge__empty-card {
+  text-align: center;
+  padding: 40px 32px;
+  border: 1px dashed var(--h-border-strong);
+  border-radius: var(--h-radius-lg);
+  background: var(--h-surface-1);
+  max-width: 420px;
+}
+
+.knowledge__empty-card .knowledge__empty-title {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+.knowledge__empty-desc {
+  margin: 0 0 20px;
+  font-size: 13px;
 }
 
 .knowledge__breadcrumb {
@@ -1872,26 +2504,29 @@ button.calendar__cell--day:hover {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(5, 7, 12, 0.62);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  z-index: 900;
   padding: 20px;
 }
 
 .modal {
+  position: relative;
+  z-index: 910;
   width: 100%;
   max-width: 420px;
   max-height: 90vh;
   overflow-y: auto;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border-strong);
+  border-radius: var(--h-radius-md);
   padding: 20px 22px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
 }
 
 .modal__title {
@@ -2008,6 +2643,39 @@ button.calendar__cell--day:hover {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* DEV-0063 §19-§20：Current Study Hero——正在学习 = 首要视觉中心（accent 边 + soft 底） */
+.today-hero {
+  border-color: var(--h-accent-border);
+  background: var(--h-surface-1);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.22);
+}
+
+.today-hero .today-banner__label {
+  color: var(--h-accent);
+}
+
+.today-hero .today-banner__name {
+  font-size: 16px;
+}
+
+/* DEV-0063 §19-6：Review / 风险提示降噪（页尾次级；弱 surface、无强调边框） */
+.today-banner--quiet {
+  padding: 6px 14px;
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--h-border);
+}
+
+.today-banner--quiet .today-banner__name {
+  font-size: 13px;
+  color: var(--h-text-secondary);
+}
+
+.today-banner--quiet .today-banner__label {
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .today-empty,
@@ -3605,17 +4273,18 @@ button.calendar__cell--day:hover {
 
 .pcal__cell {
   min-height: 84px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
   padding: 6px 8px;
   cursor: pointer;
   text-align: left;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  color: var(--fg);
+  color: var(--h-text);
   overflow: hidden;
+  transition: border-color 0.15s, background 0.15s;
 }
 
 .pcal__cell--empty {
@@ -3624,12 +4293,15 @@ button.calendar__cell--day:hover {
   cursor: default;
 }
 
+/* DEV-0063 §27：Today = accent border + soft background */
 .pcal__cell--today {
-  border-color: var(--accent);
+  border-color: var(--h-accent-border);
+  background: var(--h-accent-soft);
 }
 
 .pcal__cell--has:hover {
-  border-color: var(--accent);
+  border-color: var(--h-accent-border);
+  background: var(--h-surface-2);
 }
 
 .pcal__date {
@@ -3638,12 +4310,12 @@ button.calendar__cell--day:hover {
 }
 
 .pcal__cell--today .pcal__date {
-  color: var(--accent);
+  color: var(--h-accent);
 }
 
 .pcal__count {
   font-size: 10.5px;
-  color: var(--accent);
+  color: var(--h-accent);
 }
 
 .pcal__tasks {
@@ -3999,14 +4671,15 @@ button.calendar__cell--day:hover {
   right: 0;
   top: 28px;
   /* DEV-0061R §49：菜单交互层必须高于透明 backdrop（z-60）——
-     旧 z-30 被 backdrop 抢 hit-testing 导致"看得到点不到" */
-  z-index: 70;
+     旧 z-30 被 backdrop 抢 hit-testing 导致"看得到点不到"；
+     DEV-0063 §13：Dropdown/Menu 层级 = 100 */
+  z-index: 100;
   min-width: 130px;
   display: flex;
   flex-direction: column;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border-strong);
+  border-radius: var(--h-radius-sm);
   padding: 4px;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
 }
@@ -4014,7 +4687,7 @@ button.calendar__cell--day:hover {
 .taskmenu__pop button {
   background: transparent;
   border: 0;
-  color: var(--fg);
+  color: var(--h-text);
   text-align: left;
   font-size: 12.5px;
   padding: 6px 10px;
@@ -4023,11 +4696,18 @@ button.calendar__cell--day:hover {
 }
 
 .taskmenu__pop button:hover {
-  background: var(--bg);
+  background: var(--h-surface-3);
+}
+
+/* DEV-0063 §22：菜单分组分隔线（编辑 ──── 删除） */
+.taskmenu__sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--h-border);
 }
 
 .taskmenu__danger {
-  color: var(--error) !important;
+  color: var(--h-danger) !important;
 }
 
 /* AI 一行 */
@@ -4042,13 +4722,13 @@ button.calendar__cell--day:hover {
   color: var(--fg-muted);
 }
 
-/* 轻量 Toast */
+/* 轻量 Toast（DEV-0063 §13：Toast = 1000） */
 .toast {
   position: fixed;
   bottom: 26px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 200;
+  z-index: 1000;
   padding: 8px 18px;
   border-radius: 8px;
   font-size: 13px;
@@ -5345,6 +6025,10 @@ button.calendar__cell--day:hover {
   flex: 1;
   min-height: 320px;
   position: relative;
+  /* DEV-0064R.2 §49：无壁纸 = neutral 深底；有壁纸 = 64% 透明透出同一壁纸
+     （React Flow 数据 / layout 算法零改动，只改 CSS；override 见壁纸区） */
+  background: #16181d;
+  border-radius: var(--h-radius-sm);
 }
 
 .kflow__empty {
@@ -5362,17 +6046,22 @@ button.calendar__cell--day:hover {
   justify-content: center;
   gap: 3px;
   padding: 8px 30px 8px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  /* DEV-0064R.2 §50：无壁纸 = neutral surface；有壁纸 = 78% 透明（比 Canvas 深） */
+  background: #1d2027;
+  border: 1px solid #2d3139;
   border-radius: 9px;
   font-size: 12px;
-  color: var(--fg);
+  color: #f4f6fa;
   cursor: grab;
   user-select: none;
 }
 
 .kflow__node:active {
   cursor: grabbing;
+}
+
+.kflow__node:hover {
+  border-color: #3c414c;
 }
 
 .kflow__node--selected {
@@ -5820,6 +6509,199 @@ button.calendar__cell--day:hover {
 }
 
 /* ============ DEV-0050 PHASE-C/D：Planning V1（第一屏两栏 / 目标树 / 下一步 / 学习数据 / Date Detail 掌握度） ============ */
+
+/* ---- DEV-0064 §15-§23：Planning UI v2（Header + View Switch + Week Board） ---- */
+
+/* Header：标题左 / [周][月] View Switch 右（§15/§17） */
+.planning__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* Higher Segmented Control（§27 统一组件；Planning 周/月 与 Knowledge 工作区/知识图 共用） */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+}
+
+.seg__item {
+  border: 0;
+  background: transparent;
+  color: var(--h-text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  padding: 6px 16px;
+  border-radius: 6px;
+}
+
+.seg__item:hover {
+  color: var(--h-text);
+}
+
+.seg__item--active {
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+}
+
+/* Week Board（§20：7 列 周一→周日；每列 = 星期/日期/数量·时长/Task Card/Session summary） */
+.pweek__grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.pweek__col {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-md);
+  /* §39：禁止 overflow hidden 裁剪 ⋯ 菜单（taskmenu__pop 为 absolute 弹层） */
+}
+
+.pweek__col--today {
+  border-color: var(--h-accent-border);
+}
+
+.pweek__col--selected {
+  border-color: var(--h-accent);
+  box-shadow: inset 0 0 0 1px var(--h-accent-border);
+}
+
+.pweek__colhead {
+  position: relative;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--h-border);
+  border-radius: calc(var(--h-radius-md) - 1px) calc(var(--h-radius-md) - 1px) 0 0;
+  cursor: pointer;
+}
+
+.pweek__col--today .pweek__colhead {
+  background: var(--h-accent-soft);
+}
+
+.pweek__dow {
+  display: block;
+  font-size: 11px;
+  color: var(--h-text-muted);
+}
+
+.pweek__dom {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.pweek__add {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--h-border);
+  border-radius: 6px;
+  background: var(--h-surface-2);
+  color: var(--h-text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.pweek__colhead:hover .pweek__add {
+  opacity: 1;
+}
+
+.pweek__add:hover {
+  color: var(--h-accent);
+  border-color: var(--h-accent-border);
+}
+
+.pweek__meta {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--h-text-secondary);
+}
+
+.pweek__tasks {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+}
+
+.pweek__task {
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  padding: 8px;
+}
+
+.pweek__task-main {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+}
+
+.pweek__task-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--h-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 竖排空间有限：最多两行 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.pweek__task--done .pweek__task-title {
+  color: var(--h-text-muted);
+  text-decoration: line-through;
+}
+
+.pweek__task-meta {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--h-text-muted);
+}
+
+.pweek__task-acts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.pweek__task-acts .taskmenu {
+  margin-left: auto;
+}
+
+/* Session summary（§20：已有 range data 才显示） */
+.pweek__sess {
+  margin: 0 10px 10px;
+  font-size: 11px;
+  color: var(--h-text-secondary);
+}
 
 /* 第一屏：左目标树 + 右下一步（宽屏两栏；<900px 单列堆叠 §33） */
 .planning__first {
@@ -6343,13 +7225,25 @@ button.calendar__cell--day:hover {
 .kws__stats {
   font-size: 12px;
   color: var(--fg-muted);
+  /* DEV-0064 §25：Workspace metadata 更明确（轻量 pill 化，数据零改动） */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--h-border);
+  border-radius: 999px;
+  background: var(--h-surface-1);
+  font-variant-numeric: tabular-nums;
 }
 
 .kws__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 2px;
+  /* DEV-0064 §25：Toolbar 更紧凑 */
+  margin-top: 12px;
 }
 
 /* ---- 内容时间线（§28-34） ---- */
@@ -7183,23 +8077,29 @@ button.calendar__cell--day:hover {
 }
 
 .csr__diff-field {
-  color: var(--fg-muted);
+  color: var(--h-text-muted);
   min-width: 72px;
   flex-shrink: 0;
 }
 
 .csr__diff-old {
-  color: var(--error);
+  color: var(--h-danger);
   word-break: break-all;
 }
 
 .csr__diff-new {
-  color: var(--ok);
+  color: var(--h-success);
   word-break: break-all;
 }
 
+/* DEV-0063 §33：显式清空（before → 未设置）= 弱化警示 */
+.csr__diff-row--clear .csr__diff-new {
+  color: var(--h-text-secondary);
+}
+
 .csr__diff-row--add .csr__diff-new,
-.csr__diff-row--del .csr__diff-old {
+.csr__diff-row--del .csr__diff-old,
+.csr__diff-row--clear .csr__diff-old {
   flex: 1;
 }
 
@@ -7649,27 +8549,29 @@ button.calendar__cell--day:hover {
   gap: 4px;
 }
 
-/* Task Row（DEV-0054 §32-37：min-height 62px；Checkbox + Title 15px + Meta + 直接动作/⋯） */
+/* Task Row（DEV-0054 §32-37 → DEV-0063 §21：surface 层级 + 圆角统一） */
 .today__task {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 62px;
   padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--bg);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-md);
+  background: var(--h-surface-1);
+  transition: border-color 0.15s, background 0.15s;
 }
 
 .today__task:hover {
-  border-color: var(--border-strong);
+  border-color: var(--h-border-strong);
+  background: var(--h-surface-2);
 }
 
 .today__task-check {
   flex-shrink: 0;
   background: transparent;
   border: none;
-  color: var(--fg-muted);
+  color: var(--h-text-secondary);
   font-size: 16px;
   line-height: 1;
   padding: 2px 4px;
@@ -7677,7 +8579,7 @@ button.calendar__cell--day:hover {
 }
 
 .today__task-check:hover {
-  color: var(--accent);
+  color: var(--h-accent);
 }
 
 .today__task-main {
@@ -7697,7 +8599,7 @@ button.calendar__cell--day:hover {
 .today__task-title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--h-text);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -7705,13 +8607,13 @@ button.calendar__cell--day:hover {
 }
 
 .today__task--done .today__task-title {
-  color: var(--fg-muted);
+  color: var(--h-text-muted);
   text-decoration: line-through;
 }
 
 .today__task-meta {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--h-text-muted);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -7925,6 +8827,72 @@ button.calendar__cell--day:hover {
   word-break: break-all;
   max-height: 300px;
   overflow: auto;
+}
+
+/* ============ DEV-0064R.2 · Phase C · Special Surfaces（wallpaper-only override） ============
+   §80 施工原则：先 Token 架构 → 绝大部分页面自然继承 → 只对 hard-coded 特殊面
+   做 override。本块置于文件末尾（原规则之后）：同/更高 specificity 时后者生效，
+   且不干扰既有规则的源码锚点。仅壁纸模式（data-h-wallpaper="on"）生效。 */
+
+/* §36：Form Controls——输入可读性优先的 Strong Control Surface（只改 background；
+   不触碰 focus / disabled / border / validation） */
+html[data-h-wallpaper="on"] :is(input, textarea, select) {
+  background: color-mix(in srgb, var(--h-bg-solid) 78%, transparent);
+}
+
+/* 例外：行内伪装成纯文本的输入（知识标题），保持 transparent 结构 */
+html[data-h-wallpaper="on"] input.knowledge__title {
+  background: transparent;
+}
+
+/* §37-§39：Modal 也透同一壁纸（surface-2-solid 76% + border/shadow 足以保证可读） */
+html[data-h-wallpaper="on"] .modal {
+  background: color-mix(in srgb, var(--h-surface-2-solid) 76%, transparent);
+}
+
+/* §38：Modal Overlay 减淡到 0.28，避免 Modal 后的壁纸再次整片变黑 */
+html[data-h-wallpaper="on"] .modal-overlay {
+  background: rgba(5, 7, 12, 0.28);
+}
+
+/* §42：Task / Knowledge / Flow 菜单——比 token 略深，固定最高 82%（禁止 90%+） */
+html[data-h-wallpaper="on"] .taskmenu__pop {
+  background: color-mix(in srgb, var(--h-surface-2-solid) 82%, transparent);
+}
+
+/* §44：AI Input Bar 外壳固定 76% sidebar solid（内部 Textarea 走 78% control surface） */
+html[data-h-wallpaper="on"] .aipanel__inputbar {
+  background: color-mix(in srgb, var(--h-sidebar-solid) 76%, transparent);
+}
+
+/* §48-§50：Knowledge Graph 也透同一壁纸（Canvas 64% / Node 78%；ReactFlow
+   数据、节点位置、边、drag、reparent 零改动，只改 CSS） */
+html[data-h-wallpaper="on"] .kflow__canvas {
+  background: color-mix(in srgb, #16181d 64%, transparent);
+}
+
+html[data-h-wallpaper="on"] .kflow__node {
+  background: color-mix(in srgb, #1d2027 78%, transparent);
+}
+
+/* §51：半透明画布上 Dot 对比度微调（≤15%，不改颜色语义/拓扑） */
+html[data-h-wallpaper="on"] .kflow__canvas .react-flow__background circle {
+  fill: #3a404c;
+}
+
+/* §54-§58：RichDocEditor 也透同一壁纸（容器 72% / 工具栏 78% / 代码块 86%；
+   ProseMirror 正文无独立实色背景，自然透出；行为零改动） */
+html[data-h-wallpaper="on"] .hdoc {
+  background: color-mix(in srgb, #1b1e24 72%, transparent);
+}
+
+html[data-h-wallpaper="on"] .hdoc__toolbar,
+html[data-h-wallpaper="on"] .hdoc__codebar {
+  background: color-mix(in srgb, #22262e 78%, transparent);
+}
+
+html[data-h-wallpaper="on"] .hdoc__codeblock {
+  background: color-mix(in srgb, #14161b 86%, transparent);
 }
 .pt-form-json {
   font-family: "Cascadia Code", Consolas, monospace;
@@ -8540,11 +9508,12 @@ button.calendar__cell--day:hover {
   font-size: 12px;
 }
 
-/* ---- Calendar 选中日期（§61-62：正下方展开日报） ---- */
+/* ---- Calendar 选中日期（§61-62 → DEV-0063 §27：更强 accent state） ---- */
 
 .pcal__cell--selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent) inset;
+  border-color: var(--h-accent);
+  background: var(--h-accent-soft);
+  box-shadow: 0 0 0 1px var(--h-accent) inset;
 }
 
 /* ---- ChangeSet Review 分组（§106-109） ---- */
@@ -9356,5 +10325,5 @@ button.datapage__bar-main:disabled {
   opacity: 0.7;
 }
 
-/* 注：AI Panel 收起态右下角轻量悬浮按钮已由既有 .aipanel-fab（DEV-0022）实现，
-   语义等同 DEV-0055 §149 的收起浮钮，不重复实现第二套 .aidock__*。 */
+/* 注：AI Panel 收起态入口由 .aipanel--rail / .aipanel__rail-hit 承担
+   （DEV-0065.1 两态：无 Closed/FAB；语义等同 DEV-0055 §149 的收起浮钮）。 */

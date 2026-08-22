@@ -6,14 +6,17 @@
 ## Metadata
 | 字段 | 值 |
 |---|---|
-| Context Version | **HGCTX-0012**（DEV-0062R.1 Probe Input/Output Truth Repair：AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING） |
-| Current Schema | **v024**（DEV-0062R.1 **0 migration**——Probe A-D bounded retry / Response Truth / Hard-Soft / Snapshot Guard 全部复用 v024 既有列；无 v025） |
-| Last Completed DEV | **DEV-0062R.1**（修复 Probe A 假阴性：Response DTO +finish_reason/reasoning_content（reasoning 只分类不展示不落盘）/ §7 固定 Token Budget 常量 / Basic+Temp0 两 attempt 256→1024 分类驱动 retry / Hard（401/404/connect→B-E skipped）vs Soft（500 等→B-E 继续全量诊断）/ 单次 Probe ≤9 calls / 测试连接=API connectivity only（新文案不冒充能力）/ Probe snapshot 冻结+Config Changed discard / 结果 A-E 完成后一次原子落库+安全摘要段） |
-| Current DEV | 无（**AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING**：等待用户实机 H00-H10，见下方 Checklist / TASK §39） |
-| Last Updated | 2026-08-22T14:57:03+08:00（系统时间，DEV-0062R.1 收口） |
-| Source Fingerprint | Git：main @ c19ce78；**WORKTREE DIRTY：YES**（DEV-0059→0062R.1 全部未提交工作；HEAD≠当前代码，以工作区为准） |
-| Runtime Status | 旧证据：**v020 VERIFIED BY USER RUNTIME**（2026-08-17）；DEV-0060.1 主骨架 Human Runtime 已确认；**v021-v024 及 0060.2/0061R/0062/0062R/0062R.1 Human Runtime 尚未验证**（0062 BLOCKED at Compatibility；0062R BLOCKED at H02 Probe A false negative；0062R.1 修复待复验）——不得写 Runtime Verified |
-| Gate Status | **DEV-0062R.1 recorded automated gate**：cargo check **0 errors** / batch062r1 **41/41**（localhost fake provider 行为级）/ 回归 batch062r **44/44** · batch062 **57/57** · batch061r **47/47** · batch0602 **29/29** · batch0601 **33/33** · batch060 **16/16** · batch0592 **12/12** · ai_foundation **7/7** · ai_assistant **10/10** · ai_panel **8/8** / tsc **0 errors** / npm run build **通过**（按 TASK 纪律本轮未跑 full cargo test）；真实 Provider 本轮 **0 次自动调用**（fake provider 仅 127.0.0.1） |
+| Context Version | **HGCTX-0016**（DEV-0065.1 Desktop Shell：AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING） |
+| Active Development | **DEV-0065.1** |
+| Desktop Shell | Custom Titlebar **implemented**（34px/--h-titlebar-height · fixed top · z-index 1200 · var(--h-sidebar) 半透明 · data-tauri-drag-region + 双击最大化 · 三控件 min/max/close 纯 CSS 图标 · 浏览器 isTauriRuntime 屏蔽；App = WallpaperLayers → DesktopTitlebar → app-shell__content(100vh-34px) > ProfileGate 全阶段恒渲染） |
+| Native Decorations | **OFF**（lib.rs 唯一 builder 加 .decorations(false)；tauri.conf windows 仍 []；无 transparent/fullscreen；capabilities 精确加 core:window:allow-close/minimize/toggle-maximize/start-dragging 四权限，无越权） |
+| Higher AI | **Expanded / Collapsed only**（三态废止：Closed 分支/FAB/X 全删；整 46px rail = aipanel__rail-hit 单按钮可点；missing→collapsed；唯一偏好 higher.aiPanel.mode；ui.ai_panel_open 前端不再消费不迁移——DB 旧值 stale 兼容；Panel 恒挂载，收起↔展开会话/流/Proposal 不重建；页面 AI 入口经 pending-send/actionBusy 自动展开；Context 删 open/setOpen，Today/FinalGoalCard/PlanningTruthSummary 三处 setOpen 消费行连锁删除（仅删调用行，handler 链零变化）） |
+| Schema | **v024**（0 migration；Backend Domain 0；AI Runtime 0；Dependency 0） |
+| Last Updated | 2026-08-22（DEV-0065.1 收口，系统时间） |
+| Source Fingerprint | Git：main @ **b14e237**；**WORKTREE DIRTY：YES**（DEV-0063+0064+0064R.2+0065.1 未提交；HEAD≠当前代码，以工作区为准） |
+| Runtime Status | b14e237 = 用户实测 stable AI runtime baseline；**DEV-0065.1 真实 Windows 无边框 UX 尚未验证**（自动测试无法证明拖拽/双击最大化/缩放）——不得写 Runtime Verified |
+| Gate Status | **DEV-0065.1 recorded automated gate**：tsc **0 errors** / npm build **通过** / cargo check **0 errors**（capability schema 通过）/ **batch0651_ui 20/20**（T01-T20 source-contract）/ batch064_ui **28/28**（U21 按两态真值改写、U28 收窄为"lib.rs 仅 decorations"）/ batch064r2_ui **27/27**（R2-U23 §46 授权收窄）/ batch063_ui **18/18** / ai_panel **8/8** / batch062r1 **41/41** / batch062r **44/44** / batch062 **57/57** / batch061r **47/47** / batch0602 **29/29**（串行）；**Frozen：tauri.conf.json/package*/Cargo*/api.ts/types.ts/appearance/**/ai·repository·migrations·db.rs 零 diff；壁纸图片消费者仍=2（titlebar/rail=0）** |
+| Known Deferred P2 | Planning Week 上/下切周后旧选中日详情残留（不修）；旧长会话偶发 no_changeset（不修，Runtime 调查另轮） |
 | Document Status | 本文件 CURRENT；`archive/audit/`=审计时点证据（非永久当前）；`archive/history/`=仅历史；`archive/reference/`=速查参考；`progress/CURRENT.md`=跳转页 |
 
 ## Documentation Authority（文件权威表）
@@ -297,9 +300,10 @@ AI 可创建：GoalTarget（经 target_proposal ChangeSet）/Blueprint/Phase/Mil
 ## 21. Recent Development Ledger（最近 5 DEV；更早→archive/history）
 | DEV | Date | Product | Architecture | Schema | User-visible | Regression | Runtime |
 |---|---|---|---|---|---|---|---|
-| DEV-0062R.1 | 08-22 | Probe A 假阴性修复（empty/reasoning/length → bounded retry）/ Soft 失败后五项全检 / 测试连接≠Higher 能力（新文案）/ 检测中防并发 / 细分诊断 | client.rs Response Truth（finish_reason/reasoning_content 不落盘）· compatibility.rs（预算常量/classify_final/Hard-Soft/≤9 calls/Snapshot Guard/原子保存） | **保持 v024（0 migration）** | 连接测试新文案；Basic/Temp0 细分；未继续检测（连接失败） | batch062r1 41/41+回归 10 套（见 Gate） | 冒烟 ✅/实机 H00-H10 NOT VERIFIED |
-| DEV-0062R | 08-22 | Structured JSON false negative 修复 / Re-Probe 独立 / Limited≠Action 禁用 / 零隐藏 fallback / 原子切换 / Active 不可停用 | ai/compatibility.rs（初版）· provider.rs 严格 resolver · repository 原子+Disable Guard | **保持 v024（0 migration）** | 连接卡五项+role+警告 | batch062r 44/44+回归 9 套 | 冒烟 ✅/实机 BLOCKED at H02（0062R.1 修复待复验） |
-| DEV-0062 | 08-22 | 多 AI Connection / Primary+Control 双角色 / 兼容性检测 / Action 澄清持久化续答 / AiPanel 快速换 Connection | ai/provider.rs + action_continuation.rs + 两 repository · Capability Contract · Probe · Truth Guard · provenance 8 列 | **v024**（ai_provider_profiles + ai_pending_actions + snapshot + legacy 迁移） | Settings AI Tab 多 Connection；AiPanel Connection 下拉 | batch062 57/57+回归 8 套 | 冒烟 ✅/实机 BLOCKED at Compatibility（0062R 修复待复验） |
+| DEV-0063 | 08-22 | UI Redesign v1：Design System/Shell/Sidebar 分组/Today Hero/Task 菜单收敛（编辑+删除）/Calendar 视觉/AI Panel bubble/**Update Diff Truth（不再假 DELETE）** | 纯前端：styles.css `--h-*` v1 token+旧变量映射 / Layout nav 分组 / ChangeSetReview diffRows update 分支 | **保持 v024（0 migration；backend diff=0）** | 全站新视觉；Proposal 只显示真实变更字段 | batch063_ui 17/17+回归 11 套 | 冒烟 ✅/实机点击 H01-H14 NOT VERIFIED |
+| DEV-0062R.1 | 08-22 | Probe A 假阴性修复（empty/reasoning/length → bounded retry）/ Soft 失败后五项全检 / 测试连接≠Higher 能力 | client.rs Response Truth · compatibility.rs（预算/分类/Hard-Soft/≤9/Snapshot/原子） | **保持 v024（0 migration）** | 连接测试新文案；Basic/Temp0 细分 | batch062r1 41/41+回归 10 套 | **VERIFIED（b14e237 用户提交）** |
+| DEV-0062R | 08-22 | Structured false negative 修复 / 零隐藏 fallback / 原子切换 / Disable Guard | ai/compatibility.rs 初版 · provider 严格 resolver | **保持 v024（0 migration）** | 连接卡五项+role+警告 | batch062r 44/44+回归 9 套 | VERIFIED（b14e237） |
+| DEV-0062 | 08-22 | 多 AI Connection / Primary+Control 双角色 / 兼容性检测 / Action 澄清持久化续答 / AiPanel 快速换 Connection | ai/provider.rs + action_continuation.rs + 两 repository · Capability Contract · Probe · Truth Guard · provenance 8 列 | **v024**（ai_provider_profiles + ai_pending_actions + snapshot + legacy 迁移） | Settings AI Tab 多 Connection；AiPanel Connection 下拉 | batch062 57/57+回归 8 套 | VERIFIED（b14e237） |
 | DEV-0061R | 08-22 | Turn Interpreter/Contract v2/Unified AI/Recent 隔离/Planner 边界/Trace/rolling 物化/Task 菜单 | ai/semantic_contract.rs 等 | （保持 v023） | 双模式 UI 删除 | batch061r 47/47+回归 | 冒烟 ✅/实机 NOT VERIFIED |
 | DEV-0060 | 08-21 | AI 主链修复：当前消息最后/Context=背景/GoalTarget canonical/Planner 恢复与逃生/21 工具契约 | ai/planner.rs payload 状态机+三分流 · ContextPurpose · TOOL_ALLOWLIST | （保持 v022） | AiPanel run-status 兼容 | batch060 16/16+全量 382 | 冒烟 ✅/实机 NOT VERIFIED |
 | DEV-0054 | 08-16 | 效率证据规则/单 Active 守卫/Markdown/产品级 UI 收敛/Preview Guard | — | （保持 v018） | 全局 UI 质感 | 无已知 | 冒烟 ✅/实机 UI 复验 NOT VERIFIED |
@@ -315,14 +319,14 @@ Date=2026-08-17 · Audit Context Version=pre-HGCTX（审计时点无版本制）
 ---
 
 # Active Development
-- Task：**DEV-0062R.1 · Probe Input/Output Truth Repair / AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING**（Probe A 假阴性修复：Response Truth / Token Budgets / bounded retry / Hard-Soft / ≤9 calls / 连接测试语义 / Snapshot Guard / 原子持久化；Schema **v024 保持 0 migration**）
-- **旧 DEV-0060/0060.1/0060.2/0059.x/0061R/0062/0062R 处置**：AUTOMATED GATE PASSED；0062 Human Runtime BLOCKED at Compatibility（0062R 修）；0062R Human Runtime BLOCKED at H02（Probe A false negative，0062R.1 修）；全部 Human Runtime 项并入 DEV-0062R.1 H00-H10 一次用户实机验证（TASK §39 为准）
-- User Runtime Evidence（继续有效）：v020 VERIFIED BY USER RUNTIME；DEV-0060.1 主骨架已确认；**v021/v022/v023/v024/0060.2/0061R/0062/0062R/0062R.1 尚未验证**
+- Task：**DEV-0063 · Higher UI Redesign v1 / AUTOMATED GATE PASSED · HUMAN CLICK RUNTIME PENDING**（Design System + App Shell + Today + Planning + AI Panel + Task Menu + Proposal Diff Truth；**纯前端轮：Backend Runtime diff=0 / Schema v024 / 0 migration / 0 新依赖**）
+- **b14e237 基线**：用户实测后提交（0062/0062R/0062R.1 Human Runtime 全链已验证 = stable AI runtime baseline）
+- User Runtime Evidence：v020 VERIFIED（2026-08-17）→ b14e237 AI runtime 全链 VERIFIED BY USER COMMIT（2026-08-22）；**DEV-0063 UI 点击验证 PENDING**
 
 # In-Progress Delta
-- 08-22 14:57 收口 | DEV-0062R.1 全段施工 + Gate（Human Runtime 证据：0062R 后 Re-Probe = 不兼容 empty_content，Basic ✗ + 后四项全未检测） | Files 新增：tests/batch062r1.rs（41）；修改：ai/client.rs（finish_reason/reasoning_content/Completion/chat_stream+temp）、ai/compatibility.rs（budget 常量/classify_final/is_hard_connection_failure/A-D retry/connectivity_check/capability_fields_changed/≤9 计数）、lib.rs（连接测试=connectivity_check；probe snapshot guard+原子保存+摘要段；FastChat stream 0.3）、src/pages/Settings.tsx（细分+skipped+检测中全禁用）、tests/batch062r.rs（r15 新语义） | Behavior：见 §8e；Pre-Approval DB Mutation=0 | Data Model：**0 migration（v024 保持）** | UI：连接测试新文案/五项细分/未继续检测 | **Gate**：check 0 err / batch062r1 41/41 / 回归 062r 44+062 57+061r 47+0602 29+0601 33+060 16+0592 12+ai_foundation 7+ai_assistant 10+ai_panel 8 全绿 / tsc 0 / build ✓ / 真实 Provider 0 次自动调用 / full cargo test 未跑（TASK 纪律） | PENDING：**Human Runtime H00-H10（TASK §39，用户实机）** → 用户验证后才可记 DEV-0062R.1 / DONE → STOP
-- 08-22 14:14 收口 | DEV-0062R 全段施工 + Gate（Compatibility False Negative 修复：temp=0/真实 parser/bounded fallback/严格 Resolver/原子切换/Disable Guard；详见 TRAE_RUN） | Files 新增：ai/compatibility.rs、tests/batch062r.rs（44）| Data Model：**0 migration** | Gate：batch062r 44/44+回归 9 套 | 其 Human Runtime 在 H02 再次 BLOCKED（Probe A false negative → 0062R.1 修复待复验）
-- 08-22 12:52 收口 | DEV-0062 全段施工 + Gate（多 Connection/Primary+Control/Pending Continuation/Truth Guard；详见 TRAE_RUN） | Data Model：**v024（该轮唯一 migration）** | Gate：batch062 57/57+回归 8 套 | 其 Human Runtime BLOCKED at Compatibility（0062R 修复）
+- 08-22 18:37 修复 | DEV-0063 Human Runtime Repair：End Sheet「返回今日」只 closeSheet（落回结束后视图，无路由变化）→ 改为 `closeSheet()+navigate("/")`（复用结束后视图/错误兜底原 handler）；LearningWorkspace 与 b14e237 零 diff 证实非 DEV-0063 施工破坏，系该按钮历史从未绑定导航；同页其余按钮（开始下一个/现在整理/AI 分析/AI 整理/结束后返回今日）handler 全部完好（ADDITIONAL_INTERACTION_REGRESSION: NONE）；batch063_ui +U18（18/18）；tsc 0/build ✓/batch03 22+batch053 9+batch054 4+ai_panel 8 全绿；Backend/Schema/其他 UI 0 改动 | Human Retest PENDING
+- 08-22 17:46 收口 | DEV-0063 Phase A-D 施工 + Gate（Baseline b14e237 clean；Visual Change, Behavior Freeze——Interaction Preservation Matrix 全 PRESERVED 见 TRAE_RUN） | Files 修改：src/styles.css（Design System v1 :root token+旧变量映射+Sidebar/nav/page header/z-index/task card/pcal/aipanel/csr diff）、src/Layout.tsx（nav 分组标签）、src/pages/Today.tsx（Hero+页尾降噪重排）、src/components/DailyTasksSection.tsx（⋯ 菜单=编辑+分隔线+删除）、src/components/ChangeSetReview.tsx（Update Diff Truth：keys(after_json) 候选/clear/same 隐藏）、src-tauri/tests/batch061r.rs（r29 新语义）；新增：src-tauri/tests/batch063_ui.rs（17 source-contract） | Behavior：**0 handler 重写**；Pre-Approval DB Mutation=0 | Data Model：**0 migration（v024）** | UI：全站新调色板+层级 | **Gate**：tsc 0 / build ✓ / check 0 err / batch063_ui 17/17 + 回归 11 套全绿（batch0602 串行）| Forbidden Diff Audit PASS（无 src-tauri/src/api.ts/types.ts/依赖文件） | PENDING：**Human Click Runtime H01-H14（TASK §52-§64，用户实机）** → 验证后才可记 DEV-0063 / DONE → STOP
+- 08-22 15:56 | 用户提交 b14e237「Higher v0.2.0 - stable AI runtime baseline」＝ 0062/0062R/0062R.1 Human Runtime 验证通过（AI Connection/Compatibility/Primary-Control/SemanticAction/Grounding/ChangeSet/Approval First/Action Continuation/Restart/隔离/新意图逃逸全链）
 - 08-22 10:22 收口 | DEV-0061R 全 PART 施工 + Gate（Recovery 审计见 TRAE_RUN PART 0R；RECOVER_KEEP=0059.2→0060.2 全部工作区；无 RECOVER_FINISH/REWRITE/UNRELATED；无粗暴 Reset） | Files：ai/semantic_contract.rs（新）、ai/action.rs、ai/runtime.rs、ai/client.rs、ai/planner.rs、ai/context_builder.rs、ai/grounding.rs、ai/trace.rs、ai/mod.rs、repository/recurring_rule.rs、repository/changeset.rs、lib.rs、components/ai/AiPanel.tsx、components/ai/AiPanelContext.tsx、styles.css、api.ts、pages/PlanningCalendar.tsx、pages/Today.tsx、skills/{task,recurring_task,time}/SKILL.md、tests/batch061r.rs（新 47）+batch0601/0602 适配 | Behavior：见 §8d；Pre-Approval DB Mutation=0 | Data Model：**0 migration（v023）** | UI：双模式 UI 删除/Task 菜单 z-index/Calendar+Today rolling 物化 | **Gate**：check 0 err / batch061r 47/47 / 回归 0601 33+0602 29+060 16+0592 12+ai_assistant 10+ai_panel 8 全绿 / tsc 0 / build ✓ / DeepSeek 0 次自动调用 / full cargo test 未跑（TASK 纪律） | 其 Human Runtime 项已并入 DEV-0062 H00-H22
 - 08-21 19:50 收口 | DEV-0060.1 全 PART 施工 + Gate | Files：migrations/v023_recurring_task_semantics.rs（新）+mod.rs、repository/recurring_rule.rs（RuleSemantics+create/update_with_semantics+materialize v2）、repository/task.rs（create_from_rule_v2）、repository/changeset.rs（recurring_rule 四操作+recurring_rule_ref+task update V2+快照/ fetch V2 全字段）、ai/runtime.rs（新：Envelope/TemporalIntent/RecurrenceIntent/Router/FastChat bound_history）、ai/skills/（新：Registry+3 SKILL.md）、skills/{time,task,recurring_task}/SKILL.md（新）、ai/action.rs（新：SemanticAction+Resolver+Compiler+Validator）、ai/trace.rs（新）、ai/tools.rs（tool_definitions_for_scopes/fast_chat_tools/scopes_for_route）、ai/prompts.rs（Knowledge Optional+Semantic Understanding）、lib.rs（ai_start_run+3 参数/Turn Router/FastChat 分支/SemanticAction 分支/Planner 收口/planning_gate 收口/trace 接线/create|update_recurring_rule 三字段）、components/ai/AiPanel.tsx（send 传本地时钟）、components/TaskModal.tsx（重复=规则+materialize）、components/ChangeSetReview.tsx（recurring_rule 标签）、api.ts、types.ts、tests/batch0601.rs（新 33 项 T1-T58）+13 套 schema 版本断言→23 适配 | Behavior：见 §8b/§9；Pre-Approval DB Mutation=0（T18/T19/T53 锁定） | Data Model：**v023（唯一一条）** | UI：TaskModal 重复路径/AiPanel 时钟参数/ChangeSetReview 标签 | **Gate**：check 0 err / batch0601 33/33 / batch060 16/16 / 指定回归全绿 / 全量 **415 passed 0 failed（37 套件）** / tsc 0 / build ✓ / DeepSeek 0 次自动调用 | PENDING：**Human Runtime H1-H14（TASK §38-39，用户实机）** → 用户验证后才可记 DEV-0060.1 / DONE → STOP
 - 08-21 收口 | DEV-0060 全 PART 施工 + Gate | Files：lib.rs（ai_start_run/run_chat_turn 重构）、ai/planner.rs（payload+三分流+Protocol+target_proposal+pure helpers）、ai/context_builder.rs（ContextPurpose+GoalTarget canonical）、ai/tools.rs（Allowlist 21+Adapter+legacy 标记）、ai/prompts.rs（Intent First）、ai/context.rs、components/ai/AiPanel.tsx（run-status 兼容）、tests/batch060.rs（新 16 项）+ batch055/056/057/058/ai_assistant/ai_panel 适配 | Behavior：见 §8/§9；Pre-Approval DB Mutation=0（T13/T14 锁定） | Data Model：**无 schema 变更（v022）** | UI：仅 AiPanel 状态兼容 | **Gate 全绿**：check 0 err / batch060 16/16 / 指定回归全绿 / 全量 **382 passed 0 failed** / tsc 0 / build ✓ / DeepSeek 0 次自动调用 | PENDING：**Human Runtime H1-H9（TASK §27，用户实机）** → 用户验证后才可记 DEV-0060 / DONE → STOP
@@ -330,19 +334,22 @@ Date=2026-08-17 · Audit Context Version=pre-HGCTX（审计时点无版本制）
 - 08-18 | DEV-0059.2 | Files：planning_review.rs（prepare_current + ensure_reality_change_due）、lib.rs（prepare_current_planning_review 命令 + confirm/edit_personalization_profile 接 reality_change）、planner.rs（personal_profile_structured_summary / goal_target_detail_summary / resolve_blueprint_scenario / BlueprintDraft.scenario_type+source_review / validator+compiler）、context_builder.rs（flatten_structured 对象数组递归）、tools.rs（read_planning_source 分页 start_char/max_chars/has_more）、GoalTargetPanel.tsx（考研字段表单化）、PlanningTruthSummary.tsx（ChangeSetReview 直审 + 手工新建蓝图 + prepare_current 正式路径）| Behavior：Review ChangeSet 从 Planning 页真实可审阅；cadence 决定周期且不重复；structured facts 真实进 AI Context；PersonalProfile 目标仅 observation；GoalTarget data_json 直接进 Planner；Blueprint scenario 继承；source_review 结构化理由；长文件分页不假装读完；无 AI 可建首份蓝图；Personal 变化只建议复盘不调 AI | Data Model：无 schema 变更（head 保持 v022）| UI：见上述组件 | PENDING：→ Human Runtime H1-H11 → ENV Promotion → STOP
 - 08-18 最终 | 全量回归 + Gates | Files：tests/batch0592.rs（新增 12 项） | Behavior：— | Data Model：— | UI：— | **最终 Gate 全绿**：全量 **366 tests passed / 0 failed**（低并发）、batch0592 12/12、cargo check 0 errors、tsc 0 errors、npm run build 通过；真实 DeepSeek 0 次自动调用 | PENDING：**Human Runtime H1-H11（§61 清单见下，用户实机验证）** → ENV Promotion → STOP
 
-# Human Runtime Checklist（DEV-0062R.1 · TASK §39 H00-H10 · 仅无法自动验证项；真实 Provider 由用户本人测试，Trae 禁止烧真实 Key）
-1. **H00 Startup**：真实用户 DB 启动 → Schema v024；原数据/DeepSeek Connection 不丢
-2. **H01 Test Connection Semantic**：「测试连接」成功文案 = 「API 连接成功，模型：deepseek-v4-flash。Higher 能力请使用『检测 Higher 兼容性』验证。」（不再误解连接成功=全能力成功）
-3. **H02 DeepSeek Compatibility Re-Probe**：「检测 Higher 兼容性」→ 必须得到五项结果；禁止 Basic soft failure → 后四项全未检测
-4. **H03 Basic Chat Retry Truth**：首次真实响应 empty/reasoning-only/length → 自动 bounded retry；二次有 final → Basic ✓（二次尝试成功）
-5. **H04 Expected DeepSeek Control Truth**：目标观察 Basic ✓ / Structured ✓（Native or Prompt Only）/ Temp0 ✓；Tool/Streaming 可影响 Full/Limited，但 basic+json+temp0=true → Control 必须可用
-6. **H05 Fresh Action**：新会话「把8月25日的TEST-STABLE改成35分钟。」→ 唯一匹配时真实 Proposal/ChangeSet；禁止 control_capability_guard（前提 H04 通过）
-7. **H06 Approval First**：Proposal 未 Apply → 正式 Task 不变；Apply → estimated_minutes=35
-8. **H07 Ambiguity**：制造两个候选 → 修改命令 → 真实 candidate clarification，0 ChangeSet
-9. **H08 Deterministic Continuation**：回答「第一个」→ 0 Interpreter Provider Call、恢复 Pending Action、生成 Proposal
-10. **H09 Restart**：Pending 后关闭 Higher → 重启同 Conversation「第一个」→ 继续成功
-11. **H10 Cross Conversation**：Conversation B「第一个」→ 不得读取 A Pending
-**前轮未验项（随本轮一并验）**：v021-v024 迁移与真实数据；DEV-0059→0062R 全部 Human Runtime 项（0062 多 Connection/第二 Provider/Primary 切换、0062R Resolver 真值/原子切换/Disable Guard/H00-H16 语义）——已并入上述 H00-H10 与既有页面操作。
+# Human Runtime Checklist（DEV-0063 · TASK §52-§64 H01-H14 · 用户实机点击验证；自动 Gate 无法证明真实点击）
+1. **H01 App Shell**：今日/规划/知识/数据/设置 可点击；Profile selector 可点击；AI Panel 可打开/关闭
+2. **H02 Today Main Actions**：快速学习 / 新建任务 / AI安排 全部有反应
+3. **H03 Task**：Checkbox / 开始 / ⋯（⋯ 内只有 编辑+删除）
+4. **H04 Task Edit**：点 Edit 打开原完整 Task Edit Modal，全部字段仍可编辑（标题/日期/时间/预计/类型/优先级/Goal/Knowledge）
+5. **H05 Task Delete**：原确认保留——取消→不删除；确认→正常删除
+6. **H06 Current Session**：active session 时 继续/结束 可点击
+7. **H07 Planning**：上个月/下个月/今天/点击日期/创建任务/Recurring Task 入口/Planning actions/Review actions 继续工作
+8. **H08 AI Panel**：发送 / Shift+Enter / 新对话 / 关闭 / AI 设置 / Model(Connection) selector
+9. **H09 Real Proposal**：真实 Task 修改 → Proposal 只显示真正 changed field（如 estimated_minutes 42→55）；不得显示未 Patch 的 planned_date/priority/status/title 旧值
+10. **H10 Proposal Buttons**：应用计划 / 只应用选中项 / 继续调整 / 取消 每个有反应
+11. **H11 Approval First**：未 Apply 正式数据不变；Apply 后才变化
+12. **H12 Cross-Page**：Knowledge / Data / Settings / LearningWorkspace 可读、可滚动、按钮可点、无透明 overlay、无 menu 裁切、无 modal 挡住
+13. **H13 Resolution**：1366×768 与 1920×1080 下 Today/Planning/Settings/AI Panel 滚动正常
+14. **H14 Visual Acceptance**：整体轻/统一/成熟/清晰/有层次；无大面积渐变/过度发光/大量彩色边框/每卡不同风格/StudyOS 1:1 复刻
+**前轮**：b14e237 AI runtime 全链已由用户实测提交验证；本轮仅 UI 点击项。
 
 ---
 

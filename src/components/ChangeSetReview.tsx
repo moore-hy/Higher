@@ -401,13 +401,44 @@ function FieldDiff({ op }: { op: ChangeOperation }) {
   );
 }
 
-type DiffRow = { kind: "add" | "del" | "mod"; field: string; old: string; new: string };
+type DiffRow = { kind: "add" | "clear" | "mod" | "del"; field: string; old: string; new: string };
 
+/**
+ * DEV-0063 §32-§33 Update Diff Truth：
+ * - 后端 update 的 after_json = Patch（缺失字段 = UNCHANGED，不是 DELETE）
+ * - 候选字段只来自 keys(after_json)；missing-after-key 一律不展示（禁止渲染为删除）
+ * - after == before 不展示；before 缺失 = Added；after=null 且 before 非 null = 显式清空；
+ *   其余 before != after = 修改
+ * - create / delete 保持原语义（全字段 Added / 全字段删除）
+ */
 function diffRows(op: ChangeOperation): DiffRow[] {
   const before = op.before_json ?? {};
   const after = op.after_json ?? {};
-  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   const rows: DiffRow[] = [];
+
+  if (op.action === "update") {
+    // 候选 = keys(after_json)（Patch 真值；缺失 = UNCHANGED 不渲染）
+    for (const k of Object.keys(after)) {
+      const oldV = before[k];
+      const newV = after[k];
+      if (oldV === undefined) {
+        // before 不存在该字段 → Added
+        rows.push({ kind: "add", field: k, old: "", new: prettyVal(newV) });
+        continue;
+      }
+      if (oldV === newV) continue; // 未变化不展示
+      if (newV === null) {
+        // 显式清空：before → 未设置
+        rows.push({ kind: "clear", field: k, old: prettyVal(oldV), new: "未设置" });
+      } else {
+        rows.push({ kind: "mod", field: k, old: prettyVal(oldV), new: prettyVal(newV) });
+      }
+    }
+    return rows;
+  }
+
+  // create / delete：保持原语义
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   for (const k of keys) {
     const oldV = before[k];
     const newV = after[k];

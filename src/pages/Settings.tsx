@@ -1,10 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import {
+  applyAppearance,
+  DEFAULT_PREFS,
+  LIMITS,
+  loadPrefs,
+  loadWallpaper,
+  removeWallpaper,
+  savePrefs,
+  setWallpaper,
+  THEMES,
+  THEME_SWATCH,
+  validateWallpaperFile,
+} from "../appearance/appearanceHelpers";
+import type { AppearancePrefs } from "../appearance/appearanceHelpers";
 import {
   compilePersonalization,
   confirmPersonalizationProfile,
@@ -63,9 +77,10 @@ import { downloadTextFile, formatDateTime, todayDate } from "../utils";
  * 设置中心（DEV-0016 + DEV-0030 数据管理 + DEV-0042 学习提醒）。
  *
  * 一、学习档案：切换 / 编辑 / 创建 / 退出（复用现有 Profile API，无第二套逻辑）
- * 二、AI 设置：DeepSeek（Provider / Base URL / API Key 明文 / Model / Thinking / 测试连接）
- * 三、学习提醒（DEV-0042）：系统通知开关 + 权限状态（拒绝不阻塞使用）
- * 四、数据管理：当前档案的活动数据清理（clear/keep today/month/year + Full Reset；
+ * 二、外观（DEV-0064）：自定义壁纸（IndexedDB）+ 壁纸效果三滑杆 + 6 套颜色氛围
+ * 三、AI 设置：DeepSeek（Provider / Base URL / API Key 明文 / Model / Thinking / 测试连接）
+ * 四、学习提醒（DEV-0042）：系统通知开关 + 权限状态（拒绝不阻塞使用）
+ * 五、数据管理：当前档案的活动数据清理（clear/keep today/month/year + Full Reset；
  *    预览 → 备份 → 事务执行；所有操作只影响当前 StudyProfile）
  *
  * 权限说明固定展示：AI 只在主动使用时运行；建议不会自动写入知识库。
@@ -73,11 +88,12 @@ import { downloadTextFile, formatDateTime, todayDate } from "../utils";
 export default function Settings() {
   const { activeProfile, exitProfile, refreshGate, enterProfile } = useActiveProfile();
   const [tab, setTab] = useState<
-    "profile" | "ai" | "notify" | "data" | "personal" | "websearch" | "vault"
+    "profile" | "appearance" | "ai" | "notify" | "data" | "personal" | "websearch" | "vault"
   >("profile");
 
   const TABS: { key: typeof tab; label: string }[] = [
     { key: "profile", label: "学习档案" },
+    { key: "appearance", label: "外观" },
     { key: "ai", label: "AI 设置" },
     { key: "personal", label: "私人化部署" },
     { key: "websearch", label: "联网搜索" },
@@ -115,6 +131,8 @@ export default function Settings() {
           }
           await exitProfile();
         }} onSaved={refreshGate} onCreated={async (id: number) => enterProfile(id)} />
+      ) : tab === "appearance" ? (
+        <AppearanceSection />
       ) : tab === "ai" ? (
         <AiSection />
       ) : tab === "notify" ? (
@@ -1918,6 +1936,220 @@ function VaultSection() {
           </div>
         </>
       )}
+    </section>
+  );
+}
+
+// ---------------- 外观（DEV-0064 §6/§33 · 壁纸 + 氛围） ----------------
+
+function AppearanceSection() {
+  const [prefs, setPrefs] = useState<AppearancePrefs>(DEFAULT_PREFS);
+  /** 只需文件名做展示；图片本体（Blob）不进入 React state（§8）。 */
+  const [wallpaperName, setWallpaperName] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setPrefs(loadPrefs());
+    void loadWallpaper().then((rec) => setWallpaperName(rec?.name ?? null));
+  }, []);
+
+  /** §33 即时生效：保存 + 应用（不 reload / 不 navigate）。 */
+  function updatePrefs(next: AppearancePrefs) {
+    setPrefs(next);
+    savePrefs(next);
+    applyAppearance(next);
+  }
+
+  /** §7/§13：MIME + 大小校验 → IndexedDB 保存 → 立即预览；失败保留原壁纸。 */
+  async function onPickFile(file: File | undefined) {
+    if (!file) return;
+    setError("");
+    setMessage("");
+    const invalid = validateWallpaperFile(file);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    try {
+      const rec = await setWallpaper(file, file.name);
+      setWallpaperName(rec.name);
+      setMessage("壁纸已应用。");
+    } catch (e) {
+      setError(`壁纸保存失败：${String(e)}`);
+    }
+  }
+
+  /** §13 删除：清 IndexedDB + revoke + 回颜色氛围背景。 */
+  async function onDeleteWallpaper() {
+    setError("");
+    setMessage("");
+    try {
+      await removeWallpaper();
+      setWallpaperName(null);
+      setMessage("已删除壁纸，回到颜色氛围背景。");
+    } catch (e) {
+      setError(`删除壁纸失败：${String(e)}`);
+    }
+  }
+
+  /** DEV-0064R.2 §66：恢复推荐效果——保留壁纸与颜色氛围，只把三值调回 70/70/45。 */
+  function onRecommended() {
+    setError("");
+    setMessage("");
+    updatePrefs({
+      ...prefs,
+      visibility: LIMITS.visibility.def,
+      saturation: LIMITS.saturation.def,
+      overlay: LIMITS.overlay.def,
+    });
+    setMessage("已恢复推荐效果（70 / 70 / 45）。");
+  }
+
+  /** §67 恢复默认：删除壁纸 + default 主题 + 70 / 70 / 45。 */
+  async function onReset() {
+    setError("");
+    setMessage("");
+    try {
+      await removeWallpaper();
+      setWallpaperName(null);
+      updatePrefs(DEFAULT_PREFS);
+      setMessage("已恢复默认外观。");
+    } catch (e) {
+      setError(`恢复默认失败：${String(e)}`);
+    }
+  }
+
+  return (
+    <section className="card">
+      <h2 className="card__title">外观</h2>
+      {error && <div className="alert alert--error">{error}</div>}
+      {message && <div className="alert alert--ok">{message}</div>}
+
+      {/* A. 壁纸 */}
+      <div className="appearance__group" style={{ marginTop: 0 }}>
+        <div className="appearance__group-title">壁纸</div>
+        <div className="appearance__preview">
+          {wallpaperName ? (
+            <>
+              <span className="appearance__preview-name" title={wallpaperName}>
+                {wallpaperName}
+              </span>
+              {/* §65：示例 Surface——预览 壁纸+半透明 Card+文字 的真实效果 */}
+              <span className="appearance__preview-sample">卡片示例 · Aa</span>
+            </>
+          ) : (
+            <span className="appearance__preview-empty">未设置自定义壁纸</span>
+          )}
+        </div>
+        {/* §41：隐藏原生 file 控件，由 Higher Button 触发 */}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            void onPickFile(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+        <div className="btn-row">
+          <button className="btn" onClick={() => fileRef.current?.click()}>
+            {wallpaperName ? "替换图片" : "导入图片"}
+          </button>
+          {wallpaperName && (
+            <button className="btn btn--danger" onClick={() => void onDeleteWallpaper()}>
+              删除壁纸
+            </button>
+          )}
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+          支持 PNG / JPG / WEBP，单张最大 20 MB。壁纸只保存在本机，不会上传、不会发送给 AI。
+        </p>
+      </div>
+
+      {/* B. 壁纸效果（R.2 §12-§15：壁纸强度 / 色彩保留 / 压暗程度；推荐 70/70/45） */}
+      <div className="appearance__group">
+        <div className="appearance__group-title">壁纸效果</div>
+        <div className="appearance__slider-row">
+          <label htmlFor="ap-visibility">壁纸强度</label>
+          <input
+            id="ap-visibility"
+            type="range"
+            min={LIMITS.visibility.min}
+            max={LIMITS.visibility.max}
+            value={prefs.visibility}
+            onChange={(e) => updatePrefs({ ...prefs, visibility: Number(e.target.value) })}
+          />
+          <output>{prefs.visibility}</output>
+        </div>
+        <div className="appearance__slider-row">
+          <label htmlFor="ap-saturation">色彩保留</label>
+          <input
+            id="ap-saturation"
+            type="range"
+            min={LIMITS.saturation.min}
+            max={LIMITS.saturation.max}
+            value={prefs.saturation}
+            onChange={(e) => updatePrefs({ ...prefs, saturation: Number(e.target.value) })}
+          />
+          <output>{prefs.saturation}</output>
+        </div>
+        <div className="appearance__slider-row">
+          <label htmlFor="ap-overlay">压暗程度</label>
+          <input
+            id="ap-overlay"
+            type="range"
+            min={LIMITS.overlay.min}
+            max={LIMITS.overlay.max}
+            value={prefs.overlay}
+            onChange={(e) => updatePrefs({ ...prefs, overlay: Number(e.target.value) })}
+          />
+          <output>{prefs.overlay}</output>
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+          推荐效果 70 / 70 / 45：无需拉满滑杆即可看清原图构图与主要颜色，同时 Higher 保持深色 UI、正文清晰。
+        </p>
+      </div>
+
+      {/* C. 颜色氛围 */}
+      <div className="appearance__group">
+        <div className="appearance__group-title">颜色氛围</div>
+        <div className="appearance__themes">
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              className={
+                "appearance__theme-btn" +
+                (prefs.theme === t.id ? " appearance__theme-btn--active" : "")
+              }
+              onClick={() => updatePrefs({ ...prefs, theme: t.id })}
+            >
+              <span
+                className="appearance__theme-swatch"
+                style={{ background: THEME_SWATCH[t.id] }}
+              />
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* D. 恢复推荐效果 / 恢复默认（§66-§67） */}
+      <div className="appearance__group">
+        <div className="btn-row">
+          <button className="btn" onClick={onRecommended}>
+            恢复推荐效果
+          </button>
+          <button className="btn" onClick={() => void onReset()}>
+            恢复默认
+          </button>
+        </div>
+        <p className="muted" style={{ fontSize: 11, margin: "8px 0 0" }}>
+          恢复推荐效果只调整三值为 70 / 70 / 45（保留壁纸与氛围）；恢复默认会删除壁纸并回到默认深色。
+        </p>
+      </div>
     </section>
   );
 }

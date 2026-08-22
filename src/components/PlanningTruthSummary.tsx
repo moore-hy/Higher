@@ -63,7 +63,7 @@ export default function PlanningTruthSummary({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
-  const { sendChat, setOpen: setAiOpen, setPageContext } = useAiPanel();
+  const { sendChat, setPageContext } = useAiPanel();
   const { triggerRefresh } = useActiveProfile();
   // DEV-0059.1 §2：参与本次审查的规划资料（默认选所有 ready/imported）
   const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
@@ -462,10 +462,9 @@ export default function PlanningTruthSummary({
     }
   }
 
-  /** §28：让 Higher AI 生成规划（打开 AI 面板并发送 blueprint 模式请求；无 AI 也一切可用） */
+  /** §28：让 Higher AI 生成规划（发送 blueprint 模式请求；AI 恒驻 + pending-send 自动展开；无 AI 也一切可用） */
   function askAiPlanning() {
     setPageContext({ page: "planning", pageLabel: "学习规划" });
-    setAiOpen(true);
     void sendChat("请基于我的正式目标与规划资料，生成一份长期学习蓝图（blueprint 模式）：包含阶段划分、里程碑与未来 14 天任务。").catch(() => {});
   }
 
@@ -474,7 +473,6 @@ export default function PlanningTruthSummary({
     const sel = sources.filter((s) => selectedSourceIds.includes(s.id));
     const refs = sel.map((s) => `[source_id=${s.id}] ${s.original_name}`);
     setPageContext({ page: "planning", pageLabel: "学习规划" });
-    setAiOpen(true);
     const body =
       refs.length > 0
         ? `本次只审查用户选中的以下规划资料（${refs.join("；")}）：用 read_planning_source 分页读取（start_char/max_chars）直到 has_more=false；若总量超出本次 context 预算，请明确告诉用户「资料过长，本次未完整读取」，禁止声称已读全文。结合我的正式目标整理成一份可执行的长期蓝图（blueprint 模式），并给出规划资料审查意见（source_review：原内容/建议内容/修改理由/依据；decision=modify 必须给 reason 与 suggested；不确定写 conflict/missing，禁止编造）。`

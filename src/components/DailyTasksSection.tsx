@@ -16,15 +16,15 @@ import type { DailyTaskRow, Goal, LearningItem } from "../types";
 import { todayDate } from "../utils";
 
 /**
- * 今日任务区（DEV-0053 §14-23 / DEV-0054 §32-37）。
+ * 今日任务区（DEV-0053 §14-23 / DEV-0054 §32-37 → DEV-0063 §21-§23）。
  *
  * Today 与 Calendar Daily Report 共用同一套 Task 渲染（§72-73 不写两套）：
  * - 分组：核心（structured+core）→ 常规（structured+normal）→ 积累（accumulation）；
  *   空组不显示；分组标题为轻量 Section Label（§39），组名同时进 Row Meta（§34）
- * - Task Row（§32-37）：Checkbox + Title(15px/600) + Meta（组名 · 预计 · 知识归属）
- *   + 右侧直接动作：未完成=开始学习(primary)/编辑(ghost)/⋯；完成=查看/编辑/⋯
- * - ⋯ 菜单（§36-37）：调整日期 / 调整目标 / 调整知识 / 修改类型（均打开同一编辑 Modal）+ 删除；
- *   删除不再出现在直接按钮（§17）
+ * - Task Row：Checkbox + Title(15px/600) + Meta（组名 · 预计 · 知识归属）
+ *   + 右侧直接动作：未完成=开始学习(primary)/⋯；完成=查看/⋯
+ * - ⋯ 菜单（DEV-0063 §22）：编辑（同一编辑 Modal，全部字段可改）+ 分隔线 + 删除；
+ *   日期/目标/知识/类型调整统一并入编辑 Modal
  */
 
 /** §21/§127：任务视觉分组 */
@@ -224,21 +224,12 @@ export default function DailyTasksSection({
                             <>
                               <div className="actrow__backdrop" onClick={() => setMenuFor(null)} />
                               <div className="taskmenu__pop">
+                                {/* DEV-0063 §22：菜单收敛为 编辑 + 分隔线 + 删除；
+                                    编辑继续打开同一 TaskFormModal（全部字段可改） */}
                                 <button onClick={() => { setMenuFor(null); setEditing(t); }}>
                                   编辑
                                 </button>
-                                <button onClick={() => { setMenuFor(null); setEditing(t); }}>
-                                  调整日期
-                                </button>
-                                <button onClick={() => { setMenuFor(null); setEditing(t); }}>
-                                  调整目标
-                                </button>
-                                <button onClick={() => { setMenuFor(null); setEditing(t); }}>
-                                  调整知识
-                                </button>
-                                <button onClick={() => { setMenuFor(null); setEditing(t); }}>
-                                  修改类型
-                                </button>
+                                <span className="taskmenu__sep" aria-hidden="true" />
                                 <button
                                   className="taskmenu__danger"
                                   onClick={() => {

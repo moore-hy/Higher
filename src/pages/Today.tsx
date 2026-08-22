@@ -70,7 +70,7 @@ function Today() {
   const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
 
-  const { runAction: aiRunAction, sendChat, setOpen: setAiOpen, setPageContext } = useAiPanel();
+  const { runAction: aiRunAction, sendChat, setPageContext } = useAiPanel();
   const { conflict, guard, close } = useActiveSessionConflict();
 
   const [now, setNow] = useState(() => Date.now());
@@ -213,7 +213,7 @@ function Today() {
             className="btn btn--ghost"
             onClick={() => {
               // DEV-0058 §51-53：三入口统一 Planner（Planning「AI 生成计划」/对话写意图同一管线）
-              setAiOpen(true);
+              // DEV-0065.1：AI 恒驻，pending-send 事件自动展开 rail
               void sendChat(PLAN_REQUEST_MESSAGE);
             }}
             title="根据最终目标安排未来14天计划（助手模式下生成可应用计划）"
@@ -225,52 +225,9 @@ function Today() {
 
       {error && <div className="alert alert--error">{error}</div>}
 
-      {/* DEV-0059 §30：Review 提醒（到期只提醒，不自动调 AI）+ Risk Banner（启动只读） */}
-      {!dismissedReview && reviewDue && (
-        <section className="card today-banner today-banner--review">
-          <div className="today-banner__main">
-            <span className="today-banner__label">阶段复盘</span>
-            <span className="today-banner__name">该进行阶段复盘了</span>
-          </div>
-          <div className="today-banner__actions">
-            <button
-              className="btn btn--small btn--primary"
-              onClick={() => {
-                setDismissedReview(true);
-                navigate("/planning");
-              }}
-            >
-              开始复盘
-            </button>
-            <button className="btn btn--small" onClick={() => setDismissedReview(true)}>
-              稍后
-            </button>
-          </div>
-        </section>
-      )}
-      {["near_safety", "below_safety", "off_reach"].includes(riskState) && (
-        <section className="card today-banner today-banner--risk">
-          <div className="today-banner__main">
-            <span className="today-banner__label">风险提示</span>
-            <span className="today-banner__name">
-              {riskState === "off_reach"
-                ? "当前进度偏离冲刺目标"
-                : riskState === "near_safety"
-                  ? "当前进度接近保底目标风险线"
-                  : "当前进度已低于保底目标"}
-            </span>
-          </div>
-          <div className="today-banner__actions">
-            <button className="btn btn--small" onClick={() => navigate("/planning")}>
-              查看依据
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* Active Session Banner（§77-79：正在学习 · 已进行 Xm；继续/结束） */}
+      {/* 2 · Current Study Hero（§19-§20 DEV-0063：正在学习 = 首要视觉中心；继续/结束原 handler） */}
       {active && (
-        <section className="card today-banner">
+        <section className="card today-banner today-hero">
           <div className="today-banner__main">
             <span className="today-banner__label">正在学习</span>
             <span className="today-banner__name">{activeItemName}</span>
@@ -343,6 +300,49 @@ function Today() {
           )
         )}
       </section>
+
+      {/* 6 · Review / 风险提示（§19 DEV-0063：视觉降噪，置于页面底部次级区；原 handler 不变） */}
+      {!dismissedReview && reviewDue && (
+        <section className="card today-banner today-banner--quiet today-banner--review">
+          <div className="today-banner__main">
+            <span className="today-banner__label">阶段复盘</span>
+            <span className="today-banner__name">该进行阶段复盘了</span>
+          </div>
+          <div className="today-banner__actions">
+            <button
+              className="btn btn--small btn--primary"
+              onClick={() => {
+                setDismissedReview(true);
+                navigate("/planning");
+              }}
+            >
+              开始复盘
+            </button>
+            <button className="btn btn--small" onClick={() => setDismissedReview(true)}>
+              稍后
+            </button>
+          </div>
+        </section>
+      )}
+      {["near_safety", "below_safety", "off_reach"].includes(riskState) && (
+        <section className="card today-banner today-banner--quiet today-banner--risk">
+          <div className="today-banner__main">
+            <span className="today-banner__label">风险提示</span>
+            <span className="today-banner__name">
+              {riskState === "off_reach"
+                ? "当前进度偏离冲刺目标"
+                : riskState === "near_safety"
+                  ? "当前进度接近保底目标风险线"
+                  : "当前进度已低于保底目标"}
+            </span>
+          </div>
+          <div className="today-banner__actions">
+            <button className="btn btn--small" onClick={() => navigate("/planning")}>
+              查看依据
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* AI复盘（§76）：不抢首屏，页面底部次级入口 */}
       <div className="today__ai-secondary">

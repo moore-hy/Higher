@@ -2,6 +2,8 @@ import { Suspense, lazy } from "react";
 import { HashRouter, Navigate, Route, Routes, useSearchParams } from "react-router-dom";
 import { ActiveProfileProvider, useActiveProfile } from "./contexts/ActiveProfileContext";
 import { AiPanelProvider } from "./components/ai/AiPanelContext";
+import WallpaperLayers from "./components/WallpaperLayers";
+import DesktopTitlebar from "./components/DesktopTitlebar";
 import Layout from "./Layout";
 import Evaluations from "./pages/Evaluations";
 import Goals from "./pages/Goals";
@@ -98,7 +100,14 @@ function ProfileGate() {
 function App() {
   return (
     <ActiveProfileProvider>
-      <ProfileGate />
+      {/* DEV-0064 §10/§40：壁纸/遮罩独立图层（fixed + pointer-events:none）+ 启动恢复 */}
+      <WallpaperLayers />
+      {/* DEV-0065.1 §10：自定义桌面标题栏（恒渲染于全部 ProfileGate 阶段；
+          背景 var(--h-sidebar) 透出同一全局壁纸；无独立 background-image） */}
+      <DesktopTitlebar />
+      <div className="app-shell__content">
+        <ProfileGate />
+      </div>
     </ActiveProfileProvider>
   );
 }

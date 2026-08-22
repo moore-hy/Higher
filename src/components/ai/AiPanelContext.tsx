@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { aiAnalyze, getUiSetting, setUiSetting } from "../../api";
+import { aiAnalyze } from "../../api";
 import type { AiActionName } from "../../api";
 import type {
   AiKnowledgeProposal,
@@ -78,8 +78,6 @@ export interface AiChatMessage {
 }
 
 interface AiPanelState {
-  open: boolean;
-  setOpen: (v: boolean) => void;
   pageContext: AiPageContext | null;
   setPageContext: (ctx: AiPageContext) => void;
   messages: AiChatMessage[];
@@ -129,7 +127,6 @@ export function trimHistory(messages: AiChatMessage[]): [string, string][] {
 
 export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   const { activeProfile, refreshKey } = useActiveProfile();
-  const [open, setOpenState] = useState(false);
   const [pageContext, setPageContext] = useState<AiPageContext | null>(null);
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
@@ -145,17 +142,10 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   const PLAN_WRITE_INTENT_RE =
     /(安排|排个|排一下|排进|加入\s*higher|加入higher|做个.{0,6}计划|生成.{0,6}计划|规划)/i;
 
-  // 持久化展开状态（ui.ai_panel_open；缺省 false）
-  const setOpen = useCallback((v: boolean) => {
-    setOpenState(v);
-    void setUiSetting("ui.ai_panel_open", v ? "true" : "false").catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    getUiSetting("ui.ai_panel_open")
-      .then((v) => setOpenState(v === "true"))
-      .catch(() => {});
-  }, []);
+  // DEV-0065.1 §8/§31：open/setOpen 与旧的 DB 打开位（ai_panel_open）读取/写入全部移除——
+  // Higher AI 恒驻 App Shell（Expanded/Collapsed 两态），唯一视觉偏好是
+  // higher.aiPanel.mode（AiPanel 本地管理）。DB 中的旧键值
+  // 不迁移、不删除、不再被 UI 消费（stale 兼容数据）。
 
   // Profile 切换：立即清空对话 / Trace / Proposal（绝不跨档案携带）
   useEffect(() => {
@@ -229,8 +219,8 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   const sendChat = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
-      setOpenState(true);
-      // 统一入口：pendingSend + 事件 → AiPanel 以主输入同路径 send()
+      // DEV-0065.1 §31：AI 恒驻，无需 setOpenState(true)；仍广播 pending-send
+      // 让 Panel 以主输入同路径 send()（AiPanel 收到事件会自动展开 rail §40）
       pendingSendRef.current = text.trim();
       window.dispatchEvent(new CustomEvent("higher:aipanel-pending-send"));
     },
@@ -241,7 +231,7 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   const runAction = useCallback(
     async (action: AiActionName, hint?: string, extra?: { date?: string }) => {
       if (busy) return;
-      setOpenState(true);
+      // DEV-0065.1 §31：AI 恒驻；actionBusy 变化会让 Panel 自动展开 rail（§40）
       setActiveAction(action);
       setBusy(true);
       setApiKeyMissing(false);
@@ -326,8 +316,6 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(
     () => ({
-      open,
-      setOpen,
       pageContext,
       setPageContext,
       messages,
@@ -348,7 +336,7 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
       pendingSendRef,
     }),
     [
-      open, setOpen, pageContext, messages, busy, activeAction, scope,
+      pageContext, messages, busy, activeAction, scope,
       runAction, sendChat, newConversation, proposal, proposalItems,
       hasPendingProposal, apiKeyMissing,
     ]

@@ -1,3 +1,265 @@
+# DEV-0065.1 · Higher Desktop Shell（Custom Titlebar + Two-State AI Rail）· TRAE_RUN
+
+- **DEV ID**: DEV-0065.1（A. 自定义桌面标题栏；B. Higher AI 三态→两态；无学习域/AI Runtime 改动）
+- **Timestamp Source**: SYSTEM · Start 2026-08-22T22:45:19+08:00
+- **Baseline HEAD**: b14e23703999d5855ef020e6b27a1684ada03741 · **Branch**: main
+- **Known Worktree Before**: 14 M（ENVIRONMENT/TRAE_RUN/batch061r/App/Layout/ChangeSetReview/DailyTasksSection/ai-AiPanel/Knowledge/LearningWorkspace/Planning/Settings/Today/styles.css）+ ??（4 份 TASK 输入 0063/0064R/0064R.2/0065.1 · batch063_ui/batch064_ui/batch064r2_ui · appearance/×3 · PlanningWeekBoard · WallpaperLayers）——与 DEV-0064R.2 收口一致，无 UNKNOWN_WORKTREE_DIFF。
+
+## Phase A · Source Evidence（§52；编辑前实测）
+- **窗口真值**：main 窗口在 `src-tauri/src/lib.rs` run() 内 `WebviewWindowBuilder::new(app,"main",App("index.html"))` 动态创建（L7230）；builder 链 `.title("Higher").inner_size(1024.0,720.0).resizable(true)`——**decorations 默认 ON = 白条根因**；`tauri.conf.json app.windows = []`（冻结不动）。
+- **Capability 真值**：`capabilities/default.json` permissions = core:default + dialog:default + notification:default（windows:["main"]）——**缺 4 个窗口 mutation 权限**。
+- **壁纸真值**：App.tsx = ActiveProfileProvider > WallpaperLayers + ProfileGate（fixed inset:0 / 单图 / pointer-events:none）——正确，不重建。
+- **AI 真值**：AiPanel.tsx 三态（!open→fab / open+collapsed→46px rail / open+expanded→340px）；Context 持 open/setOpen（持久化 ui.ai_panel_open，DB）+ Panel 本地 collapsed（higher.aiPanel.mode）；Expanded header 4 按钮（历史/新对话/⇥收起/✕关闭）；rail 仅 30px 小按钮可点；另 3 消费方（Today/FinalGoalCard/PlanningTruthSummary）调用 setOpen(true)。
+- **几何真值**：.layout{height:100vh}；.profile-gate{min-height:100vh}；<=1100px 时 .aipanel absolute overlay（不动）；Layout.tsx 用 `open: aiOpen` 拼接 layout__main--with-ai 类（styles.css 中该类无规则，纯残留）。
+- **Product Decisions**：custom titlebar（34px/fixed top/z1200/var(--h-sidebar)/仅下边框/3 控件/data-tauri-drag-region）；one wallpaper（titlebar 0 image）；AI 两态 only（no X/no FAB/whole rail clickable/missing→collapsed/ui.ai_panel_open 不再消费不迁移）。
+
+## Phase B-F 施工记录
+- **Phase B · AI 两态**：AiPanelContext.tsx 删 open/setOpen state + ui.ai_panel_open 读写 + sendChat/runAction 的 setOpenState(true)（pending-send 事件仍触发 Panel 自动展开）+ value/memo 清理；AiPanel.tsx 删 !open-FAB 分支/✕按钮、rail 重构为 `.aipanel__rail-hit` 整条 46px 单按钮（✦ icon + 竖排 HIGHER AI，无嵌套按钮；点击/Enter/Space 原生语义）、初始化 `!== "expanded"` → missing/invalid=collapsed；Layout.tsx 去 aiOpen（main 类固定 `layout__main`）；**连锁最小适配**（§31 必然、非业务改动）：Today.tsx/FinalGoalCard.tsx/PlanningTruthSummary.tsx 各删 `setOpen/setAiOpen(true)` 消费行（tsc 硬错误无法绕过；handler/消息/sendChat 链零变化）；styles.css 删 .aipanel-fab(-hover) + 旧 rail 样式 → rail-hit 全尺寸按钮 + 轻量 accent-soft hover。
+- **Phase C · Titlebar**：新建 `src/components/DesktopTitlebar.tsx`（getCurrentWindow().minimize/toggleMaximize/close，isTauriRuntime() 屏蔽浏览器，catch 防未处理 rejection；drag 区 flex:1 带 data-tauri-drag-region，含 app 名 span 同标注；3 控件 44px 在 drag 区外；纯 CSS 图标 线/方/×；Close 红 hover 白图标）；App.tsx = WallpaperLayers → DesktopTitlebar → .app-shell__content > ProfileGate（恒渲染全部 gate 阶段）；styles.css：--h-titlebar-height:34px token + .titlebar（fixed top/left/right · var(--h-sidebar) · border-bottom --h-border · z-index 1200）+ .app-shell__content{margin-top:titlebar; height:calc(100vh-titlebar); overflow:hidden} + .layout height:100% + .profile-gate min-height:100%；lib.rs builder `.decorations(false)`（无 transparent/fullscreen 等）；capabilities 加恰好 4 个 core:window:allow-*（无越权）。
+- **Phase D · 测试**：新建 **batch0651_ui T01-T20 20/20**（dynamic window/conf windows=[]/decorations(false)/无 transparent/4 精确权限/App 结构顺序/titlebar 非 wallpaper consumer/几何 34+1200+content offset+layout·gate 100%/getCurrentWindow 三调用/drag 与控件分离/AI 无 closed·fab·x/两态+missing→collapsed/旧 DB 键不消费/整 rail 单按钮/三动作/runtime 事件串/ChangeSetReview/Enter·Shift+Enter/壁纸消费者=2/依赖零 diff）；batch064_ui U21 按新产品真值改写（无 FAB/X/open 分支）+ U28 收窄（lib.rs decorations 是唯一合法 src-tauri/src diff，且校验 diff 内容确实只加 decorations）→ **28/28**；batch064r2_ui R2-U23 同理收窄（§46 授权：旧断言被直接矛盾）→ **27/27**。
+- **中途问题**：①tsc 三处 setOpen 消费残留（见 Phase B 连锁）；②测试自伤：我的新注释含 `ui.ai_panel_open`/`padding-top: 34px` 字样被自家断言命中 → 改注释措辞；T14 锚点 rail-hit→aipanel--rail；③git 路径前缀（src-tauri/src/lib.rs vs src/lib.rs）→ ends_with 过滤；④lines().cloned() 类型错 → map(to_string)。
+- **Gate**：tsc 0 / build ✓ / cargo check ✓（capability schema 验证通过）/ batch0651 **20/20** / batch064 **28/28** / batch064r2 **27/27** / batch063 **18/18** / ai_panel **8/8** / batch062r1 **41/41** / batch062r **44/44** / batch062 **57/57** / batch061r **47/47** / batch0602 **29/29**（串行）。
+- **Forbidden Diff 审计**：本轮新增 M = capabilities/default.json · src/lib.rs（仅 decorations）· App.tsx · Layout.tsx · ai/AiPanel.tsx · ai/AiPanelContext.tsx · styles.css · FinalGoalCard.tsx · PlanningTruthSummary.tsx · Today.tsx（后三=§31 连锁最小适配，各仅删 setOpen 消费行）· batch064_ui/batch064r2_ui（§46/§78 授权）+ ?? DesktopTitlebar.tsx · batch0651_ui.rs；**tauri.conf.json/package*/Cargo*/api.ts/types.ts/appearance/**/ai·repository·migrations·db.rs/其余 pages 零 diff**。
+- **AI Runtime Changes: 0 · Backend Domain Changes: 0 · Schema v024 · Migration 0 · Dependency 0**；P2 记录不修（§106 Planning Week 选中日残留；§107 旧会话 no_changeset 异常）；未 commit/push；**HUMAN RUNTIME PENDING（H01-H24：启动无白条/壁纸连续/无壁纸回归/拖拽/双击最大化/最小化/最大化/关闭/缩放/AI 无 X/FAB/整 rail 展开/会话保持/态持久化/跨页稳定/页面 AI 动作自动展开/发送/Proposal/Modal+标题栏/1024·1366·1920/窄宽 overlay/浏览器预览）**。
+
+# DEV-0064R.2 · Single Global Wallpaper Surface System · TRAE_RUN
+
+- **DEV ID**: DEV-0064R.2（单一全局壁纸 + 全界面半透明 Surface 统一修正；DEV-0064R Human Runtime 产物）
+- **Start/End**: 2026-08-22（同日）
+- **Baseline**：HEAD = `b14e237`（main）；轮前 Worktree = DEV-0063+0064R 未提交集（14 M + 9 ??），与 DEV-0064R 收口快照逐项一致，无 UNKNOWN_WORKTREE_DIFF。
+- **User Product Decision**: Single Global Wallpaper + Translucent Surface System。
+- **Full Audit**: 277 files / ~130k lines（本任务书自含；本轮施工前另做 styles.css hard-coded surface 定向审计）。
+
+## WALLPAPER SURFACE AUDIT（§82-§83；施工前建立）
+| Selector | Current Background | Wallpaper Behavior | Decision |
+|---|---|---|---|
+| .h-wallpaper-layer | var(--h-wallpaper-image)+brightness+saturate | 唯一真实壁纸层 | A（去 brightness） |
+| .appearance__preview | 容器直用 background-image | 预览例外 | B（重构为 ::before 真值） |
+| body/#root | var(--bg)（canvas 传播） | 盖住壁纸风险 | B（壁纸时 transparent） |
+| .layout__sidebar / .aipanel | var(--h-sidebar)+旧 92% 双混 | 断壁纸 | A（删双混；token 66%） |
+| .card | var(--bg-elevated)+旧 94% 双混 | 断壁纸 | A（改 var(--h-surface-1)=72%；删双混） |
+| .modal / .modal-overlay | surface-2 / rgba .62 | 黑块 | B（76% / 0.28） |
+| .taskmenu__pop | var(--h-surface-2) | 自动 78% | B（提到 82% 封顶） |
+| .aipanel__inputbar | var(--bg-sidebar) | 自动 66% | B（外壳 76%） |
+| .aipanel__msg--assistant | var(--h-surface-1) | 自动 72% | A |
+| .kflow__canvas / .kflow__node | #16181d / #1d2027 | 黑块 | B（64% / 78%） |
+| react-flow controls / kflow menu | var(--bg-elevated) | 84% | A |
+| .hdoc / __toolbar / __codebar / __codeblock | var(--surface-x,#hex) / #14161b | 黑块 | B（72% / 78% / 86%） |
+| input/textarea/select | 各处 var(--bg) | 不统一 | B（全局 78% control） |
+| input.knowledge__title | transparent（伪装纯文本） | 会被全局规则误伤 | B（例外保持 transparent） |
+| 语义色 / accent-soft / 媒体内容 | — | 非 Surface | C / D（保持） |
+
+## 施工记录（Phase A-F）
+- **Architecture**: One wallpaper layer only（.h-wallpaper-layer 唯一图片消费者 + Settings 预览唯一例外）；Token Refactor: Solid（--h-*-solid，Theme 写入）/ Effective（--h-bg 等，CSS 按 data-h-wallpaper 决定）。
+- **Phase A**：appearance.ts LIMITS 70/70/45（visibility 0..100 def70；saturation 0..100 def70；overlay 20..80 def45 §16 语义不重复）；applyAppearance 只写 *-solid + border/accent + wallpaper 三变量，禁写 --h-bg 等（R2-U08 锁）；:root 加 5 个 solid token + Effective 默认映射 var(*-solid)（无壁纸视觉不变 §23）；旧值 40/100/54 合法不强制迁移（§68）。
+- **Phase B**：html[data-h-wallpaper="on"] Effective Tokens bg68/sidebar66/s1-72/s2-78/s3-84 + --bg-elevated=s2-solid84（§26-§27 锁死）；body/#root transparent（§28）；删旧 Sidebar/AI 92%、Card 94% 二次混（R2-U11）；.card 改消费 var(--h-surface-1)。
+- **Phase C**（集中置于 styles.css 末尾，原规则之后）：Form :is(input,textarea,select) 78% bg-solid（例外 .knowledge__title 保持 transparent）；Modal 76% s2-solid + overlay rgba(5,7,12,.28)；taskmenu__pop 82% 封顶；aipanel__inputbar 76% sidebar-solid；Graph Canvas #16181d 64% / Node #1d2027 78% + dots ≤15% 对比微调（CSS fill 覆盖 presentation attr）；HDoc 72% / toolbar+codebar 78% / codeblock 86%。
+- **Phase D**：Preview Truth 重构（::before=同图+同强度+同饱和+cover/center；::after=同压暗；content=文件名+示例 Surface「卡片示例 · Aa」用 var(--h-surface-1) §65）；滑杆改名 壁纸强度/色彩保留/压暗程度；新增「恢复推荐效果」（保留壁纸+氛围，只改 70/70/45）；「恢复默认」=删壁纸+default+70/70/45（DEFAULT_PREFS）。
+- **Phase E**：registerWallpaperUnload 返回 cleanup（removeEventListener）；WallpaperLayers effect `register→restore→return unregister`（cleanup 只移除 listener 不 revoke URL §69）。
+- **Tests**：新建 batch064r2_ui **27/27**（R2-U01~U27：单层/fixed/无区域重复铺图/cover-center-no-repeat/无 brightness/Controls 70-70-45/Solid Tokens/Theme 写 Solid/Effective 68-66-72-78-84/body 透明/旧双混删除/Form78/Modal76+overlay28/elevated84/Graph64+78/HDoc72-78-86/AI Surface/Preview Truth/推荐恢复/默认恢复/StrictMode/Frozen JSX=轮前集合/Backend/Dependency/三既有锁）；batch064_ui 更新过时断言（U08-U10 新默认、U13 禁 brightness）后 **28/28**；batch063_ui **18/18**。
+- **中途问题与修复**：① 测试裸锚点 `.h-wallpaper-layer`/`.modal-overlay`/`.taskmenu__pop` 被新 CSS 注释或前置 override 抢先命中 → 测试锚点加 ` {`（batch064）+ Special Surfaces override 移文件末尾（batch063 不改文件，CSS 顺序解决，override specificity 本就更高）；② batch063 u14 断言 `--h-bg: #0b0d12` 直接值与 Solid 架构冲突且该文件禁改 → :root 注释保留直接值存档（值真实不变，仅改经 *-solid 提供）。
+- **Business JSX Changes: 0**（frozen 8 文件 diff 与轮前逐一相等，R2-U22）；Handler Reimplementation: 0。
+- **Forbidden Diff**: PASS（src-tauri/src=0；package*/Cargo*=0；api/types=0；App/Layout/AiPanel/KnowledgeFlow/RichDocEditor/LearningWorkspace/Planning/Today/ChangeSetReview/DailyTasksSection/PlanningWeekBoard/Data 零新增 diff）。
+- **Schema v024 · Migration 0 · Backend/AI Runtime 0 · Dependency 0 · 新 !important 0**；knowledge_workspace 6/8 = 既有 stale（§115 不动非 blocker）；未 commit/push；Human Runtime PENDING（H01-H30）。
+
+# DEV-0064 · Higher UI Redesign v2 · TRAE_RUN
+
+- **DEV ID**: DEV-0064（Atmosphere Background/自定义壁纸 + Planning Week/Month + Knowledge v2 + AI Panel v2 + Settings 外观 + Today polish）
+- **Start**: 2026-08-22T19:09:00+08:00 ｜ **End**:（进行中）
+- **DEV-0064 BASELINE**：HEAD = `b14e23703999d5855ef020e6b27a1684ada03741`（main）；Pre-existing DEV-0063 Diff（已人工验收未提交）= `.higher/ENVIRONMENT.md`、`.higher/TRAE_RUN.md`、`src-tauri/tests/batch061r.rs`(r29)、`src/Layout.tsx`、`src/components/ChangeSetReview.tsx`(Diff Truth)、`src/components/DailyTasksSection.tsx`(菜单收敛)、`src/pages/LearningWorkspace.tsx`(返回今日修复)、`src/pages/Today.tsx`(Hero/降噪)、`src/styles.css`(Design System v1)、`?? batch063_ui.rs`、`?? 两份 TASK 输入`——与 DEV-0063 记录完全一致，无 UNKNOWN_WORKTREE_DIFF。
+- **纪律**：纯前端；禁 src-tauri/src/**、api.ts、types.ts、依赖文件；0 migration（v024）；壁纸走 IndexedDB（`higher-appearance`/`wallpaper`/`active`）+ localStorage 数值；新 !important=0。
+
+## DEV-0064 INTERACTION PRESERVATION MATRIX（§37；开工前建立）
+
+### Planning（含新增 Week View——全部复用原 handler）
+| Control | Source File | Current Handler | API Call | After | Status |
+|---|---|---|---|---|---|
+| Week/Month switch（新） | PlanningCalendar.tsx | view state + localStorage `higher.planning.view` | — | UI-only（§38 允许） | NEW |
+| 上一/下个月 | PlanningCalendar.tsx | shiftMonth(±1) | listTasksByRangeByProfile（refresh 链） | 同 | PRESERVED |
+| 今天 | PlanningCalendar.tsx | goToday | 同上 | 同 | PRESERVED |
+| 上一/下一周/本周（新） | PlanningCalendar.tsx | shiftWeek(±1)/goThisWeek（前端偏移；数据仍 range 查询） | listTasksByRangeByProfile | UI-only 计算 | NEW |
+| Date Cell（月） | PlanningCalendar.tsx | onSelectDate(isSelected?null:date) → Planning.selectDate | getDailyLearningReport | 同 | PRESERVED |
+| Day Cell（周，新） | PlanningCalendar.tsx | 同 selectDate（复用正下方日报） | 同上 | 同一 handler | NEW(reuse) |
+| + 新建任务 | PlanningCalendar.tsx | setCreateFor(selectedDate??today) → TaskModal mode=create | createTask | 同（周视图列内 + 新建同路径，自动带该日期） | PRESERVED/NEW(reuse) |
+| Week Task Start/Edit/Delete（新） | PlanningCalendar.tsx | 复用：start→startTaskSession+navigate；edit/delete→setEditing/setDeleting（DailyTasksSection 同款）或 Planning openEditTask | startTaskSession/update/deleteTask | 同原 handler | NEW(reuse) |
+| 重复任务 显/建/编/启停/删 | PlanningCalendar.tsx | setShowRules/setRuleCreate/setRuleEdit/setEnabled/delete | recurring API | 同 | PRESERVED |
+| PlanningTruthSummary/FinalGoalCard/GoalTreePanel/NextStep | 各组件 | 原样 | 原样 | 未触碰 | FROZEN |
+
+### Knowledge
+| Control | Source File | Current Handler | After | Status |
+|---|---|---|---|---|
+| Tree Select/Expand/Create/Rename/Move/Delete/Search | KnowledgeTree 组件 | onSelect/onToggle/handleCreateRoot/onCreateChild/onRename/onMove/onDelete | 未触碰（仅视觉） | FROZEN |
+| 工作区/知识图 Tabs | Knowledge.tsx viewMode | setViewMode | 同（统一 Segmented 样式） | PRESERVED |
+| Empty state（右侧未选） | Knowledge.tsx | — | 固定文案+复用 handleCreateRoot/setViewMode("graph") | POLISH(reuse) |
+| Editor/Autosave/Session list/Attachment/Graph controls | RichDocEditor/KnowledgeFlow | 原样 | 未触碰（Graph canvas 稳定 neutral 深底，不随氛围染色） | FROZEN |
+
+### AI Panel
+| Control | Source File | Current Handler | After | Status |
+|---|---|---|---|---|
+| Open（fab） | AiPanel.tsx | setOpen(true) | 同 | PRESERVED |
+| Close（✕） | AiPanel.tsx | setOpen(false) | 同（保持 ui.ai_panel_open 持久化语义=关闭） | PRESERVED |
+| Collapse/Expand（新） | AiPanelContext+AiPanel | setCollapsed + localStorage `higher.aiPanel.mode` | UI-only | NEW |
+| 新对话/历史/归档 | AiPanel.tsx | 原样 | 同 | PRESERVED |
+| Send / Shift+Enter | AiPanel.tsx | 主发送 onKeyDown | 同（Enter 发送/Shift+Enter 换行不变） | PRESERVED |
+| AI 设置 | AiPanel.tsx | navigate("/settings") | 同 | PRESERVED |
+| Connection Selector | AiPanel.tsx | setActiveAiProfiles | 同 | PRESERVED |
+| Proposal 查看/应用/取消 | AiPanel+ChangeSetReview | ai://changeset / applyAiChangeSet | 同（Patch Truth 保留） | PRESERVED |
+
+### Settings
+| Control | Source File | Current Handler | After | Status |
+|---|---|---|---|---|
+| Tab switch | Settings.tsx setTab | — | +外观 tab（位次 2） | PRESERVED/NEW |
+| 外观：导入/替换/删除/恢复默认（新） | AppearanceSection | IndexedDB + localStorage（UI-only） | NEW |
+| 壁纸三滑杆 + 6 氛围（新） | AppearanceSection | applyAppearance CSS vars | NEW |
+| 其余全部 Tab（档案/AI/私人化/联网/提醒/数据/保险箱） | Settings.tsx | 原样 | 未触碰 | FROZEN |
+
+### Today
+| Control | Current Handler | After | Status |
+|---|---|---|---|
+| 快速学习/新建任务/AI安排/Start/Edit/Delete/继续/结束 | DEV-0063 Matrix 全 PRESERVED | 仅 spacing/typography polish，handler 原样 | PRESERVED |
+
+## DEV-0064 施工记录（Phase A-F · 2026-08-22）
+
+- **Files read**：TASK.md(§1-§51)、styles.css(:root/布局/aipanel/pcal/knowledge/kflow/today 区)、App.tsx、main.tsx、Layout.tsx、pages/{Settings,Planning,Today,Knowledge,LearningWorkspace}.tsx、components/{PlanningCalendar,DailyTasksSection,TaskModal,KnowledgeFlow,ai/AiPanel,ai/AiPanelContext}.tsx、types.ts(Task/DailyTaskRow)、batch063_ui.rs。
+- **Phase A · Atmosphere Background + Settings 外观**：新建 `src/appearance/appearance.ts`（6 主题×9 token + KEYS/LIMITS + load/save/apply/init + THEME_SWATCH）、`src/appearance/wallpaperStore.ts`（IndexedDB higher-appearance/wallpaper/active；Blob+mime+name+updated_at；Object URL 单例生命周期 + validateWallpaperFile PNG/JPG/WEBP≤20MB）、`src/appearance/appearanceHelpers.ts`（统一 re-export）、`src/components/WallpaperLayers.tsx`（aria-hidden 双层，init+unload+restore）；App.tsx 根挂载；styles.css 壁纸层（.h-wallpaper-layer z-index:-2 filter=brightness(0.55)+saturate(var)；.h-wallpaper-overlay z-index:-1 rgb(7,9,13)·overlay 变量；均 fixed+pointer-events:none+data-h-wallpaper 门控）+ §12 Surface 透明（sidebar/aipanel 92%、card 94% color-mix；Modal/Input/Editor 不动）；Settings.tsx 新增外观 Tab（位次 2）+ AppearanceSection（§33 固定结构：预览/导入替换删除/三滑杆/6 氛围/恢复默认；file input 隐藏由按钮触发；即时生效）。
+- **Phase B · Planning UI v2 + Week/Month**：Planning.tsx header 加 [周][月] Seg Switch（`higher.planning.view`，默认 month）+ 条件渲染；新建 `src/components/PlanningWeekBoard.tsx`（§18-§22：周一→周日 7 列；<上一周/本周/下一周>；每列 星期/日期/任务数·计划时长/Task Card/Session summary；数据同源 materializeRecurringTasksRange+listTasksByRangeByProfile+getProfileRangeSessions；Start=Planning handleStartTask 回调复用、Edit/Create=TaskModal 复用（defaultDate 带日期）、Delete=deleteTask→archive 原链+同款确认；⋯ 菜单=编辑+分隔线+删除）；styles.css：.seg 通用 Segmented + .pweek 7 列（无 overflow:hidden 以免裁剪菜单 §39）。
+- **Phase C · Knowledge v2**：空态固定文案（标题/说明/+新建知识(setCreatingRoot)/查看知识图(setViewMode("graph"))，§26）；Tabs 统一 .seg（§27）；Tree 视觉（行高 32/active accent-soft+边框/搜索 focus ring/缩进 12）；Graph canvas/节点固定 neutral 深底（#16181d/#1d2027，不随氛围/壁纸染色，ReactFlow 数据与 layout 零改动）；kws__stats pill 化 + toolbar 节奏。业务（Tree CRUD/Drag/Sort/Editor/Autosave/Flow/Session/Attachment）零触碰。
+- **Phase D · AI Panel v2**：三态 Expanded(340px/min320/max380)/Collapsed Rail(46px 标识+展开)/Closed(fab 原样)；header = 历史+新对话+**收起为侧栏(⇥ setMode(true))**+**关闭(✕ setOpen(false))** 分离；`higher.aiPanel.mode` expanded|collapsed；关闭语义保持 ui.ai_panel_open；页面 AI 入口（actionBusy/pending-send 事件）自动展开 rail；Runtime（aiStartRun/事件串/ChangeSet/Proposal/Model Selector/Enter·Shift+Enter）零改动。
+- **Phase E · polish**：全局 scrollbar thin/dark/subtle（scrollbar-width+::-webkit-）；:focus-visible 统一 accent ring；Today stat tabular-nums/section gap 12/hero 左侧 accent 锚点条。
+- **Tests**：batch064_ui **28/28**（首轮 U07/U20 断言过严：U07 改查 localStorage API 调用而非注释文字、U20 改用实际 CRUD 函数名 createRootLearningItem 等——非源码问题）；batch063_ui 18/18；batch062r1 41/41；batch062r 44/44；batch062 57/57；batch061r 47/47；batch0602 29/29；ai_panel 8/8；review_progress 6/6。
+- **PRE-EXISTING TEST FAILURE（非本轮）**：knowledge_workspace 6/8——`test_migration_v006_schema_version_and_idempotent` 与 `test_migration_v005_to_v006_preserves_old_items_with_empty_content` 断言 schema_migrations=[1..=23]，实际含 v024（DEV-0062 引入 v024 时未同步这两处老断言；`git diff HEAD -- src-tauri/src src-tauri/tests/knowledge_workspace.rs` = 0 证明与本轮无关；该文件不在历轮 gate 清单）。按纪律不改，待决策。
+- **Forbidden Diff**：PASS（修改=ENVIRONMENT/TRAE_RUN/batch061r(既有 DEV-0063)/App/Layout/ChangeSetReview/DailyTasksSection/AiPanel/Knowledge/LearningWorkspace(既有)/Planning/Settings/Today/styles.css；新增=appearance×3/WallpaperLayers/PlanningWeekBoard/batch064_ui/batch063_ui(既有)/两份 TASK 输入；**无 src-tauri/src、无 package*.json/Cargo.*、无 api.ts/types.ts**）。
+- **Backend changes 0 · Schema v024 · Migration 0 · Dependency 0**；Human Runtime PENDING；未 commit/push。
+
+# DEV-0063 · Higher UI Redesign v1 · TRAE_RUN
+
+- **DEV ID**: DEV-0063（Design System + App Shell + Today + Planning + AI Panel；Visual Change, Behavior Freeze）
+- **Start**: 2026-08-22T17:31:28+08:00 ｜ **End**: 2026-08-22T17:46:39+08:00（AUTOMATED GATE PASSED · HUMAN CLICK RUNTIME PENDING）
+
+## HUMAN RUNTIME REPAIR（2026-08-22T18:37+08:00 · 用户报告「返回今日」回归）
+- **用户证据**：Today→任务开始→LearningWorkspace→结束学习→End Sheet 出现→点「返回今日」→仍停留在 LearningWorkspace 学习完成页面（预期回 `/` Today）。
+- **审计事实**：`git diff b14e237 -- src/pages/LearningWorkspace.tsx` = **0 diff**（DEV-0063 未触碰该文件）；End Sheet「返回今日」在 b14e237 及全部历史提交（d5b5433→c19ce78→b14e237）均为 `onClick={closeSheet}`——只关 Sheet（`justEnded=true` → 渲染 lw-ended 结束后视图），**不导航**。即：非 handler 丢失/overlay 拦截，而是该按钮从未绑定「返回今日」的导航语义（结束后视图与错误兜底的「返回今日/返回今日任务」才是 `navigate("/")`）。
+- **Root Cause**：End Sheet「返回今日」仅 `closeSheet`，关闭后落入同样名为「返回今日」按钮的结束后视图——用户点击后无路由变化，感知为「点了没反应/仍停留」。
+- **Fix（最小，复用原 handler）**：End Sheet「返回今日」→ `onClick={() => { closeSheet(); navigate("/"); }}`——`navigate("/")` 即结束后视图/错误兜底同款原业务路径；`closeSheet` 保留全部状态清理；无任何新 handler/新 API。`暂不处理`/`以后整理`/overlay 点击仍为 closeSheet（保留「以后整理」语义，未动）。
+- **其他按钮检查（要求 §同时检查）**：开始下一个（setNextOpen/startNext→startQuickSession/startTaskSession→navigate(/learn/:id)）✓；现在整理（setEndSheetOpen(true)+setSheetTab("link")）✓；AI 分析本次学习（aiRunAction("session_analysis")）✓；AI 帮我整理知识（aiRunAction("knowledge_organize")）✓；结束后视图 返回今日（navigate("/")）✓——全部绑定真实 handler，**ADDITIONAL_INTERACTION_REGRESSION: NONE**。
+- **回归锁**：batch063_ui 新增 `u18_endsheet_return_today_navigates`（closeSheet+navigate("/") 且 ended/error 两处原 navigate("/") ≥2）。
+- **Gate**：tsc 0 / build ✓ / batch063_ui **18/18** / batch03 22/22（Workspace+Session）/ batch053 9/9 / batch054 4/4 / ai_panel 8/8。Backend Runtime 0 改动；diff 仅 + `src/pages/LearningWorkspace.tsx`（本修复）与 `src-tauri/tests/batch063_ui.rs`（U18）。
+- **Human Retest**: PENDING（用户重走 Today→开始→结束→End Sheet→返回今日 → 应直达 Today）。
+
+- **Baseline Gate**：`git rev-parse HEAD` = b14e23703999d5855ef020e6b27a1684ada03741 ✓；branch=main ✓；`git status --short` = 仅 `?? .higher/DEV-0063_Higher_UI_Redesign_v1_TASK.md`（本任务书输入，预期）✓；log-3 = b14e237 / c19ce78 / 2d4e919 ✓。无 BASELINE_DRIFT / WORKTREE_NOT_CLEAN。
+- **纪律**：TASK 只读；禁 src-tauri/src/**（除 tests/**）；禁 api.ts/types.ts/package.json/Cargo.toml；0 新依赖；0 migration（v024）；handler 全保留；每 Phase 后 tsc/build/git diff --name-only；禁 !important 新增。
+
+## UI INTERACTION PRESERVATION MATRIX（§35-§38；施工前建立）
+
+### Today（§36）
+| Control | Source File | Current Handler | Current API/Tauri Call | After Refactor Handler | Status |
+|---|---|---|---|---|---|
+| 快速学习 | pages/Today.tsx | handleQuickStart | startQuickSession(profile.id)+navigate(/learn) | 同 handler 原样 | PRESERVED |
+| + 新建任务（Header/区内） | pages/Today.tsx | setShowCreate(true) | —（打开 TaskFormModal create） | 同 | PRESERVED |
+| AI安排 | pages/Today.tsx | setAiOpen(true)+sendChat(PLAN_REQUEST_MESSAGE) | —（AI Panel 主发送） | 同 | PRESERVED |
+| Session 继续 | pages/Today.tsx | navigate(`/learn/${active.id}`) | — | 同 | PRESERVED |
+| Session 结束 | pages/Today.tsx | handleEndActive | endSession(active.id)+refresh | 同 | PRESERVED |
+| Task Checkbox | components/DailyTasksSection.tsx | toggle(t) | completeTask/uncompleteTask | 同 | PRESERVED |
+| Task 开始 | 同上 | start(t) | startTaskSession+navigate | 同 | PRESERVED |
+| Task 查看（done） | 同上 | setEditing(t) | —（TaskFormModal edit） | 同 | PRESERVED |
+| Task 主行点击 | 同上 | setEditing(t) | — | 同 | PRESERVED |
+| Task ⋯ 菜单 | 同上 | setMenuFor(id) | — | 同（items 收敛 Edit/Delete） | PRESERVED |
+| Task 编辑（菜单内） | 同上 | setMenuFor(null)+setEditing(t) | updateTaskV2（Modal save） | 同 | PRESERVED |
+| Task 删除（菜单内） | 同上 | setMenuFor(null)+setDeleting(t) → confirm → handleDelete | deleteTask→(未删则)archiveTask | 同 | PRESERVED |
+| Modal 保存 | 同上 TaskFormModal.save | save() | createTaskV2/updateTaskV2 | 同 | PRESERVED |
+| Modal 取消 | 同上 | onClose | — | 同 | PRESERVED |
+| 空态 新建任务/快速学习 | 同上 | onEmptyCreate/onEmptyQuickStart | 同上两条链 | 同 | PRESERVED |
+| 复盘 banner 开始复盘/稍后 | pages/Today.tsx | navigate("/planning")/setDismissedReview | — | 同（DOM 移至页面底部降噪） | PRESERVED |
+| 风险 banner 查看依据 | pages/Today.tsx | navigate("/planning") | — | 同（同上降噪） | PRESERVED |
+| AI复盘今天 | pages/Today.tsx | runTodayReview | aiRunAction("daily_review") | 同 | PRESERVED |
+
+### Planning（§37）
+| Control | Source File | Current Handler | Current API/Tauri Call | After | Status |
+|---|---|---|---|---|---|
+| 上个月/下个月 | components/PlanningCalendar.tsx | shiftMonth(±1) | listTasksByRangeByProfile（refresh 链） | 同 | PRESERVED |
+| 今天 | 同上 | goToday | 同上 | 同 | PRESERVED |
+| Date Cell | 同上 | onSelect(date) → Planning.selectDate | getDailyLearningReport | 同 | PRESERVED |
+| + 新建任务（Calendar bar） | 同上 | onCreate() → Planning setTaskCreate | TaskModal → createTask | 同 | PRESERVED |
+| 重复任务 显示/新建/编辑/启停 | 同上 | setShowRules/setRuleCreate/setRuleEdit/toggle | create/update_recurring_rule API | 同 | PRESERVED |
+| FinalGoalCard 全部操作 | components/FinalGoalCard.tsx | 原样 | 原样 | 未触碰 | FROZEN |
+| GoalTreePanel / NextStep | 同名组件 | 原样 | 原样 | 未触碰 | FROZEN |
+| Review / TruthSummary | PlanningTruthSummary.tsx | 原样 | 原样 | 未触碰 | FROZEN |
+
+### AI Panel（§38）
+| Control | Source File | Current Handler | Current API/Tauri Call | After | Status |
+|---|---|---|---|---|---|
+| Send | components/ai/AiPanel.tsx | 主发送路径 | aiStartRun | 同 | PRESERVED |
+| Shift+Enter 换行 | 同上 | onKeyDown | — | 同 | PRESERVED |
+| 新对话/历史/归档 | 同上 | 原样 | createAiConversation/list/archive | 同 | PRESERVED |
+| 关闭 Panel | 同上 | setOpen(false) | — | 同 | PRESERVED |
+| AI 设置入口 | 同上 | navigate("/settings") | — | 同 | PRESERVED |
+| Connection 选择器（footer） | 同上 | setActiveAiProfiles | 同 | 同 | PRESERVED |
+| 查看 Proposal | 同上 | ai://changeset 驱动 | — | 同（真值不变） | PRESERVED |
+| 应用计划/只应用选中项/继续调整/取消 | components/ChangeSetReview.tsx | 原按钮 | applyAiChangeSet 等 | 同（仅 diffRows 显示算法改） | PRESERVED |
+
+## Phase A · Design System + App Shell + Sidebar + Page Header（§9-§17）
+- **styles.css `:root`**：新增 Higher Design System v1 全套 `--h-*` token（bg/sidebar/surface-1/2/3、border/strong、text/secondary/muted、accent+hover/soft/border、success/warning/danger、radius sm-md-lg-xl、space 1-10）；**既有 `--bg/--fg/--accent/--border/--ok/--warn/--error/--radius-*` 整体映射到 v1 调色板**（全站继承新视觉，不逐页改 selector）；字体栈 → `Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`（无新字体文件）。
+- **Sidebar（§15-§16）**：220px 不变；brand 改 H 徽标+名称横排（accent-soft 徽标）；导航分组 学习（今日/规划/知识）/ 洞察（数据）+ footer 设置（系统）——Layout.tsx 仅加非交互 `layout__nav-group` 标签与 wrapper span（NavLink 原样）；nav item 40px/padding 12/radius 10；Default=secondary+transparent、Hover=surface-2、Selected=**accent-soft+accent-border+accent**（替换旧 solid accent）；z-20。
+- **Page Header（§17）**：`.page__title` 24→28px/700；`.layout__main` padding 32px；`--h-space-*` 接入。
+- **Z-Index 规范（§13）**：modal-overlay 100→**900**；`.modal` +z **910**（surface-2 + 轻阴影）；taskmenu__pop 70→**100**；toast 200→**1000**；.aipanel +z **200**（overlay 模式 30→200）；aipanel-fab 40→200。
+
+## Phase B · Today + Task Card + Task Menu（§18-§24）
+- **Task Menu Before**：编辑 / 调整日期 / 调整目标 / 调整知识 / 修改类型 / 删除（六项；后四项全部仅 `setEditing(t)` 打开同一 Modal）。**After**：编辑 + `taskmenu__sep` 分隔线 + 删除（§22）。编辑 → 同一 TaskFormModal（全部字段：标题/日期/时间/预计/类型/优先级/Goal/Knowledge）；删除 → 原确认 Modal → handleDelete（deleteTask→未删则 archiveTask）。文件头注释同步。
+- **Today 视觉层次（§19）**：JSX 重排——Header → **Current Study Hero**（today-hero：accent 边 + surface-1 + 轻阴影，继续/结束原 handler）→ 今日任务 → 今日活动 → **Review/风险 banner 移至页尾降噪**（today-banner--quiet：dashed 弱边、字号降档；handler 原样）→ AI复盘次级入口。
+- **Task Card（§21）**：surface-1 底 + hover surface-2 + radius-md + 过渡；Checkbox/Title/Meta/Start/⋯ 全保留原 handler。
+
+## Phase C · Planning + Month Calendar（§25-§28）
+- `pcal__cell`：surface-1 + subtle border + radius-sm + 过渡；**today = accent-border + accent-soft**（§27）；hover = surface-2；**selected = accent 边 + accent-soft + inset ring**（更强 state）；日期数字/count 用 accent。月导航/选日/新建/重复规则 handler 全未触碰（Matrix FROZEN 项）。
+
+## Phase D · AI Panel + Proposal UI + Update Diff Truth（§29-§34）
+- **AI Panel（§29-§30）**：仅视觉——panel 底 h-sidebar+z200；user bubble=accent-soft 靠右、assistant=surface-1 靠左（radius-sm 统一）；input=surface-1+focus accent。**Runtime 零触碰**（aiStartRun/ai://delta/ai://changeset/ai://run-status/Pending/Connection selector 原样；U08-U10/U17 锁定）。
+- **Proposal Diff Before/After（§32-§33）**：Before=`diffRows` 遍历 before+after 全键并集 → missing-after-key 渲染为删除（假 DELETE）。**After**：`op.action === "update"` 分支候选**只来自 `Object.keys(after)`**——before 缺失=Added；`oldV === newV` continue（不展示）；`after=null && before 非 null`=「clear」（`- old + 未设置`，弱化警示色）；其余=mod（`- old + new`）；**绝不 push "del"**。create/delete 保持原语义。四个按钮（应用计划/只应用选中项/继续调整/取消）原 handler 未动。
+
+## Forbidden Diff Audit（§49；最终）
+```
+ M .higher/TRAE_RUN.md                      （文档，预期）
+ M src-tauri/tests/batch061r.rs             （§24 允许：r29 旧测试语义更新）
+ M src/Layout.tsx                           （导航分组标签；NavLink 原样）
+ M src/components/ChangeSetReview.tsx       （diffRows Update Diff Truth）
+ M src/components/DailyTasksSection.tsx     （Task Menu 收敛 + 注释）
+ M src/pages/Today.tsx                      （Hero/降噪重排；handler 原样）
+ M src/styles.css                           （Design System v1 + 各 selector）
+?? .higher/DEV-0063_Higher_UI_Redesign_v1_TASK.md （任务书输入）
+?? src-tauri/tests/batch063_ui.rs           （§44 允许：新 source-contract 回归）
+```
+无 src-tauri/src/**；无 api.ts/types.ts/package.json/package-lock.json/Cargo.toml/Cargo.lock → **PASS**。
+
+## AUTOMATED GATE（2026-08-22T17:46:39+08:00 全绿；默认未跑 full cargo test；真实 Provider 0 次调用）
+| Gate | 结果 |
+|---|---|
+| batch063_ui（新） | **17/17**（U01-U17 source-contract） |
+| batch062r1（回归） | **41/41** |
+| batch062r（回归） | **44/44** |
+| batch062（回归） | **57/57** |
+| batch061r（回归，r24 适配后） | **47/47** |
+| batch0602（回归，RUST_TEST_THREADS=1） | **29/29** |
+| batch0601（回归） | **33/33** |
+| batch060（回归） | **16/16** |
+| batch0592（回归） | **12/12** |
+| ai_foundation（回归） | **7/7** |
+| ai_assistant（回归） | **10/10** |
+| ai_panel（回归） | **8/8** |
+| npx tsc --noEmit | **0 errors** |
+| npm run build | **通过** |
+| cargo check -j 1 | **0 errors**（8 warnings 既有遗留） |
+| Backend Runtime Changes | **0**（src-tauri/src/** 零 diff） |
+| Schema Changes / Migration | **0 / v024 保持** |
+| Dependency Changes | **0** |
+| 新增 !important | **0**（U16 锁定） |
+
+### 失败与修复
+1. batch063_ui U04/U05/U07 首轮失败：split 锚点 `if (op.action === "update")` 被 ChangeSetReview line83 统计处 `else if (op.action === "update") s.update++;` 抢先命中 → 改用唯一锚点 `function diffRows`。
+2. batch061r r29 首轮失败：DailyTasksSection 文件头 doc 注释仍含旧菜单四词 → 注释按新语义改写（代码本体首轮已收敛）。
+3. batch0602 t9 首轮并行失败（ResolvedMany 3≠2）：单测隔离运行通过；确认为全局 RECENT map 在并行 test 线程下的既有竞态（b14e237 既有，非本轮改动——本轮零 Rust runtime 改动）；按项目历史纪律 `RUST_TEST_THREADS=1` 串行运行 → 29/29。已在 TRAE_RUN 记录，不修改 runtime/测试。
+
+### Human Click Runtime = PENDING
+- **AUTOMATED GATE PASSED · HUMAN CLICK RUNTIME PENDING**——TASK §52-§64 H01-H14（App Shell 导航/Profile/AI Panel 开关 → Today 三主操作 → Task Checkbox/开始/⋯=编辑+删除 → Edit Modal 全字段 → Delete 确认 → Session 继续/结束 → Planning 月导航/选日/新建/Recurring/Review → AI Panel 发送/Shift+Enter/新对话/关闭/设置/Connection → 真实 Proposal 只显示 changed field → 四按钮 → Approval First → Knowledge/Data/Settings/LearningWorkspace 跨页可点无遮挡 → 1366×768/1920×1080 滚动）由用户实机点击验证。
+
 # DEV-0062R.1 · Probe Input/Output Truth Repair · TRAE_RUN
 
 - **DEV ID**: DEV-0062R.1（修复 0062R Human Runtime 新暴露的 H02：Probe A 误报 empty_content → Basic ✗ + 后四项全未检测；Connection Test 语义混淆；响应预算/Response Truth 缺失）

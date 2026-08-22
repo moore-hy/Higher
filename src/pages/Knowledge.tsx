@@ -1087,12 +1087,15 @@ function Knowledge() {
       {/* ============ 右侧：工作区 / 知识图（DEV-0018 双视图） ============ */}
       <main className="knowledge__main">
         <div className="knowledge__viewbar">
-          <div className="review-window">
+          {/* DEV-0064 §27：Tabs 统一为 Higher Segmented Control（工作区/知识图 保留原语义） */}
+          <div className="seg" role="tablist" aria-label="知识视图">
             <button
               className={
-                "review-window__item" +
-                (viewMode === "workspace" && !showUnassigned ? " review-window__item--active" : "")
+                "seg__item" +
+                (viewMode === "workspace" && !showUnassigned ? " seg__item--active" : "")
               }
+              role="tab"
+              aria-selected={viewMode === "workspace" && !showUnassigned}
               onClick={() => {
                 setShowUnassigned(false);
                 setViewMode("workspace");
@@ -1102,9 +1105,10 @@ function Knowledge() {
             </button>
             <button
               className={
-                "review-window__item" +
-                (viewMode === "graph" ? " review-window__item--active" : "")
+                "seg__item" + (viewMode === "graph" ? " seg__item--active" : "")
               }
+              role="tab"
+              aria-selected={viewMode === "graph"}
               onClick={() => setViewMode("graph")}
             >
               知识图
@@ -1207,8 +1211,25 @@ function Knowledge() {
             }}
           />
         ) : selectedItem == null ? (
+          /* DEV-0064 §26：成熟空态（固定文案；Primary/Secondary 均复用现有 handler） */
           <div className="knowledge__editor-empty">
-            <p className="muted">选择左侧一个知识，开始整理你的学习内容。</p>
+            <div className="knowledge__empty-card">
+              <h2 className="knowledge__empty-title">选择一个知识开始整理</h2>
+              <p className="muted knowledge__empty-desc">
+                在左侧选择知识，或创建新的知识节点。
+              </p>
+              <div className="btn-row">
+                <button
+                  className="btn btn--primary"
+                  onClick={() => setCreatingRoot(true)}
+                >
+                  + 新建知识
+                </button>
+                <button className="btn" onClick={() => setViewMode("graph")}>
+                  查看知识图
+                </button>
+              </div>
+            </div>
           </div>
         ) : editingDoc != null ? (
           /* ============ 文档详情模式（DEV-0051 §36-37） ============ */

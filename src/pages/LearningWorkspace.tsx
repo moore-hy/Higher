@@ -876,8 +876,16 @@ export default function LearningWorkspace() {
               学习记录已经保存。不整理也完全可以——之后仍可在学习规划中找到它并整理。
             </p>
 
-            {/* A 默认 Primary（§61 + §98）：返回今日（不强迫整理） */}
-            <button className="btn btn--primary btn--block" onClick={closeSheet}>
+            {/* A 默认 Primary（§61 + §98）：返回今日（不强迫整理）。
+                DEV-0063 Human Runtime Repair：必须真正返回 Today「/」——复用结束后视图/
+                错误兜底同款原 navigate("/") handler；closeSheet 保留全部状态清理。 */}
+            <button
+              className="btn btn--primary btn--block"
+              onClick={() => {
+                closeSheet();
+                navigate("/");
+              }}
+            >
               返回今日
             </button>
 

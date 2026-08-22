@@ -38,6 +38,10 @@ interface RunEvent<T> {
 /** 消息分页大小（加载最近 50 / 「加载更早」） */
 const MSG_PAGE = 50;
 
+/** DEV-0065.1 §8/§33：唯一视觉态偏好 higher.aiPanel.mode；
+ *  missing/invalid → collapsed（AI 随手可用但不抢占学习工作区）。 */
+const AI_PANEL_MODE_KEY = "higher.aiPanel.mode";
+
 /** DEV-0060.1 PART A：WebView 本地时钟 → Runtime Time Truth（YYYY-MM-DD / YYYY-MM-DD HH:mm） */
 function localIsoDate(d = new Date()): string {
   const p = (n: number) => String(n).padStart(2, "0");
@@ -49,17 +53,20 @@ function localIsoDatetime(d = new Date()): string {
 }
 
 /**
- * Higher AI Agent Panel V2（DEV-0061R §33：Unified Higher AI——单一模式）。
- * - Header：Higher AI + 历史 + 新对话 + 收起（无用户模式开关；修改经审查后写入）
+ * Higher AI Agent Panel V2（DEV-0061R §33：Unified Higher AI——单一模式；
+ * DEV-0065.1 §7-§43：两态 Expanded(340px) / Collapsed Rail(46px)——无 Closed/FAB/X，
+ * Panel 恒驻 App Shell 且恒挂载（收起↔展开不重建会话/流/Proposal）。
+ * - Header 三动作：历史 / 新对话 / 收起为侧栏
+ * - 态偏好 higher.aiPanel.mode（expanded|collapsed；missing → collapsed）
  * - 对话主流程：DB 持久化消息（list_ai_messages）+ ai_start_run 后台流式
  *   （ai://delta 逐字、ai://source 来源、ai://changeset 提案、run-status 终态）
  * - 引用 [[S1]] → 可点击上标；消息底部来源区（open_external_url 系统浏览器打开）
  * - 保留：scope chips / 快捷 Action（AiProposalReview）/ 上下文·trace·diag 折叠
+ * - Runtime 完全冻结：aiStartRun / Conversation / Streaming / Model Selector /
+ *   Provider / Pending Action 零改动；Enter 发送、Shift+Enter 换行保持
  */
 export default function AiPanel() {
   const {
-    open,
-    setOpen,
     pageContext,
     messages,
     busy: actionBusy,
@@ -86,6 +93,26 @@ export default function AiPanel() {
   const [showProposal, setShowProposal] = useState(false);
   /** §61：上下文 chips 默认收起 */
   const [ctxOpen, setCtxOpen] = useState(false);
+  /** DEV-0065.1 §33：两态 collapsed 位（expanded|collapsed；missing/invalid → collapsed） */
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(AI_PANEL_MODE_KEY) !== "expanded"
+  );
+
+  function setMode(c: boolean) {
+    setCollapsed(c);
+    localStorage.setItem(AI_PANEL_MODE_KEY, c ? "collapsed" : "expanded");
+  }
+
+  // 页面 AI 入口（runAction / sendChat pendingSend）触发时自动展开 rail（§29）
+  useEffect(() => {
+    if (actionBusy) setMode(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionBusy]);
+  useEffect(() => {
+    const expand = () => setMode(false);
+    window.addEventListener("higher:aipanel-pending-send", expand);
+    return () => window.removeEventListener("higher:aipanel-pending-send", expand);
+  }, []);
 
   // ---- DEV-0052 对话主流程状态（DEV-0061R §33：Unified Higher AI——无只读/助手双模式） ----
   const [conversationId, setConversationId] = useState<number | null>(null);
@@ -156,13 +183,14 @@ export default function AiPanel() {
   }
 
   // Panel 需要展示 Proposal 时按需拉取当前档案 items（AiProposalReview 的 allowedIds）
+  // DEV-0065.1：Panel 恒挂载，Proposal 出现即拉取
   useEffect(() => {
-    if (open && proposal && proposalItems.length === 0 && activeProfile) {
+    if (proposal && proposalItems.length === 0 && activeProfile) {
       listLearningItemsByProfile(activeProfile.id)
         .then(setProposalItems)
         .catch(() => {});
     }
-  }, [open, proposal, activeProfile, proposalItems.length, setProposalItems]);
+  }, [proposal, activeProfile, proposalItems.length, setProposalItems]);
 
   /** 从 DB 刷新当前会话消息（completed / waiting_approval / cancelled 后） */
   const refreshMessages = useCallback(async () => {
@@ -534,21 +562,29 @@ export default function AiPanel() {
     [activeProfile, runId, streamSources]
   );
 
-  if (!open) {
+  // DEV-0065.1 §7/§30：无 Closed 态——Panel 恒驻，仅 Expanded / Collapsed 两态
+  if (collapsed) {
+    // §34：整条 46px rail = 单个全尺寸按钮（点击/Enter/Space 原生语义展开；无嵌套按钮）
     return (
-      <button
-        className="aipanel-fab"
-        onClick={() => setOpen(true)}
-        title="打开 Higher AI"
-      >
-        ✨ AI
-      </button>
+      <aside className="aipanel aipanel--rail" aria-label="Higher AI（已收起）">
+        <button
+          className="aipanel__rail-hit"
+          title="展开 Higher AI"
+          onClick={() => setMode(false)}
+        >
+          <span className="aipanel__rail-icon" aria-hidden="true">✦</span>
+          <span className="aipanel__rail-label" aria-hidden="true">
+            HIGHER&nbsp;AI
+          </span>
+        </button>
+      </aside>
     );
   }
 
   return (
     <aside className="aipanel">
-      {/* Header：Higher AI（DEV-0061R §33：单一模式；修改经审查后写入） */}
+      {/* Header：Higher AI（DEV-0061R §33：单一模式；修改经审查后写入）
+          DEV-0065.1 §37：三动作 = 历史 / 新对话 / 收起为侧栏（无关闭） */}
       <div className="aipanel__header">
         <div className="aipanel__header-main">
           <span className="aipanel__title">Higher AI</span>
@@ -578,10 +614,10 @@ export default function AiPanel() {
           </button>
           <button
             className="aipanel__icon-btn"
-            title="收起"
-            onClick={() => setOpen(false)}
+            title="收起为侧栏"
+            onClick={() => setMode(true)}
           >
-            ✕
+            ⇥
           </button>
         </div>
       </div>
