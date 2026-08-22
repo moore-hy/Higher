@@ -250,8 +250,8 @@ fn test_trace_only_real_tools_and_allowlist() {
         assert!(execute_read_tool(&conn, pid, evil, &json!({})).is_err(), "{} 必须被拒绝", evil);
     }
 
-    // 白名单 17 个（DEV-0052：11 只读 + search/memory/personalization/web×2/propose；无直接写）
-    assert_eq!(TOOL_ALLOWLIST.len(), 17);
+    // DEV-0060 §9.3：不硬编码数量（与 tool_definitions 集合一致；Direct Write=0 见上方 evil 断言）
+    assert_eq!(TOOL_ALLOWLIST.len(), ai::tools::defined_tool_names().len());
     for t in TOOL_ALLOWLIST {
         assert!(!tool_label(t).contains("未知"), "{} 应有标签", t);
     }

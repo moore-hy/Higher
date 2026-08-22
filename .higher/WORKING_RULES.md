@@ -88,6 +88,52 @@ WORKING_RULES → ENVIRONMENT → TASK → 涉及模块源码 → TRAE_RUN 初�
 14. 无数据不堆 0
 15. 用户永远可以 Quick Study
 
+# PART 5 · Permanent AI Architecture Invariants（DEV-0060.1 起永久）
+
+AI-INV-001 Current User Intent First：只有最后一个用户消息是本轮请求；Context 永远是 system 背景。
+AI-INV-002 LLM 理解与 Domain Execution 分层：模型输出 Typed Intent（SemanticAction/TemporalIntent），绝不输出数据库操作或实体 id。
+AI-INV-003 Direct Write = 0：一切正式写入经 ChangeSet → 用户批准 → Apply；未批准 0 落库。
+AI-INV-004 Skill 来自 versioned Registry：SKILL.md 编译期嵌入（include_str!），运行时禁止源码扫描。
+AI-INV-005 Skill Contract 可验证：required_capabilities ⊆ Capability Registry；optional_tools ⊆ Tool Registry（SKILL_CONTRACT_STALE 检测）。
+AI-INV-006 Turn Router 保守默认：路由不确定时偏向 HigherRead/SemanticAction，动作请求绝不判成 FastChat。
+AI-INV-007 Knowledge Optional：创建任务/重复任务不依赖知识，也不自动创建知识。
+AI-INV-008 Entity Resolver 不自动选择：0 匹配 → NotFound；2+ → 澄清。
+AI-INV-009 Runtime Time Truth 由 Higher 提供：local_date/datetime/timezone/weekday 经前端传入、后端校验；模型永不猜"今天"；intent 与编译日期不符 → Reject。
+AI-INV-010 Minimal Change Scope：操作实体 ⊆ 用户请求范围；禁止自动扩大到未要求实体。
+AI-INV-011 FastChat 零负担：tools=0、Memory Extract=0、私有 Context=0、history 有预算。
+AI-INV-012 Recurring 语义复用既有系统：不重建重复任务体系；规则语义（estimated_minutes/task_kind/priority）由 materialization 继承。
+AI-INV-013 语义动作成功后总结确定性生成（Compiler 产出），禁止第二次模型调用写总结。
+AI-INV-014 Invalid Semantic JSON 最多 Repair Once；修复仍失败 → 0 落库。
+AI-INV-015 Active Planner 收口：显式取消走本地 Cancel（不调 Provider）；续跑 vs 新意图由 Semantic Router 判定；被接管的旧规划 paused。
+AI-INV-016 Performance Trace 复用 ai_run_events：主/次 Provider 调用分开计数；禁记 API Key / 完整 Prompt / 用户隐私全文。
+
+**回归纪律**：任何修改 `src-tauri/src/ai/**`、AI ChangeSet Compiler、GoalTarget AI truth、Skill Registry、Tool Registry 的提交，必须至少运行并通过：
+```
+cargo test --test batch060 -j 1
+cargo test --test batch0601 -j 1
+```
+
+# PART 6 · Permanent Grounding Invariants（DEV-0060.2 起永久）
+
+AI-GND-001 自然语言 Reference 与数据库 Entity ID 必须分离。
+AI-GND-002 模型只能输出 Reference Hint，不得创造正式 Entity ID。
+AI-GND-003 Entity ID 只能来自 Higher Candidate Retrieval / Current UI Context / Recent Entity Resolution。
+AI-GND-004 Grounding 必须限定当前 Profile。
+AI-GND-005 时间、状态、实体类型等结构过滤必须先于语义选择。
+AI-GND-006 候选唯一时不得为了"显得智能"再次调用模型。
+AI-GND-007 多个合理候选时允许一次轻量 Candidate Selection。
+AI-GND-008 模型 Candidate Selection 只能从 Higher 提供的 candidate_id 中选择（幻想 ID → Invalid → 安全澄清）。
+AI-GND-009 无法唯一确定时必须 Clarification，不得猜。
+AI-GND-010 NotFound / Ambiguous / NothingToChange 不得创建空 ChangeSet。
+AI-GND-011 用户不得看到"ChangeSet 至少包含一个操作"等内部错误。
+AI-GND-012 Occurrence（单次出现）与 Recurring Series（重复系列）必须显式区分。
+AI-GND-013 过去学习事实不得因为 Series 修改而重写（过去/Completed/有 Session 事实的永不自动改）。
+AI-GND-014 一个用户请求可以生成多个 ProposedOp，但必须属于一个审查用 ChangeSet。
+AI-GND-015 Multi-step Action 仍然 Direct Write = 0。
+AI-GND-016 普通 Action Provider Call 必须 bounded（semantic 1 + selection ≤1 = ≤2）；不得演化成无限 Agent Loop。
+AI-GND-017 Grounding Runtime 禁止读取源码。
+AI-GND-018 所有 Grounding / ActionPlan 核心修改必须运行 batch060 + batch0601 + batch0602。
+
 # 开发节奏
 * **BATCH WHEN CLEAR**：产品语义已定 + 技术可从源码验证 + 风险可自动测试 → 一次性施工。
 * **STOP WHEN HUMAN SIGNAL REQUIRED**：仅真实 AI 行为/真实 UI 体验/真实迁移结果/真实异常数据/真实用户路径无法自动确认时才停，标 `HUMAN_RUNTIME_REQUIRED`。

@@ -3924,7 +3924,9 @@ button.calendar__cell--day:hover {
   position: absolute;
   right: 0;
   top: 28px;
-  z-index: 30;
+  /* DEV-0061R §49：菜单交互层必须高于透明 backdrop（z-60）——
+     旧 z-30 被 backdrop 抢 hit-testing 导致"看得到点不到" */
+  z-index: 70;
   min-width: 130px;
   display: flex;
   flex-direction: column;

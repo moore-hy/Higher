@@ -29,6 +29,7 @@ pub fn build(
     user_message: &str,
     page: &PageContext,
     mode: &str,
+    purpose: ContextPurpose,
 ) -> Result<ContextReport, String> {
     let mut layers: Vec<Layer> = Vec::new();
     let mut chips: Vec<String> = Vec::new();
@@ -46,27 +47,44 @@ pub fn build(
     }
     l1.push_str(&format!("当前页面：{}\n", page.page_label));
     l1.push_str(&format!("权限模式：{}\n", if mode == "assistant" { "助手模式" } else { "只读模式" }));
-    if let Some(g) = current_goal_summary(conn, profile_id)? {
-        l1.push_str(&format!("当前目标：{}\n", g));
-    }
-    // DEV-0058 §63-64：Active Session 只作为「当前有学习进行中」状态上下文，
-    // 不得当作已完成学习证据（elapsed 不计入学习时长）。
-    let active_sess: Option<(String, String)> = conn
-        .query_row(
-            "SELECT started_at, title FROM study_sessions
-             WHERE profile_id=?1 AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
-            params![profile_id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        )
-        .ok();
-    if let Some((started, title)) = active_sess {
-        l1.push_str(&format!(
-            "当前有学习进行中：{}（开始于 {}；进行中时长不算已完成学习量）\n",
-            title, started
-        ));
+    // DEV-0060 §7.1：Generic 问题最多只注入 当前页面/权限模式——
+    // 不注入 当前目标/PersonalProfile/Memory/跨会话历史（Context 按需，不是 Context 删除）。
+    // §7.3：Planning 请求不依赖普通 Context 猜目标——正式事实统一走 build_planning_truth_context
+    //（Dedicated Planner instruction 自带 5 区块 truth），普通层同样最小化。
+    if purpose != ContextPurpose::Generic && purpose != ContextPurpose::Planning {
+        if let Some(g) = current_goal_summary(conn, profile_id)? {
+            l1.push_str(&format!("当前目标：{}\n", g));
+        }
+        // DEV-0058 §63-64：Active Session 只作为「当前有学习进行中」状态上下文，
+        // 不得当作已完成学习证据（elapsed 不计入学习时长）。
+        let active_sess: Option<(String, String)> = conn
+            .query_row(
+                "SELECT started_at, title FROM study_sessions
+                 WHERE profile_id=?1 AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
+                params![profile_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .ok();
+        if let Some((started, title)) = active_sess {
+            l1.push_str(&format!(
+                "当前有学习进行中：{}（开始于 {}；进行中时长不算已完成学习量）\n",
+                title, started
+            ));
+        }
     }
     layers.push(Layer { name: "L1 当前上下文", text: l1 });
     chips.push("当前上下文".into());
+
+    if purpose == ContextPurpose::Generic || purpose == ContextPurpose::Planning {
+        // Generic（如「1+1等于多少」）：与 Higher 私有数据无关 → 跳过 L2/L3/L4
+        // Planning：正式事实在 Dedicated Planner instruction（truth context），此处同样最小
+        return Ok(ContextReport {
+            total_chars: layers.iter().map(|l| l.text.chars().count()).sum(),
+            layers,
+            truncated: false,
+            chips,
+        });
+    }
 
     // ---- L2 私人化档案（相关章节，非全量 §50） ----
     if let Some(md) = personalization_related(conn, profile_id, user_message)? {
@@ -155,6 +173,101 @@ pub struct PageContext {
     pub conversation_id: Option<i64>,
 }
 
+/// DEV-0060 PART C：Context Purpose（按需装载，不是 Context 删除）。
+/// - Generic：与 Higher 私有数据无关（如「1+1」「什么是梯度下降」）→ 只注入页面/模式
+/// - Personal：涉及「我的情况/我最近学得怎么样」→ 允许 PersonalProfile/Trusted/Memory
+/// - HigherData：涉及 Higher 数据（任务/进度/知识库/学习记录）→ 全量相关层
+/// - Planning：规划请求（由 lib.rs 判定 is_planning_request）
+/// - Knowledge / Session：页面锚定知识节点 / 学习会话
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextPurpose {
+    Generic,
+    Personal,
+    HigherData,
+    Planning,
+    Knowledge,
+    Session,
+}
+
+/// §7 + DEV-0061R §38：deterministic purpose 检测（planning 由调用方显式传入，不在此猜）。
+/// **Current User Message First**：页面是 Soft Context——只有用户消息显式指代页面对象
+/// （"这个知识/这个节点/当前Session/这一天"）时才升级 Knowledge/Session purpose；
+/// 单纯"打开着 Knowledge 页面"不得劫持 Generic 问题（R16/R17）。
+pub fn detect_context_purpose(
+    user_message: &str,
+    page: &PageContext,
+    planning: bool,
+) -> ContextPurpose {
+    if planning {
+        return ContextPurpose::Planning;
+    }
+    let m = user_message.trim();
+    // 显式页面指代（升级为页面锚定 purpose）
+    let knowledge_cues = [
+        "这个知识", "这个节点", "这个知识点", "当前知识", "当前节点", "这个文档", "这篇知识",
+        "总结一下当前", "总结这个", "解释这个", "讲讲这个",
+    ];
+    let session_cues = [
+        "这个会话", "本次学习", "这次学习", "当前会话", "这个session", "本次session",
+        "刚才学的", "这轮学习",
+    ];
+    if page.session_title.is_some() && session_cues.iter().any(|c| m.contains(c)) {
+        return ContextPurpose::Session;
+    }
+    if page.knowledge_path.is_some() && knowledge_cues.iter().any(|c| m.contains(c)) {
+        return ContextPurpose::Knowledge;
+    }
+    // Personal：「我」+ 自我状态分析（不含纯世界知识问题）
+    let personal_cues = [
+        "我的情况", "我的档案", "我最近", "我目前", "我现在", "学得怎么样", "我的水平", "我的进度",
+        "根据我的", "我每天", "我应该学", "我的状态", "帮我分析我", "我的优势", "我的短板",
+    ];
+    if personal_cues.iter().any(|c| m.contains(c)) {
+        return ContextPurpose::Personal;
+    }
+    // HigherData：Higher 私有状态关键词（SYSTEM_PROMPT 第 30 行同一语义）
+    let data_cues = [
+        "我的任务", "今日任务", "今天任务", "我的目标", "知识库", "知识树", "学习记录",
+        "我的笔记", "验证记录", "进度", "规划", "计划", "复盘", "掌握", "学了什么", "学了多久",
+    ];
+    if data_cues.iter().any(|c| m.contains(c)) {
+        return ContextPurpose::HigherData;
+    }
+    ContextPurpose::Generic
+}
+
+/// DEV-0060 §8.1：当前目标摘要——**active GoalTarget 为唯一正式来源**。
+/// - 有 active GoalTarget：REACH=主目标、SAFETY=风险参考（考研）；generic 取第一个 active
+/// - 无 active GoalTarget：返回「正式目标：未设置」，**不自动返回旧 goals.final**（legacy 只能是候选）
+fn current_goal_summary(conn: &Connection, profile_id: i64) -> Result<Option<String>, String> {
+    let targets = crate::repository::goal_target::GoalTargetRepository::new(conn)
+        .list_active(profile_id, None, None)
+        .unwrap_or_default();
+    if targets.is_empty() {
+        return Ok(Some(
+            "正式目标未设置（GoalTarget=0；历史数据中的旧目标仅为候选，不是当前正式目标）".to_string(),
+        ));
+    }
+    let reach = targets
+        .iter()
+        .find(|t| t.scenario_type == "postgraduate" && t.role == "reach")
+        .or_else(|| targets.iter().find(|t| t.role == "reach"))
+        .or_else(|| targets.first());
+    let safety = targets.iter().find(|t| t.role == "safety");
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(r) = reach {
+        parts.push(format!(
+            "{}（正式 GoalTarget{}）",
+            r.title,
+            if r.scenario_type == "postgraduate" { "·REACH 主目标" } else { "" }
+        ));
+    }
+    if let Some(s) = safety {
+        parts.push(format!("{}（SAFETY 风险参考）", s.title));
+    }
+    Ok(Some(parts.join("；")))
+}
+
 impl Default for PageContext {
     fn default() -> Self {
         Self {
@@ -165,17 +278,6 @@ impl Default for PageContext {
             conversation_id: None,
         }
     }
-}
-
-fn current_goal_summary(conn: &Connection, profile_id: i64) -> Result<Option<String>, String> {
-    let r = conn
-        .query_row(
-            "SELECT name FROM goals WHERE profile_id=?1 AND goal_level='final' LIMIT 1",
-            params![profile_id],
-            |row| row.get::<_, String>(0),
-        )
-        .ok();
-    Ok(r)
 }
 
 /// DEV-0059 §6.9：正式 AI Context = confirmed PersonalProfile.structured_json 优先，

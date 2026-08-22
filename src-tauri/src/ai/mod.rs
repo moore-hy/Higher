@@ -18,6 +18,15 @@ pub mod tools;
 pub mod planner;
 pub mod vault;
 pub mod web;
+// DEV-0060.1：Semantic Action Runtime（envelope/skills/router/action/trace）
+pub mod runtime;
+pub mod skills;
+pub mod action;
+pub mod trace;
+// DEV-0060.2：Grounding Layer（reference/candidates/selection/recent context）
+pub mod grounding;
+// DEV-0061R §18：Semantic Contract 唯一事实源（version/examples/prompt fragment）
+pub mod semantic_contract;
 
 use serde::{Deserialize, Serialize};
 

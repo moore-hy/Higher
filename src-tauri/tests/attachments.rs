@@ -59,7 +59,7 @@ fn test_migration_v009_applied_and_idempotent() {
     };
     assert_eq!(
         versions,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     );
 
     let columns: Vec<String> = {
@@ -81,7 +81,7 @@ fn test_migration_v009_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 22);
+    assert_eq!(count, 23);
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn test_v008_to_v009_upgrade_preserves_old_data() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions.last(), Some(&22));
+    assert_eq!(versions.last(), Some(&23));
 }
 
 #[test]

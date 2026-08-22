@@ -259,7 +259,9 @@ impl<'a> ChangeSetRepository<'a> {
 fn snapshot_before(conn: &Connection, profile_id: i64, entity_type: &str, id: i64) -> Result<Option<String>, String> {
     let v = match entity_type {
         "task" => conn.query_row(
-            "SELECT title, planned_date, planned_time, goal_id, status FROM tasks WHERE id=?1 AND profile_id=?2",
+            // DEV-0060.1 PART I（T29）：before 快照必须含 V2 全字段（未提供的 update 字段保留 before）
+            "SELECT title, planned_date, planned_time, goal_id, status, learning_item_id, estimated_minutes, task_kind, priority
+             FROM tasks WHERE id=?1 AND profile_id=?2",
             params![id, profile_id],
             |r| Ok(serde_json::json!({
                 "title": r.get::<_, String>(0)?,
@@ -267,6 +269,10 @@ fn snapshot_before(conn: &Connection, profile_id: i64, entity_type: &str, id: i6
                 "planned_time": r.get::<_, Option<String>>(2)?,
                 "goal_id": r.get::<_, Option<i64>>(3)?,
                 "status": r.get::<_, String>(4)?,
+                "learning_item_id": r.get::<_, Option<i64>>(5)?,
+                "estimated_minutes": r.get::<_, Option<i64>>(6)?,
+                "task_kind": r.get::<_, String>(7)?,
+                "priority": r.get::<_, String>(8)?,
             })),
         ).map_err(|_| "任务不存在或不属于当前档案".to_string())?,
         "session" => conn.query_row(
@@ -371,11 +377,14 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
             if let Some(g) = goal {
                 check_rest_day(tx, profile_id, g)?;
             }
+            // DEV-0060.1 §19.3/19.4：initial task 携带 recurring_rule_real_id（resolve 注入）
+            let rule_id = opt_i(&after_v, "recurring_rule_id")
+                .or_else(|| opt_i(&after_v, "recurring_rule_real_id"));
             tx.execute(
                 "INSERT INTO tasks (profile_id, goal_id, learning_item_id, title, planned_date, planned_time,
-                                    estimated_minutes, task_kind, priority, status)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending')",
-                params![profile_id, goal, item, title, date, time, estimated, kind, pri],
+                                    estimated_minutes, task_kind, priority, recurring_rule_id, status)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'pending')",
+                params![profile_id, goal, item, title, date, time, estimated, kind, pri, rule_id],
             )
             .map_err(|e| e.to_string())?;
             let id = tx.last_insert_rowid();
@@ -386,6 +395,9 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
             let id = op.entity_id.ok_or("update 需要 entity_id")?;
             let before = fetch_task(tx, profile_id, id)?;
             verify_before(op, &before)?;
+            // DEV-0060.1 PART I（§20）：与 TaskRepository::update_v2 语义一致——
+            // 未提供字段保留 before（goal/learning_item 传 null 显式清除需显式 null 语义：
+            // AI 语义路径不输出清除；手工 before 保留）。
             let title = opt_s(&after_v, "title").unwrap_or_else(|| s(&before, "title"));
             let date = match opt_s(&after_v, "planned_date") {
                 Some(d) => Some(d),
@@ -399,13 +411,44 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
                 Some(g) => Some(g),
                 None => opt_i(&before, "goal_id"),
             };
+            let item = match opt_i(&after_v, "learning_item_id") {
+                Some(i) => Some(i),
+                None => opt_i(&before, "learning_item_id"),
+            };
+            let estimated = match opt_i(&after_v, "estimated_minutes") {
+                Some(m) => {
+                    if !(1..=1440).contains(&m) {
+                        return Err(format!("预计学习分钟必须在 1~1440 之间（收到 {m}）"));
+                    }
+                    Some(m)
+                }
+                None => opt_i(&before, "estimated_minutes"),
+            };
+            let kind = match opt_s(&after_v, "task_kind") {
+                Some(k) if !k.is_empty() => match k.as_str() {
+                    "accumulation" => "accumulation".to_string(),
+                    "structured" => "structured".to_string(),
+                    other => return Err(format!("task_kind 非法：{other}")),
+                },
+                _ => s(&before, "task_kind"),
+            };
+            let pri = match opt_s(&after_v, "priority") {
+                Some(p) if !p.is_empty() => match p.as_str() {
+                    "core" => "core".to_string(),
+                    "normal" => "normal".to_string(),
+                    other => return Err(format!("priority 非法：{other}")),
+                },
+                _ => s(&before, "priority"),
+            };
             if let Some(g) = goal {
                 check_rest_day(tx, profile_id, g)?;
             }
             tx.execute(
-                "UPDATE tasks SET title=?1, planned_date=?2, planned_time=?3, goal_id=?4, updated_at=datetime('now')
-                 WHERE id=?5 AND profile_id=?6",
-                params![title, date, time, goal, id, profile_id],
+                "UPDATE tasks SET title=?1, planned_date=?2, planned_time=?3, goal_id=?4,
+                                 learning_item_id=?5, estimated_minutes=?6, task_kind=?7, priority=?8,
+                                 updated_at=datetime('now')
+                 WHERE id=?9 AND profile_id=?10",
+                params![title, date, time, goal, item, estimated, kind, pri, id, profile_id],
             )
             .map_err(|e| e.to_string())?;
             index_upsert(tx, "task", id, profile_id, &title, &title)?;
@@ -439,6 +482,126 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
                 return Err("任务不存在或不属于当前档案".to_string());
             }
             Ok(after_v.to_string())
+        }
+        // ---- DEV-0060.1 PART H（§19）：Recurring Rule（复用既有 recurring_task_rules） ----
+        ("recurring_rule", "create") => {
+            let title = s(&after_v, "title");
+            if title.trim().is_empty() {
+                return Err("重复任务标题不能为空".to_string());
+            }
+            let repeat_type = s(&after_v, "repeat_type");
+            if !["daily", "weekly"].contains(&repeat_type.as_str()) {
+                return Err(format!("repeat_type 非法：{repeat_type}"));
+            }
+            let weekdays: Vec<u32> = after_v
+                .get("weekdays")
+                .and_then(|w| w.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_u64().map(|v| v as u32)).collect())
+                .unwrap_or_default();
+            let time_of_day = opt_s(&after_v, "time_of_day");
+            let start_date = s(&after_v, "start_date");
+            let end_date = opt_s(&after_v, "end_date");
+            // v023 语义字段
+            let estimated = opt_i(&after_v, "estimated_minutes");
+            if let Some(m) = estimated {
+                if !(1..=1440).contains(&m) {
+                    return Err(format!("预计学习分钟必须在 1~1440 之间（收到 {m}）"));
+                }
+            }
+            let kind = match s(&after_v, "task_kind").as_str() {
+                "accumulation" => "accumulation",
+                _ => "structured",
+            };
+            let pri = match s(&after_v, "priority").as_str() {
+                "core" => "core",
+                _ => "normal",
+            };
+            let goal = opt_i(&after_v, "goal_id").or_else(|| opt_i(&after_v, "goal_real_id"));
+            let item = opt_i(&after_v, "learning_item_id").or_else(|| opt_i(&after_v, "learning_item_real_id"));
+            let rule = super::recurring_rule::RecurringRuleRepository::new(tx)
+                .create_with_semantics(
+                    profile_id,
+                    goal,
+                    item,
+                    &title,
+                    &repeat_type,
+                    &weekdays,
+                    time_of_day.as_deref(),
+                    &start_date,
+                    end_date.as_deref(),
+                    &super::recurring_rule::RuleSemantics {
+                        estimated_minutes: estimated,
+                        task_kind: Some(kind.to_string()),
+                        priority: Some(pri.to_string()),
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            // DEV-0061R §52：新 Rule Apply 后 Rolling Horizon 30 天物化
+            // （未来日历立即可见；幂等由 exists_for_rule_date 保证）
+            let today = crate::repository::planning::today_utc8();
+            let _ = super::recurring_rule::materialize_rolling_horizon(tx, profile_id, &today);
+            let out = serde_json::json!({ "id": rule.id }).to_string();
+            let _ = index_upsert(tx, "recurring_rule", rule.id, profile_id, &title, "");
+            Ok(out)
+        }
+        ("recurring_rule", "update") => {
+            let id = op.entity_id.ok_or("recurring_rule update 需要 entity_id")?;
+            let rule = super::recurring_rule::RecurringRuleRepository::new(tx)
+                .get(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("重复规则不存在")?;
+            let title = opt_s(&after_v, "title").unwrap_or_else(|| rule.title.clone());
+            let repeat_type = opt_s(&after_v, "repeat_type").unwrap_or_else(|| rule.repeat_type.clone());
+            let weekdays: Vec<u32> = after_v
+                .get("weekdays")
+                .and_then(|w| w.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_u64().map(|v| v as u32)).collect())
+                .unwrap_or_else(|| serde_json::from_str(&rule.weekdays_json).unwrap_or_default());
+            let time_of_day = opt_s(&after_v, "time_of_day").or(rule.time_of_day.clone());
+            let start_date = opt_s(&after_v, "start_date").unwrap_or_else(|| rule.start_date.clone());
+            let end_date = opt_s(&after_v, "end_date").or(rule.end_date.clone());
+            let estimated = opt_i(&after_v, "estimated_minutes").or(rule.estimated_minutes);
+            let kind = opt_s(&after_v, "task_kind").unwrap_or_else(|| rule.task_kind.clone());
+            let pri = opt_s(&after_v, "priority").unwrap_or_else(|| rule.priority.clone());
+            // 只影响未来 materialization（repo update 语义）；历史 Task 不动
+            super::recurring_rule::RecurringRuleRepository::new(tx)
+                .update_with_semantics(
+                    id,
+                    &title,
+                    &repeat_type,
+                    &weekdays,
+                    time_of_day.as_deref(),
+                    &start_date,
+                    end_date.as_deref(),
+                    rule.learning_item_id,
+                    &super::recurring_rule::RuleSemantics {
+                        estimated_minutes: estimated,
+                        task_kind: Some(kind),
+                        priority: Some(pri),
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"id": id}).to_string())
+        }
+        ("recurring_rule", "status_change") => {
+            // §19：Skill 默认 disable → enabled=false（历史 Task 保留；物理删除仅显式 delete）
+            let id = after_v
+                .get("id")
+                .and_then(|x| x.as_i64())
+                .or(op.entity_id)
+                .ok_or("recurring_rule status_change 缺少 entity_id")?;
+            let enabled = after_v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
+            super::recurring_rule::RecurringRuleRepository::new(tx)
+                .set_enabled(id, enabled)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"id": id}).to_string())
+        }
+        ("recurring_rule", "delete") => {
+            let id = op.entity_id.ok_or("recurring_rule delete 需要 entity_id")?;
+            super::recurring_rule::RecurringRuleRepository::new(tx)
+                .delete(id)
+                .map_err(|e| e.to_string())?;
+            Ok("{}".to_string())
         }
         // ---- Goal ----
         ("goal", "create") => {
@@ -1079,7 +1242,8 @@ fn undo_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperatio
             }
             Ok(())
         }
-        ("task", "update") | ("knowledge", "update") | ("document", "update") | ("session", "update") => {
+        ("task", "update") | ("knowledge", "update") | ("document", "update") | ("session", "update")
+        | ("recurring_rule", "update") => {
             verify_current(tx, profile_id, op, &after_v)?;
             restore_from_before(tx, profile_id, op, &before)?;
             Ok(())
@@ -1136,6 +1300,8 @@ fn table_of(entity: &str) -> &'static str {
         "planning_blueprint" => "planning_blueprints",
         "planning_phase" => "planning_phases",
         "planning_milestone" => "planning_milestones",
+        // DEV-0060.1 §19：recurring_rule
+        "recurring_rule" => "recurring_task_rules",
         _ => "tasks",
     }
 }
@@ -1400,8 +1566,10 @@ fn parent_period(tx: &rusqlite::Transaction<'_>, parent_id: i64) -> Result<(Opti
 }
 
 fn fetch_task(tx: &rusqlite::Transaction<'_>, profile_id: i64, id: i64) -> Result<J, String> {
+    // DEV-0060.1 PART I（T29）：apply 期 before 事实源必须含 V2 全字段
     tx.query_row(
-        "SELECT title, planned_date, planned_time, goal_id, status FROM tasks WHERE id=?1 AND profile_id=?2",
+        "SELECT title, planned_date, planned_time, goal_id, status, learning_item_id, estimated_minutes, task_kind, priority
+         FROM tasks WHERE id=?1 AND profile_id=?2",
         params![id, profile_id],
         |r| {
             Ok(serde_json::json!({
@@ -1410,6 +1578,10 @@ fn fetch_task(tx: &rusqlite::Transaction<'_>, profile_id: i64, id: i64) -> Resul
                 "planned_time": r.get::<_, Option<String>>(2)?,
                 "goal_id": r.get::<_, Option<i64>>(3)?,
                 "status": r.get::<_, String>(4)?,
+                "learning_item_id": r.get::<_, Option<i64>>(5)?,
+                "estimated_minutes": r.get::<_, Option<i64>>(6)?,
+                "task_kind": r.get::<_, String>(7)?,
+                "priority": r.get::<_, String>(8)?,
             }))
         },
     )
@@ -1569,6 +1741,8 @@ fn resolve_refs(after: &J, id_map: &std::collections::HashMap<String, i64>) -> R
         // DEV-0059 §23：蓝图内 phase/milestone 引用 blueprint create 的 ref
         ("blueprint_ref", "blueprint_id"),
         ("phase_ref", "phase_id"),
+        // DEV-0060.1 §19.4：initial task 引用同集内前序 recurring_rule create
+        ("recurring_rule_ref", "recurring_rule_real_id"),
     ] {
         if let Some(v) = obj.get(key).and_then(|x| x.as_str()) {
             match id_map.get(v) {

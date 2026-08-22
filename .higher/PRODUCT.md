@@ -42,7 +42,7 @@ Higher 是一个帮助用户**建立个人学习系统**的本地软件：它记
 - **Goal Optional / Knowledge Optional / AI Optional**——三层均可不用，Quick Study 永远可用
 - **Archive Later**——学习先永久保存，整理稍后决定
 - **User Controlled Knowledge**——知识结构由**用户控制**：允许用户手动创建；允许 AI Assistant 提出知识结构修改方案，经 ChangeSet 展示，**用户批准后正式写入**。禁止 AI 未经批准直接改变正式知识结构。**User Controlled ≠ Manual Only**。
-- **AI Advisory + Dual Mode**——只读模式/助手模式；AI 只读取分析建议；**Direct Write Tools 永远为 0**（助手模式修改一律经 propose → ChangeSet → 用户批准）；联网与修改权限独立
+- **Unified Higher AI**——无用户可见的只读/助手双模式；AI 只读取分析建议；**Direct Write Tools 永远为 0**（一切修改经 propose → ChangeSet → 用户批准）；联网与修改权限独立
 - **Evidence Exists ≠ Evidence Trusted**——真实记录也可能异常（如忘记结束学习导致的超长时长）：Higher **不得静默修改**任何真实原始数据；明显异常时长（默认阈值 12h）进入**待确认**；待确认记录默认不进入可信统计、不作为 AI 可靠学习投入证据；用户确认或修正后恢复正常
 - **No Decorative Data**——不打努力分/专注分/效率分；0/0 不显示伪 0%；未评估 ≠ 0 分；证据不足不硬打分
 - **Local First / RAM-light / Disk-rich**——数据本地；尽量轻内存、完整留盘
@@ -78,6 +78,21 @@ Profile
 ```
 
 **Canonical Final Goal**：每 Profile 唯一的最终目标，Canonical 结构化事实源 = **Goal Brief**（七字段：title / outcome / deadline / success_criteria / scope / constraints / unresolved）；Profile 名称不是 Final Goal；`brief.title` 为唯一语义标题（goals.name 仅显示投影）；多源目标信息冲突必须提示用户确认，**不自动选择**；Memory 不作为 Goal Source of Truth。
+**与正式目标的边界（DEV-0060 起）**：Goal Tree 的 Final Goal / GoalBrief 属 legacy compatibility 与历史证据——**不得覆盖 AI formal GoalTarget truth**（见 §6b）；历史 Goal 数据永不删除。
+
+## 6b. 个人事实四层与正式目标（DEV-0060 起产品 Truth）
+
+```
+StudyProfile      = 当前学习数据世界 / 场景容器（不是目标；旧 target_* 字段仅 legacy 观察）
+PersonalProfile   = 我是谁（能力/时间/约束/习惯/偏好/当前状态）
+GoalTarget        = 我要去哪（AI 正式目标 Source of Truth；考研 REACH≤1 active 主目标 + SAFETY≤1 active 风险参考）
+PlanningBlueprint = 我准备怎么去（长期规划 Canonical；Phase/Milestone/滚动任务投影）
+Legacy Final Goal / GoalBrief = compatibility / history（仅候选与历史证据，永不覆盖 GoalTarget，永不自动晋升）
+```
+
+- **AI Direct Write = 0** 不变：GoalTarget/Blueprint 的一切实体化只经 PlanDraft（可含 target_proposal）→ ChangeSet → 用户批准 → Apply；未批准正式数据 0 修改。
+- **Context = background，Current User Intent First**：Higher Context（档案/目标/记忆/历史）只是背景事实，不是用户当前指令；只有最后一个用户消息是本轮请求；与背景无关的问题直接回答。
+- PersonalProfile 中的目标描述只能是 source observation（unresolved/goal_observation），不是正式 Goal。
 
 ## 7. 下一步（Next Step）
 
@@ -123,6 +138,53 @@ Write Intent（写意图识别）
 - **联网搜索 + Web Open**：SSRF 全防护；来源引用经 Registry 校验
 - **ChangeSet**：propose → Diff 审查（逐项勾选）→ 事务 Apply（并发变更冲突拒绝，不静默覆盖）→ Undo；休息日
 - **审计与备份（Vault）**：操作审计日志 + 数据库快照；访问锁为测试级（**不代表数据加密**）
+
+## 10b. Higher AI Semantic Runtime（DEV-0060.1 起稳定架构）
+
+```
+LLM understands language（模型只负责理解语义）
+Higher validates execution（Higher 保证事实、规则与正式写入）
+Skill System（versioned SKILL.md 编译期嵌入；运行时 0 源码扫描）
+Runtime Time Truth（今天/星期/时区由 Higher 提供，模型永不自行猜测）
+Minimal Change Scope（操作实体 ⊆ 用户请求范围；禁止自动扩大）
+Knowledge Optional（创建任务不依赖也不自动创建知识）
+Direct Write = 0（一切写经 ChangeSet → 用户批准 → Apply）
+```
+
+- **Turn Interpreter（唯一控制入口）**：每轮一次请求同时产出 route 与 typed action（FastChat / HigherRead / Action{SemanticAction} / Planning / PlannerContinuation / Clarification）；控制层（Interpreter / Repair / Selection）温度恒 0（deterministic）；动作不再二次调用模型。
+- **Typed SemanticAction（Contract v2）**：模型输出类型化意图（create_task / create_recurring_task / update_task{target,patch} / set_task_status / update_recurring_task{target,patch,reconcile_future} / bulk_update_tasks + TemporalIntent），**不输出数据库操作**；显式 patch 字段（无 flatten）；ContractFailure（模型输出不可靠）与 NothingToChange（DB 已是要求值）严格分离；Grounding 0 匹配→NotFound、2+→澄清；Domain Compiler 确定性编译 ChangeSet。
+- **Recurring Rule = 既有系统**：AI 语义层复用 recurring_task_rules（v023 起规则携带 estimated_minutes/task_kind/priority，materialization 继承）；初始任务与规则同 ChangeSet（recurring_rule_ref 前向引用）。
+- **Active Planner 收口**：明确取消与「先不规划了…」类退出语走本地 Cancel（不调 Provider）；其余续跑 vs 新意图由 Turn Interpreter 判定，旧规划 paused 而非劫持；「帮我安排明天30分钟数学」类单任务请求是 Action，不是 Planner（仅长期/阶段/多日蓝图进 Planner）。
+
+## 10c. AI Grounding（DEV-0060.2 起稳定架构）
+
+```
+用户自然语言引用 ≠ 数据库 ID。
+Higher 必须把："那个" / "刚才那个" / "背单词" / "每天那个408" / "今天所有没完成的"
+Ground 到真实 Higher Entity / Entity Set。
+LLM 提供 Semantic Reference；Higher 决定 Canonical Entity。
+```
+
+- **引用分层**：ReferenceHint（用户说的是谁：title_hint/时间/状态/数量/最近性）→ TargetScope（**Occurrence 单次出现 vs Series 重复系列 vs MatchedSet 结构集合 vs Recent vs Current**）→ Candidate Retrieval（结构过滤先行：日期/状态/类型；≤8 候选）→ Grounding（唯一候选直接命中；多候选一次轻量选择；无法确定→澄清；没有→友好未找到）。
+- **Occurrence vs Series（正式产品语义）**："删除今天这条，但每日规则继续"=只删今天出现；"以后不要再每天背单词"=停整个系列（今天/历史任务保留，未来不再生成）；"把每天学408改成晚上9点"=改系列并同步未来未开始任务（**过去与已完成永不重写**）。
+- **多操作请求 → 一个 ChangeSet**："把今天所有没完成的任务挪到明天"=结构匹配集合一次展开为多个更新，进入同一张审查卡片（单次批准；批量上限 50）。
+- **用户级结果契约**：已就绪提案 / 澄清选哪个 / 未找到（数据没变化）/ 无需修改 / 范围过大请缩小——**用户永远看不到内部错误**。
+
+## 10d. Long-term Decisions（DEV-0061R 起固定）
+
+```text
+Unified Higher AI
+No user-facing readonly/assistant modes
+Approval First
+Direct Write = 0
+Conversation History ≠ Control State
+Current User Intent First
+Semantic Contract v2
+Conversation-scoped Recent
+RecurringRule canonical
+30-day bounded materialization
+Task ≠ StudySession
+```
 
 ## 11. Today 与双树闭环
 

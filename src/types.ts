@@ -488,6 +488,10 @@ export interface RecurringRule {
   start_date: string;
   end_date: string | null;
   enabled: boolean;
+  /** v023 DEV-0060.1：规则语义三字段（materialize 时继承到 Task） */
+  estimated_minutes: number | null; // 1..1440；null=未设置
+  task_kind: "structured" | "accumulation" | string;
+  priority: "core" | "normal" | string;
   created_at: string;
   updated_at: string;
 }

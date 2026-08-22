@@ -8,7 +8,7 @@ import {
   getPlanningReviewRisk,
   isPlanningReviewDue,
   listLearningItemsByProfile,
-  materializeRecurringTasks,
+  materializeRecurringRolling,
   startQuickSession,
   syncNotifications,
 } from "../api";
@@ -86,8 +86,8 @@ function Today() {
     setError("");
     try {
       const today = todayDate();
-      // 今日重复任务 materialize（幂等；失败静默）
-      await materializeRecurringTasks(activeProfile.id, today).catch(() => {});
+      // DEV-0061R §52：Today 刷新 → Rolling Horizon 30 天 materialize（幂等；失败静默）
+      await materializeRecurringRolling(activeProfile.id, today).catch(() => {});
       const [rep, itemList, tree, activeSess, due, risk] = await Promise.all([
         getDailyLearningReport(activeProfile.id, today),
         listLearningItemsByProfile(activeProfile.id),
@@ -118,7 +118,7 @@ function Today() {
   useEffect(() => {
     if (!activeProfile) return;
     const t = window.setInterval(() => {
-      void materializeRecurringTasks(activeProfile.id, todayDate())
+      void materializeRecurringRolling(activeProfile.id, todayDate())
         .then((n) => (n > 0 ? refresh() : undefined))
         .catch(() => {});
     }, 30000);

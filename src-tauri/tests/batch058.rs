@@ -41,14 +41,14 @@ fn mk_profile(conn: &Connection) -> i64 {
 #[test]
 fn test_migration_latest_is_v021_and_idempotent() {
     let conn = setup();
-    // DEV-0059.1 §9：新增 v022（personalization_sources 支持 xlsx）后最新版本为 22
-    assert_eq!(latest_version(), 22);
+    // DEV-0060.1 §17：新增 v023（recurring_task_semantics）后最新版本为 23
+    assert_eq!(latest_version(), 23);
     // 幂等：重复执行不报错、不重复应用
     app_lib::migrations::run_migrations(&conn).unwrap();
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 22);
+    assert_eq!(n, 23);
 }
 
 #[test]
@@ -568,7 +568,7 @@ fn bp_mk_blueprint(today: &str) -> BlueprintDraft {
 fn test_bp_compile_blueprint_ops_structure() {
     let today = app_lib::repository::planning::today_utc8();
     let draft = PlanDraft { blueprint: Some(bp_mk_blueprint(&today)), ..Default::default() };
-    let ops = compile_to_changeset_ops(None, &draft);
+    let ops = compile_to_changeset_ops(None, true, &draft);
     assert_eq!(ops.len(), 5, "蓝图编译 ops 数量：blueprint+phases+milestones");
     assert_eq!(ops[0].entity_type, "planning_blueprint");
     assert_eq!(ops[0].action, "create");
@@ -601,7 +601,7 @@ fn test_bp_compile_blueprint_does_not_touch_goal_targets() {
         evidence: "近三次模考".into(),
     }];
     let draft = PlanDraft { blueprint: Some(bp), ..Default::default() };
-    let ops = compile_to_changeset_ops(None, &draft);
+    let ops = compile_to_changeset_ops(None, true, &draft);
     assert!(!ops.iter().any(|o| o.entity_type == "goal_target"), "suggested changes 不得自动改正式目标");
     let md = ops[0].after["content_md"].as_str().unwrap();
     assert!(md.contains("建议的目标调整"));
@@ -614,7 +614,7 @@ fn test_bp_plan_draft_blueprint_roundtrip_and_goal_tree_compat() {
         r#"{"year_goals":[{"name":"24 考研","period":"2026-09-01..2027-12-31","operation_ref":"G1"}],"tasks":[{"title":"高数：极限 10 题","date":"9999-09-02","estimated_minutes":60}]}"#,
     ).unwrap();
     assert!(legacy.blueprint.is_none());
-    let ops = compile_to_changeset_ops(None, &legacy);
+    let ops = compile_to_changeset_ops(None, true, &legacy);
     assert_eq!(ops[0].entity_type, "goal");
     assert_eq!(ops[1].entity_type, "task");
     let js = serde_json::json!({
@@ -686,7 +686,7 @@ fn test_bp_changeset_apply_blueprint_full_chain() {
     let p = mk_profile(&conn);
     let today = app_lib::repository::planning::today_utc8();
     let draft = PlanDraft { blueprint: Some(bp_mk_blueprint(&today)), ..Default::default() };
-    let ops = compile_to_changeset_ops(None, &draft);
+    let ops = compile_to_changeset_ops(None, true, &draft);
     assert!(app_lib::ai::planner::ops_within_limit(&ops));
 
     let csid = ChangeSetRepository::new(&conn).create(p, None, None, "AI 蓝图规划", "用户批准", &ops).unwrap();
@@ -733,7 +733,7 @@ fn test_bp_changeset_apply_blueprint_replaces_previous_active() {
     let p = mk_profile(&conn);
     let today = app_lib::repository::planning::today_utc8();
     let draft_a = PlanDraft { blueprint: Some(bp_mk_blueprint(&today)), ..Default::default() };
-    let ops_a = compile_to_changeset_ops(None, &draft_a);
+    let ops_a = compile_to_changeset_ops(None, true, &draft_a);
     let csa = ChangeSetRepository::new(&conn).create(p, None, None, "蓝图 A", "a", &ops_a).unwrap();
     ChangeSetRepository::new(&conn).apply(csa, p, false).unwrap();
     let bp_a = PlanningRepository::new(&conn).get_active(p).unwrap().unwrap();
@@ -741,7 +741,7 @@ fn test_bp_changeset_apply_blueprint_replaces_previous_active() {
     let mut bp = bp_mk_blueprint(&today);
     bp.title = "2027 考研全程规划 V2".into();
     let draft_b = PlanDraft { blueprint: Some(bp), ..Default::default() };
-    let ops_b = compile_to_changeset_ops(None, &draft_b);
+    let ops_b = compile_to_changeset_ops(None, true, &draft_b);
     let csb = ChangeSetRepository::new(&conn).create(p, None, None, "蓝图 B", "b", &ops_b).unwrap();
     ChangeSetRepository::new(&conn).apply(csb, p, false).unwrap();
 

@@ -108,6 +108,8 @@ pub fn build_context(conn: &Connection, input: &ContextInput) -> Result<String, 
         &query,
         &page,
         "readonly",
+        // DEV-0060 PART C：ai_analyze 旧 action 通道永远涉及 Higher 数据 → HigherData（全量相关层）
+        super::context_builder::ContextPurpose::HigherData,
     )?;
     for layer in &report.layers {
         if !layer.text.trim().is_empty() {

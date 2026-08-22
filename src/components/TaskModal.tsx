@@ -4,6 +4,7 @@ import {
   createRootLearningItem,
   createTask,
   createRecurringRule,
+  materializeRecurringTasks,
   updateTask,
 } from "../api";
 import type { Goal, LearningItem, Task } from "../types";
@@ -97,17 +98,10 @@ export default function TaskModal({
     setError("");
     try {
       if (mode === "create") {
-        // v013：profileId 必填；goal 可空（title-only 任务不依赖目标）
-        await createTask({
-          profileId,
-          goalId: selectedGoal?.id ?? null,
-          title: title.trim(),
-          plannedDate: date || null,
-          plannedTime: time.trim() || null,
-          learningItemId: itemId,
-          planId: null,
-        });
-        if (repeat !== "none" && itemId != null) {
+        if (repeat !== "none") {
+          // DEV-0060.1 PART G：选了重复 → 只建规则，不先建无 rule_id 的普通 Task；
+          // 首日任务由规则 materialize 生成（带 rule_id，exists_for_rule_date 幂等）。
+          // Knowledge Optional：不再要求先关联知识（AI-INV-007）。
           await createRecurringRule({
             profileId,
             goalId: selectedGoal?.id ?? null,
@@ -118,7 +112,20 @@ export default function TaskModal({
             timeOfDay: time.trim() || null,
             startDate: date || todayDate(),
             endDate: null,
-          }).catch(() => null); // 重复规则失败不阻塞任务创建
+          });
+          // 首日任务由规则物化（命中当日 recurrence 才生成；幂等）
+          await materializeRecurringTasks(profileId, date || todayDate());
+        } else {
+          // v013：profileId 必填；goal 可空（title-only 任务不依赖目标）
+          await createTask({
+            profileId,
+            goalId: selectedGoal?.id ?? null,
+            title: title.trim(),
+            plannedDate: date || null,
+            plannedTime: time.trim() || null,
+            learningItemId: itemId,
+            planId: null,
+          });
         }
       } else if (task) {
         await updateTask({

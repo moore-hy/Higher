@@ -7,15 +7,12 @@ import {
   aiStartRun,
   archiveAiConversation,
   createAiConversation,
-  getAiMode,
   getAiSettings,
   listAiConversations,
   listAiMessages,
   listLearningItemsByProfile,
   openExternalUrl,
   saveAiSettings,
-  setAiConversationMode,
-  setAiMode,
 } from "../../api";
 import AiProposalReview from "../AiProposalReview";
 import ChangeSetReview from "../ChangeSetReview";
@@ -26,7 +23,6 @@ import { useActiveProfile } from "../../contexts/ActiveProfileContext";
 import type {
   AiConversation,
   AiMessage,
-  AiMode,
   ToolTraceEntry,
   WebSource,
 } from "../../types";
@@ -40,12 +36,21 @@ interface RunEvent<T> {
 /** 消息分页大小（加载最近 50 / 「加载更早」） */
 const MSG_PAGE = 50;
 
+/** DEV-0060.1 PART A：WebView 本地时钟 → Runtime Time Truth（YYYY-MM-DD / YYYY-MM-DD HH:mm） */
+function localIsoDate(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function localIsoDatetime(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${localIsoDate(d)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /**
- * Higher AI Agent Panel V2（DEV-0052 §16-19 / §128 / §186）。
- * - Header：Higher AI + 只读/助手双模式 + 历史 + 新对话 + 收起
+ * Higher AI Agent Panel V2（DEV-0061R §33：Unified Higher AI——单一模式）。
+ * - Header：Higher AI + 历史 + 新对话 + 收起（无用户模式开关；修改经审查后写入）
  * - 对话主流程：DB 持久化消息（list_ai_messages）+ ai_start_run 后台流式
  *   （ai://delta 逐字、ai://source 来源、ai://changeset 提案、run-status 终态）
- * - waiting_approval → §186 卡片：切换助手模式并继续（同一条原始用户消息重跑）
  * - 引用 [[S1]] → 可点击上标；消息底部来源区（open_external_url 系统浏览器打开）
  * - 保留：scope chips / 快捷 Action（AiProposalReview）/ 上下文·trace·diag 折叠
  */
@@ -77,8 +82,7 @@ export default function AiPanel() {
   /** §61：上下文 chips 默认收起 */
   const [ctxOpen, setCtxOpen] = useState(false);
 
-  // ---- DEV-0052 对话主流程状态 ----
-  const [mode, setMode] = useState<AiMode>("readonly");
+  // ---- DEV-0052 对话主流程状态（DEV-0061R §33：Unified Higher AI——无只读/助手双模式） ----
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [convoMsgs, setConvoMsgs] = useState<AiMessage[]>([]);
   const [msgOffset, setMsgOffset] = useState(0);
@@ -95,7 +99,6 @@ export default function AiPanel() {
     count: number;
   } | null>(null);
   const [showChangeSet, setShowChangeSet] = useState(false);
-  const [needsAssistant, setNeedsAssistant] = useState<string | null>(null);
   /** DEV-0053 §9：requires_change_set=true 但未生成 ChangeSet 的守卫文案（null = 无） */
   const [guardMsg, setGuardMsg] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -105,11 +108,9 @@ export default function AiPanel() {
   const runIdRef = useRef<string | null>(null);
   const profileIdRef = useRef<number | null>(null);
   const conversationIdRef = useRef<number | null>(null);
-  const modeRef = useRef<AiMode>("readonly");
   const lastUserTextRef = useRef<string>("");
 
   profileIdRef.current = activeProfile?.id ?? null;
-  modeRef.current = mode;
 
   const busy = runBusy || actionBusy;
 
@@ -118,7 +119,7 @@ export default function AiPanel() {
   useEffect(() => {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [convoMsgs.length, messages.length, busy, streamText, streamError, needsAssistant, pendingChangeSet]);
+  }, [convoMsgs.length, messages.length, busy, streamText, streamError, pendingChangeSet]);
 
   // 模型与设置同源（settings KV；不维护第二套 model state）
   useEffect(() => {
@@ -179,7 +180,7 @@ export default function AiPanel() {
     setHasMoreMsgs(msgs.length >= MSG_PAGE);
   }, []);
 
-  /** 档案切换 / 首次挂载：读模式偏好 + 恢复最近会话（无则新建） */
+  /** 档案切换 / 首次挂载：恢复最近会话（无则新建；DEV-0061R §33 统一 mode=assistant legacy 值） */
   useEffect(() => {
     if (!activeProfile) return;
     let cancelled = false;
@@ -191,7 +192,6 @@ export default function AiPanel() {
     setStreamSources([]);
     setStreamError(null);
     setPendingChangeSet(null);
-    setNeedsAssistant(null);
     setGuardMsg(null);
     setStopped(false);
     setRunBusy(false);
@@ -199,14 +199,10 @@ export default function AiPanel() {
     setRunId(null);
     (async () => {
       try {
-        const m = await getAiMode(pid);
-        if (cancelled) return;
-        const nextMode: AiMode = m === "assistant" ? "assistant" : "readonly";
-        setMode(nextMode);
         const convs = await listAiConversations(pid, 20);
         if (cancelled) return;
         const latest = convs.length > 0 ? convs[0] : null;
-        const conv = latest ?? (await createAiConversation(pid, nextMode));
+        const conv = latest ?? (await createAiConversation(pid, "assistant"));
         if (cancelled) return;
         conversationIdRef.current = conv.id;
         setConversationId(conv.id);
@@ -248,7 +244,8 @@ export default function AiPanel() {
     reg<{ status: string; needs_assistant?: string; message?: string }>("ai://run-status", (d) => {
       setRunBusy(false);
       if (d.status === "waiting_approval") {
-        setNeedsAssistant(d.needs_assistant ?? "");
+        // DEV-0061R §34：needs_assistant 语义已废弃（Unified AI）；waiting_approval =
+        // ChangeSet 已生成，刷新会话展示提案卡
         void refreshMessages();
       } else if (d.status === "cancelled") {
         setStopped(true);
@@ -263,11 +260,15 @@ export default function AiPanel() {
       } else if (
         // DEV-0058 §76/§170-173：这些状态后端已落库（澄清提问/冲突/校验失败/超载），
         // 前端必须刷新会话让用户立即看到（此前不刷新=用户看不到要回答的问题）。
+        // DEV-0060：planner_cancelled（PART I 取消规划回执）/ handoff_chat（§12 TYPE C
+        // 新意图回复）同样已落库，需刷新展示。
         d.status === "clarification" ||
         d.status === "goal_conflict" ||
         d.status === "plan_validation_failed" ||
         d.status === "plan_too_large" ||
-        d.status === "needs_assistant"
+        d.status === "needs_assistant" ||
+        d.status === "planner_cancelled" ||
+        d.status === "handoff_chat"
       ) {
         void refreshMessages();
       }
@@ -321,7 +322,7 @@ export default function AiPanel() {
     let convId = conversationIdRef.current;
     if (convId == null) {
       try {
-        const conv = await createAiConversation(pid, modeRef.current);
+        const conv = await createAiConversation(pid, "assistant");
         convId = conv.id;
         conversationIdRef.current = conv.id;
         setConversationId(conv.id);
@@ -331,7 +332,6 @@ export default function AiPanel() {
       }
     }
     lastUserTextRef.current = text;
-    setNeedsAssistant(null);
     setStopped(false);
     setPendingChangeSet(null);
     setShowChangeSet(false);
@@ -370,6 +370,11 @@ export default function AiPanel() {
         pageLabel: ctx?.pageLabel ?? "Higher",
         knowledgePath,
         sessionTitle,
+        // DEV-0060.1 PART A：Runtime Time Truth——每次发送都带 WebView 本地时钟，
+        // 后端 AiRuntimeEnvelope 校验后注入 Prompt（TODAY/星期/时区由 Higher 提供）
+        localDate: localIsoDate(),
+        localDatetime: localIsoDatetime(),
+        timezoneOffsetMinutes: -new Date().getTimezoneOffset(),
       });
       runIdRef.current = rid;
       setRunId(rid);
@@ -414,38 +419,8 @@ export default function AiPanel() {
     }
   }
 
-  /** §13：模式切换同时写档案偏好 + 当前会话临时模式 */
-  async function switchMode(next: AiMode) {
-    const pid = profileIdRef.current;
-    if (pid == null || next === modeRef.current) return;
-    const prev = modeRef.current;
-    setMode(next);
-    try {
-      await setAiMode(pid, next);
-      const cid = conversationIdRef.current;
-      if (cid != null) await setAiConversationMode(pid, cid, next);
-    } catch {
-      /* 失败回滚显示 */
-      setMode(prev);
-    }
-  }
-
-  /** §186：切换到助手模式，用同一条原始用户消息重新运行 */
-  async function resumeWithAssistant() {
-    const pid = profileIdRef.current;
-    if (pid == null) return;
-    const text = lastUserTextRef.current;
-    setNeedsAssistant(null);
-    setMode("assistant");
-    try {
-      await setAiMode(pid, "assistant");
-      const cid = conversationIdRef.current;
-      if (cid != null) await setAiConversationMode(pid, cid, "assistant");
-    } catch {
-      /* 继续尝试重跑 */
-    }
-    if (text) await send(text);
-  }
+  // DEV-0061R §33：模式切换 / 旧续跑入口已删除（Unified Higher AI，
+  // 无双模式；写入恒走 ChangeSet Approval Boundary）
 
   // ---------------- 历史 / 新对话 ----------------
 
@@ -466,12 +441,10 @@ export default function AiPanel() {
     setHistoryOpen(false);
     conversationIdRef.current = c.id;
     setConversationId(c.id);
-    setMode(c.mode === "assistant" ? "assistant" : "readonly");
     setStreamText("");
     setStreamSources([]);
     setStreamError(null);
     setPendingChangeSet(null);
-    setNeedsAssistant(null);
     setGuardMsg(null);
     setStopped(false);
     try {
@@ -500,7 +473,7 @@ export default function AiPanel() {
     const pid = profileIdRef.current;
     if (pid == null) return;
     try {
-      const conv = await createAiConversation(pid, modeRef.current);
+      const conv = await createAiConversation(pid, "assistant");
       conversationIdRef.current = conv.id;
       setConversationId(conv.id);
       setConvoMsgs([]);
@@ -511,7 +484,6 @@ export default function AiPanel() {
       setStreamError(null);
       setPendingChangeSet(null);
       setShowChangeSet(false);
-      setNeedsAssistant(null);
       setGuardMsg(null);
       setStopped(false);
       setHistoryOpen(false);
@@ -566,30 +538,10 @@ export default function AiPanel() {
 
   return (
     <aside className="aipanel">
-      {/* Header：标题 + 双模式 + 动作 */}
+      {/* Header：Higher AI（DEV-0061R §33：单一模式；修改经审查后写入） */}
       <div className="aipanel__header">
         <div className="aipanel__header-main">
           <span className="aipanel__title">Higher AI</span>
-          <div className="aipanel__modes">
-            <button
-              className={
-                "aipanel__mode-btn" + (mode === "readonly" ? " aipanel__mode-btn--active" : "")
-              }
-              title="只读：AI 只能查询与分析，不能修改数据"
-              onClick={() => void switchMode("readonly")}
-            >
-              只读模式
-            </button>
-            <button
-              className={
-                "aipanel__mode-btn" + (mode === "assistant" ? " aipanel__mode-btn--active" : "")
-              }
-              title="助手：AI 可以提出修改，经你确认后写入"
-              onClick={() => void switchMode("assistant")}
-            >
-              助手模式
-            </button>
-          </div>
         </div>
         <div className="aipanel__header-actions">
           <button
@@ -673,7 +625,6 @@ export default function AiPanel() {
                 <button className="aipanel__history-pick" onClick={() => void pickConversation(c)}>
                   <span className="aipanel__history-title">{c.title}</span>
                   <span className="aipanel__history-meta">
-                    {c.mode === "assistant" ? "助手" : "只读"} ·{" "}
                     {(c.updated_at || "").slice(0, 16).replace("T", " ")}
                   </span>
                 </button>
@@ -745,20 +696,18 @@ export default function AiPanel() {
           </div>
         )}
 
-        {/* DB 对话消息（含后端落库的错误 / 需要助手模式 / 已停止标记） */}
+        {/* DB 对话消息（含后端落库的错误 / 历史遗留标记 / 已停止） */}
         {convoMsgs.map((m) => {
           const isError = m.role === "assistant" && m.content.startsWith("[出错]");
-          const isNeeds = m.role === "assistant" && m.content.startsWith("[需要助手模式]");
           const isSystem = m.role === "system";
           const cls =
             "aipanel__msg aipanel__msg--" +
             (m.role === "user" ? "user" : isSystem ? "system" : "assistant") +
-            (isError ? " aipanel__msg--error" : "") +
-            (isNeeds ? " aipanel__msg--needs" : "");
+            (isError ? " aipanel__msg--error" : "");
           return (
             <div key={m.id} className={cls}>
               <div className="aipanel__msg-content">
-                {m.role === "user" || isError || isNeeds || isSystem ? (
+                {m.role === "user" || isError || isSystem ? (
                   m.content
                 ) : (
                   <Markdown text={m.content} />
@@ -876,24 +825,7 @@ export default function AiPanel() {
           <div className="aipanel__msg aipanel__msg--assistant">正在分析…</div>
         )}
 
-        {/* §186：需要助手模式卡片 */}
-        {needsAssistant != null && !runBusy && (
-          <div className="aipanel__needs">
-            <div className="aipanel__needs-title">🔒 该操作需要助手模式</div>
-            {needsAssistant && <p className="aipanel__needs-intent">{needsAssistant}</p>}
-            <div className="btn-row">
-              <button
-                className="btn btn--small btn--primary"
-                onClick={() => void resumeWithAssistant()}
-              >
-                切换到助手模式并继续
-              </button>
-              <button className="btn btn--small" onClick={() => setNeedsAssistant(null)}>
-                保持只读
-              </button>
-            </div>
-          </div>
-        )}
+        {/* DEV-0061R §33：旧双模式入口卡片已删除（Unified Higher AI） */}
 
         {/* DEV-0053 §9：AI Guard（no_changeset）——正式数据没有发生变化 */}
         {guardMsg != null && !runBusy && (

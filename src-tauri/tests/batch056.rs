@@ -93,14 +93,17 @@ fn test_get_current_goal_final_semantics() {
     )
     .unwrap();
     let out = app_lib::ai::tools::execute_read_tool(&conn, p, "get_current_goal", &json!({})).unwrap();
-    assert!(out.contains("\"canonical\":\"final_goal\""), "必须返回 final：{out}");
-    assert!(out.contains("未设置最终目标"), "final 占位名");
+    // DEV-0060 §8.2：Canonical GoalTarget Adapter——无 GoalTarget 时 primary=null、
+    // final 占位只进 legacy_candidates（canonical=false）；active legacy 行不参与
+    assert!(out.contains("\"canonical\":\"goal_target\""), "canonical 永远是 goal_target：{out}");
+    assert!(out.contains("\"primary\":null"), "无 GoalTarget → primary=null：{out}");
+    assert!(out.contains("legacy_candidates"), "final 行只进 legacy_candidates");
     assert!(!out.contains("活跃旧目标"), "禁止乱取 active goal（§39）");
-    // 无 final 档案 → null + 提示
+    // 无 final 档案 → formal_targets 空 + 提示
     let p2 = mk_profile(&conn);
     conn.execute("DELETE FROM goals WHERE profile_id=?1", rusqlite::params![p2]).unwrap();
     let out2 = app_lib::ai::tools::execute_read_tool(&conn, p2, "get_current_goal", &json!({})).unwrap();
-    assert!(out2.contains("\"goal\":null") && out2.contains("尚未设置最终目标"));
+    assert!(out2.contains("\"formal_targets\":[]") && out2.contains("没有已确认的正式 GoalTarget"), "{out2}");
 }
 
 #[test]

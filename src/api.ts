@@ -490,7 +490,7 @@ export const listArchivedTasksByProfile = (profileId: number) =>
 export const listTasksByRangeByProfile = (profileId: number, start: string, end: string) =>
   invoke<Task[]>("list_tasks_by_range_by_profile", { profileId, start, end });
 
-// ---- Recurring Rules（v013 Profile First；DEV-0026） ----
+// ---- Recurring Rules（v013 Profile First；DEV-0026；v023 DEV-0060.1 语义三字段） ----
 export const createRecurringRule = (args: {
   profileId: number;
   goalId?: number | null;
@@ -501,6 +501,10 @@ export const createRecurringRule = (args: {
   timeOfDay: string | null;
   startDate: string;
   endDate: string | null;
+  /** v023：预计分钟（1..1440）/ 任务类型 / 优先级（可选，未传=默认） */
+  estimatedMinutes?: number | null;
+  taskKind?: "structured" | "accumulation" | null;
+  priority?: "core" | "normal" | null;
 }) =>
   invoke<RecurringRule>("create_recurring_rule", {
     profileId: args.profileId,
@@ -512,6 +516,9 @@ export const createRecurringRule = (args: {
     timeOfDay: args.timeOfDay,
     startDate: args.startDate,
     endDate: args.endDate,
+    estimatedMinutes: args.estimatedMinutes ?? null,
+    taskKind: args.taskKind ?? null,
+    priority: args.priority ?? null,
   });
 
 export const listRecurringRulesByProfile = (profileId: number) =>
@@ -526,6 +533,10 @@ export const updateRecurringRule = (args: {
   startDate: string;
   endDate: string | null;
   learningItemId: number | null;
+  /** v023：语义三字段（可选覆盖，null=不改） */
+  estimatedMinutes?: number | null;
+  taskKind?: "structured" | "accumulation" | null;
+  priority?: "core" | "normal" | null;
 }) =>
   invoke<void>("update_recurring_rule", {
     id: args.id,
@@ -536,6 +547,9 @@ export const updateRecurringRule = (args: {
     startDate: args.startDate,
     endDate: args.endDate,
     learningItemId: args.learningItemId,
+    estimatedMinutes: args.estimatedMinutes ?? null,
+    taskKind: args.taskKind ?? null,
+    priority: args.priority ?? null,
   });
 
 export const setRecurringRuleEnabled = (id: number, enabled: boolean) =>
@@ -546,6 +560,18 @@ export const deleteRecurringRule = (id: number) =>
 
 export const materializeRecurringTasks = (profileId: number, date: string) =>
   invoke<number>("materialize_recurring_tasks", { profileId, date });
+
+/** DEV-0061R §53-54：范围内有界物化（Calendar 可见月；幂等/有界） */
+export const materializeRecurringTasksRange = (
+  profileId: number,
+  startDate: string,
+  endDate: string,
+) =>
+  invoke<number>("materialize_recurring_tasks_range", { profileId, startDate, endDate });
+
+/** DEV-0061R §52：Rolling Horizon（今天起 30 天）物化 */
+export const materializeRecurringRolling = (profileId: number, today: string) =>
+  invoke<number>("materialize_recurring_rolling", { profileId, today });
 
 /** 今天的任务（Profile Scope） */
 export const listTodayTasksByProfile = (profileId: number) =>
@@ -1656,6 +1682,10 @@ export const aiStartRun = (args: {
   knowledgePath?: string | null;
   sessionTitle?: string | null;
   date?: string | null;
+  /** DEV-0060.1 PART A：Runtime Time Truth——WebView 本地日期/时间/时区（AI 不再自行猜测"今天"） */
+  localDate?: string | null;
+  localDatetime?: string | null;
+  timezoneOffsetMinutes?: number | null;
 }) =>
   invoke<string>("ai_start_run", {
     profileId: args.profileId,
@@ -1665,6 +1695,9 @@ export const aiStartRun = (args: {
     knowledgePath: args.knowledgePath ?? null,
     sessionTitle: args.sessionTitle ?? null,
     date: args.date ?? null,
+    localDate: args.localDate ?? null,
+    localDatetime: args.localDatetime ?? null,
+    timezoneOffsetMinutes: args.timezoneOffsetMinutes ?? null,
   });
 
 /** 取消正在运行的 run（返回是否成功发出取消） */

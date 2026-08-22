@@ -8,7 +8,8 @@ import {
   listPlanningPhases,
   listRecurringRulesByProfile,
   listTasksByRangeByProfile,
-  materializeRecurringTasks,
+  materializeRecurringTasksRange,
+  materializeRecurringRolling,
   setRecurringRuleEnabled,
   syncNotifications,
   updateRecurringRule,
@@ -75,8 +76,9 @@ export default function PlanningCalendar({
     setLoading(true);
     setError("");
     try {
-      // 今日重复任务 materialize（幂等；跨月未来日期在到达当天时生成）
-      await materializeRecurringTasks(profileId, today).catch(() => {});
+      // DEV-0061R §53：打开某月 → 对**可见月范围**有界 materialize（幂等；
+      // 可超 rolling 30 天，按当前显示月份生成，不无限延伸）
+      await materializeRecurringTasksRange(profileId, monthStart, monthEnd).catch(() => {});
       const [ts, ss, rs, bp] = await Promise.all([
         listTasksByRangeByProfile(profileId, monthStart, monthEnd),
         // §75：月度学习时长用一次 range 查询前端聚合（避免每格 get_day_detail）
@@ -113,10 +115,10 @@ export default function PlanningCalendar({
     refresh();
   }, [refresh]);
 
-  // 运行中每 30s materialize（有新任务时刷新）
+  // 运行中每 30s rolling horizon materialize（有新任务时刷新）
   useEffect(() => {
     const t = window.setInterval(() => {
-      void materializeRecurringTasks(profileId, today)
+      void materializeRecurringRolling(profileId, today)
         .then((n) => (n > 0 ? refresh() : undefined))
         .catch(() => {});
     }, 30000);

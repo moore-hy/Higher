@@ -220,84 +220,19 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
     [scope, pageContext, activeProfile]
   );
 
-/** 自由对话发送（assistant_chat 结构化协议 + 只读工具 + 上下文重建）。
-   *  DEV-0058 §51-53：三入口统一 Planner——页面按钮（Planning「AI 生成计划」/ Today「AI安排」）
-   *  经本函数发送时，若命中规划写意图则交由 AiPanel 主输入的 send()（aiStartRun 新管线：
-   *  intent→conflict→readiness→clarification→draft→validation→retry→compiler→ChangeSet→审批，
-   *  含 conversation 管理 + 流式事件），不再落入旧 aiAnalyze 通道；其余消息维持旧协议。 */
+/** 自然语言发送（DEV-0061R §35/§36：ONE Interactive Natural-Language Entry）。
+   *  所有页面（Today/Planning/Knowledge/Session/FinalGoal 等）的自由对话
+   *  一律转 AiPanel 主输入 send()（aiStartRun：Turn Interpreter → … → ChangeSet 审批，
+   *  含 conversation 管理 + 流式事件）。aiAnalyze assistant_chat 不再承担通用聊天。 */
   const sendChat = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
       setOpenState(true);
-      if (PLAN_WRITE_INTENT_RE.test(text.trim())) {
-        // 写意图 → 新管线（AiPanel 监听 pendingSendRef 后自动 send）
-        pendingSendRef.current = text.trim();
-        window.dispatchEvent(new CustomEvent("higher:aipanel-pending-send"));
-        return;
-      }
-      if (busy) return;
-      setBusy(true);
-      setApiKeyMissing(false);
-      const userMsg: AiChatMessage = { role: "user", content: text.trim() };
-      setMessages((m) => [...m, userMsg]);
-      try {
-        const req = resolveChatRequest(text.trim());
-        const history = trimHistory(messages);
-        const r = await aiAnalyze({ ...req, history });
-        // 结构化协议（DEV-0023 §47）：message / knowledge_proposal 两类
-        let parsed: AssistantChatResponse;
-        try {
-          parsed = JSON.parse(r.content) as AssistantChatResponse;
-        } catch {
-          // 极端情况：后端已修复过一次仍非标准结构 → 按纯文本展示
-          parsed = { type: "message", message: r.content };
-        }
-        const proposal =
-          parsed.type === "knowledge_proposal" && parsed.proposal
-            ? parsed.proposal
-            : null;
-        if (proposal && Array.isArray(proposal.operations)) {
-          setProposal(proposal);
-        }
-        setMessages((m) => [
-          ...m,
-          {
-            role: "assistant",
-            content: parsed.message || "（AI 没有返回内容，请重试）",
-            toolTrace: r.tool_trace,
-            contextProvided: r.context_provided,
-            tokens: r.total_tokens,
-            chatType: parsed.type,
-            structured: r,
-            diag: {
-              action: r.action,
-              toolCount: r.tool_trace?.length ?? 0,
-              toolRounds: r.tool_rounds ?? 0,
-              promptTokens: r.prompt_tokens ?? null,
-              completionTokens: r.completion_tokens ?? null,
-              totalTokens: r.total_tokens ?? null,
-              durationMs: r.duration_ms ?? null,
-            },
-          },
-        ]);
-      } catch (e) {
-        const msg = String(e);
-        if (msg.includes("尚未配置 API Key")) setApiKeyMissing(true);
-        setMessages((m) => [
-          ...m,
-          {
-            role: "assistant",
-            content: humanizeError(msg),
-            error: true,
-            // 技术详情：仅安全处理后的原始消息（后端错误不含 API Key / Authorization）
-            errorDetail: sanitizeDetail(msg),
-          },
-        ]);
-      } finally {
-        setBusy(false);
-      }
+      // 统一入口：pendingSend + 事件 → AiPanel 以主输入同路径 send()
+      pendingSendRef.current = text.trim();
+      window.dispatchEvent(new CustomEvent("higher:aipanel-pending-send"));
     },
-    [busy, messages, resolveChatRequest]
+    []
   );
 
   /** 快捷 Action（页面按钮触发；结果同样显示在 Panel） */

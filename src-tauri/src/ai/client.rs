@@ -115,12 +115,28 @@ impl AiClient {
     }
 
     /// chat/completions。json_mode=true 时要求 json_object 输出。
+    /// DEV-0061R §11：temperature 参数化——控制层（Interpreter/Repair/Selection）固定 0.0，
+    /// 普通聊天用 conversational 值（0.3）；调用方必须显式选择。
     pub async fn chat(
         &self,
         messages: Vec<ChatMessage>,
         json_mode: bool,
         tools: Option<serde_json::Value>,
         max_tokens: Option<i64>,
+    ) -> Result<Completion, String> {
+        self.chat_with_temperature(messages, json_mode, tools, max_tokens, 0.3).await
+    }
+
+    /// 显式温度版本。`temp` 由调用方决定：
+    /// - Turn Interpreter / Contract Repair / Candidate Selection → 0.0（§11 deterministic）
+    /// - FastChat / 普通回答 → 0.3（§11.1 conversational）
+    pub async fn chat_with_temperature(
+        &self,
+        messages: Vec<ChatMessage>,
+        json_mode: bool,
+        tools: Option<serde_json::Value>,
+        max_tokens: Option<i64>,
+        temp: f64,
     ) -> Result<Completion, String> {
         if self.settings.api_key.trim().is_empty() {
             return Err("尚未配置 API Key。请先在「设置 → AI」中填写。".to_string());
@@ -133,7 +149,7 @@ impl AiClient {
             model: self.settings.model.clone(),
             messages,
             max_tokens,
-            temperature: Some(0.3),
+            temperature: Some(temp),
             response_format: json_mode.then(|| ResponseFormat { kind: "json_object".into() }),
             tools,
             stream: false,

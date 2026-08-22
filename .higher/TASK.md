@@ -1,3639 +1,3287 @@
-# DEV-0058 · Goal → Plan → Apply Runtime Closure
 
-# Higher 最终目标 → AI规划 → 用户审核 → 正式写入 → 全系统同步 产品主闭环收口
+# DEV-0061R · Higher AI Runtime Stabilization
+## Decision-Complete Recovery Task
+
+> 本任务取代此前所有 DEV-0061 草稿。
+>
+> 当前工作区已经执行过旧 DEV-0061 的一部分后被人工停止。
+> 不得假设工作区仍然等于上一个 Git checkpoint。
+>
+> 本任务的职责：
+>
+> 1. 接管当前半施工状态；
+> 2. 保留符合本任务最终决策的已有修改；
+> 3. 重写不符合本任务决策的部分；
+> 4. 完成 Higher AI Runtime 稳定化；
+> 5. 完成 Task / Recurring 与 AI 执行链必需的基础闭环；
+> 6. 自动回归后停止，等待人工 Runtime 验收。
 
 ---
 
-# 0 · 本轮定位
+# 0. 最高角色规则
+
+## 0.1 决策权
+
+本任务中的：
+
+- 产品语义；
+- AI Runtime 架构；
+- Conversation 语义；
+- Planner 边界；
+- SemanticAction 协议；
+- Grounding 语义；
+- ChangeSet 权限；
+- Recurring 语义；
+- 数据保护规则；
+- 用户交互规则；
+- 测试标准；
+
+全部已经由 ChatGPT 决定。
+
+Trae 不得重新设计。
+
+---
+
+## 0.2 Trae 的职责
+
+Trae 只负责：
+
+```text
+读取当前真实源码
+→ 核对本任务
+→ 实现
+→ 测试
+→ 记录实际结果
+````
+
+Trae 可以自行决定的只有：
+
+```text
+私有 helper 函数名
+局部 Rust / TS idiomatic 写法
+不改变行为的内部函数拆分
+不改变模块责任的局部去重
+局部变量命名
+测试辅助函数组织
+```
+
+---
+
+## 0.3 Trae 不可以自行决定
+
+遇到以下选择，禁止自行判断：
+
+```text
+产品行为
+Canonical Truth
+AI 权限
+是否直接写数据库
+Conversation State 语义
+Planner 是否应该接管请求
+Recurring Series / Occurrence 语义
+Task / Session 语义
+SemanticAction Schema
+ChangeSet 边界
+是否新增 Migration
+是否增加第二套 Agent
+是否增加 Claude Code
+是否增加新 AI Runtime
+```
+
+如果本 TASK 没覆盖到、但需要做上述决定：
+
+```text
+STOP
+DECISION_REQUIRED
+```
+
+写入：
+
+```text
+.higher/TRAE_RUN.md
+```
+
+并停止施工。
+
+---
+
+# 1. 项目与本轮状态
 
 项目根目录：
 
-`C:\Users\37653\Desktop\Higher`
+```text
+C:\Users\37653\Desktop\Higher
+```
 
-本轮不是：
-
-* 重做 AI Planner
-* 重做 Goal 系统
-* 新增另一套规划系统
-* 增加新的 Goal 层级
-* 增加大批新功能
-* 重做数据库
-* 重做 Knowledge
-* 重做 Today
-* 重做整个 AI Panel
-
-本轮目标：
-
-# 把 Higher 已经存在的核心规划能力真正收口成一个可靠的用户产品闭环
-
-最终必须能够真实完成：
+当前已知正式 Schema：
 
 ```text
-明确最终目标
-↓
-AI 理解当前目标和个人情况
-↓
-必要时询问少量关键问题
-↓
-生成结构化学习计划
-↓
-用户看到清楚的计划预览
-↓
-用户调整 / 审核
-↓
-用户明确批准
-↓
-ChangeSet Apply
-↓
-Goal Tree 更新
-↓
-Knowledge Tree 更新
-↓
-Task 写入
-↓
-Today 出现当天任务
-↓
-Calendar 出现未来任务
-↓
-AI 能读取刚刚批准的正式计划
+v023 recurring_task_semantics
 ```
 
-这条链成立以后：
-
-Higher 才算真正具备：
-
-# “从长期目标到今天学习”的能力
-
----
-
-# 1 · 当前已知重要事实
-
-开始前必须重新读取源码确认。
-
-当前历史 Context：
-
-`HGCTX-0004`
-
-当前 Schema：
-
-`v020`
-
-当前项目已有：
-
-* Final Goal
-* `goal_brief_json`
-* Goal Tree
-* Knowledge Tree
-* Task
-* StudySession
-* Dedicated Planning Pipeline
-* Goal Conflict
-* Goal Readiness
-* Clarification
-* PlanDraft
-* Validator
-* Compiler
-* ChangeSet
-* User Approval
-* Apply
-* Rolling Horizon
-* Search
-* Memory
-* Personalization
-
-但是：
-
-不能因为 ENV 写着存在就直接认为运行正确。
-
-必须重新读取真实源码。
-
----
-
-# ============================================================
-
-# PART A · 永久工作流程
-
-# ============================================================
-
-# 2 · 第一读取顺序
-
-严格：
-
-1. `.higher/WORKING_RULES.md`
-2. `.higher/ENVIRONMENT.md`
-3. `.higher/TASK.md`
-4. 本 TASK 涉及模块 Source Evidence
-5. 真实源码
-
----
-
-# 3 · TASK
-
-`.higher/TASK.md`
-
-只读。
-
-Trae：
-
-禁止修改。
-
----
-
-# 4 · TRAE_RUN
-
-重新初始化：
-
-`.higher/TRAE_RUN.md`
-
-标题：
-
-`DEV-0058 · Goal → Plan → Apply Runtime Closure`
-
----
-
-# 5 · 时间
-
-必须：
-
-SYSTEM。
-
-Windows：
-
-```powershell
-Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"
-```
-
----
-
-# 6 · ENV
-
-开始：
-
-Active Development：
-
-`DEV-0058 / IN PROGRESS`
-
-每 Phase：
-
-实时更新：
-
-In-Progress Delta。
-
----
-
-# ============================================================
-
-# PART B · 首先纠正 Runtime Truth
-
-# ============================================================
-
-# 7 · 用户已经提供新的真实 Runtime Evidence
-
-DEV-0057.2 之后：
-
-用户手动再次运行：
-
-`npm run tauri dev`
-
-真实终端显示：
+本轮默认：
 
 ```text
-Finished `dev` profile
-Running `target\debug\app.exe`
-[migration] database already up to date (latest v020)
+Migration = 0
+Schema = v023
 ```
 
-Higher 窗口：
-
-真实打开成功。
+禁止真实 DeepSeek 自动测试。
 
 ---
 
-# 8 · 用户同时确认
+# 2. 当前工作区已经部分施工
 
-Windows：
+用户已经让旧版 DEV-0061 执行过一部分后人工停止。
 
-Smart App Control / 智能应用控制：
-
-# ON / 打开
-
----
-
-# 9 · 因此旧 ENV 当前状态
-
-如果仍写：
+截图可见 Trae 已开始处理：
 
 ```text
-ENV_BLOCKED_SAC
-Higher 未启动
-v020 Runtime NOT VERIFIED
-DB v019 待迁
+src-tauri/src/ai/action.rs
+src-tauri/src/ai/grounding.rs
 ```
 
-已经过时。
-
----
-
-# 10 · 更新 ENV
-
-必须记录为：
-
-### Higher Runtime
-
-VERIFIED BY USER RUNTIME
-
-### Current Runtime Schema
-
-v020 VERIFIED
-
-### `npm run tauri dev`
-
-SUCCESS
-
-### Smart App Control
-
-ON
-
-### Historical SAC Blocking
-
-OBSERVED
-
-### Current SAC Blocking
-
-NO
-
----
-
-# 11 · 重要语义
-
-SAC：
-
-曾经阻塞过 Cargo-generated exe。
-
-但是：
-
-# 当前不再阻塞 Higher 启动
-
-不能继续把整个项目状态写成：
-
-BLOCKED。
-
----
-
-# 12 · WORKING_RULES SAC 规则修正
-
-如果当前写成：
-
-“禁止关闭 Smart App Control”
-
-改成更准确的永久规则：
-
-### Trae / 自动化
-
-永远无权：
-
-* 关闭 Smart App Control
-* 关闭 Defender
-* 改安全策略
-* 改注册表绕过
-* 自动建立系统白名单
-
-### 用户本人
-
-系统安全设置最终由用户决定。
-
-### 当前项目策略
-
-用户已明确保持：
-
-Smart App Control = ON。
-
----
-
-# 13 · SAC 状态恢复规则
-
-如果出现 4551：
-
-标记：
-
-`ENV_BLOCKED_SAC`
-
-但如果后续真实编译成功：
-
-必须解除：
-
-Current Blocked。
-
-历史事件继续保留。
-
----
-
-# ============================================================
-
-# PART C · 本轮源码 Truth Audit
-
-# ============================================================
-
-# 14 · 修改业务代码之前
-
-必须读取当前真实实现。
-
-至少：
-
-### Planning UI
-
-真实：
-
-* Planning page
-* Final Goal Card
-* Goal editor
-* Goal Tree
-* Next Step
-* Calendar
-
-### AI UI
-
-真实：
-
-* AiPanel
-* conversation
-* ChangeSet review
-* proposal UI
-* apply UI
-* context scope
-
-### Backend
-
-真实：
-
-* ai/planner
-* ai/context
-* ai/run
-* changeset
-* goal repository
-* task repository
-* learning_item repository
-* daily report
-* calendar aggregation
-* search index
-
-### Types / API
-
-相关：
-
-* GoalBrief
-* PlanDraft
-* Plan operation
-* ChangeSet
-* Apply Result
-
----
-
-# 15 · 必须确认
-
-以下全部是真实现还是只是 ENV 描述：
+且已经开始把 Recent Entity Context 改向：
 
 ```text
-Planning Intent
-Goal Conflict
-Goal Readiness
-Clarification
-PlanDraft
-Validator
-Retry Once
-Compiler
-ChangeSet
-Selective Apply
-Atomic Apply
-Rolling 14 Days
-Deep Link
+HashMap<(profile_id, conversation_id), RecentEntityContext>
 ```
 
----
-
-# 16 · 找不到
-
-写：
-
-`NOT FOUND`
-
-禁止重新造一套之前“应该存在”的实现。
-
----
-
-# 17 · 如果现有实现可以修
-
-在本 TASK 规定的产品语义内：
-
-直接修。
-
----
-
-# 18 · 如果必须新建：
-
-* 第二套 Planner
-* 第二套 Goal model
-* 第二套 ChangeSet
-* 新 Schema
-* 新大型状态系统
-
-立即：
-
-`NEED DECISION`
-
-不得擅自做。
-
----
-
-# ============================================================
-
-# PART D · 本轮产品成功定义
-
-# ============================================================
-
-# 19 · 用户打开 Planning
-
-首先必须明白：
-
-# 我的最终目标是什么？
-
-然后：
-
-# Higher 接下来怎么帮我走向它？
-
----
-
-# 20 · Planning 不能让用户理解：
-
-goal_brief
-
-PlanDraft
-
-ChangeSet
-
-operation_ref
-
-这些内部概念。
-
-这些：
-
-全部隐藏。
-
----
-
-# ============================================================
-
-# PART E · Final Goal 产品收口
-
-# ============================================================
-
-# 21 · Final Goal 的唯一产品语义
-
-Final Goal：
-
-# 这个学习档案最终想实现什么？
-
----
-
-# 22 · Profile 名称
-
-只是：
-
-档案名称。
-
----
-
-# 23 · 禁止
-
-Profile：
-
-`华中科技大学考研`
-
-→
-
-自动推断：
-
-目标学校 = 华中科技大学。
-
----
-
-# 24 · 禁止
-
-旧 AI 对话里：
-
-出现“清华大学”
-
-→
-
-自动修改当前 Final Goal。
-
----
-
-# 25 · Canonical
-
-当前已经确定：
-
-`goal_brief_json`
-
-是 Final Goal 正式结构。
-
-必须维持。
-
----
-
-# ============================================================
-
-# PART F · Final Goal UI 成熟化
-
-# ============================================================
-
-# 26 · 当前截图存在开发术语
-
-例如：
-
-```text
-最终想达到什么（outcome）
-```
-
-这种：
-
-不允许继续出现在普通用户 UI。
-
----
-
-# 27 · UI 使用自然中文
-
-Final Goal 编辑界面：
-
-### 目标名称
-
-例如：
-
-`2027研究生考试`
-
-### 最终想达到什么
-
-自然语言输入。
-
-### 截止时间
-
-日期。
-
-### 成功标准
-
-可添加多条。
-
----
-
-# 28 · 次级字段
-
-需要时展开：
-
-### 学习范围
-
-### 现实约束
-
----
-
-# 29 · `unresolved`
-
-不是普通用户填写字段。
-
-系统显示为：
-
-### 还需要确认
-
----
-
-# 30 · 禁止 UI 出现
-
-```text
-outcome
-success_criteria
-scope
-constraints
-unresolved
-goal_brief_json
-```
-
-这些字段名。
-
----
-
-# ============================================================
-
-# PART G · Goal Incomplete State
-
-# ============================================================
-
-# 31 · Goal 不完整
-
-Planning Card：
-
-### 最终目标
-
-**目标待完善**
-
-简洁说明：
-
-`明确目标后，Higher 才能为你生成可靠的长期和每日计划。`
-
----
-
-# 32 · 只显示真正缺的内容
-
-例如：
-
-```text
-还需要确认：
-• 最终想达到什么
-• 截止时间
-• 至少一条成功标准
-```
-
----
-
-# 33 · 按钮
-
-主：
-
-`完善目标`
-
-次：
-
-`AI 帮我梳理`
-
----
-
-# 34 · 不显示
-
-内部 field key。
-
----
-
-# ============================================================
-
-# PART H · Goal Ready State
-
-# ============================================================
-
-# 35 · Goal 完整
-
-显示：
-
-### 最终目标
-
-**<title>**
-
-`<一句 outcome>`
-
-`截止 <date>`
-
----
-
-# 36 · 默认不把
-
-scope
-
-constraints
-
-success criteria 全部铺满页面。
-
----
-
-# 37 · 详细信息
-
-点击：
-
-`查看详情`
-
----
-
-# 38 · Actions
-
-主：
-
-# `AI 生成计划`
-
-次：
-
-`编辑目标`
-
----
-
-# ============================================================
-
-# PART I · Goal Readiness
-
-# ============================================================
-
-# 39 · 最低 Planning Ready
-
-沿用当前产品规则。
-
-至少：
-
-* outcome
-* deadline 或明确“无截止时间”
-* success criteria ≥ 1
-
----
-
-# 40 · 特定目标需要更多信息
-
-只有真正影响规划：
-
-才询问。
-
----
-
-# 41 · Blocking Questions
-
-最多：
-
-5 个。
-
----
-
-# 42 · 禁止
-
-为了显得 AI 很专业：
-
-一次问十几二十个问题。
-
----
-
-# ============================================================
-
-# PART J · Goal 保存真实性
-
-# ============================================================
-
-# 43 · 用户手动编辑 Goal
-
-保存成功以后：
-
-Planning UI：
-
-立即刷新。
-
----
-
-# 44 · Goal Tree root
-
-必须：
-
-使用相同 title。
-
----
-
-# 45 · 用户修改 Final Goal
-
-不得：
-
-修改 Profile name。
-
----
-
-# 46 · 用户 Goal save
-
-属于：
-
-用户直接操作。
-
-不需要 AI ChangeSet。
-
----
-
-# ============================================================
-
-# PART K · AI 帮我梳理目标
-
-# ============================================================
-
-# 47 · 点击
-
-`AI 帮我梳理`
-
-打开：
-
-Higher AI。
-
----
-
-# 48 · AI 自动获得
-
-当前：
-
-* Final Goal
-* 已填写部分
-* Personalization
-* 当前 Profile
-* relevant user context
-
----
-
-# 49 · 但
-
-Personalization
-
-Memory
-
-旧 Conversation
-
-都不能覆盖：
-
-Canonical Goal。
-
----
-
-# 50 · AI Goal 梳理
-
-如果用户最终确认修改：
-
-必须：
-
-Proposal
-
-→ Review
-
-→ User Apply。
-
----
-
-# ============================================================
-
-# PART L · Planner 入口统一
-
-# ============================================================
-
-# 51 · 以下入口
-
-必须进入同一个 Planner：
-
-### Planning
-
-`AI 生成计划`
-
-### Today
-
-`AI安排`
-
-### Assistant Chat
-
-用户说：
-
-`帮我安排未来14天并加入Higher`
-
----
-
-# 52 · 禁止
-
-三个入口：
-
-三个不同 Planning implementation。
-
----
-
-# 53 · 最终都进入：
-
-同一个：
-
-Planning Intent
-
-→ Planner Pipeline。
-
----
-
-# ============================================================
-
-# PART M · Readonly Mode
-
-# ============================================================
-
-# 54 · 用户在只读模式说：
-
-`帮我安排未来14天并加入Higher`
-
----
-
-# 55 · 正确结果
-
-不能：
-
-默默失败。
-
-不能：
-
-只输出作文。
-
----
-
-# 56 · 应提示
-
-`这个请求需要助手模式才能生成可应用的计划。`
-
-按钮：
-
-`切换到助手模式并继续`
-
----
-
-# 57 · 用户确认
-
-继续：
-
-# 当前同一个请求
-
-禁止让用户重新输入。
-
----
-
-# ============================================================
-
-# PART N · Write Intent
-
-# ============================================================
-
-# 58 · 明确写请求
-
-例如：
-
-```text
-帮我安排未来14天并加入Higher
-帮我排一下接下来两周
-把接下来学习安排进去
-帮我做个两周计划并放到Higher
-按我的目标给我排个日程
-```
-
-必须识别：
-
-Planning Write Intent。
-
----
-
-# 59 · Advice-only
-
-例如：
-
-```text
-你觉得408应该怎么复习？
-考研数学应该怎么学？
-给我一些计划建议
-```
-
-仍然：
-
-普通回答。
-
-不得创建 ChangeSet。
-
----
-
-# ============================================================
-
-# PART O · Planner Context Truth
-
-# ============================================================
-
-# 60 · Planner读取
-
-必须以：
-
-Canonical Final Goal
-
-为目标事实源。
-
----
-
-# 61 · 辅助读取
-
-允许：
-
-* Personalization
-* Knowledge Tree
-* current tasks
-* recent trusted sessions
-* recent evaluations
-* relevant Memory
-* system current date
-* user availability
-* rest preference
-
----
-
-# 62 · 但辅助信息
-
-永远不能覆盖 Final Goal。
-
----
-
-# 63 · 当前用户已有异常 Active Session
-
-Planner：
-
-不得把：
-
-Active Session 已经运行 30+ 小时
-
-当作：
-
-用户真实完成了30小时学习。
-
----
-
-# 64 · Active Session
-
-只能作为：
-
-`当前有学习进行中`
-
-上下文。
-
-不能作为：
-
-Completed Learning Evidence。
-
----
-
-# ============================================================
-
-# PART P · 旧聊天污染隔离
-
-# ============================================================
-
-# 65 · 当前 AI Panel 里存在旧规划对话
-
-这些历史消息：
-
-不能成为：
-
-当前 Final Goal 真相。
-
----
-
-# 66 · 新对话
-
-只加载：
-
-当前 conversation messages
-
-*
-
-正式 Context Builder。
-
----
-
-# 67 · 禁止
-
-把另一 Conversation 中：
-
-模型自己曾经说过的话
-
-当成用户事实。
-
----
-
-# 68 · Memory
-
-只能使用：
-
-正式 Memory records。
-
-并遵守当前 Memory priority。
-
----
-
-# ============================================================
-
-# PART Q · 事实冲突
-
-# ============================================================
-
-# 69 · 如果 AI发现
-
-Canonical Final Goal
-
-与：
-
-明确的用户 Personalization / 用户确认记录
-
-真正冲突：
-
----
-
-# 70 · 不自动选择
-
-显示：
-
-### 发现目标信息不一致
-
-例如：
-
-`你的正式目标与个人档案中的一条历史信息不同。`
-
----
-
-# 71 · 让用户选择
-
-`保持当前正式目标`
-
-`更新正式目标`
-
----
-
-# 72 · AI不能说
-
-“我帮你选择了更合理的那个。”
-
----
-
-# ============================================================
-
-# PART R · 最新外部事实
-
-# ============================================================
-
-# 73 · 对考试 / 政策 / 官方日期等会变化的信息
-
-如果 Planning 真实依赖：
-
-必须：
-
-### Web Search已开启
-
-→ 搜官方来源。
-
-### Web Search关闭
-
-→ 向用户确认。
-
----
-
-# 74 · 禁止
-
-根据模型记忆断言：
-
-考试日期
-
-考试科目
-
-学校最新政策
-
-招生变化。
-
----
-
-# 75 · 外部事实
-
-必须与：
-
-用户目标事实
-
-区分。
-
----
-
-# ============================================================
-
-# PART S · Clarification UX
-
-# ============================================================
-
-# 76 · Goal / Planning 条件不足
-
-AI不要：
-
-先输出2000字计划。
-
----
-
-# 77 · 正确：
-
-### 在生成正式计划前，还需要确认 3 项
-
-1. 每天现实可投入多少时间？
-2. 当前基础？
-3. 某个真正影响计划的问题？
-
----
-
-# 78 · 用户回答
-
-继续原 Planner Run。
-
----
-
-# 79 · 禁止
-
-重新开始一轮完全独立规划。
-
----
-
-# ============================================================
-
-# PART T · PlanDraft Product Quality
-
-# ============================================================
-
-# 80 · 不重做 PlanDraft Schema
-
-先复用现有。
-
----
-
-# 81 · Validator必须保证
-
-### 时间
-
-Daily workload：
-
-不明显超过用户可投入时间。
-
----
-
-# 82 · Rest Days
-
-休息日：
-
-不得安排计划 Task。
-
----
-
-# 83 · Goal
-
-Day 属于 Month。
-
-Month 属于 Year。
-
----
-
-# 84 · Knowledge
-
-不能：
-
-一天一个 Knowledge Node。
-
----
-
-# 85 · Accumulation
-
-例如：
-
-英语单词
-
-使用：
-
-稳定的：
-
-英语 / 词汇积累。
-
----
-
-# 86 · Structured Study
-
-例如：
-
-数据结构线性表
-
-可以：
-
-408 / 数据结构 / 线性表。
-
----
-
-# 87 · Task
-
-必须：
-
-可执行。
-
----
-
-# 88 · 禁止大量：
-
-```text
-学习数学
-学习408
-复习英语
-继续努力
-```
-
-这种低信息任务。
-
----
-
-# 89 · 更好的任务
-
-类似：
-
-```text
-数据结构：线性表基本概念 + 10道基础题
-高数：极限计算基础题 15题
-英语：词汇复习 30min
-```
-
-具体内容：
-
-由目标和用户资料决定。
-
----
-
-# 90 · 禁止
-
-为了让 Plan Review 看起来丰富：
-
-创建没有必要的：
-
-Goal
-
-Knowledge
-
-Task。
-
----
-
-# ============================================================
-
-# PART U · Rolling Horizon
-
-# ============================================================
-
-# 91 · 默认
-
-未来：
-
-14天详细 Task。
-
----
-
-# 92 · 长期
-
-可以创建必要：
-
-Year / Month Goal。
-
----
-
-# 93 · 不默认
-
-一次生成：
-
-未来一年每一天任务。
-
----
-
-# 94 · 用户明确要求长期详细
-
-分批。
-
----
-
-# ============================================================
-
-# PART V · Existing Data Reuse
-
-# ============================================================
-
-# 95 · Existing Goal / Knowledge
-
-能够语义匹配：
-
-优先复用。
-
----
-
-# 96 · 但是
-
-不能因为已有：
-
-`111`
-
-`222`
-
-`333`
-
-这种测试节点：
-
-就强行把新计划挂进去。
-
----
-
-# 97 · Knowledge reuse
-
-必须：
-
-真实语义匹配。
-
----
-
-# 98 · 否则
-
-Proposal：
-
-新建正确 Knowledge Node。
-
----
-
-# ============================================================
-
-# PART W · Duplicate Protection
-
-# ============================================================
-
-# 99 · Planner必须检查
-
-现有：
-
-Goal
-
-Task
-
-Knowledge。
-
----
-
-# 100 · 避免
-
-同一天生成：
-
-两个完全相同 Task。
-
----
-
-# 101 · Retry Planner
-
-也不能：
-
-重复添加第一轮已经存在的正式任务。
-
----
-
-# ============================================================
-
-# PART X · AI Chat 输出减法
-
-# ============================================================
-
-# 102 · 这是重点产品要求
-
-Planner成功后：
-
-AI Panel 不应该继续显示：
-
-14天全部计划全文。
-
----
-
-# 103 · 默认只显示
-
-例如：
-
-### 已准备好未来14天计划
-
-计划范围：
-
-`8月xx日 — 8月xx日`
-
-本次将：
-
-`新增 2 个阶段目标`
-
-`新增 6 个知识节点`
-
-`安排 18 个学习任务`
-
-`包含 2 个休息日`
-
-只显示：
-
-非零项目。
-
----
-
-# 104 · 如果某类是0
-
-例如：
-
-Knowledge +0
-
-默认：
-
-不展示。
-
----
-
-# 105 · Buttons
-
-`查看计划`
-
-`继续调整`
-
-`取消`
-
----
-
-# 106 · 未批准
-
-不能：
-
-`已经加入 Higher`
-
----
-
-# ============================================================
-
-# PART Y · Plan Review Surface
-
-# ============================================================
-
-# 107 · 当前 AI Panel 较窄
-
-完整计划：
-
-不能塞在窄聊天栏里。
-
----
-
-# 108 · 点击
-
-`查看计划`
-
-必须打开：
-
-足够宽的 Review Surface。
-
----
-
-# 109 · 优先
-
-复用当前 ChangeSet Review。
-
----
-
-# 110 · 如果当前 Review已经足够
-
-不要新建第二个 Review系统。
-
----
-
-# 111 · 如果当前 Review只适合技术 Diff
-
-可以：
-
-在现有 Review 上增加：
-
-Planner Presentation Layer。
-
----
-
-# 112 · 禁止
-
-重做 ChangeSet backend。
-
----
-
-# ============================================================
-
-# PART Z · Review 第一层
-
-# ============================================================
-
-# 113 · Review Header
-
-### 未来14天学习计划
-
-`<date> → <date>`
-
----
-
-# 114 · Summary
-
-只显示真正存在：
-
-* 阶段目标
-* 知识节点
-* 学习任务
-* 休息日
-
----
-
-# 115 · 同时显示
-
-### 规划依据
-
-简短：
-
-* Final Goal
-* 每日可投入
-* 当前基础
-* 必要假设
-
----
-
-# 116 · 未确认 assumption
-
-必须：
-
-显式显示。
-
----
-
-# ============================================================
-
-# PART AA · Review 信息顺序
-
-# ============================================================
-
-# 117 · 第一组
-
-# 阶段规划
-
-Year / Month
-
----
-
-# 118 · 第二组
-
-# 知识结构
-
-只显示：
-
-新增 / 修改部分。
-
----
-
-# 119 · 第三组
-
-# 每日安排
-
-按日期。
-
----
-
-# 120 · 每一天
-
-例如：
-
-### 8月18日
-
-`数据结构：线性表基础 · 60m`
-
-`英语词汇积累 · 30m`
-
----
-
-# 121 · Rest Day
-
-显示：
-
-`休息日`
-
-而不是：
-
-0个任务空白页。
-
----
-
-# ============================================================
-
-# PART AB · 技术 Diff
-
-# ============================================================
-
-# 122 · 普通用户默认
-
-不显示：
-
-operation_ref
-
-entity_id
-
-JSON
-
-ref
-
-SQL
-
----
-
-# 123 · 用户需要细节
-
-可以展开：
-
-`查看具体修改`
-
----
-
-# 124 · Add
-
-绿色。
-
-Delete：
-
-红色。
-
-Update：
-
-清楚显示前后变化。
-
----
-
-# ============================================================
-
-# PART AC · Selective Apply
-
-# ============================================================
-
-# 125 · 如果当前 ChangeSet 已支持 Selective Apply
-
-继续支持。
-
----
-
-# 126 · 用户可以
-
-取消：
-
-某一个任务
-
-某一个知识节点
-
-某一组建议。
-
----
-
-# 127 · 但是
-
-如果取消父实体导致子引用无效：
-
-UI必须提示依赖关系。
-
----
-
-# 128 · 禁止
-
-生成 invalid ChangeSet。
-
----
-
-# ============================================================
-
-# PART AD · Continue Adjust
-
-# ============================================================
-
-# 129 · 用户点击
-
-`继续调整`
-
----
-
-# 130 · 当前 Proposal
-
-作为 Planning Context。
-
----
-
-# 131 · 用户例如：
-
-`每天最多3小时`
-
----
-
-# 132 · AI
-
-重新生成：
-
-新的 PlanDraft / Proposal。
-
----
-
-# 133 · 旧 Proposal
-
-不得 Apply。
-
-应标：
-
-Superseded / Replaced。
-
----
-
-# ============================================================
-
-# PART AE · Apply Truth
-
-# ============================================================
-
-# 134 · 用户未点击 Apply
-
-正式数据库：
-
-不能改变。
-
----
-
-# 135 · 用户点击 Apply
-
-Backend：
-
-事务 Apply。
-
----
-
-# 136 · 成功以后
-
-成功消息：
-
-必须由：
-
-Backend Apply Result
-
-驱动。
-
----
-
-# 137 · 禁止让模型自己说
-
-`已成功创建24个任务`
-
-但后台实际上失败。
-
----
-
-# 138 · 正确成功消息
-
-例如：
-
-### ✓ 计划已应用
-
-`新增 2 个目标`
-
-`新增 5 个知识节点`
-
-`新增 18 个任务`
-
----
-
-# 139 · 只显示真实 Apply Count。
-
----
-
-# ============================================================
-
-# PART AF · Apply Failure
-
-# ============================================================
-
-# 140 · Apply失败
-
-必须：
-
-### 应用失败
-
----
-
-# 141 · 显示
-
-用户可以理解的原因。
-
----
-
-# 142 · 事务
-
-必须：
-
-0 partial write。
-
----
-
-# 143 · AI不能
-
-失败以后仍说：
-
-“已经创建完成”。
-
----
-
-# ============================================================
-
-# PART AG · Apply 后全系统同步
-
-# ============================================================
-
-# 144 · Apply成功
-
-不需要：
-
-重启 Higher。
-
----
-
-# 145 · Planning
-
-立即：
-
-Goal Tree 更新。
-
----
-
-# 146 · Calendar
-
-立即：
-
-未来14天显示任务。
-
----
-
-# 147 · Today
-
-如果计划包含今天：
-
-Today：
-
-立即出现任务。
-
----
-
-# 148 · Knowledge
-
-新增 / 关联 Knowledge：
-
-立即出现。
-
----
-
-# 149 · Data
-
-未来计划本身：
-
-不能增加：
-
-实际学习时间。
-
----
-
-# 150 · 只有真实 Session
-
-才影响：
-
-Actual Learning。
-
----
-
-# ============================================================
-
-# PART AH · Same Source Rule
-
-# ============================================================
-
-# 151 · Apply后
-
-Today
-
-Calendar
-
-Planning
-
-Knowledge
-
-不是：
-
-复制四份 Plan。
-
----
-
-# 152 · 必须读取
-
-同一正式：
-
-Goal / Task / Knowledge 数据。
-
----
-
-# ============================================================
-
-# PART AI · AI Apply 后再理解
-
-# ============================================================
-
-# 153 · Apply之后
-
-用户新问：
-
-`我接下来该学什么？`
-
----
-
-# 154 · AI
-
-必须：
-
-基于正式已 Apply 数据。
-
----
-
-# 155 · 不能
-
-只引用：
-
-刚才聊天里模型自己写的 Proposal。
-
----
-
-# 156 · 即使：
-
-新开 Conversation
-
-也应该通过：
-
-Current Context / Read Tools
-
-知道正式计划。
-
----
-
-# ============================================================
-
-# PART AJ · Cancel
-
-# ============================================================
-
-# 157 · 用户取消 Proposal
-
-正式数据：
-
-0变化。
-
----
-
-# 158 · Proposal状态
-
-Cancelled / Rejected。
-
----
-
-# 159 · AI
-
-不能下次误认为：
-
-已应用。
-
----
-
-# ============================================================
-
-# PART AK · User Experience
-
-# ============================================================
-
-# 160 · 整个 Planning Flow
-
-用户应该感觉：
-
-```text
-我告诉 Higher 想去哪
-↓
-Higher 理解我的现实情况
-↓
-给我一份可以看懂的方案
-↓
-我修改
-↓
-我批准
-↓
-计划真正进入每天学习
-```
-
----
-
-# 161 · 用户不应该感觉
-
-```text
-我在操作数据库
-我在配置Agent
-我在看JSON
-我在维护Goal Node
-我在填写内部字段
-```
-
----
-
-# ============================================================
-
-# PART AL · Product Tone
-
-# ============================================================
-
-# 162 · AI规划
-
-语言：
-
-短
-
-明确
-
-克制。
-
----
-
-# 163 · 不需要
-
-长篇激励。
-
----
-
-# 164 · 不需要
-
-“非常棒”
-
-“你一定可以”
-
-等无证据表扬。
-
----
-
-# 165 · 重点
-
-告诉用户：
-
-* 缺什么
-* 为什么需要
-* 准备了什么
-* 会修改什么
-* 是否已经真正应用
-
----
-
-# ============================================================
-
-# PART AM · One Primary Action
-
-# ============================================================
-
-# 166 · Goal Incomplete
-
-主 Action：
-
-`完善目标`
-
----
-
-# 167 · Goal Ready
-
-主 Action：
-
-`AI 生成计划`
-
----
-
-# 168 · Plan Ready
-
-主 Action：
-
-`应用计划`
-
----
-
-# 169 · Apply Success
-
-主 Action：
-
-`查看规划`
-
----
-
-# ============================================================
-
-# PART AN · Planner Error UX
-
-# ============================================================
-
-# 170 · 模型 JSON错误
-
-用户不能看到：
-
-JSON parse stack trace。
-
----
-
-# 171 · Validator第一次失败
-
-内部：
-
-自动重试一次。
-
----
-
-# 172 · 第二次失败
-
-显示：
-
-`这份计划暂时无法生成，因为……`
-
-提供：
-
-`重新生成`
-
-或：
-
-`修改条件`
-
----
-
-# 173 · 不循环。
-
----
-
-# ============================================================
-
-# PART AO · AI Stop
-
-# ============================================================
-
-# 174 · Planning Generation期间
-
-必须：
-
-可停止。
-
----
-
-# 175 · Stop
-
-取消：
-
-当前模型 Run。
-
----
-
-# 176 · 已经存在 Proposal
-
-不得被错误删除。
-
----
+因此本轮第一步不是 Reset。
 
-# ============================================================
-
-# PART AP · Search / Web Sources
-
-# ============================================================
-
-# 177 · 如果 Planner使用 Web
-
-Review：
-
-提供：
-
-规划依据中的 Source Summary。
-
----
-
-# 178 · 不需要
-
-每个 Task重复URL。
-
----
-
-# 179 · 但重要变化事实
-
-可点击来源。
-
----
-
-# ============================================================
-
-# PART AQ · No Fake Data
-
-# ============================================================
-
-# 180 · 禁止AI生成
-
-用户没有提供、Web没有确认的：
-
-学校
-
-专业
-
-分数
-
-考试日期
-
-每日时间
-
-当前基础。
-
----
-
-# 181 · 不知道：
-
-Clarification。
-
----
-
-# 182 · 不重要：
-
-不要问。
-
----
-
-# ============================================================
-
-# PART AR · Automated Test Strategy
-
-# ============================================================
-
-# 183 · 这次必须尽可能自动覆盖
-
-真实 AI Provider 以外的全部逻辑。
-
----
-
-# 184 · 使用测试 DB / fixtures
-
-禁止：
-
-自动写用户真实 DB。
-
----
-
-# 185 · 测试场景 A
-
-Goal incomplete：
-
-Planner返回：
-
-Clarification。
-
-正式数据：
-
-0变化。
-
----
-
-# 186 · 场景 B
-
-Goal complete：
-
-Planner：
-
-PlanDraft
-
-→ Valid
-
-→ ChangeSet。
-
-未 Apply：
-
-0变化。
-
----
-
-# 187 · 场景 C
-
-Apply：
-
-Goal / Knowledge / Task：
-
-真实写入测试DB。
-
----
-
-# 188 · 场景 D
-
-Calendar：
-
-任务可查询。
-
----
-
-# 189 · 场景 E
-
-Today：
-
-今天任务可查询。
-
----
-
-# 190 · 场景 F
-
-Knowledge：
-
-节点可查询。
-
----
-
-# 191 · 场景 G
-
-Cancel：
-
-0正式写入。
-
----
-
-# 192 · 场景 H
-
-Selective Apply：
-
-依赖正确。
-
----
-
-# 193 · 场景 I
-
-Apply conflict：
-
-事务回滚。
-
----
-
-# 194 · 场景 J
-
-Readonly：
-
-不能产生正式 Proposal Apply。
-
-切换 Assistant：
-
-可继续原 request。
-
----
-
-# 195 · 场景 K
-
-Advice only：
-
-无 ChangeSet。
-
----
-
-# 196 · 场景 L
-
-旧 conversation：
-
-不能覆盖 Final Goal。
-
----
-
-# 197 · 场景 M
-
-Profile name：
-
-不能当 target school。
-
----
-
-# 198 · 场景 N
-
-Memory：
-
-不能覆盖 Canonical Goal。
-
----
-
-# 199 · 场景 O
-
-Rest Day：
-
-无 Task。
-
----
-
-# 200 · 场景 P
-
-Accumulation：
-
-复用稳定 Knowledge node。
-
----
-
-# 201 · 场景 Q
-
-Duplicate：
-
-不生成重复正式任务。
-
----
-
-# 202 · 场景 R
-
-Active Session：
-
-elapsed time
-
-不能当：
-
-completed learning evidence。
-
----
-
-# ============================================================
-
-# PART AS · Frontend Tests / Smoke
-
-# ============================================================
-
-# 203 · Planning Goal Card
-
-验证：
-
-没有：
-
-`(outcome)`
-
-等内部字段。
-
----
-
-# 204 · Goal incomplete
-
-按钮：
-
-完善目标
-
-AI帮我梳理。
-
----
-
-# 205 · Goal ready
-
-按钮：
-
-AI生成计划。
-
----
-
-# 206 · Plan Summary
-
-不输出长篇任务全文。
-
----
-
-# 207 · Review
-
-有：
-
-阶段规划
-
-知识结构
-
-每日安排。
-
----
-
-# 208 · Apply success
-
-有：
-
-真实统计
-
-查看规划。
-
----
-
-# ============================================================
-
-# PART AT · Runtime / SAC Gate
-
-# ============================================================
-
-# 209 · Windows SAC 当前
-
-用户真实确认：
-
-ON。
-
----
-
-# 210 · 不修改安全设置。
-
----
-
-# 211 · 编译验证
-
-优先：
-
-```text
-npx tsc --noEmit
-npm run build
-cargo check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml --no-run
-```
-
----
-
-# 212 · 如果 cargo runtime tests 可以正常运行
-
-允许：
-
-执行 Targeted Tests。
-
----
-
-# 213 · 如果出现 4551
-
-停止重复。
-
-标：
-
-`ENV_BLOCKED_SAC_TEST_RUNTIME`
-
----
-
-# 214 · 但
-
-如果：
-
-Higher app 本身仍可正常启动，
-
-不能把项目整体标成：
-
-Runtime Blocked。
-
----
-
-# ============================================================
-
-# PART AU · Tauri Runtime
-
-# ============================================================
-
-# 215 · 自动修改完成后
-
-尝试：
-
-`npm run tauri dev`
-
----
-
-# 216 · 成功
-
-记录：
-
-APP_RUNTIME_VERIFIED。
-
----
-
-# 217 · 如果因为 SAC偶发阻塞
-
-记录：
-
-环境事件。
-
-不自动改系统设置。
-
----
-
-# ============================================================
-
-# PART AV · Human Runtime 阶段
-
-# ============================================================
-
-# 218 · 自动施工全部完成后
-
-不要结束 DEV。
-
-状态：
-
-# WAITING_HUMAN_RUNTIME
-
----
-
-# 219 · Trae 给用户一张非常短的测试清单。
-
 ---
-
-# 220 · 用户只需要做以下真实操作
-
-## Test 1 · Final Goal
-
-进入：
 
-规划。
+# 3. RECOVERY PHASE · 先接管当前半施工状态
 
-把自己的真实 Final Goal 填完整。
+施工前必须执行一次当前状态审计。
 
 检查：
 
-* UI没有内部字段名
-* 保存后卡片正确
-* Goal Tree root 同步
-* Profile名称不被改
+```text
+git status
+git diff
+```
+
+重点检查：
+
+```text
+src-tauri/src/ai/action.rs
+src-tauri/src/ai/grounding.rs
+src-tauri/src/ai/runtime.rs
+src-tauri/src/ai/client.rs
+src-tauri/src/ai/context_builder.rs
+src-tauri/src/ai/planner.rs
+src-tauri/src/ai/prompts.rs
+src-tauri/src/ai/tools.rs
+src-tauri/src/lib.rs
+
+src/components/ai/AiPanel.tsx
+src/pages/Today.tsx
+src/pages/Planning.tsx
+相关 Task 菜单组件 / CSS
+
+src-tauri/src/repository/*
+src-tauri/tests/*
+.higher/*
+```
+
+把当前未提交修改分类为：
+
+```text
+RECOVER_KEEP
+符合本 TASK，保留并继续。
+
+RECOVER_FINISH
+方向正确，但尚未完成，继续完成。
+
+RECOVER_REWRITE
+与本 TASK 最终决策冲突，只重写对应修改。
+
+UNRELATED
+非 DEV-0061 修改，不得动。
+```
+
+在 `.higher/TRAE_RUN.md` 中记录。
 
 ---
 
-## Test 2 · 新 AI 对话
-
-新建 Conversation。
-
-不要继续旧规划对话。
-
----
-
-## Test 3 · Planner
-
-助手模式发送：
-
-`根据我的最终目标和个人情况，帮我安排未来14天学习计划，并加入 Higher。`
-
----
-
-## Test 4 · Clarification / Proposal
-
-观察：
-
-* 是否只问必要问题
-* 是否避免自己猜目标
-* 是否最终出现计划 Proposal
-* 是否没有直接写入
-
----
-
-## Test 5 · Review
-
-点击：
-
-`查看计划`
-
-截图：
-
-* Summary
-* 每日安排
-* Knowledge
-* Goal
-
----
-
-## Test 6 · Apply
-
-点击：
-
-`应用计划`
-
-然后分别截图：
-
-* AI成功状态
-* Planning Goal Tree
-* Calendar
-* Today
-* Knowledge
-
----
-
-# 221 · 用户一次返回
-
-以上截图 / 观察。
-
----
-
-# ============================================================
-
-# PART AW · Same TASK Human Repair Loop
-
-# ============================================================
-
-# 222 · 这是减少往返的重要规则
-
-用户完成 Human Runtime 以后：
-
-Trae：
-
-# 不需要新的 TASK 才能修本轮明确范围内的问题。
-
----
-
-# 223 · 如果失败属于本 TASK已经定义的产品规则
-
-例如：
-
-* Goal字段暴露英文
-* AI仍输出长作文
-* Proposal没出现
-* Apply后Calendar没刷新
-* Knowledge没同步
-* 成功文案造假
-* 旧conversation覆盖goal
-* Review太窄
-* Apply partial
-* Readonly不能继续切Assistant
-
-Trae：
-
-可以直接定位
-
-→ 修复
-
-→ Targeted Tests
-
-→ 请求用户只复测失败项。
-
----
-
-# 224 · 最多
-
-# 2 个 Human Repair Pass
-
----
-
-# 225 · 如果第二次仍失败
-
-STOP。
-
----
-
-# 226 · 如果发现问题需要
-
-* 新 Schema
-* 新产品语义
-* 改 Goal层级
-* 换 AI Architecture
-* 改 Knowledge结构
-* 新增未经本TASK批准的大能力
-
-立即：
-
-`NEED_DECISION`
-
-交给：
-
-User + ChatGPT。
-
----
-
-# ============================================================
-
-# PART AX · Real DB Safety
-
-# ============================================================
-
-# 227 · Trae 自动测试
-
-只能：
-
-Test DB。
-
----
-
-# 228 · Human Apply
-
-由用户：
-
-在真实开发库里主动点击。
-
----
-
-# 229 · 用户 Apply以后
-
-Trae可以：
-
-READ-ONLY SELECT
-
-检查真实DB。
-
----
-
-# 230 · 禁止Trae
-
-直接：
-
-INSERT
-
-UPDATE
-
-DELETE
-
-用户正式计划数据
-
-来“模拟成功”。
-
----
-
-# ============================================================
-
-# PART AY · Runtime Observability
-
-# ============================================================
-
-# 231 · 为了真正定位 Planner失败
-
-如果当前日志不足：
-
-允许增加：
-
-Development-only structured logs。
-
----
-
-# 232 · 可记录
-
-* planner intent detected
-* goal ready/incomplete
-* clarification
-* plan draft generated
-* validation passed/failed
-* compiler success
-* changeset id
-* apply result
-
----
-
-# 233 · 禁止日志
-
-完整：
-
-API Key
-
-Personalization全文
-
-私人笔记全文
-
-完整AI prompt。
-
----
-
-# 234 · Production
-
-不默认展示 Debug UI。
-
----
-
-# ============================================================
-
-# PART AZ · Plan Quality Check
-
-# ============================================================
-
-# 235 · Human Review 时
-
-不仅检查：
-
-“有没有生成”。
-
-还检查：
-
-# 计划是否有实际可执行性
-
----
-
-# 236 · 至少检查
-
-* 每天任务量是否现实
-* 任务是否具体
-* 是否有休息
-* Knowledge是否合理
-* 是否重复
-* 是否乱猜考试事实
-* 是否利用当前基础
-* 是否一股脑生成数百任务
-
----
-
-# 237 · AI Plan技术成功
-
-但质量明显不可用：
-
-不能标：
-
-PRODUCT VERIFIED。
-
----
-
-# ============================================================
-
-# PART BA · UI 数据克制
-
-# ============================================================
-
-# 238 · Planner UI
-
-不新增：
-
-* AI置信度 %
-* 计划质量分
-* 自律分
-* 预测成功率
-* 学习效率分
-* “击败多少用户”
-
----
-
-# 239 · 只展示
-
-用户需要决定：
-
-是否应用
-
-所需的信息。
-
----
-
-# ============================================================
-
-# PART BB · 性能
-
-# ============================================================
-
-# 240 · Planner
-
-不把：
-
-全 Knowledge全文
-
-全历史笔记
-
-全 Conversation
-
-一次全部送模型。
-
----
-
-# 241 · 使用当前 Context Builder预算。
-
----
-
-# 242 · Plan Review
-
-大量 Task：
-
-虚拟化不是本轮强制。
-
-因为默认只有14天。
-
----
-
-# 243 · 但不能
-
-因为 Review：
-
-加载所有 Session rich note。
-
----
-
-# ============================================================
-
-# PART BC · No New Schema
-
-# ============================================================
-
-# 244 · 本轮预期
-
-Schema：
-
-保持 v020。
-
----
-
-# 245 · 如果必须新增 Schema才能满足本 TASK
-
-说明当前架构事实与 ENV不一致。
-
----
-
-# 246 · 此时
-
-不要自行 v021。
-
-标：
-
-`NEED_DECISION_SCHEMA`
-
-STOP受影响部分。
-
----
-
-# ============================================================
-
-# PART BD · 不做的事
-
-# ============================================================
-
-本轮明确不做：
-
-* Mastery UI
-* Global Search UI
-* 新 Memory UI
-* 新 Vault 功能
-* 云同步
-* 手机端
-* Week Goal
-* 新 Knowledge架构
-* Focus Score
-* XP
-* 成就
-* 排行榜
-* AI多智能体
-* Vector DB
-* 全页面重新设计
-* Data Trust第二阶段完整验收
-* 删除旧测试数据
-* 自动结束用户当前32h Session
-
----
-
-# ============================================================
-
-# PART BE · ENVIRONMENT 更新
-
-# ============================================================
-
-# 247 · 本轮必须更新
-
-`.higher/ENVIRONMENT.md`
-
----
-
-# 248 · 第一处
-
-Runtime状态：
-
-从历史 blocked
-
-更新：
-
-v020 Runtime：
-
-VERIFIED。
-
----
-
-# 249 · SAC
-
-Current：
-
-ON
-
-App Runtime：
-
-SUCCESS
-
-Historical Blocking：
-
-YES。
-
----
-
-# 250 · Planner
-
-自动代码验证以后：
-
-标：
-
-SOURCE VERIFIED / AUTOMATED VERIFIED。
-
----
-
-# 251 · Human测试以后
-
-才允许：
-
-`REAL AI RUNTIME VERIFIED`
-
----
-
-# 252 · 没 Human Test
-
-必须保持：
-
-NOT VERIFIED。
-
----
-
-# ============================================================
-
-# PART BF · PRODUCT / RULES
-
-# ============================================================
-
-# 253 · PRODUCT
-
-只有本轮产生：
-
-真正新的永久产品决策
-
-才改。
-
----
-
-# 254 · WORKING_RULES
-
-修正 SAC 权限语义。
-
----
-
-# 255 · 不复制：
-
-Planner具体函数名
-
-进 PRODUCT。
-
----
-
-# ============================================================
-
-# PART BG · Context Version
-
-# ============================================================
-
-# 256 · Baseline
-
-真实读取。
-
----
-
-# 257 · 如果：
-
-HGCTX-0004
-
-最终：
-
-HGCTX-0005。
-
----
-
-# 258 · 如果 Baseline drift
-
-按真实顺序 +1。
-
-不得硬写0005。
-
----
-
-# ============================================================
-
-# PART BH · TRAE_RUN 最终报告
-
-# ============================================================
-
-必须回答：
-
-1. DEV ID
-
-2. System Start
-
-3. System End
-
-4. Baseline Context
-
-5. Final Context
-
-6. Baseline Schema
-
-7. Final Schema
-
-8. Git HEAD
-
-9. Dirty Worktree状态
-
-10. User Runtime Evidence是否吸收
-
-11. Smart App Control状态
-
-12. v020 Runtime状态
-
-13. Current ENV_BLOCKED是否解除
-
-14. Planning页面真实源码
-
-15. Final Goal Card真实源码
-
-16. Goal Editor真实源码
-
-17. Planner真实源码
-
-18. ChangeSet Review真实源码
-
-19. Apply真实源码
-
-20. Goal Ready真实规则
-
-21. Goal Conflict真实规则
-
-22. Planning Intent真实规则
-
-23. Clarification真实实现
-
-24. PlanDraft真实实现
-
-25. Validator真实实现
-
-26. Retry Once真实实现
-
-27. Compiler真实实现
-
-28. Rolling Horizon真实实现
-
-29. 是否重做Planner
-    正确：
-    NO
-
-30. 是否新增第二套ChangeSet
-    正确：
-    NO
-
-31. 是否新增Schema
-    预期：
-    NO
-
-32. Final Goal UI调整
-
-33. 是否还有内部field名
-
-34. Goal ready UI
-
-35. AI生成计划入口
-
-36. Readonly→Assistant continuation
-
-37. Old Conversation隔离
-
-38. Profile name不作为目标
-
-39. Memory不覆盖Final Goal
-
-40. Active Session不作为completed evidence
-
-41. Planner Chat是否仍输出长作文
-
-42. Proposal Summary
-
-43. Review Surface
-
-44. Daily schedule UX
-
-45. Knowledge review
-
-46. Goal review
-
-47. Selective Apply
-
-48. 未Apply数据库是否0变化
-
-49. Apply atomic
-
-50. Apply success是否Backend-driven
-
-51. Apply failure
-
-52. Apply后Planning同步
-
-53. Apply后Calendar同步
-
-54. Apply后Today同步
-
-55. Apply后Knowledge同步
-
-56. 新Conversation是否读取正式计划
-
-57. Advice-only测试
-
-58. Write-intent测试
-
-59. Rest Day测试
-
-60. Duplicate测试
-
-61. Accumulation测试
-
-62. Goal conflict测试
-
-63. Frontend smoke
-
-64. TypeScript
-
-65. npm build
-
-66. cargo check
-
-67. cargo test --no-run
-
-68. Targeted Rust test
-
-69. SAC事件
-
-70. tauri dev
-
-71. Human Runtime状态
-
-72. Human Pass 1结果
-
-73. Repair Pass 1
-
-74. Human Pass 2结果
-
-75. Repair Pass 2
-
-76. REAL AI RUNTIME VERIFIED?
-
-77. PRODUCT VERIFIED?
-
-78. NOT VERIFIED
-
-79. NOT DONE
-
-80. CONFLICT
-
-81. ENV_BLOCKED
-
-82. NEED_DECISION
-
-83. Changed Files
-
-84. New Files
-
-85. Deleted Files
-
-86. Dependency Changes
-
-87. Schema Changes
-
-88. Final Status
-
----
-
-# ============================================================
-
-# PART BI · Definition of Done
-
-# ============================================================
-
-## Runtime Truth
-
-* [ ] Higher真实可启动
-* [ ] v020 Runtime Verified
-* [ ] SAC ON记录正确
-* [ ] 旧 Blocked 状态解除
-
-## Final Goal
-
-* [ ] Profile ≠ Goal
-* [ ] Goal Brief canonical
-* [ ] 用户UI无内部字段
-* [ ] 手动可完善
-* [ ] AI可帮助梳理
-* [ ] Goal Tree root同步
-* [ ] 不猜学校/日期/分数
-
-## Planner
-
-* [ ] 三入口同一Planner
-* [ ] Advice / Write区分
-* [ ] Readonly可切Assistant继续
-* [ ] Goal不足先Clarify
-* [ ] Blocking Questions≤5
-* [ ] PlanDraft
-* [ ] Validation
-* [ ] Retry once
-* [ ] Rolling 14天
-* [ ] Rest day
-* [ ] 不过载
-* [ ] Knowledge不碎片化
-* [ ] Duplicate guard
-
-## Proposal
-
-* [ ] Chat简洁
-* [ ] 不输出全文
-* [ ] 非零summary
-* [ ] 查看计划
-* [ ] 继续调整
-* [ ] 取消
-* [ ] 未Apply不谎称已写入
-
-## Review
-
-* [ ] 足够宽
-* [ ] 阶段规划
-* [ ] 知识结构
-* [ ] 每日安排
-* [ ] 休息日
-* [ ] 依据/assumption
-* [ ] 无内部JSON
-* [ ] Selective Apply安全
-
-## Apply
-
-* [ ] User Approval
-* [ ] Atomic
-* [ ] Backend-driven success
-* [ ] Failure不撒谎
-* [ ] Planning立即同步
-* [ ] Calendar立即同步
-* [ ] Today立即同步
-* [ ] Knowledge立即同步
-* [ ] Data不因计划增加actual
-
-## AI Truth
-
-* [ ] Old chat不当事实
-* [ ] Memory不覆盖Goal
-* [ ] Personalization不覆盖Goal
-* [ ] Active Session不当完成证据
-* [ ] 变化事实需Web/用户确认
-* [ ] 新Conversation能读Apply后的正式计划
-
-## Product Quality
-
-* [ ] 任务具体
-* [ ] 工作量现实
-* [ ] 不乱猜
-* [ ] 不制造数百任务
-* [ ] 不造无意义Knowledge
-* [ ] 不加装饰数据
-
-## Gate
-
-* [ ] tsc
-* [ ] build
-* [ ] cargo check
-* [ ] cargo test --no-run
-* [ ] targeted test或诚实SAC blocked
-* [ ] Tauri runtime
-* [ ] Human Runtime
-* [ ] ENV最终同步
-* [ ] TRAE_RUN完整
-
----
-
-# ============================================================
-
-# PART BJ · Human Result Classification
-
-# ============================================================
-
-最终只允许：
-
-### VERIFIED
-
-真实AI+Review+Apply+跨页面同步全部通过。
-
-### VERIFIED_WITH_MINOR_ISSUES
-
-主闭环通过，仅存在不阻塞的视觉问题，并明确列出。
-
-### NOT VERIFIED
-
-没有完成真实AI测试。
-
-### FAILED
-
-闭环某关键步骤失败。
-
-### NEED_DECISION
-
-失败原因需要新的产品/架构决定。
+## 3.1 禁止操作
 
 禁止：
 
-`基本完成`
+```text
+git reset --hard
+git checkout .
+git restore .
+删除整个当前 working tree
+重新覆盖整个项目
+```
 
-`理论可用`
-
-`应该可以`
+不得为了方便把用户当前其他工作一起回滚。
 
 ---
 
-# ============================================================
+# 4. DEV-0061R 的最终产品定义
 
-# PART BK · 最终 STOP
+Higher AI 最终只存在：
 
-# ============================================================
+```text
+一个 Higher AI
+```
 
-本 DEV 目标只有一个：
+不再向用户暴露：
 
-# 证明并收口 Higher 的 Goal → AI Plan → User Review → Apply → Daily Learning 主闭环。
+```text
+只读模式
+助手模式
+```
 
-Human Runtime真实通过以后：
+AI 是否允许修改数据，不靠“模式”决定。
 
-更新：
+正式写入永远走：
 
-`ENVIRONMENT.md`
+```text
+AI 理解用户
+↓
+生成 Proposal
+↓
+生成 ChangeSet
+↓
+用户审查
+↓
+Apply
+↓
+Canonical Data 改变
+```
 
-`TRAE_RUN.md`
+永久：
 
-必要时：
+```text
+AI Direct Write = 0
+```
 
-`PRODUCT.md`
+---
 
-`WORKING_RULES.md`
+# 5. 最终 Higher AI Runtime
+
+本轮结束后的唯一 Interactive AI 主链必须是：
+
+```text
+Current User Message
+        ↓
+TurnContext
+        ↓
+Turn Interpreter
+        ↓
+┌──────────────────────────┐
+│ FastChat                 │
+│ HigherRead               │
+│ Action                   │
+│ Planning                 │
+│ PlannerContinuation      │
+│ Clarification            │
+└──────────────────────────┘
+        ↓
+Action:
+SemanticAction v2
+        ↓
+Grounding
+        ↓
+GroundedMutation
+        ↓
+Domain Validation
+        ↓
+Domain Compiler
+        ↓
+ChangeSet
+        ↓
+User Approval
+        ↓
+Apply
+```
+
+不得存在第二套 Interactive Natural-Language Runtime。
+
+---
+
+# 6. 核心稳定性原则
+
+最终必须满足：
+
+```text
+Same Canonical State
++
+Same Explicit Current User Intent
+=
+Same Business Decision
+```
+
+以下因素不得改变一个“已经明确表达”的当前命令：
+
+```text
+聊天是第1轮还是第30轮
+之前聊过数学还是英语
+旧 Assistant 曾经说过什么
+之前出现过 Error
+之前进入过 Planner
+当前打开 Today
+当前打开 Planning
+当前打开 Knowledge
+另一个 Conversation 创建过什么
+```
+
+---
+
+# 7. Conversation History 与 Control State 正式分离
+
+这是本轮固定架构。
+
+## 7.1 Conversation History
+
+用途：
+
+```text
+自然语言连续性
+普通聊天背景
+必要的语言理解
+```
+
+不得直接承担：
+
+```text
+最近实体 ID
+Planner 状态
+Pending Proposal
+当前正式目标
+当前正式计划
+AI 权限
+```
+
+---
+
+## 7.2 Control State
+
+必须是显式结构化状态。
+
+建立：
+
+```rust
+TurnContext
+```
+
+至少包含：
+
+```text
+profile_id
+conversation_id
+
+current_user_message
+
+local_date
+timezone
+
+page_context
+
+planner_state
+
+recent_entity_state
+
+pending_changeset_state
+```
+
+可以增加纯技术辅助字段。
+
+不得删除上述语义。
+
+---
+
+# 8. Current User Intent First
+
+优先级固定为：
+
+```text
+1. Current User Message
+2. Explicit reference / scope
+3. Pending ChangeSet
+4. Active Planner State
+5. Relevant Page Context
+6. Conversation background
+```
+
+当前用户明确命令不得被旧状态覆盖。
+
+例如：
+
+```text
+Planner 正在等待目标信息
+```
+
+用户突然说：
+
+```text
+先不规划了，给明天创建一个30分钟英语任务。
+```
+
+必须：
+
+```text
+停止 / 取消当前 Planner workflow
+→ CreateTask
+```
+
+不得继续旧 Planner。
+
+---
+
+# 9. Turn Interpreter 是唯一控制入口
+
+删除以下“多重独立判断”架构：
+
+```text
+关键词先判断
+→ Router 再判断
+→ Semantic Action 模型再判断
+```
+
+建立一个控制级：
+
+```rust
+TurnDecision
+```
+
+正式类型语义固定：
+
+```rust
+FastChat
+HigherRead
+Action
+Planning
+PlannerContinuation
+Clarification
+```
+
+Action 必须直接携带：
+
+```text
+SemanticAction
+```
+
+即：
+
+```text
+Turn Interpreter
+→ TurnDecision::Action(SemanticAction)
+```
+
+不要再：
+
+```text
+模型调用1判断是不是Action
+模型调用2重新猜具体Action
+```
+
+---
+
+# 10. Turn Interpreter 输入
+
+Turn Interpreter 只能收到：
+
+```text
+Current User Message
+TurnContext
+必要 Skill 摘要
+必要 Contract
+```
+
+Conversation background 如果提供：
+
+只能提供一个非常小的 recent context。
+
+要求：
+
+```text
+最多最近3条用户消息
+```
+
+不得向控制层发送几十轮完整 Assistant prose。
+
+---
+
+## 10.1 使用 recent user messages 的规则
+
+它们只有当当前请求明显是：
+
+```text
+刚才那个
+继续
+那个呢
+改成50
+那昨天呢
+```
+
+这类不完整 / 指代型请求时，才可以辅助。
+
+如果当前请求本身完整：
+
+```text
+创建一个明天30分钟的英语任务，名字叫ABC。
+```
+
+recent messages 不得改变业务决策。
+
+---
+
+# 11. 控制层必须 deterministic
+
+以下 Provider 调用：
+
+```text
+Turn Interpreter
+Semantic Contract Repair
+Candidate Selection
+```
+
+固定：
+
+```text
+temperature = 0
+```
+
+不得使用普通聊天 temperature。
+
+---
+
+## 11.1 普通聊天
+
+FastChat / 普通内容解释可以继续使用正常 conversational temperature。
+
+控制决策与语言生成必须分开。
+
+---
+
+# 12. Planner 正式边界
+
+Planner 只用于：
+
+```text
+长期规划
+阶段规划
+多日 / 多周学习蓝图
+GoalTarget → PlanningBlueprint
+计划复盘 / 重规划
+```
+
+---
+
+## 12.1 以下不是 Planner
+
+```text
+帮我安排明天30分钟数学
+明天下午安排一个英语任务
+给我明天放一个任务
+每天晚上8点背单词
+```
+
+全部是：
+
+```text
+Task / Recurring Action
+```
+
+---
+
+## 12.2 以下才是 Planner
+
+```text
+根据我的目标规划未来两周
+帮我制定完整考研计划
+根据最近学习情况重排未来一个月
+生成阶段学习蓝图
+```
+
+---
+
+# 13. 删除 Broad Planner Keyword Preemption
+
+当前类似：
+
+```text
+帮我安排
+安排任务
+安排学习
+生成任务
+```
+
+这种关键词不得再在 Turn Interpreter 前：
+
+```text
+强制进入 Planner
+```
+
+可以保留的 Local Planner Control 只有明确 workflow 指令：
+
+```text
+取消规划
+停止规划
+退出规划
+先不做这个计划
+```
+
+---
+
+# 14. Planner Workflow
+
+Planner State 必须结构化保存：
+
+```text
+original_request
+current_stage
+pending_questions
+collected_answers
+goal_source
+```
+
+不能依赖 Assistant prose 推断 Planner 到哪里了。
+
+---
+
+## 14.1 Clarification
+
+已经存在的事实：
+
+```text
+不得重新问
+```
+
+用户已经回答并进入 workflow state：
+
+```text
+不得下一轮继续重复问
+```
+
+---
+
+# 15. Goal Truth
+
+正式：
+
+```text
+GoalTarget
+```
+
+旧：
+
+```text
+Legacy Final Goal
+GoalBrief
+StudyProfile target fields
+```
+
+只允许作为：
+
+```text
+legacy candidate / historical reference
+```
+
+没有 Active GoalTarget：
+
+```text
+Formal Target = Unset
+```
+
+Planner 可以告诉用户：
+
+```text
+Higher 里存在旧目标候选信息……
+```
+
+但不能自动升级。
+
+---
+
+# 16. SemanticAction v2 · 正式协议
+
+本轮明确废弃：
+
+```rust
+#[serde(flatten)]
+```
+
+承担 Patch Contract 的方式。
+
+---
+
+## 16.1 UpdateTask
+
+正式：
+
+```rust
+UpdateTask {
+    target: EntityHint,
+    patch: TaskPatch
+}
+```
+
+---
+
+## 16.2 UpdateRecurringTask
+
+正式：
+
+```rust
+UpdateRecurringTask {
+    target: EntityHint,
+    patch: RecurringRulePatch,
+    reconcile_future: bool
+}
+```
+
+---
+
+## 16.3 BulkUpdateTasks
+
+正式：
+
+```rust
+BulkUpdateTasks {
+    filter: TaskFilter,
+    patch: TaskPatch
+}
+```
+
+---
+
+# 17. Canonical JSON Contract
+
+Task：
+
+```json
+{
+  "type": "update_task",
+  "target": {
+    "entity_type": "task",
+    "title_hint": "背单词",
+    "date": {
+      "kind": "today"
+    }
+  },
+  "patch": {
+    "estimated_minutes": 30
+  }
+}
+```
+
+Recurring：
+
+```json
+{
+  "type": "update_recurring_task",
+  "target": {
+    "entity_type": "recurring_rule",
+    "title_hint": "学408"
+  },
+  "patch": {
+    "time_of_day": "21:00",
+    "estimated_minutes": 45
+  },
+  "reconcile_future": true
+}
+```
+
+Bulk：
+
+```json
+{
+  "type": "bulk_update_tasks",
+  "filter": {
+    "date": {
+      "kind": "today"
+    },
+    "status": "not_completed"
+  },
+  "patch": {
+    "planned_date": {
+      "kind": "tomorrow"
+    }
+  }
+}
+```
+
+---
+
+# 18. Semantic Contract 唯一事实源
+
+创建：
+
+```text
+src-tauri/src/ai/semantic_contract.rs
+```
+
+职责固定：
+
+```text
+SEMANTIC_CONTRACT_VERSION
+Canonical JSON examples
+Prompt contract fragment
+Contract validation helpers
+```
+
+Rust enum / payload 类型继续放在：
+
+```text
+src-tauri/src/ai/action.rs
+```
+
+---
+
+## 18.1 Runtime
+
+`runtime.rs` 必须引用：
+
+```text
+semantic_contract.rs
+```
+
+不能自己维护第二份 JSON examples。
+
+---
+
+## 18.2 Tests
+
+Contract tests 必须直接 parse：
+
+```text
+semantic_contract.rs
+```
+
+中的 Canonical examples。
+
+---
+
+## 18.3 Skills
+
+Skill Markdown 不再复制另一份完整 JSON Schema。
+
+Skill 只负责：
+
+```text
+业务语义
+Intent examples
+Series / Occurrence
+Scope
+Entity meaning
+Allowed operations
+```
+
+---
+
+# 19. Semantic Repair Once
+
+模型输出结构不合法时：
+
+```text
+Parse
+↓
+失败
+↓
+Repair Once
+↓
+Parse
+```
+
+Repair 固定：
+
+```text
+temperature = 0
+tools = 0
+```
+
+Repair 输入只能有：
+
+```text
+Canonical Contract
+invalid JSON
+safe parser error
+```
+
+不能带：
+
+```text
+完整聊天
+完整用户资料
+知识库
+Goal
+源码
+```
+
+---
+
+## 19.1 Repair 最大次数
+
+```text
+1
+```
+
+第二次失败：
+
+```text
+ContractRepairFailed
+```
+
+Canonical Data：
+
+```text
+0 change
+```
+
+---
+
+# 20. NothingToChange 与 ContractFailure 必须完全分离
+
+如果 Task 当前：
+
+```text
+30 min
+```
+
+用户说：
+
+```text
+改成30分钟
+```
+
+正确：
+
+```text
+NothingToChange
+```
+
+---
+
+如果用户明显要求：
+
+```text
+改成30分钟
+```
+
+但 Parser 得到：
+
+```text
+patch = empty
+```
+
+正确：
+
+```text
+ContractFailure
+```
+
+不能：
+
+```text
+NothingToChange
+```
+
+---
+
+# 21. Recent Entity 正式语义
+
+Recent Entity 必须严格：
+
+```text
+(profile_id, conversation_id)
+```
+
+隔离。
+
+---
+
+## 21.1 当前已经部分施工
+
+如果当前 `grounding.rs` 已经被旧任务改成：
+
+```rust
+HashMap<(i64, i64), RecentEntityContext>
+```
+
+且语义完全符合本 TASK：
+
+```text
+RECOVER_KEEP
+```
+
+不得为了“重新按新任务做”又改回去。
+
+---
+
+# 22. Recent API
+
+以下函数必须显式接受：
+
+```text
+profile_id
+conversation_id
+```
+
+包括语义等价的：
+
+```text
+record_grounded
+record_apply
+resolve_recent
+clear_recent
+```
+
+禁止 ambient global conversation。
+
+---
+
+# 23. 跨 Conversation 禁止引用
+
+Conversation A：
+
+```text
+创建并 Apply TEST-A
+```
+
+Conversation B：
+
+```text
+把刚才那个改成20分钟
+```
+
+不得得到 TEST-A。
+
+必须：
+
+```text
+Clarification / recent not found
+```
+
+---
+
+# 24. Restart Recent Fallback
+
+App 重启后 Memory Recent 丢失允许。
+
+但允许从：
+
+```text
+latest Applied ChangeSet
+```
+
+恢复时必须同时：
+
+```text
+same profile_id
+same conversation_id
+actual applied entity_id
+```
+
+禁止跨 Conversation。
+
+---
+
+# 25. Pending Proposal 与 Canonical Recent 分离
+
+未 Apply Proposal：
+
+```text
+不是 Canonical Entity
+```
+
+不得进入 Recent Canonical。
+
+如果用户对 Pending Proposal 说：
+
+```text
+改成20分钟
+```
+
+应该：
+
+```text
+adjust pending proposal
+```
+
+依赖：
+
+```text
+PendingChangeSetState
+```
+
+而不是 Recent Entity。
+
+---
+
+# 26. Grounding 正式流程
+
+固定：
+
+```text
+EntityHint
+↓
+Structural Candidate Retrieval
+↓
+
+0 candidate
+→ NotFound
+
+1 candidate
+→ deterministic resolve
+
+2..N candidate
+→ Candidate Selection
+
+仍无法可靠选择
+→ Clarification
+```
+
+---
+
+# 27. Candidate Selection
+
+模型只可以看到：
+
+```text
+temporary candidate IDs
+safe labels
+必要字段
+```
+
+输出只能：
+
+```text
+candidate_id
+```
+
+不得输出真实数据库 ID。
+
+固定：
+
+```text
+temperature = 0
+```
+
+---
+
+# 28. Ambiguity 不能猜
+
+例如存在：
+
+```text
+英语阅读
+英语单词
+```
+
+用户：
+
+```text
+把英语任务改成40分钟
+```
+
+必须：
+
+```text
+请确认你指的是英语阅读还是英语单词。
+```
+
+禁止随机选。
+
+---
+
+# 29. Patch 语义
+
+Patch 只修改用户明确要求的字段。
+
+例如：
+
+```text
+把刚才那个改成50分钟
+```
+
+只能：
+
+```text
+estimated_minutes = 50
+```
+
+不得顺带改：
+
+```text
+title
+date
+goal
+knowledge
+priority
+task_kind
+```
+
+---
+
+# 30. 时间语义
+
+固定：
+
+```text
+晚上9点
+→ planned_time = 21:00
+
+50分钟
+→ estimated_minutes = 50
+```
+
+不得混淆。
+
+---
+
+# 31. 日期语义
+
+统一 TemporalIntent。
+
+必须可靠支持：
+
+```text
+今天
+明天
+后天
+昨天
+N天后
+N天前
+YYYY-MM-DD
+```
+
+当前 Contract 与 Parser 必须一致。
+
+不得 Skill 教一种表达，Parser 不支持。
+
+---
+
+# 32. Bulk Action
+
+例如：
+
+```text
+把今天所有没完成的任务挪到明天。
+```
+
+固定执行：
+
+```text
+filter:
+date=today
+status=not_completed
+
+↓
+query exact set
+
+↓
+ONE ChangeSet
+N task.update
+```
+
+Completed：
+
+```text
+0 operations
+```
+
+---
+
+# 33. Higher AI 用户模式
+
+删除前端：
+
+```text
+只读模式
+助手模式
+切换助手模式并继续
+保持只读
+```
+
+最终：
+
+```text
+Higher AI
+```
+
+只有一个模式。
+
+---
+
+# 34. Legacy Mode 字段
+
+本轮不 Migration。
+
+如果 DB 仍有：
+
+```text
+conversation.mode
+profile AI mode
+```
+
+保留兼容字段。
+
+Interactive Runtime：
+
+```text
+不得再用其阻止 Proposal
+```
+
+新 Conversation 可以继续写 legacy：
+
+```text
+assistant
+```
+
+但该字段失去用户权限控制含义。
+
+---
+
+# 35. ONE Interactive Natural-Language Entry
+
+所有自然语言：
+
+```text
+AiPanel
+Today AI
+Planning AI
+Knowledge AI
+Session AI
+```
+
+统一进入：
+
+```text
+aiStartRun
+```
+
+---
+
+# 36. aiAnalyze
+
+旧：
+
+```text
+aiAnalyze assistant_chat
+```
+
+不得再成为通用聊天主入口。
+
+如果保留：
+
+只能用于明确 Typed Analysis Job，例如：
+
+```text
+Session Analysis
+Daily Analysis
+Review Analysis
+```
+
+且不得：
+
+```text
+改变 Planner State
+改变 Recent Entity
+承担 Task 写入
+承担通用 Conversation Routing
+```
+
+---
+
+# 37. FastChat
+
+明显通用问题：
+
+```text
+你好
+1+1
+解释过拟合
+```
+
+允许走 FastChat。
+
+FastChat：
+
+```text
+1次主模型请求
+tools=0
+Higher private context=0
+```
+
+---
+
+# 38. ContextPurpose
+
+当前 Page Context 是：
+
+```text
+Soft Context
+```
+
+不能自动覆盖 Current User Message。
+
+---
+
+## 38.1 Knowledge 页面
+
+用户：
+
+```text
+1+1等于多少？
+```
+
+必须 Generic。
+
+用户：
+
+```text
+总结一下当前这个知识节点。
+```
+
+才可以 Knowledge context。
+
+---
+
+# 39. Error Boundary
+
+正式定义：
+
+```text
+ProposalReady
+Clarification
+NotFound
+NothingToChange
+Unsupported
+ContractRepairFailed
+InternalFailure
+Cancelled
+```
+
+具体 Rust enum 名可以保持现有风格，但语义必须完整。
+
+---
+
+# 40. 用户永远看不到内部错误
+
+禁止：
+
+```text
+missing field `entity_type`
+serde
+SQL error
+FOREIGN KEY
+ChangeSet 至少包含一个操作
+Rust panic
+JSON parse error
+```
+
+用户统一得到语义化提示：
+
+例如：
+
+```text
+这次没有成功生成可靠的修改方案，正式数据没有变化。
+```
+
+内部错误进入：
+
+```text
+Trace
+log
+TRAE_RUN
+```
+
+---
+
+# 41. Empty ChangeSet Guard
+
+如果：
+
+```text
+operations.len() == 0
+```
+
+禁止调用：
+
+```text
+ChangeSetRepository::create
+```
+
+必须先转化：
+
+```text
+NothingToChange
+或
+ContractFailure
+```
+
+---
+
+# 42. Trace 生命周期
+
+当前 Trace 早期 event 因 ai_runs 尚未创建而可能丢失的问题必须修。
+
+---
+
+## 42.1 Run Start
+
+`ai_start_run` 创建 `run_id` 后立即：
+
+```text
+INSERT ai_runs
+status=running
+```
+
+然后才能开始：
+
+```text
+Turn Interpreter
+Context
+Provider
+Grounding
+Compiler
+```
+
+---
+
+## 42.2 Run Finish
+
+终态：
+
+```text
+UPDATE same ai_runs row
+```
+
+不得重新建立第二个 run row。
+
+---
+
+# 43. Trace Events
+
+至少确保：
+
+```text
+turn_started
+turn_decided
+
+provider_request_started
+provider_request_finished
+
+semantic_action_parsed
+semantic_action_repaired
+
+grounding_started
+candidates_retrieved
+candidate_selection_started
+candidate_selection_finished
+grounding_resolved
+grounding_ambiguous
+grounding_not_found
+
+action_plan_compiled
+empty_plan_guarded
+
+changeset_created
+
+run_finished
+```
+
+真实可持久化查询。
+
+---
+
+# 44. Trace Privacy
+
+禁止保存：
+
+```text
+API Key
+完整私人文档
+完整 PersonalProfile
+完整 Prompt
+```
+
+允许：
+
+```text
+route
+action_type
+duration
+candidate_count
+provider_call_count
+operation_count
+status
+token usage
+safe error code
+```
+
+---
+
+# 45. Performance 决策
+
+本轮必须减少重复 Provider 调用。
+
+---
+
+## 45.1 Generic
+
+```text
+FastChat
+→ 1 Provider call
+```
+
+---
+
+## 45.2 Action
+
+正常：
+
+```text
+1 Turn Interpreter call
++
+0 / 1 Candidate Selection
+```
+
+Semantic Repair 仅异常时：
+
+```text
++1
+```
+
+---
+
+## 45.3 禁止
+
+普通 Action 不得固定：
+
+```text
+Router call
++
+Semantic call
++
+Writer call
++
+Summary call
+```
+
+---
+
+# 46. Proposal 文案
+
+Proposal 的：
+
+```text
+标题
+字段 Diff
+概要
+```
+
+优先从：
+
+```text
+ActionPlan / ChangeSet
+```
+
+确定性生成。
+
+不要为了写一句：
+
+```text
+已经准备好修改方案
+```
+
+再调用一次 AI。
+
+---
+
+# 47. Skill 正式定位
+
+Skill：
+
+```text
+Higher 领域能力说明书
+```
+
+不是：
+
+```text
+Code Agent
+另一个 Planner
+另一个 Runtime
+代码扫描器
+```
+
+运行时禁止每次扫描项目代码。
+
+本轮：
+
+```text
+不嵌 Claude Code
+不接 MCP Code Agent
+不 Fine Tune
+不 Vector DB
+```
+
+---
+
+# 48. Task / Session Truth
+
+固定：
+
+```text
+Task = 准备做什么
+StudySession = 实际做了什么
+```
+
+完成 StudySession：
+
+```text
+不能自动 Completed Task
+```
+
+除非用户明确完成任务。
+
+保持当前产品语义。
+
+---
+
+# 49. Task `⋯` 菜单
+
+当前已确认：
+
+```text
+菜单看得到
+但透明 backdrop 抢 click
+```
+
+修复。
+
+最终点击层级必须：
+
+```text
+Menu interaction layer
+>
+Backdrop
+>
+Page
+```
+
+---
+
+## 49.1 六项全部必须真实可用
+
+```text
+编辑
+调整日期
+调整目标
+调整知识
+修改类型
+删除
+```
+
+点击每一个都必须：
+
+```text
+打开对应已有 flow / dialog
+```
+
+禁止仅修 CSS 后未验证 handler。
+
+---
+
+# 50. Recurring 正式产品模型
+
+固定：
+
+```text
+RecurringRule
+= Series Canonical Truth
+
+Task
+= concrete occurrence
+```
+
+---
+
+# 51. Recurring 采用“有界真实物化”
+
+本轮正式选择：
+
+```text
+Bounded Materialization
+```
+
+不采用纯 Virtual Projection。
+
+原因已经做出决策：
+
+```text
+Calendar
+AI Grounding
+Task Editing
+Occurrence semantics
+Session relation
+```
+
+都需要真实 Task entity。
+
+Trae 不得改成另一套方案。
+
+---
+
+# 52. Rolling Horizon
+
+固定：
+
+```text
+30 days
+```
+
+以下行为必须保证未来 30 天 occurrence 已物化：
+
+```text
+新 RecurringRule Apply 后
+App / Today 正常刷新时
+```
+
+---
+
+# 53. Calendar Visible Range
+
+Planning Calendar 打开某个月：
+
+必须确保：
+
+```text
+当前可见 Calendar range
+```
+
+已经 materialize。
+
+即使该范围超出 rolling 30 days，也按当前显示月份进行有界 materialization。
+
+不得无限生成未来所有日期。
+
+---
+
+# 54. Range Materialization
+
+建立 / 使用等价能力：
+
+```text
+materialize_recurring_tasks_range(
+    profile_id,
+    start_date,
+    end_date
+)
+```
+
+必须：
+
+```text
+idempotent
+deterministic
+bounded
+```
+
+重复调用：
+
+```text
+0 duplicate
+```
+
+---
+
+# 55. Series / Occurrence 语义
+
+## 55.1 单天
+
+```text
+今天这次408不要了，但以后继续。
+```
+
+只操作：
+
+```text
+今天 occurrence
+```
+
+不得 disable rule。
+
+---
+
+## 55.2 Series Disable
+
+```text
+以后不要再每天学408。
+```
+
+操作：
+
+```text
+RecurringRule.enabled=false
+```
+
+---
+
+## 55.3 Series Update
+
+```text
+每天学408改成晚上9点，每次45分钟。
+```
+
+修改：
+
+```text
+Rule time_of_day=21:00
+Rule estimated_minutes=45
+```
+
+然后 reconcile 允许修改的 future occurrences。
+
+---
+
+# 56. Recurring Reconcile 保护
+
+Series update / disable 绝不能破坏：
+
+```text
+Past occurrence
+Completed occurrence
+user_modified_at != NULL
+已有 StudySession 的 occurrence
+```
+
+---
+
+# 57. StudySession Protection
+
+施工前 Trae 必须通过：
+
+```text
+schema
+repository
+真实源码
+```
+
+确认：
+
+```text
+StudySession ↔ Task
+```
+
+真实关联方式。
+
+如果能确认：
+
+按真实关联实现保护。
+
+如果无法确认：
+
+```text
+STOP
+SESSION_PROTECTION_UNRESOLVED
+```
+
+不得猜字段。
+
+---
+
+# 58. DirectWrite0
+
+所有 AI action：
+
+```text
+parse
+ground
+compile
+```
+
+阶段：
+
+```text
+Canonical DB 0 mutation
+```
+
+只有：
+
+```text
+Apply ChangeSet
+```
+
+才允许 mutation。
+
+---
+
+# 59. AI Eval Dataset
+
+新增固定 Regression fixtures。
+
+至少包含：
+
+```text
+E01
+你好
+
+E02
+1+1等于多少？只回答数字。
+
+E03
+请用三句话解释什么是过拟合。
+
+E04
+创建一个明天的任务，名字叫 TEST-AI-数学，预计30分钟。
+
+E05
+明天下午我想复习半小时数学，帮我放到任务里。
+
+E06
+从明天开始每天晚上8点学习30分钟英语。
+
+E07
+以后每天给我留半小时背单词。
+
+E08
+我感觉以后每天背单词挺好的。
+
+E09
+把今天那个背单词任务改成30分钟。
+
+E10
+把刚才那个改成50分钟。
+
+E11
+把刚才那个改到晚上9点。
+
+E12
+把刚才那个挪到后天。
+
+E13
+以后不要再每天背单词了。
+
+E14
+把每天学408改成晚上9点，每次45分钟。
+
+E15
+今天这次408不要了，但以后每天继续。
+
+E16
+把英语任务改成40分钟。
+
+E17
+把今天所有没完成的任务挪到明天。
+
+E18
+先不规划了，给明天创建一个30分钟英语任务。
+
+E19
+根据我的目标和最近学习情况，帮我规划未来两周。
+
+E20
+Knowledge 页面：
+1+1等于多少？只回答数字。
+
+E21
+Conversation A 创建并 Apply TEST-RECENT-A。
+Conversation B：
+把刚才那个改成20分钟。
+```
+
+---
+
+# 60. 禁止 Hardcode Eval
+
+禁止：
+
+```rust
+if message.contains("背单词")
+if message.contains("408")
+if message.contains("英语")
+```
+
+这种针对 Fixture 的硬编码修复。
+
+Eval 测试的是：
+
+```text
+Intent category
+```
+
+不是固定句子。
+
+---
+
+# 61. 自动测试必须覆盖真实 Contract Boundary
+
+过去这种测试：
+
+```text
+直接构造 SemanticAction Rust struct
+↓
+plan_action
+```
+
+不能再被视作完整 AI Action 测试。
+
+必须增加：
+
+```text
+Canonical JSON
+↓
+Parser
+↓
+Validation
+↓
+Grounding
+↓
+Compiler
+↓
+ChangeSet Ops
+```
+
+---
+
+# 62. 新增测试
+
+创建：
+
+```text
+src-tauri/tests/batch061r.rs
+```
+
+不要创建十几个碎片文件。
+
+---
+
+# 63. batch061r 必须覆盖
+
+### R01
+
+Canonical UpdateTask JSON：
+
+```text
+estimated_minutes=30
+```
+
+必须 parse。
+
+### R02
+
+Recurring：
+
+```text
+21:00
+45min
+```
+
+必须 parse。
+
+### R03
+
+Bulk today/not_completed/tomorrow 必须 parse。
+
+### R04
+
+明显 Update 但 empty patch：
+
+```text
+ContractFailure
+```
+
+不是 NothingToChange。
+
+### R05
+
+Canonical Contract 中所有 example 都可 parse。
+
+### R06
+
+Runtime 使用的 example 与 Contract 是同一来源。
+
+### R07
+
+同 Conversation Recent 正常。
+
+### R08
+
+跨 Conversation Recent 隔离。
+
+### R09
+
+跨 Profile Recent 隔离。
+
+### R10
+
+Restart fallback 只读取 same conversation Applied ChangeSet。
+
+### R11
+
+Pending Proposal 不进入 Canonical Recent。
+
+### R12
+
+20min → 30min：
+
+```text
+ONE task.update
+```
+
+### R13
+
+30min → 30min：
+
+```text
+NothingToChange
+```
+
+### R14
+
+“帮我安排明天30分钟数学”
+
+不得被 Planner keyword preempt。
+
+### R15
+
+Active Planner：
+
+```text
+先不规划了，给明天创建英语任务
+```
+
+必须 Action。
+
+### R16
+
+Knowledge page + `1+1`：
+
+Generic。
+
+### R17
+
+Knowledge page + `总结当前节点`：
+
+Knowledge context。
+
+### R18
+
+Bulk：
+5 pending + 1 completed。
+
+必须：
+
+```text
+5 operations
+completed unchanged
+```
+
+### R19
+
+0 operation 不创建 ChangeSet。
+
+### R20
+
+Internal error 不直接暴露。
+
+### R21
+
+ai_runs 必须先以 running 建立。
+
+### R22
+
+中间 Trace events 可持久化。
+
+### R23
+
+run terminal 更新同一 row。
+
+### R24
+
+Frontend 不再有 readonly/assistant mode toggle。
+
+### R25
+
+旧 readonly conversation 不阻止 Proposal。
+
+### R26
+
+Interactive Natural Language 不再通过 aiAnalyze assistant_chat。
+
+### R27
+
+Approval 前 DirectWrite=0。
+
+### R28
+
+Task menu hit layer 高于 backdrop。
+
+### R29
+
+六个 Task menu action 都存在真实 handler。
+
+### R30
+
+Recurring range materialization idempotent。
+
+### R31
+
+Daily rule future 30 days 可 materialize。
+
+### R32
+
+Calendar visible month 可 materialize。
+
+### R33
+
+Past occurrence protected。
+
+### R34
+
+Completed occurrence protected。
+
+### R35
+
+user_modified occurrence protected。
+
+### R36
+
+StudySession occurrence protected。
+
+### R37
+
+Disable series 只清理合法 future derived occurrence。
+
+### R38
+
+相同 Explicit Current Intent + Canonical State，
+加入无关 assistant prose 后：
+
+```text
+TurnDecision class 不变
+```
+
+### R39
+
+相同 Explicit Current Intent + Canonical State，
+之前出现过 Internal Error：
+
+```text
+TurnDecision class 不变
+```
+
+### R40
+
+相同 Explicit Current Intent + Canonical State，
+旧 Planner 已 cancelled：
+
+```text
+不得再次劫持。
+```
+
+---
+
+# 64. Mock Provider
+
+自动测试不得使用真实 DeepSeek。
+
+建立 / 扩展现有 Mock Provider。
+
+验证：
+
+```text
+Turn Interpreter temperature=0
+Candidate Selection temperature=0
+Repair temperature=0
+```
+
+普通 Chat 可不同。
+
+---
+
+# 65. Provider Call Count Regression
+
+自动测试至少验证逻辑预算：
+
+```text
+FastChat:
+1 main provider call
+
+Simple Action:
+1 interpreter
+0 candidate selector
+0 repair
+
+Ambiguous Action:
+1 interpreter
+1 candidate selector
+
+Malformed Action:
+1 interpreter
+1 repair
+```
+
+不得无意义重复调用。
+
+---
+
+# 66. Automated Gate
+
+使用低资源模式。
+
+依次执行：
+
+```powershell
+npx tsc --noEmit
+```
+
+```powershell
+npm run build
+```
+
+```powershell
+cargo check -j 1
+```
+
+```powershell
+$env:RUST_TEST_THREADS="1"
+cargo test --test batch061r -j 1
+```
+
+然后回归已有相关测试。
+
+根据当前真实存在文件执行：
+
+```text
+batch0602
+batch0601
+batch060
+batch0592
+ai_assistant
+ai_panel
+```
+
+如果某测试文件当前不存在：
+
+记录：
+
+```text
+NOT FOUND
+```
+
+不要编造。
+
+---
+
+# 67. 禁止反复 Full Cargo Test
+
+用户机器以前出现过高资源占用。
+
+本轮默认：
+
+```text
+不跑 full cargo test
+```
+
+Targeted gate 足够。
+
+若 Trae认为必须跑全量：
+
+```text
+不得自行执行
+```
+
+先：
+
+```text
+STOP
+FULL_TEST_DECISION_REQUIRED
+```
+
+---
+
+# 68. Automated Gate 状态
+
+所有自动 Gate 通过后：
+
+只能报告：
+
+```text
+AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING
+```
+
+不得：
+
+```text
+DONE
+全部完成
+已完全解决
+```
+
+---
+
+# 69. HUMAN RUNTIME · 用户之后手工执行
+
+Trae 不执行真实 DeepSeek 测试。
+
+下面由用户真人完成。
+
+---
+
+## H01 Generic
+
+新 Conversation：
+
+```text
+1+1等于多少？只回答数字。
+```
+
+预期：
+
+```text
+2
+```
+
+---
+
+## H02 Create
+
+```text
+创建一个明天的任务，名字叫 TEST-STABLE，预计30分钟。
+```
+
+预期：
+
+```text
+CreateTask Proposal
+tomorrow
+30min
+```
+
+Apply 前：
+
+```text
+0 canonical mutation
+```
+
+---
+
+## H03 Existing Update
+
+准备：
+
+```text
+TEST-普通任务
+20min
+```
+
+发送：
+
+```text
+把今天那个TEST普通任务改成30分钟。
+```
+
+必须出现：
+
+```text
+20 → 30
+```
+
+不得再：
+
+```text
+没有修改字段
+```
+
+---
+
+## H04 Same Conversation Recent
+
+Apply：
+
+```text
+TEST-RECENT-A
+```
 
 然后：
 
-# STOP
+```text
+把刚才那个改成50分钟。
+```
 
-禁止自动开始下一 DEV。
+必须命中 TEST-RECENT-A。
 
-下一阶段将根据真实结果决定是否进入：
+---
 
-# Actual Learning → Trusted Evidence → AI Adjustment
+## H05 Time
 
-也就是：
+```text
+把刚才那个改到晚上9点。
+```
 
-计划已经确定以后，
+必须：
 
-Higher 是否能够可信地理解：
+```text
+21:00
+```
 
-用户实际学了什么，
+---
 
-以及怎样根据真实差距调整下一步。
+## H06 Date
+
+```text
+把刚才那个挪到后天。
+```
+
+必须：
+
+```text
+local today + 2
+```
+
+---
+
+## H07 Cross Conversation
+
+Conversation A 创建 TEST-RECENT-A。
+
+新 Conversation B：
+
+```text
+把刚才那个改成20分钟。
+```
+
+必须：
+
+```text
+不知道“刚才那个”是谁 / 要求澄清
+```
+
+如果命中 A：
+
+```text
+P0 FAIL
+```
+
+---
+
+## H08 Ambiguity
+
+存在：
+
+```text
+TEST-英语阅读
+TEST-英语单词
+```
+
+说：
+
+```text
+把英语任务改成40分钟。
+```
+
+必须询问具体哪一个。
+
+---
+
+## H09 Bulk
+
+```text
+把今天所有没完成的任务挪到明天。
+```
+
+必须：
+
+```text
+ONE ChangeSet
+N task updates
+```
+
+Completed 不动。
+
+---
+
+## H10 Recurring Update
+
+```text
+把每天学408改成晚上9点，每次45分钟。
+```
+
+必须：
+
+```text
+Series Proposal
+21:00
+45min
+```
+
+---
+
+## H11 Occurrence
+
+```text
+今天这次408不要了，但以后每天继续。
+```
+
+只改今天 occurrence。
+
+---
+
+## H12 Series Disable
+
+```text
+以后不要再安排每天学408。
+```
+
+Disable rule。
+
+历史保留。
+
+---
+
+## H13 Planner Boundary
+
+```text
+明天下午帮我安排一个30分钟数学复习任务。
+```
+
+必须 Task Proposal。
+
+不得 Planner。
+
+---
+
+## H14 Planner
+
+```text
+根据我的目标和最近学习情况，帮我规划未来两周。
+```
+
+才进入 Planner。
+
+---
+
+## H15 Planner Escape
+
+Planner 过程中：
+
+```text
+先不规划了，给明天创建一个30分钟英语任务。
+```
+
+必须退出 Planner 当前流程并 CreateTask。
+
+---
+
+## H16 Page Stability
+
+Knowledge 页面：
+
+```text
+1+1等于多少？只回答数字。
+```
+
+必须：
+
+```text
+2
+```
+
+---
+
+## H17 Mode
+
+UI 不再存在：
+
+```text
+只读模式
+助手模式
+```
+
+---
+
+## H18 Error Boundary
+
+任何失败：
+
+用户不得看到：
+
+```text
+missing field
+serde
+SQL
+ChangeSet至少一个操作
+Rust
+```
+
+---
+
+## H19 Task Menu
+
+依次点击：
+
+```text
+编辑
+调整日期
+调整目标
+调整知识
+修改类型
+删除
+```
+
+全部必须真实响应。
+
+---
+
+## H20 Recurring Future
+
+创建：
+
+```text
+从今天开始每天 TEST-DAILY
+```
+
+Apply 后。
+
+Calendar：
+
+```text
+明天
+后天
+未来数日
+```
+
+必须提前可见 occurrence。
+
+---
+
+## H21 Approval First
+
+Proposal 未 Apply：
+
+```text
+Today
+Planning
+Knowledge
+```
+
+不得发生正式变化。
+
+Apply 后才变化。
+
+---
+
+## H22 Same Intent Stability
+
+完全相同：
+
+```text
+创建一个明天30分钟的英语任务，名称叫 STABILITY-TEST。
+```
+
+分别测试：
+
+```text
+A 新 Conversation 第一条
+B 普通聊天多轮以后
+C 创建过任务以后
+D Planner 已退出以后
+E 之前发生过一次 Error 后
+```
+
+五次必须：
+
+```text
+CreateTask
+tomorrow
+30min
+STABILITY-TEST
+```
+
+自然语言措辞允许不同。
+
+业务路径不得变。
+
+---
+
+# 70. Documentation
+
+自动 Gate 完成后更新。
+
+---
+
+## `.higher/PRODUCT.md`
+
+只记录长期正式产品决策：
+
+```text
+Unified Higher AI
+No user-facing readonly/assistant modes
+Approval First
+Direct Write = 0
+Conversation History ≠ Control State
+Current User Intent First
+Semantic Contract v2
+Conversation-scoped Recent
+RecurringRule canonical
+30-day bounded materialization
+Task ≠ StudySession
+```
+
+不要写当前测试数量等动态事实。
+
+---
+
+## `.higher/ENVIRONMENT.md`
+
+只写当前真实工程事实：
+
+```text
+schema
+runtime architecture
+semantic contract version
+skills count
+current test files
+trace state
+recurring implementation
+```
+
+不得写未完成未来设计。
+
+---
+
+## `.higher/TRAE_RUN.md`
+
+完整记录：
+
+```text
+Recovery audit
+RECOVER_KEEP
+RECOVER_FINISH
+RECOVER_REWRITE
+
+修改文件
+自动测试
+失败
+修复
+Source conflicts
+Migration
+真实 DeepSeek calls
+最终状态
+```
+
+---
+
+# 71. 本轮禁止范围膨胀
+
+禁止：
+
+```text
+Claude Code 嵌入
+Claude SDK
+MCP Code Agent
+运行时扫描项目代码
+Vector Database
+Embedding Router
+Fine Tune
+重新训练模型
+Multi-Agent swarm
+新的 Planner
+新的 ChangeSet 系统
+新的 Goal System
+新的 Knowledge System
+账号
+云同步
+Server
+```
+
+---
+
+# 72. Schema STOP
+
+如果任何实现必须新增：
+
+```text
+v024
+```
+
+则：
+
+```text
+STOP
+SCHEMA_CHANGE_REQUIRED
+```
+
+说明：
+
+```text
+需要新增什么
+为什么 v023 无法完成
+风险
+```
+
+等待决策。
+
+不得自行 Migration。
+
+---
+
+# 73. 安全 STOP
+
+禁止修改：
+
+```text
+Smart App Control
+Windows Defender
+系统安全策略
+```
+
+如果环境阻止测试：
+
+```text
+ENV_BLOCKED
+```
+
+记录真实错误。
+
+---
+
+# 74. Source Conflict STOP
+
+如果当前源码与本任务关键前提冲突：
+
+例如：
+
+```text
+不存在 ChangeSet approval boundary
+真实 Recurring schema 与任务完全不符
+StudySession 与 Task 保护无法建立
+```
+
+必须：
+
+```text
+STOP
+SOURCE_CONFLICT
+```
+
+不要自行发明替代架构。
+
+---
+
+# 75. 最终架构 Guard
+
+本轮完成后必须只有：
+
+```text
+ONE Interactive Natural-Language Runtime
+
+ONE Turn Interpreter
+
+ONE Semantic Contract
+
+ONE Grounding semantics
+
+ONE Domain Compiler path
+
+ONE ChangeSet approval boundary
+```
+
+不得形成：
+
+```text
+Old Agent
+New Agent
+Task Agent
+Planner Agent
+Page Agent
+Skill Agent
+```
+
+各自拥有不同写协议。
+
+Planner 是一个明确业务模式，不是第二套写入 Runtime。
+
+---
+
+# 76. 防止以后再次被修改打乱
+
+以后新增任何 SemanticAction 必须同时拥有：
+
+```text
+1 Canonical Contract
+2 Parser Fixture
+3 Grounding rule
+4 Domain Compiler
+5 Eval case
+6 Approval test
+```
+
+缺一个：
+
+```text
+test failure
+```
+
+这条必须体现在测试结构中。
+
+---
+
+# 77. DEV-0061R Definition of Done
+
+自动阶段只有以下全部成立才通过：
+
+```text
+旧半施工修改已正确接管
+没有粗暴 Reset
+
+Semantic Contract v2 生效
+Prompt / Parser / Example 一致
+
+Turn Interpreter 唯一
+控制层 deterministic
+
+Current User Intent First
+
+Planner 不再 broad keyword hijack
+
+Recent 按 profile+conversation 隔离
+
+Pending Proposal 与 Recent 分离
+
+Grounding ambiguity 正确
+
+Task update 正确
+
+Recurring update 正确
+
+Bulk 正确
+
+Unified Higher AI
+旧模式 UI 删除
+
+Internal Error Boundary 生效
+
+Trace 中间事件真实可持久化
+
+Task 菜单六项可交互
+
+Recurring 未来任务可提前出现
+
+History / Completed / Session / UserModified occurrence 保护
+
+Approval First 保持
+
+AI DirectWrite = 0
+
+自动 Gate 全绿
+```
+
+最终状态：
+
+```text
+AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING
+```
+
+---
+
+# 78. Trae 最终输出格式
+
+只按照下面格式回复：
+
+```text
+DEV-0061R AUTOMATED GATE RESULT
+
+Status:
+...
+
+Recovery:
+RECOVER_KEEP:
+...
+RECOVER_FINISH:
+...
+RECOVER_REWRITE:
+...
+
+Schema:
+v023
+
+Migration:
+0
+
+Real DeepSeek Automated Calls:
+0
+
+Architecture:
+...
+
+Semantic Contract:
+...
+
+Turn Interpreter:
+...
+
+Conversation State:
+...
+
+Recent Grounding:
+...
+
+Planner:
+...
+
+Error Boundary:
+...
+
+Trace:
+...
+
+Recurring:
+...
+
+Task Menu:
+...
+
+Tests:
+batch061r: X/X
+
+Regression:
+...
+
+Frontend:
+tsc:
+build:
+
+Cargo:
+check:
+
+Human Runtime:
+PENDING
+
+Source Conflicts:
+NONE / ...
+
+Decision Required:
+NONE / ...
+
+Files Modified:
+...
+
+TRAE_RUN Updated:
+YES
+
+ENVIRONMENT Updated:
+YES
+
+PRODUCT Updated:
+YES
+```
+
+不要附加新的产品建议。
+
+不要提出“以后可以考虑重新设计”。
+
+不要决定下一轮做什么。
+
+下一轮由 ChatGPT 根据报告决定。
+
+

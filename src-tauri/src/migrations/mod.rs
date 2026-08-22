@@ -23,6 +23,7 @@ pub mod v019_goal_brief;
 pub mod v020_goal_truth_convergence;
 pub mod v021_personal_planning_truth;
 pub mod v022_personal_xlsx;
+pub mod v023_recurring_task_semantics;
 
 /// 单个 Migration 定义。
 ///
@@ -148,6 +149,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 22,
         name: "personal_xlsx",
         up: v022_personal_xlsx::up,
+    },
+    Migration {
+        version: 23,
+        name: "recurring_task_semantics",
+        up: v023_recurring_task_semantics::up,
     },
 ];
 

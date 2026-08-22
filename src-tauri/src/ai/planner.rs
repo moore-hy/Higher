@@ -16,37 +16,43 @@ use crate::repository::goal::{GoalBrief, GoalRepository};
 use rusqlite::{params, Connection};
 use serde_json::json;
 
-// =============== ① Planning Write Intent（§35-36） ===============
+// =============== ① Planning Write Intent（0061R §12-13 收口） ===============
+// 边界：仅明确"长期/多日/阶段规划蓝图"语义进 Dedicated Planner。
+// broad 关键词（帮我安排/安排任务/生成任务/安排一下/帮我排 等裸词）已删除——
+// 单日单任务安排（"帮我安排明天30分钟数学"）一律交给 Turn Interpreter → Action（R14/H13）。
 
 const PLANNING_WRITE_PATTERNS: &[&str] = &[
-    "生成计划", "制定计划", "制定学习计划", "生成学习计划", "做个计划", "做一个计划",
-    "加入 higher", "加入higher", "排进日历", "排入日历", "排进 higher", "排入higher",
-    "安排未来", "安排接下来", "安排学习", "帮我安排", "安排计划",
-    "调整计划", "修改计划", "重新调整", "重新规划", "更新计划",
-    "建立计划", "建立知识框架", "生成任务", "安排任务",
-    // DEV-0057 §86：口语补充（非模糊匹配；Advice 排除规则仍在前置）
-    "排个日程", "排一下日程", "安排一下", "排进higher", "帮我排一下", "帮我排个",
-    "排个计划", "做个两周计划", "做个月计划", "做个学习计划", "把这些安排进去",
-    "安排进去", "排进去", "安排上", "帮我排", "给我排", "给我安排一下",
-    "做个规划", "制定个计划", "生成个计划",
+    // 未来范围 / 重排
+    "规划未来", "规划接下来", "规划一下未来", "重新规划", "重排未来", "重排接下来",
+    "安排未来", "安排接下来",
+    // 完整 / 阶段蓝图
+    "制定完整", "完整学习计划", "完整计划", "阶段学习蓝图", "学习蓝图", "规划蓝图",
+    // 计划制定
+    "制定计划", "制定学习计划", "生成学习计划", "做个计划", "做一个计划", "做个规划",
+    "制定个计划", "生成个计划", "做个两周计划", "做个月计划",
+    // 落库短语
+    "加入 higher", "加入higher", "排进 higher", "排进higher", "排入 higher", "排入higher",
+    "排个日程", "排一下日程", "排进日历", "排入日历", "调整计划", "修改计划",
+    "重新调整", "更新计划", "建立计划", "建立知识框架",
 ];
-const PLANNING_WRITE_HINTS: &[&str] = &["计划", "安排", "规划", "排期", "日历", "日程"];
+const PLANNING_WRITE_HINTS: &[&str] = &["计划", "规划", "蓝图", "日程"];
+const PLANNING_WRITE_VERBS: &[&str] =
+    &["制定", "建立", "做个", "重排", "重新", "加入", "排"];
 const ADVICE_ONLY_HINTS: &[&str] = &["建议", "怎么复习", "怎么学", "怎么看", "如何复习", "如何学", "意见", "思路"];
 
-/// §35-36：明确 Planning Write Intent → true（进入 Pipeline）；
-/// 纯咨询（含"建议/怎么…"且无 写动词+落库词）→ false。
+/// §12.2：明确 Planning Write Intent → true（进入 Pipeline）；
+/// 纯咨询（含"建议/怎么…"且无 写动词+计划词）→ false。
 pub fn planning_write_intent(message: &str) -> bool {
     let m = message.to_lowercase();
-    // 强模式：直接命中规划写短语
+    // 强模式：直接命中规划蓝图短语
     for p in PLANNING_WRITE_PATTERNS {
         if m.contains(p) {
             return true;
         }
     }
-    // 组合模式：（计划/安排/规划…）×（加入/排进/生成/建立…）
+    // 组合模式：（计划/规划/蓝图/日程）×（制定/生成/建立/…）
     let has_noun = PLANNING_WRITE_HINTS.iter().any(|h| m.contains(h));
-    let has_write =
-        m.contains("加入") || m.contains("排进") || m.contains("排入") || m.contains("生成") || m.contains("建立") || m.contains("创建");
+    let has_write = PLANNING_WRITE_VERBS.iter().any(|v| m.contains(v));
     if has_noun && has_write {
         return true;
     }
@@ -70,14 +76,12 @@ pub enum PlanningGate {
     None,
 }
 
-/// §53+§58：入口判定（is_assistant=当前会话模式）。
-pub fn planning_gate(user_message: &str, is_assistant: bool) -> PlanningGate {
+/// DEV-0061R §34：Unified Higher AI——mode 不再阻止 Proposal。
+/// `NeedsAssistant` 保留为 legacy 值但**不再产生**：写意图恒 Planning（旧 readonly
+/// conversation 不阻止；正式写入仍走 ChangeSet Approval Boundary）。
+pub fn planning_gate(user_message: &str, _is_assistant: bool) -> PlanningGate {
     if planning_write_intent(user_message) {
-        if is_assistant {
-            PlanningGate::Planning
-        } else {
-            PlanningGate::NeedsAssistant
-        }
+        PlanningGate::Planning
     } else {
         PlanningGate::None
     }
@@ -102,12 +106,89 @@ pub const WORKFLOW_STATE_VALIDATING: &str = "validating";
 pub const WORKFLOW_STATE_WAITING_APPROVAL: &str = "waiting_approval";
 pub const WORKFLOW_STATE_APPLIED: &str = "applied";
 pub const WORKFLOW_STATE_FAILED: &str = "failed";
+/// DEV-0060 §12 TYPE C：handoff——用户当前消息明显不是继续 Planner → 暂停（不劫持会话）。
+pub const WORKFLOW_STATE_PAUSED: &str = "paused";
+/// DEV-0060 PART I：用户明确取消规划。
+pub const WORKFLOW_STATE_CANCELLED: &str = "cancelled";
 
 /// 该状态是否表示"规划工作流尚未结束、等待用户续答"（§6.8）。
+/// paused/cancelled/applied/failed/waiting_approval 均视为 inactive（§10.1：不劫持后续消息）。
 pub fn workflow_active(state: &str) -> bool {
     matches!(
         state,
         WORKFLOW_STATE_COLLECTING | WORKFLOW_STATE_CLARIFYING | WORKFLOW_STATE_DRAFTING | WORKFLOW_STATE_VALIDATING
+    )
+}
+
+/// DEV-0060 §10.3：PlanningWorkflowPayload——可恢复业务流程的真实状态（存 ai_runs.workflow_json，
+/// 禁止只存一句 intent string；禁止新建第二张 Planner Session 表）。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PlannerQuestion {
+    /// 字段键（如 institution_name / program_name / exam_year）
+    pub key: String,
+    pub question: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PlanningWorkflowPayload {
+    /// 本次规划的原始请求（恢复规划意图）
+    #[serde(default)]
+    pub original_request: String,
+    /// 当前等待用户回答的问题（≤5，T10：只保留仍缺失字段）
+    #[serde(default)]
+    pub pending_questions: Vec<PlannerQuestion>,
+    /// 已回答字段（key → 用户原话；T9/T10：禁止重复询问）
+    #[serde(default)]
+    pub answered: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub started_from_run_id: String,
+    /// goal_target | none | legacy_candidate
+    #[serde(default)]
+    pub goal_source: String,
+    #[serde(default)]
+    pub legacy_candidate_summary: Vec<String>,
+    /// 最近一轮用户输入（吸收回答）
+    #[serde(default)]
+    pub updated_by_user_turn: String,
+}
+
+impl PlanningWorkflowPayload {
+    /// T9：clarifying 中用户回复 → 把当前 pending 全部记为 answered（原始话术保留），
+    /// 下一轮 Prompt 携带 Q&A，Provider 只允许问仍缺失字段。
+    pub fn record_user_reply(&mut self, reply: &str) {
+        for q in &self.pending_questions {
+            self.answered.insert(q.key.clone(), reply.to_string());
+        }
+        self.pending_questions.clear();
+        self.updated_by_user_turn = reply.to_string();
+    }
+}
+
+/// T10：过滤已回答字段（已回答的不再出现在新 clarification 中）。
+pub fn filter_pending_questions(
+    pending: Vec<PlannerQuestion>,
+    answered: &std::collections::BTreeMap<String, String>,
+) -> Vec<PlannerQuestion> {
+    pending
+        .into_iter()
+        .filter(|q| !answered.contains_key(&q.key))
+        .take(MAX_BLOCKING_QUESTIONS)
+        .collect()
+}
+
+/// T9：clarification 用户可读文案（含字段键，便于用户按项回答）。
+pub fn format_clarification_reply(qs: &[PlannerQuestion]) -> String {
+    if qs.is_empty() {
+        return "信息已经足够，我会继续生成计划。".to_string();
+    }
+    let lines: Vec<String> = qs
+        .iter()
+        .map(|q| format!("- {}", q.question))
+        .collect();
+    format!(
+        "在生成正式计划前，还需要确认 {} 项：\n{}\n\n请直接回复以上问题（可一次回答多项），我会继续生成计划。",
+        qs.len(),
+        lines.join("\n")
     )
 }
 
@@ -136,16 +217,105 @@ pub fn set_workflow_state(
     );
 }
 
+/// DEV-0060 §10.3：带结构化 payload 写 workflow。
+pub fn set_workflow_payload(
+    conn: &Connection,
+    run_id: &str,
+    profile_id: i64,
+    conversation_id: i64,
+    state: &str,
+    payload: &PlanningWorkflowPayload,
+) {
+    let json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
+    set_workflow_state(conn, run_id, profile_id, conversation_id, state, Some(&json));
+}
+
 /// 读该会话最近一条 planning workflow 的显式状态（§6.8 主源；无 → None）。
+/// DEV-0060 §11（PART G）：ai_runs.id 是 UUID 字符串，字典序≠时间序——
+/// 必须按真实时间 `created_at DESC, rowid DESC` 取最新。
 pub fn read_workflow_state(conn: &Connection, profile_id: i64, conversation_id: i64) -> Option<String> {
     conn.query_row(
         "SELECT workflow_state FROM ai_runs
          WHERE profile_id=?1 AND conversation_id=?2 AND workflow_type='planning' AND workflow_state IS NOT NULL
-         ORDER BY id DESC LIMIT 1",
+         ORDER BY created_at DESC, rowid DESC LIMIT 1",
         params![profile_id, conversation_id],
         |r| r.get(0),
     )
     .ok()
+}
+
+/// DEV-0060 §10.3：读最新 workflow 的完整 payload（state + PlanningWorkflowPayload）。
+pub fn read_workflow_payload(
+    conn: &Connection,
+    profile_id: i64,
+    conversation_id: i64,
+) -> Option<(String, PlanningWorkflowPayload)> {
+    let row: (String, Option<String>) = conn
+        .query_row(
+            "SELECT workflow_state, workflow_json FROM ai_runs
+             WHERE profile_id=?1 AND conversation_id=?2 AND workflow_type='planning' AND workflow_state IS NOT NULL
+             ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            params![profile_id, conversation_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()?;
+    let payload = row
+        .1
+        .and_then(|j| serde_json::from_str::<PlanningWorkflowPayload>(&j).ok())
+        .unwrap_or_default();
+    Some((row.0, payload))
+}
+
+// =============== DEV-0060 PART F/H/I：Workflow 续跑决策（确定性，Provider 无关） ===============
+
+/// PART I：用户明确取消规划的关键词（不需要调用 AI）。
+pub fn is_workflow_exit_intent(m: &str) -> bool {
+    let t = m.trim();
+    ["取消规划", "停止规划", "先不做这个计划了", "退出规划", "先不规划了", "不规划了", "取消计划"]
+        .iter()
+        .any(|p| t.contains(p))
+}
+
+/// §12 TYPE C / T12：当前消息明显不是继续回答旧 Planner，而是新请求
+/// （如「帮我看看今日计划」「1+1等于多少」「先不规划了」——取消由 is_workflow_exit_intent 先判）。
+pub fn is_new_intent_message(m: &str) -> bool {
+    let t = m.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let new_intent_cues = [
+        "帮我看看", "帮我看一下", "帮我查", "看一下", "查一下", "等于多少", "是多少",
+        "帮我算", "算一下", "算算", "什么是", "解释", "翻译", "你好", "谢谢",
+    ];
+    new_intent_cues.iter().any(|c| t.contains(c))
+}
+
+/// PART F §10.1：active workflow 下用户消息的确定性分流。
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum PlanningContinuation {
+    /// 用户明确取消（PART I：不调 AI，workflow→cancelled）
+    Cancel,
+    /// 继续原 Planner（吸收本轮回答；T9）
+    Continue,
+    /// 新意图（§12 TYPE C：workflow→paused，当前请求成为本轮主任务；T12）
+    NewIntent,
+}
+
+pub fn planning_continuation_decision(user_message: &str, workflow_state: Option<&str>) -> PlanningContinuation {
+    let active = workflow_state.map(workflow_active).unwrap_or(false);
+    if !active {
+        return PlanningContinuation::NewIntent; // 无 active workflow：不适用（调用方不会走到）
+    }
+    if is_workflow_exit_intent(user_message) {
+        return PlanningContinuation::Cancel;
+    }
+    if planning_write_intent(user_message) {
+        return PlanningContinuation::Continue; // 用户再次表达规划意图 → 续跑原 workflow
+    }
+    if is_new_intent_message(user_message) {
+        return PlanningContinuation::NewIntent;
+    }
+    PlanningContinuation::Continue // 其余视为对 pending questions 的回答（§10.1 禁止劫持的例外=真回答）
 }
 
 // =============== Goal State（PART 5/7） ===============
@@ -463,6 +633,29 @@ pub struct PlanDraft {
     /// 存在时走蓝图校验/编译通道，year/month/day/tasks 不再是长期规划 Canonical。
     #[serde(default)]
     pub blueprint: Option<BlueprintDraft>,
+    /// DEV-0060 PART K §15.1：正式目标提案（无 active GoalTarget 且用户已在对话中给出足够信息时）。
+    /// 编译为同一 ChangeSet 内的 goal_target create + status_change(active)（用户批准前 0 落库）。
+    #[serde(default)]
+    pub target_proposal: Option<TargetProposalDraft>,
+}
+
+/// DEV-0060 §15.1：GoalTarget 提案（PlanDraft.target_proposal）。
+/// postgraduate 硬契约：data_json.institution_name / program_name 必填（Repository 同契约）。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TargetProposalDraft {
+    /// generic | postgraduate
+    #[serde(default)]
+    pub scenario_type: String,
+    /// postgraduate: reach|safety；generic: primary（空 → reach 兜底）
+    #[serde(default)]
+    pub role: String,
+    pub title: String,
+    #[serde(default)]
+    pub target_date: Option<String>,
+    #[serde(default)]
+    pub data_json: serde_json::Value,
+    #[serde(default)]
+    pub provenance_json: serde_json::Value,
 }
 
 // =============== DEV-0059 §23：Blueprint-centric Draft（长期规划新 Canonical） ===============
@@ -602,6 +795,7 @@ pub struct TargetChangeDraft {
 pub const PLAN_DRAFT_INSTRUCTION: &str = r#"生成正式学习计划。只输出一个 JSON 对象（不要 markdown 代码块、不要解释文字），结构：
 {
   "final_goal_adjustment": {"title":"…","outcome":"…","deadline":"YYYY-MM-DD 或 null","success_criteria":["…"],"scope":["…"],"constraints":["…"],"unresolved":["…"]} 或 null,
+  "target_proposal":{"scenario_type":"generic|postgraduate","role":"reach|safety|primary","title":"可读目标名（如 华中科技大学 计算机技术）","target_date":"YYYY-MM-DD 或 null","data_json":{"institution_name":"…","school_unit":"…","program_name":"…","program_code":"…","exam_year":"…","exam_subjects":["…"],"degree_type":"…","study_mode":"…"},"provenance_json":{"source":"user_clarification"}} 或 null,
   "year_goals": [{"name":"可读的具体名称","period":"YYYY-MM-DD..YYYY-MM-DD","parent_ref":"","operation_ref":"G1"}],
   "month_goals": [{"name":"…","period":"YYYY-MM","parent_ref":"G1","operation_ref":"G2"}],
   "day_goals": [{"name":"…","period":"YYYY-MM-DD","parent_ref":"月ref","rest_day":false,"operation_ref":"D1"}],
@@ -636,7 +830,140 @@ B2. future_tasks 只放未来 14 天内（滚动窗口），任务标题规则�
 B3. date_precision=month 的 milestone 表示"某月"，不要伪造具体某一天。
 B4. external_facts 只记录外部来源事实，不编造；无法确认的写 unresolved。
 B5. suggested_target_changes 只提建议，绝不直接修改正式目标。
-B6. 不允许既有 goal-tree 模式生成全年 day_goals（规则 1 仍适用）；蓝图模式与短期 task 模式不互相冲突。"#;
+B6. 不允许既有 goal-tree 模式生成全年 day_goals（规则 1 仍适用）；蓝图模式与短期 task 模式不互相冲突。
+DEV-0060 PART K（target_proposal 规则）：
+K1. 仅当【Active GoalTargets】区块显示"未设置正式目标"且用户已在对话中给出足够目标信息（至少 院校+专业 或 明确的通用目标）时才输出 target_proposal；否则为 null。
+K2. postgraduate 的 data_json.institution_name / program_name 必填（来自用户本轮回答，禁止编造）；不确定的字段不写。
+K3. 已有 active GoalTarget 时禁止输出 target_proposal（改目标走 suggested_target_changes 建议）。
+K4. target_proposal 与 blueprint 同处一个 JSON：Compiler 会把 GT create+activate+Blueprint 编进同一份用户可审查 ChangeSet。"#;
+
+/// DEV-0060 PART H §12：Planner Response Protocol（替代"Local Gate 固定三问"主逻辑）。
+/// Provider 每轮严格输出其一；Backend 解析后确定性落库/续跑。
+pub const PLANNER_TURN_PROTOCOL: &str = r#"【Planner Response Protocol（DEV-0060）】
+你必须只输出一个 JSON 对象（不要 markdown 代码块、不要解释文字），type 三选一：
+
+TYPE A · clarification（缺真正阻塞信息时）：
+{"type":"clarification","questions":[{"key":"institution_name","question":"你的目标院校是什么？"}]}
+- 最多 5 个真正阻塞问题；只问【仍缺失】的字段，禁止重复询问已回答字段（已回答清单见下）。
+- 不确定 → 问；禁止编造。
+
+TYPE B · plan_draft（信息足够时）：
+{"type":"plan_draft","draft":{…完整 PlanDraft JSON，结构见 PlanDraft 指令…}}
+
+TYPE C · handoff_chat（用户当前消息明显不是继续本规划，如「帮我看看今日计划」「1+1等于多少」）：
+{"type":"handoff_chat","message":"…直接回答用户当前问题的正常回复…"}
+
+【事实优先级（PART M §17，绝对顺序）】
+1. active GoalTarget（正式目标主源）
+2. confirmed PersonalProfile
+3. 用户选中的 Planning Sources
+4. active PlanningBlueprint
+5. trusted learning evidence
+6. 用户本轮 clarification 回答（可形成 Proposal，Apply 前不是 Canonical Fact）
+7. legacy candidate（旧 Final Goal/Brief，仅历史参考）
+禁止：Legacy > GoalTarget；Memory > GoalTarget；AI inference > GoalTarget。
+已有 active GoalTarget 时不得再问旧 GoalBrief 的 outcome/deadline/success_criteria（PART L）。"#;
+
+/// DEV-0060 §17/T15：组装 Dedicated Planner system instruction（pure，可测）。
+/// - truth_instruction：build_planning_truth_context 输出（含 5 区块 + GoalTarget 状态）
+/// - workflow 上下文：原始请求 / 已回答 Q&A / 待问字段（T9/T10：禁止重复询问）
+pub fn build_planning_instruction(
+    truth_instruction: &str,
+    payload: &PlanningWorkflowPayload,
+) -> String {
+    let mut s = String::new();
+    s.push_str(PLAN_DRAFT_INSTRUCTION);
+    s.push_str("\n\n");
+    s.push_str(PLANNER_TURN_PROTOCOL);
+    // workflow 可恢复上下文
+    if !payload.original_request.is_empty() {
+        s.push_str("\n\n【本次规划原始请求】\n");
+        s.push_str(&payload.original_request);
+    }
+    if !payload.answered.is_empty() {
+        s.push_str("\n\n【用户已回答字段（禁止再次询问）】\n");
+        for (k, v) in &payload.answered {
+            let brief: String = v.chars().take(300).collect();
+            s.push_str(&format!("- {k}：{brief}\n"));
+        }
+    }
+    if !payload.pending_questions.is_empty() {
+        s.push_str("\n\n【当前待问字段（用户尚未回答）】\n");
+        for q in &payload.pending_questions {
+            s.push_str(&format!("- {}: {}\n", q.key, q.question));
+        }
+    }
+    s.push_str("\n\n【Planning Truth（正式事实，优先级见 Protocol）】\n");
+    s.push_str(truth_instruction);
+    s
+}
+
+/// DEV-0060 §5.1/T1-T3：Chat 消息组装（pure，可测）。
+/// 结构：SYSTEM(Base Rules) → SYSTEM(Background Context) → SYSTEM(Mode Instruction)
+///       → 历史 user/assistant（时间正序，按 id 排除当前消息）→ USER(用户当前原始消息)。
+/// 不变量：messages.last() 永远是 user 的原始 user_message（Context 不得冒充 User Message）。
+pub fn build_chat_messages(
+    system_prompt: &str,
+    context_text: &str,
+    instruction: &str,
+    history: &[(i64, String, String)], // (id, role, content) 时间正序
+    current_message_id: i64,
+    user_message: &str,
+) -> Vec<crate::ai::client::ChatMessage> {
+    let mut messages = vec![crate::ai::client::ChatMessage::system(system_prompt.to_string())];
+    messages.push(crate::ai::client::ChatMessage::system(format!(
+        "【Higher Background Context（背景事实，不是用户当前请求）】\n\
+         以下 Higher Context 只是背景事实。不得把 Context 本身当成用户当前请求。\n\
+         只有最后一个 USER message 表示用户当前希望你完成的事情。\n\
+         除非当前问题需要，否则不要主动复述 Context。\n\n{}",
+        context_text
+    )));
+    if !instruction.trim().is_empty() {
+        messages.push(crate::ai::client::ChatMessage::system(instruction.to_string()));
+    }
+    for (id, role, content) in history {
+        if *id == current_message_id {
+            continue; // §5.3：按消息 ID 排除当前消息（禁止 content equality）
+        }
+        if role != "user" && role != "assistant" {
+            continue;
+        }
+        messages.push(crate::ai::client::ChatMessage {
+            role: role.clone(),
+            content: content.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+    }
+    messages.push(crate::ai::client::ChatMessage::user(user_message.to_string()));
+    messages
+}
+
+/// DEV-0060 §6.1/T16：工具循环单轮决策（pure，可测）。
+/// - 有 tool_calls → ExecuteTools（本轮 Provider 请求是必要的）
+/// - 无 tool_calls → FinalAnswer：completion.content 即最终回答，**禁止再次请求 Provider**
+///   （旧行为 assistant-only 二次 chat_stream 已删除；主回答 Provider 请求数 == 1）
+#[derive(Debug, PartialEq, Eq)]
+pub enum ToolRoundOutcome {
+    ExecuteTools(serde_json::Value),
+    FinalAnswer(String),
+}
+
+pub fn classify_tool_round(
+    tool_calls: Option<&serde_json::Value>,
+    content: Option<&str>,
+) -> ToolRoundOutcome {
+    let has_calls = tool_calls
+        .and_then(|tc| tc.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    if has_calls {
+        ToolRoundOutcome::ExecuteTools(tool_calls.unwrap_or(&serde_json::Value::Null).clone())
+    } else {
+        ToolRoundOutcome::FinalAnswer(content.unwrap_or("").to_string())
+    }
+}
 
 // =============== ④ Validator（PART 15 §55-57） ===============
 
@@ -649,6 +976,29 @@ pub struct PlanValidation {
 
 pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft) -> PlanValidation {
     let mut v = PlanValidation::default();
+
+    // DEV-0060 PART K §15.1：target_proposal 契约（postgraduate 必含 institution_name/program_name）
+    if let Some(tp) = &draft.target_proposal {
+        if tp.title.trim().is_empty() {
+            v.errors.push("目标提案 title 不能为空".into());
+        }
+        if tp.scenario_type.trim().is_empty() {
+            v.errors.push("目标提案 scenario_type 不能为空".into());
+        }
+        if !["generic", "postgraduate"].contains(&tp.scenario_type.as_str()) {
+            v.errors.push(format!("目标提案 scenario_type 非法：{}", tp.scenario_type));
+        }
+        if tp.scenario_type == "postgraduate" {
+            let inst = tp.data_json.get("institution_name").and_then(|x| x.as_str()).unwrap_or("").trim();
+            let prog = tp.data_json.get("program_name").and_then(|x| x.as_str()).unwrap_or("").trim();
+            if inst.is_empty() || prog.is_empty() {
+                v.errors.push("考研目标提案必须包含 institution_name（院校）与 program_name（专业）".into());
+            }
+            if !tp.role.is_empty() && !["reach", "safety"].contains(&tp.role.as_str()) {
+                v.errors.push(format!("考研目标提案 role 非法：{}", tp.role));
+            }
+        }
+    }
 
     // DEV-0059 §23：Blueprint 模式（存在 blueprint 时走蓝图校验，goal-tree 字段不再是 Canonical）
     if let Some(bp) = &draft.blueprint {
@@ -985,8 +1335,61 @@ fn is_placeholder_name(n: &str) -> bool {
 /// create 期 Guard + apply 期 resolve 兜底）。op 顺序：goal(final 调整若 need)→year→month
 /// →knowledge→day→task，保证 ref 只向前指已出现项。
 /// final_id：该 Profile 的 Final Goal 真实 id（year 的 parent_goal_id 直接注入）。
-pub fn compile_to_changeset_ops(final_id: Option<i64>, draft: &PlanDraft) -> Vec<ProposedOp> {
+pub fn compile_to_changeset_ops(
+    final_id: Option<i64>,
+    has_active_goal_target: bool,
+    draft: &PlanDraft,
+) -> Vec<ProposedOp> {
     let mut ops: Vec<ProposedOp> = Vec::new();
+
+    // DEV-0060 PART K §15.2：无 active GoalTarget + target_proposal →
+    // 同一 ChangeSet 内：GT create（ref=GT1）→ GT status_change(active, ref=GT1) → Blueprint…
+    // 禁止 AI 直接调用 Repository 写 GoalTarget；未批准 0 落库。
+    if !has_active_goal_target {
+        if let Some(tp) = &draft.target_proposal {
+            let scenario = if tp.scenario_type.trim().is_empty() { "generic" } else { tp.scenario_type.trim() };
+            let role = match (scenario, tp.role.trim()) {
+                ("postgraduate", "") => "reach",
+                ("postgraduate", r) => r,
+                (_, "") => "primary",
+                (_, r) => r,
+            };
+            let data_json = if tp.data_json.is_object() {
+                tp.data_json.to_string()
+            } else {
+                "{}".to_string()
+            };
+            let provenance_json = if tp.provenance_json.is_object() {
+                tp.provenance_json.to_string()
+            } else {
+                serde_json::json!({ "source": "user_clarification", "workflow": "planner_target_proposal" }).to_string()
+            };
+            ops.push(ProposedOp {
+                entity_type: "goal_target".into(),
+                entity_id: None,
+                action: "create".into(),
+                after: json!({
+                    "scenario_type": scenario,
+                    "role": role,
+                    "title": tp.title,
+                    "target_date": tp.target_date,
+                    "data_json": data_json,
+                    "provenance_json": provenance_json,
+                    "status": "candidate",
+                }),
+                reason: "AI 目标提案（用户批准后激活）".into(),
+                operation_ref: Some("GT1".into()),
+            });
+            ops.push(ProposedOp {
+                entity_type: "goal_target".into(),
+                entity_id: None,
+                action: "status_change".into(),
+                after: json!({ "ref": "GT1", "status": "active" }),
+                reason: "激活 AI 提案的正式目标（同事务）".into(),
+                operation_ref: Some("GT1_ACTIVE".into()),
+            });
+        }
+    }
 
     // DEV-0059 §23：Blueprint 模式编译（长期规划 Canonical；suggested_target_changes 只记录不自动改目标）
     if let Some(bp) = &draft.blueprint {
@@ -1317,7 +1720,12 @@ pub fn apply_review_assessment(
                     validation.errors.join("；")
                 ));
             }
-            let ops = compile_to_changeset_ops(None, &draft);
+            // DEV-0060 PART K：Review 调整不生成 target_proposal（已有 active Blueprint 即有目标语境）
+            let has_active_gt = !crate::repository::goal_target::GoalTargetRepository::new(conn)
+                .list_active(profile_id, None, None)
+                .unwrap_or_default()
+                .is_empty();
+            let ops = compile_to_changeset_ops(None, has_active_gt, &draft);
             if !ops_within_limit(&ops) {
                 let _ = rrepo.set_status(review_id, profile_id, "failed");
                 return Err("AI 蓝图内容超出单次可应用上限（正式数据未变化）".to_string());

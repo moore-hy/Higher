@@ -172,9 +172,9 @@ fn test_list_tasks_tool() {
         assert!(t0.get(forbidden).is_none(), "不得返回无关内部字段 {}", forbidden);
     }
 
-    // 6) allowlist 注册（DEV-0052 起 17 个工具）
+    // 6) allowlist 注册（DEV-0060 §9.3：禁止硬编码数量——与 tool_definitions 集合一致）
     assert!(TOOL_ALLOWLIST.contains(&"list_tasks"));
-    assert_eq!(TOOL_ALLOWLIST.len(), 17);
+    assert_eq!(TOOL_ALLOWLIST.len(), ai::tools::defined_tool_names().len());
     let _ = t1;
 }
 
@@ -376,7 +376,8 @@ fn test_allowlist_rejects_dangerous_tools() {
         .copied()
         .collect();
     assert!(direct_writes.is_empty(), "直接写工具泄漏：{:?}", direct_writes);
-    assert_eq!(TOOL_ALLOWLIST.len(), 17);
+    // DEV-0060 §9.3：不硬编码数量；集合一致性由 batch060 T7 保证
+    assert_eq!(TOOL_ALLOWLIST.len(), ai::tools::defined_tool_names().len());
 }
 
 // ---------- §87 assistant_chat 两类响应 ----------

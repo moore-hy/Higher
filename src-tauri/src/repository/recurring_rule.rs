@@ -21,11 +21,81 @@ pub struct RecurringRule {
     pub start_date: String,
     pub end_date: Option<String>,
     pub enabled: bool,
+    /// DEV-0060.1 v023：未来 materialized Task 继承（NULL=未设置）
+    #[serde(default)]
+    pub estimated_minutes: Option<i64>,
+    /// DEV-0060.1 v023：structured | accumulation
+    #[serde(default = "default_task_kind")]
+    pub task_kind: String,
+    /// DEV-0060.1 v023：core | normal
+    #[serde(default = "default_priority")]
+    pub priority: String,
     pub created_at: String,
     pub updated_at: String,
 }
 
-const RULE_COLUMNS: &str = "id, profile_id, goal_id, learning_item_id, title, repeat_type, weekdays_json, time_of_day, start_date, end_date, enabled, created_at, updated_at";
+fn default_task_kind() -> String {
+    "structured".into()
+}
+
+fn default_priority() -> String {
+    "normal".into()
+}
+
+/// v023 三字段的可选覆盖（None=保留默认/现状；Some("")=非法）。
+#[derive(Debug, Default, Clone)]
+pub struct RuleSemantics {
+    pub estimated_minutes: Option<i64>,
+    pub task_kind: Option<String>,
+    pub priority: Option<String>,
+}
+
+impl RuleSemantics {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(m) = self.estimated_minutes {
+            if !(1..=1440).contains(&m) {
+                return Err(format!("预计学习分钟必须在 1~1440 之间（收到 {m}）"));
+            }
+        }
+        if let Some(k) = &self.task_kind {
+            if k != "structured" && k != "accumulation" {
+                return Err(format!("task_kind 非法：{k}"));
+            }
+        }
+        if let Some(p) = &self.priority {
+            if p != "core" && p != "normal" {
+                return Err(format!("priority 非法：{p}"));
+            }
+        }
+        Ok(())
+    }
+    pub fn kind_or(&self, d: &str) -> &str {
+        match &self.task_kind {
+            Some(k) => k.as_str(),
+            None => {
+                if d == "accumulation" {
+                    "accumulation"
+                } else {
+                    "structured"
+                }
+            }
+        }
+    }
+    pub fn priority_or(&self, d: &str) -> &str {
+        match &self.priority {
+            Some(p) => p.as_str(),
+            None => {
+                if d == "core" {
+                    "core"
+                } else {
+                    "normal"
+                }
+            }
+        }
+    }
+}
+
+const RULE_COLUMNS: &str = "id, profile_id, goal_id, learning_item_id, title, repeat_type, weekdays_json, time_of_day, start_date, end_date, enabled, estimated_minutes, task_kind, priority, created_at, updated_at";
 
 pub struct RecurringRuleRepository<'a> {
     conn: &'a Connection,
@@ -37,6 +107,7 @@ impl<'a> RecurringRuleRepository<'a> {
     }
 
     /// 创建规则（Profile First：profile_id 必填；goal/item 可空；weekly 至少一个星期）。
+    /// DEV-0060.1 v023：支持 estimated_minutes/task_kind/priority（RuleSemantics）。
     #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
@@ -50,12 +121,34 @@ impl<'a> RecurringRuleRepository<'a> {
         start_date: &str,
         end_date: Option<&str>,
     ) -> Result<RecurringRule, String> {
+        self.create_with_semantics(
+            profile_id, goal_id, learning_item_id, title, repeat_type, weekdays, time_of_day,
+            start_date, end_date, &RuleSemantics::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with_semantics(
+        &self,
+        profile_id: i64,
+        goal_id: Option<i64>,
+        learning_item_id: Option<i64>,
+        title: &str,
+        repeat_type: &str,
+        weekdays: &[u32],
+        time_of_day: Option<&str>,
+        start_date: &str,
+        end_date: Option<&str>,
+        semantics: &RuleSemantics,
+    ) -> Result<RecurringRule, String> {
         validate(repeat_type, weekdays, start_date, end_date)?;
+        semantics.validate()?;
         self.conn
             .execute(
                 "INSERT INTO recurring_task_rules
-                 (profile_id, goal_id, learning_item_id, title, repeat_type, weekdays_json, time_of_day, start_date, end_date)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 (profile_id, goal_id, learning_item_id, title, repeat_type, weekdays_json, time_of_day, start_date, end_date,
+                  estimated_minutes, task_kind, priority)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     profile_id,
                     goal_id,
@@ -65,7 +158,10 @@ impl<'a> RecurringRuleRepository<'a> {
                     serde_json::to_string(weekdays).unwrap_or_else(|_| "[]".into()),
                     time_of_day,
                     start_date,
-                    end_date
+                    end_date,
+                    semantics.estimated_minutes,
+                    semantics.kind_or("structured"),
+                    semantics.priority_or("normal"),
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -109,6 +205,7 @@ impl<'a> RecurringRuleRepository<'a> {
     }
 
     /// 编辑规则（只影响未来 materialization，不重写历史 Task）。
+    /// DEV-0060.1 v023：update_with_semantics 可同步改三字段（None=保留现状）。
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &self,
@@ -121,7 +218,27 @@ impl<'a> RecurringRuleRepository<'a> {
         end_date: Option<&str>,
         learning_item_id: Option<i64>,
     ) -> Result<(), String> {
+        self.update_with_semantics(
+            id, title, repeat_type, weekdays, time_of_day, start_date, end_date, learning_item_id,
+            &RuleSemantics::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_with_semantics(
+        &self,
+        id: i64,
+        title: &str,
+        repeat_type: &str,
+        weekdays: &[u32],
+        time_of_day: Option<&str>,
+        start_date: &str,
+        end_date: Option<&str>,
+        learning_item_id: Option<i64>,
+        semantics: &RuleSemantics,
+    ) -> Result<(), String> {
         validate(repeat_type, weekdays, start_date, end_date)?;
+        semantics.validate()?;
         // 同档案校验（learning_item 若存在必须属于规则所在档案）
         if let Some(item) = learning_item_id {
             let profile_of_rule: Option<i64> = self
@@ -145,12 +262,14 @@ impl<'a> RecurringRuleRepository<'a> {
                 _ => return Err("所选知识不属于当前学习档案，无法关联".to_string()),
             }
         }
+        let existing = self.get(id)?.ok_or("规则不存在")?;
         self.conn
             .execute(
                 "UPDATE recurring_task_rules
                  SET title=?1, repeat_type=?2, weekdays_json=?3, time_of_day=?4,
-                     start_date=?5, end_date=?6, learning_item_id=?7, updated_at=datetime('now')
-                 WHERE id = ?8",
+                     start_date=?5, end_date=?6, learning_item_id=?7,
+                     estimated_minutes=?8, task_kind=?9, priority=?10, updated_at=datetime('now')
+                 WHERE id = ?11",
                 params![
                     title,
                     repeat_type,
@@ -159,6 +278,9 @@ impl<'a> RecurringRuleRepository<'a> {
                     start_date,
                     end_date,
                     learning_item_id,
+                    semantics.estimated_minutes.or(existing.estimated_minutes),
+                    semantics.kind_or(&existing.task_kind),
+                    semantics.priority_or(&existing.priority),
                     id
                 ],
             )
@@ -227,8 +349,11 @@ fn parse_rule(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecurringRule> {
         start_date: row.get(8)?,
         end_date: row.get(9)?,
         enabled: row.get::<_, i64>(10)? != 0,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        estimated_minutes: row.get(11)?,
+        task_kind: row.get(12)?,
+        priority: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -300,7 +425,7 @@ pub fn materialize_recurring_tasks(
             continue; // 幂等
         }
         task_repo
-            .create_from_rule(
+            .create_from_rule_v2(
                 rule.profile_id,
                 rule.goal_id,
                 rule.learning_item_id,
@@ -308,9 +433,77 @@ pub fn materialize_recurring_tasks(
                 date,
                 rule.time_of_day.as_deref(),
                 rule.id,
+                rule.estimated_minutes,
+                &rule.task_kind,
+                &rule.priority,
             )
             .map_err(|e| e.to_string())?;
         created += 1;
     }
     Ok(created)
+}
+
+// =============== DEV-0061R §51-54 · Bounded Materialization（Range + Rolling Horizon） ===============
+
+/// 固定 Rolling Horizon（§52）：新 Rule Apply 后 / Today 刷新时保证未来 30 天可见。
+pub const ROLLING_HORIZON_DAYS: i64 = 30;
+/// Range 上限防御（§54 bounded；Calendar 一次最多一个月，400 天绝对富余）。
+const MAX_RANGE_DAYS: i64 = 400;
+
+/// 纯日期 +n（SQLite julianday；无时区语义）。
+fn shift_date(base: &str, n: i64) -> Result<String, String> {
+    Connection::open_in_memory()
+        .and_then(|c| {
+            c.query_row(
+                "SELECT date(?1, printf('%+d days', ?2))",
+                params![base, n],
+                |r| r.get::<_, String>(0),
+            )
+        })
+        .map_err(|e| format!("日期运算失败：{e}"))
+}
+
+/// 范围内有界物化（§54：idempotent / deterministic / bounded；重复调用 0 duplicate）。
+/// 覆盖 Planning Calendar 可见月（§53：可超 rolling 30 天，按显示月份有界物化）。
+pub fn materialize_recurring_tasks_range(
+    conn: &Connection,
+    profile_id: i64,
+    start_date: &str,
+    end_date: &str,
+) -> Result<i64, String> {
+    let s = shift_date(start_date, 0)?;
+    let e = shift_date(end_date, 0)?;
+    if e < s {
+        return Err(format!("materialize range 起止颠倒：{s}..{e}"));
+    }
+    let span: i64 = conn
+        .query_row(
+            "SELECT CAST(julianday(?1) - julianday(?2) AS INTEGER)",
+            params![e, s],
+            |r| r.get(0),
+        )
+        .map_err(|er| er.to_string())?;
+    if span > MAX_RANGE_DAYS {
+        return Err(format!("materialize range 超出有界上限（{span} 天 > {MAX_RANGE_DAYS}）"));
+    }
+    let mut created = 0i64;
+    let mut d = s.clone();
+    loop {
+        created += materialize_recurring_tasks(conn, profile_id, &d)?;
+        if d == e {
+            break;
+        }
+        d = shift_date(&d, 1)?;
+    }
+    Ok(created)
+}
+
+/// Rolling Horizon 物化（§52：today .. today+30）。
+pub fn materialize_rolling_horizon(
+    conn: &Connection,
+    profile_id: i64,
+    today: &str,
+) -> Result<i64, String> {
+    let end = shift_date(today, ROLLING_HORIZON_DAYS)?;
+    materialize_recurring_tasks_range(conn, profile_id, today, &end)
 }

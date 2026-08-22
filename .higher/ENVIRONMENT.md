@@ -6,14 +6,14 @@
 ## Metadata
 | 字段 | 值 |
 |---|---|
-| Context Version | **HGCTX-0005**（DEV-0059/0059.1/0059.2 收口：Personal Planning Truth + Final Human-Path Guardrails 完成；施工记录见 TRAE_RUN DEV-0059.2 段落） |
-| Current Schema | **v022**（22 migrations：…v020 goal_truth_convergence / v021 personal_planning_truth / v022 personal_xlsx；**head 已 v022**，dev DB 应用启动迁移后落 v022） |
-| Last Completed DEV | **DEV-0059.2**（Final Human-Path Guardrails：Review ChangeSet 可审阅 / cadence 周期 / structured facts 进 Context / scenario 继承 / source_review / 分页读取 / 手工首蓝图 / reality_change 建议复盘） |
-| Current DEV | 无（**STOP**：DEV-0059.2 §14 Gate 全绿；下一步 = Human Runtime H1-H11，不新增功能） |
-| Last Updated | 2026-08-18（系统时间，DEV-0059.2 收口） |
-| Source Fingerprint | Git：main @ 457fe5e；**WORKTREE DIRTY：YES**（DEV-0059/0059.1/0059.2 全部未提交工作；HEAD≠当前代码，以工作区为准） |
-| Runtime Status | 旧证据：**v020 VERIFIED BY USER RUNTIME**（2026-08-17 用户实机）；**v021/v022 Human Runtime 尚未验证**（H1-H11 待用户实机，见 §23 清单）——不得写 Runtime Verified |
-| Gate Status | **DEV-0059.2 recorded automated gate**：cargo check **0 errors** / batch0592 **12/12** / 全量 cargo test（低并发 RUST_TEST_THREADS=1 + cargo test -j 1）**366 passed · 0 failed** / tsc **0 errors** / npm run build **通过**；真实 DeepSeek 本轮 **0 次自动调用** |
+| Context Version | **HGCTX-0009**（DEV-0061R Higher AI Runtime Stabilization：AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING） |
+| Current Schema | **v023**（DEV-0061R **0 migration**——Turn Interpreter/Semantic Contract v2/Conversation-Scoped Recent/Trace 生命周期/Rolling Materialization 全部复用既有表与内存结构，schema 保持 v023） |
+| Last Completed DEV | **DEV-0061R**（Recovery：Semantic Contract v2 显式 patch / Turn Interpreter 唯一控制入口（一次请求 route+action，控制层 temp=0）/ Repair Once / ContractFailure↔NothingToChange 分离 / Recent (profile,conversation) 隔离 + restart fallback / Planner 关键词收窄 + escape / Unified Higher AI（双模式退役）/ ONE NL Entry / Error Boundary / ai_runs running 先 INSERT / rolling 30d materialization / reconcile 四重保护 / Task 菜单 z-index+六 handler） |
+| Current DEV | 无（**AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING**：等待用户实机 H01-H22，见下方 Checklist / TASK §69） |
+| Last Updated | 2026-08-22T10:22:01+08:00（系统时间，DEV-0061R 收口） |
+| Source Fingerprint | Git：main @ 457fe5e；**WORKTREE DIRTY：YES**（DEV-0059→0061R 全部未提交工作；HEAD≠当前代码，以工作区为准） |
+| Runtime Status | 旧证据：**v020 VERIFIED BY USER RUNTIME**（2026-08-17）；DEV-0060.1 主骨架 Human Runtime 已确认；**v021/v022/v023 及 0060.2/0061R Human Runtime 尚未验证**——不得写 Runtime Verified |
+| Gate Status | **DEV-0061R recorded automated gate**：cargo check **0 errors** / batch061r **47/47** / 回归 batch0601 **33/33** · batch0602 **29/29** · batch060 **16/16** · batch0592 **12/12** · ai_assistant **10/10** · ai_panel **8/8** / tsc **0 errors** / npm run build **通过**（按 TASK 纪律本轮未跑 full cargo test）；真实 DeepSeek 本轮 **0 次自动调用** |
 | Document Status | 本文件 CURRENT；`archive/audit/`=审计时点证据（非永久当前）；`archive/history/`=仅历史；`archive/reference/`=速查参考；`progress/CURRENT.md`=跳转页 |
 
 ## Documentation Authority（文件权威表）
@@ -75,7 +75,8 @@ Study First（先学再归档）· Profile First（档案=隔离容器，非账�
 - **Evaluation**：用户/AI 录入的验证（RESTRICT FK）；**Mastery**：AI 周期评估（40/30/30 三维+insufficient 强校验+stale）——**后端完整、UI 悬空**。
 
 ## 6. Database Snapshot
-- Schema **v022** / 22 migrations / dev DB=`src-tauri/.data/higher.db` / prod=`%LOCALAPPDATA%\com.higher.desktop\higher.db`；**Connection Model = 单 SQLite 连接 `DbState(Mutex)`**（长事务会阻塞 IPC——已知架构风险）。
+- Schema **v023** / 23 migrations / dev DB=`src-tauri/.data/higher.db` / prod=`%LOCALAPPDATA%\com.higher.desktop\higher.db`；**Connection Model = 单 SQLite 连接 `DbState(Mutex)`**（长事务会阻塞 IPC——已知架构风险）。
+- v023 变更（DEV-0060.1）：`recurring_task_rules` 三条 ALTER ADD——`estimated_minutes INTEGER NULL` / `task_kind TEXT NOT NULL DEFAULT 'structured'` / `priority TEXT NOT NULL DEFAULT 'normal'`；legacy 行保留默认值（0 损失，batch0601 T1-T4 锁定）；materialization 继承三字段到 tasks。
 - v022 变更：`personalization_sources` 重建表，`file_type` CHECK 加入 `'xlsx'`（保留数据与索引；DEV-0059.1 §9 Personal Source 支持 XLSX）。
 - v021 变更（DEV-0059）：`trusted_study_sessions` VIEW（排除 needs_review）｜`ai_runs` +workflow_type/state/json（Planner 显式状态机）｜`personalization_profiles` 重建为 version rows（draft/confirmed/superseded）+ `personalization_profile_sources` 快照｜`goal_targets`（scenario_type/role/status + 考研 partial unique）｜`planning_sources/chunks`、`planning_blueprints/phases/milestones`、`planning_reviews`｜`evaluations` Evidence V1 列（session_id/source_kind/source_ref/trust_state）｜`tasks` +origin/planning_blueprint_id/planning_phase_id/projection_key/user_modified_at + projection UNIQUE 索引。
 - 表分类：核心业务 8（profiles/goals/tasks/sessions/learning_items/knowledge_documents/evaluations/recurring_rules）· 反馈主线 2（feedbacks/adjustments）· AI 全家族 7（conversations/messages/runs/sources/memory/personalization×3/change_sets+operations）· 基础设施 4（search_index+FTS5/settings/attachments）· **DEV-0059 新增**（personalization version rows+profile_sources / goal_targets / planning_sources+chunks / planning_blueprints+phases+milestones / planning_reviews）。完整字段/FK/索引 → `archive/audit/HIGHER_DATA_MODEL.md`（v019 时点 + v020-022 增量见本节）。
@@ -87,19 +88,66 @@ Study First（先学再归档）· Profile First（档案=隔离容器，非账�
 - **Readiness 门**：outcome + deadline（或 constraints 声明"无截止"）+ ≥1 success_criteria → Planner 前置。
 - **冲突检测**：detect_goal_conflicts（3 比对）不自动选。**Memory 正式不作为 Goal Source of Truth（PDR-016）**；goal_context=LEGACY_RESERVED（无 writer，不加）。
 
-## 8. AI Current State
+## 8. AI Current State（DEV-0060 后）
 - **Provider**：Deepseek 系（settings KV `ai.provider/base_url/api_key/model/thinking_enabled`；默认 api.deepseek.com / deepseek-v4-flash；**key 明文本地存储**，UI 回显；超时 120s/连接 15s；流式 chat_stream）。
-- **双模式**：readonly（读工具+needs_assistant 协议）vs assistant（+propose/规划管线）；Write Intent Guard：助手模式有写意图却无 ChangeSet → 系统打脸文案+no_changeset 事件。
-- **Context Builder = 唯一正式 AI Context（DEV-0057 PART M 收口）**：五层 60k（L1 当前上下文+final goal 名 / L2 私人化命中段落≤8k / L3 Higher FTS 12×200 / L4 Memory12+跨会话6×400 / L5 工具期动态）。**旧 ai_analyze 的 ai/context.rs 已降级为 Compatibility Adapter**（内部调统一 Builder；仅保留 action 专属数据块）；前端 scope chips 已真实映射 aiStartRun(knowledgePath/sessionTitle)，无作用 chips（当前规划/整个档案）已隐藏。**双轨 CONFLICT 已解决（RESOLVED DEV-0057）**。
-- **工具（17）**：READ **14** / WEB **2** / PROPOSAL **1** / **Direct Write = 0**（未来若变=重大产品变更需人工决策）。
-- **Conversation/Run**：5 表（ai_run_events=死表）；流式 ai://delta 按 runId 过滤；Cancel=token 检查点；历史分页 50；**前端消息窗口有界 ≤200**（默认 50+向上加载，DEV-0057 PART X）。
+- **模式（DEV-0061R 起）**：**Unified Higher AI**——readonly/assistant 双模式已退役（后端 `is_assistant` 恒 true；旧 readonly conversation 不阻止 Proposal；前端 mode UI 全删）；Write Intent Guard 保留：有写意图却无 ChangeSet → 系统打脸文案+no_changeset 事件。
+- **Message Assembly（DEV-0060 PART A，P0 修复）**：`SYSTEM(base) → SYSTEM(Higher Background Context，含"背景非请求"声明) → SYSTEM(mode/planner instruction) → 历史 user/assistant（按 ai_messages.id 排除当前条，禁止 content equality）→ USER(用户当前原始消息)`——messages.last() 永远是用户当前请求；Context 不得冒充 User Message。
+- **Main Completion（DEV-0060 PART B）**：工具循环单轮决策 `classify_tool_round`——无 tool_calls → completion.content 即最终回答（ai://delta 整段发送，**主回答 Provider 生成次数=1**）；旧 assistant-only 二次 chat_stream 已删除。合法 secondary：Planner Validation Repair Once / Citation Repair / Memory Extract（Generic purpose 跳过）。
+- **Context Builder = 唯一正式 AI Context（DEV-0057 起；DEV-0060 PART C 按需装载）**：`ContextPurpose`（Generic/Personal/HigherData/Planning/Knowledge/Session）确定性检测——**Generic（如 1+1）仅注入页面/模式**（无 PersonalProfile/GoalTarget/Memory/跨会话历史）；**Planning 走 build_planning_truth_context**（普通层最小化）；Personal/HigherData/Session/Knowledge 五层 60k 全量（L1 当前上下文+GoalTarget 目标行 / L2 私人化≤10k / L3 FTS 12 / L4 Memory12+跨会话6）。旧 ai_analyze（ai/context.rs）固定 HigherData=Compatibility Adapter。
+- **Canonical Goal（DEV-0060 PART D）**：AI 正式目标 Source of Truth = **active GoalTarget**（REACH 主/SAFETY 参考）；L1「当前目标」行、`get_current_goal`（Canonical GoalTarget Adapter：formal_targets/primary/safety/legacy_candidates，canonical=goal_target）全部以 GoalTarget 为准；无 GT →「正式目标未设置」，**legacy goals.final/study_profiles.target_* 只作候选/观察（legacy_target_*，canonical=false），永不晋升**。
+- **工具（21，源码重算 TOOL_ALLOWLIST.len()=21）**：READ **18**（含 4 个 Planning Read：list_planning_sources/read_planning_source 分页/list_active_goal_targets/read_active_planning_blueprint，DEV-0060 正式入 Allowlist）/ WEB **2** / PROPOSAL **1** / **Direct Write = 0**；定义与 Allowlist 集合一致性由 batch060 T7 自动锁定（禁止手写数量断言）。**DEV-0060.1 Dynamic Tool Scoping**：Tool Registry（21 ToolSpec 带 permission/affinity）→ `tool_definitions_for_scopes(scopes_for_route(route))` 按路由裁剪——FastChat=**[]**、HigherRead=personal/task/knowledge/read 亲和、Planning=planning+web（≤6）；Action Provider 调用 tools=None。
+- **Conversation/Run**：5 表；`ai_run_events` **DEV-0060.1 起复活为 Performance Trace 事件表**（Trace 结构化写入 route_decided/context_built/provider_request_started|first_delta|finished/tool_round/semantic_action_parsed/domain_resolved/changeset_compiled/run_finished + 自动 t_ms；main/secondary Provider 计数分开；禁记 API Key/完整 Prompt/隐私全文）；流式 ai://delta 按 runId 过滤；Cancel=token 检查点；历史分页 50；**前端消息窗口有界 ≤200**（默认 50+向上加载，DEV-0057 PART X）；AiPanel run-status 兼容 planner_cancelled/handoff_chat（DEV-0060）。
 - **list_recent_sessions**：LEFT JOIN（Quick 未关联学习可见，+title/kind/status/review_state）**RESOLVED DEV-0057**。
 - **Memory key**：category+规范化 subject 稳定生成（`cat::小写字母数字`）——同事实同 key → supersede 生效；Extractor 只产 5 可达类型。**RESOLVED DEV-0057**。
 
-## 9. AI Planning（真实状态）
-**全部 CONFIRMED by source**：Dedicated Planner（ai/planner.rs）→ **Planning Intent**（强短语 47[DEV-0057 补口语：排个日程/帮我排一下/做个两周计划/安排进去…] + 名词×写动词；建议类排除）→ **Goal Conflict**（拦截+提示确认）→ **Goal Readiness**（缺项→Clarification ≤5 问同会话）→ **PlanDraft**（严格 JSON）→ **Validation**（层级/月∈年/日∈月/rest 无 task/日期/分钟/重复/粒度/超载）→ **§88-90 失败自动重试一次（错误回喂）；二次失败显示具体错误（不循环）**→ **Compiler**（F0→Y→M→K→D→T；ref 前向；≤120 ops）→ **ChangeSet** → **Approval** → **Apply**（单事务）→ **Rolling Horizon**（14 天双保险）。
-AI 可创建：Year/Month/Day/Task/Knowledge/RestDay=✅；Final=Planner 仅 brief update（title 同步）；Document/Session create=**不可**。
-**Runtime VERIFIED?：NO**（真实 Key+真机走通 → Human Checklist #6）。
+## 8b. AI Semantic Runtime（DEV-0060.1 起）
+- **Runtime Envelope（PART A）**：`AiRuntimeEnvelope`——前端每次 send 传 `localDate/localDatetime/timezoneOffsetMinutes`（WebView 本地时钟），backend `validated()` 校验格式并**自行推导 weekday**（不信前端）；`prompt_block()` 注入【Runtime Time Truth】（今天/星期/UTC 时区/当前时间；page_date≠today 时显式提示）。**page_date（用户看的日期）与 runtime date（真实现在）语义分离**。
+- **TemporalIntent（确定性 Time Resolver）**：`today/tomorrow/offset_days(0..365)/absolute_date/weekday_relative(1..7)` → `resolve(env)` 纯函数换算；`validate_temporal_semantics`：intent 与编译日期不符 → **Reject（拒绝入库）**（模型不再可能把"今天"写成三天前）。
+- **Skill System（PART B）**：`src-tauri/src/ai/skills/`——SkillSpec（id/version/description/instructions=served SKILL.md 全文 include_str! 编译期嵌入，supported_intents/required_capabilities/optional_tools）；Registry 首批仅 **time / task / recurring_task** 三 Skill（`skills/<id>/SKILL.md`）；`validate_registry()` SKILL_CONTRACT_STALE 防过时（capability/tool 引用存在性）；**运行时 0 源码扫描**。Capability Registry 9 项（time.resolve / task.create|update|set_status / entity.resolve_task / recurring_rule.create|update|set_enabled / entity.resolve_recurring_rule）。
+- **Turn Router（PART C）**：六路由 `FastChat/HigherRead/SemanticAction(action)/Planning/PlannerContinuation/Clarification`；`fast_chat_shortcut` 高置信本地短路（寒暄/纯概念，且不含 Higher 线索）；其余一次轻量 Semantic Router 调用（json mode 400 tokens，tools=0，输入=消息+envelope+planner 摘要+skill 摘要）；**conservative 默认**：active Planner 等待回答→planner_continuation，否则→higher_read（动作请求绝不判 FastChat）。
+- **FastChat 真流式（PART D）**：`chat_stream` 每 delta 即 emit ai://delta（首字直显）；tools=0 / Memory Extract=0 / 私有 Context=0；`bound_history(8 轮, 14000 字符)`；流式失败单次非流式 fallback（主请求语义仍=1）。
+- **Typed SemanticAction（PART E）**：六动作（create_task/update_task/set_task_status/create_recurring_task/update_recurring_task/set_recurring_enabled，serde tag=type）；模型**不输出 ProposedOp/实体 id**；Entity Resolver（title LIKE + 可选日期过滤；0→NotFound、2+→Ambiguous 澄清）；Domain Compiler 纯构造 ops（含 `recurring_rule_ref:"R1"` 前向引用与 initial task）；Validator=时间语义 + Minimal Change Scope（实体 ⊆ requested；knowledge create 硬禁）；Invalid JSON **Repair Once**（只修 schema 不重新发挥）；成功后总结由 Compiler 确定性产出（**禁二次模型总结**）。readonly 模式动作请求 → needs_assistant（Approval First 不削弱）。
+- **ChangeSet recurring_rule（PART H）**：create/update/status_change/delete 四操作；task create 读 `recurring_rule_id|recurring_rule_real_id` 写入 tasks；`check_forward_refs`+`resolve_refs` 支持 recurring_rule_ref；Undo 覆盖 create/update 分支（table_of→recurring_task_rules）。**task update V2（PART I）**：八字段（title/date/time/goal/item/estimated/kind/pri）未提供保留 before（before 快照与 apply 期 fetch_task 均含 V2 全字段——batch0601 T28/T29 锁定）。
+- **手工路径一致性（PART G）**：TaskModal 选重复 → **只建规则 + materialize 首日**（不再先建无 rule_id 的普通 Task；不要求关联 Knowledge）；`create_recurring_rule/update_recurring_rule` Tauri 命令 + api.ts + types.ts 同步三语义字段。
+- **Prompt（PART L）**：SYSTEM_PROMPT 双树规划段改为 Knowledge Optional + Minimal Change Scope；新增【Semantic Understanding】段；删除"Task 必须自动建 Knowledge"语义。
+
+## 8c. AI Grounding Layer（DEV-0060.2 起）
+- **修复的两个真实失败**（Human Runtime 2026-08-21 确认）：①「把今天那个背单词任务改成30分钟」→ NotFound——根因 `resolve_task` 用 `title LIKE '%背单词%'`，而"背单词"不是"背10个英语单词"的连续子串，LIKE 必败；②「以后不要再每天背单词了」→ "ChangeSet 至少包含一个操作"——rule LIKE 同败 → 0 op → 内部错误文案泄漏。
+- **grounding.rs（新模块，0 migration / 0 源码扫描 / 0 embedding）**：
+  - `EntityHint`（ReferenceHint，模型输出）：entity_type/title_hint/date(TemporalIntent)/status_hint/recurrence_hint/recency_hint(recent_created|recent_updated)/quantity(singular|plural)/scope_hint(current)——只描述"用户说的是谁"。
+  - `TargetScope`：Occurrence / Series / MatchedSet / Recent / Current。
+  - Candidate Retrieval（Structured Narrowing First）：task 按 profile+date+status(+recurring presence) 结构过滤；rule 按 profile+enabled+repeat_type；**>8 才用通用 lexical（子串→bigram 重合度）缩小**；Candidate DTO 只暴露 candidate_id("T-3"/"R-2")/title/date/time/status/enabled/repeat_type。
+  - Grounding 优先级：Recent → Retrieval → 唯一候选直接 Ground（**0 额外调用**）→ 2..8 候选一次 `selection_prompt`+`parse_selection`（candidate_id guard：幻想 ID → Invalid → 安全澄清）→ Ambiguous → NotFound。
+  - `GroundingOutcome`：Resolved / ResolvedMany / Ambiguous(Vec<Candidate>) / NotFound / Unsupported（typed，不再 Err 一路抛到底层）。
+  - `RecentEntityContext`：**app-session-local ephemeral**（OnceLock<Mutex>，每类≤10；重启可丢失，非 Canonical Fact）；`record_apply` 挂在 `apply_ai_change_set` 成功后（从 ai_change_operations 回读 create 的真实 id——apply 已回写 after_json）；`resolve_recent` 支持"刚才那个/那两个"。
+  - `retrieve_bulk_tasks`（BulkFilter：date/status/title_hint/recurring）→ MatchedSet。
+- **action.rs 升级（plan_action）**：SemanticAction 扩展为 9 变体（+DeleteTask/DeleteRecurringRule/BulkUpdateTasks；UpdateTask/SetRecurringEnabled 改 payload 化 + reconcile_future/cleanup_future 默认 true）；`ActionOutcome`（ProposalReady{ops,title,summary,scope,selection_called}/Clarification/NotFound/NothingToChange/Unsupported——全部用户语言文案）；UpdateTask diff 判 NothingToChange（已一致不建提案）；**一个请求多 ProposedOp → ONE ChangeSet**（bulk/resolvedMany/series reconcile）；UpdateRecurringTask 同步未来 pending materialized（time/estimated/title；planned_date>today 且 status=pending——过去/Completed 永不动）；SetRecurringEnabled(false) 清理未来 pending 投影（今天/历史保留）；compile_action/validate_action 保留为 DEV-0060.1 兼容入口（EmptyPlanGuard 加入 validate）。旧 resolve_task/resolve_recurring_rule（LIKE 语义）保留供 batch0601 锁定。
+- **lib.rs 编排**：SemanticAction 分支 = semantic call（1）→ Pre-Grounding（trace grounding_started/candidates_retrieved/…；唯一→resolved 0 call；2..8→selection call（≤1，json 300 tok）→ candidate_selection_*）→ plan_action → ProposalReady 才 create ChangeSet（empty_plan_guarded/action_plan_compiled trace）；NotFound/Ambiguous/NothingToChange → 用户文案，0 mutation。**Provider 预算：普通 Action ≤2 次**。
+- **trace 9 新事件**：grounding_started / candidates_retrieved / grounding_resolved(selection_provider_called) / grounding_ambiguous / grounding_not_found / candidate_selection_started|finished / action_plan_compiled / empty_plan_guarded（data_json 只记 entity_type/candidate_count/result/operation_count）。
+- **SKILL v2**：task（+delete_task/bulk_update_tasks/Reference Semantics/Scope）、recurring_task（+delete_recurring_rule/Occurrence vs Series/reconcile_future:false）、time（+引用日期进 target.date）；Capability Registry 9→13（+task.delete/task.bulk_update/recurring_rule.delete）；semantic_action_prompt 输出 schema 重写（示例常量化）。
+
+## 8d. AI Runtime Stabilization（DEV-0061R 起 · 当前真实工程事实）
+- **Runtime Architecture**：**Turn Interpreter = 唯一控制入口**（`ai/runtime.rs::turn_interpreter_prompt` + `parse_turn_decision`）——每轮一次请求（temp=0、json mode、1400 tok）同时产出 `TurnDecision { FastChat | HigherRead{skills} | Action{action:SemanticAction} | Planning | PlannerContinuation | Clarification{question} }`；route=action 直接携带 typed action（**动作不再二次调用模型**）；PlannerContinuation 仅 active workflow 时成立；输入=当前消息+Envelope+Planner 摘要+Skill 摘要+≤3 条 recent **user** messages（仅指代型请求辅助）。控制层（Interpreter / Repair / Candidate Selection）全部 `chat_with_temperature(..., 0.0)`；普通聊天 0.3（client.rs `chat()` 委托）。旧 Semantic Router 路径已删除。
+- **Semantic Contract**：**version 2**——`ai/semantic_contract.rs` 唯一事实源（13 条 canonical JSON examples；Prompt / Parser / SKILL / 测试同源；`all_examples_parse()` 锁定）。UpdateTask/UpdateRecurringTask/BulkUpdateTasks 显式 `patch` 字段（serde flatten 已全部删除）；`ActionOutcome::ContractFailure`（模型输出不可靠，与 NothingToChange 严格分离）；**Repair Once**（temp=0、tools=0、只含 Contract+invalid JSON+parser_error；二次失败→兜底 HigherRead 确定性文案）。
+- **Recent Grounding（Conversation-scoped）**：`grounding.rs` Recent = `HashMap<(profile_id, conversation_id), RecentEntityContext>`（OnceLock<Mutex>）——同会话命中、跨会话/跨 Profile 不命中；**restart fallback**：`load_recent_from_applied` 从同 (profile,conversation) latest **applied** ChangeSet 回读；**Pending Proposal ≠ Canonical Recent**（仅 Apply 成功记入，`record_apply` 四参挂 `apply_ai_change_set`）。
+- **Planner 边界**：`PLANNING_WRITE_PATTERNS` 已收窄（删除「帮我安排/生成任务/安排一下」等 broad keywords——「明天下午帮我安排一个30分钟数学复习任务」= Action）；Hints×Verbs 双条件（Verbs 不含「生成/创建」）；「先不规划了…」escape；写意图恒 Planning（NeedsAssistant 枚举保留但永不产生）。
+- **ContextPurpose**：用户消息优先——Session/Knowledge 需显式 session_cues/knowledge_cues 指代才升级（页面是 Soft Context；Knowledge 页「1+1」仍 Generic）。
+- **Trace state**：`ai_runs` 先 `INSERT ... status='running' ON CONFLICT DO NOTHING`（满足 ai_run_events FK，早期事件不再丢）；终态 `ON CONFLICT(id) DO UPDATE`（同一 run row）；事件全集含 `turn_started / turn_decided / semantic_action_repaired / changeset_created` + 既有 grounding/provider/changeset 事件——全部真实持久化（batch061r R21-R23 锁定）。
+- **Recurring implementation**：`ROLLING_HORIZON_DAYS=30` / `MAX_RANGE_DAYS=400`；`materialize_recurring_tasks_range(conn,p,start,end)` 逐日幂等（起止颠倒/超界 Err）+ `materialize_rolling_horizon(conn,p,today)`；recurring_rule create Apply 后自动 rolling 30d；PlanningCalendar refresh=可见月 Range / 30s 定时=Rolling；Today refresh/定时=Rolling；Tauri 命令 `materialize_recurring_tasks_range` / `materialize_recurring_rolling`。**Reconcile 四重保护**：`planned_date > today AND status='pending' AND user_modified_at IS NULL AND NOT EXISTS(study_sessions)`——past/completed/手改/有 Session 事实的 occurrence 永不动；disable 只清合法未来 pending derived。
+- **ONE Interactive NL Entry**：`AiPanelContext.sendChat` → `pendingSendRef + higher:aipanel-pending-send` 事件 → AiPanel 主发送路径（aiStartRun）；aiAnalyze assistant_chat 不再承担通用聊天。
+- **Error Boundary**：用户永不看到 missing field/serde/SQL/Rust 内部文案（batch061r R20 源码级锁定）；ContractFailure 走用户语言。
+- **Skills count**：3（time / task / recurring_task；Registry version 2，SKILL.md 示例已全部对齐 `patch` 字段）。
+- **Current test files（本轮 Gate 覆盖）**：batch061r（47）+ 回归 batch0601/batch0602/batch060/batch0592/ai_assistant/ai_panel；其余 suite 未在本轮运行（TASK 纪律默认不跑 full cargo test）。
+- **Task ⋯ 菜单**：`.taskmenu__pop` z-index=70（> backdrop 60）；六项（编辑/调整日期/调整目标/调整知识/修改类型/删除）handler 全部真实可用。
+
+## 9. AI Planning（DEV-0060 后真实状态）
+**全部 CONFIRMED by source**：Dedicated Planner（ai/planner.rs）→ **Planning Intent**（强短语+名词×写动词；建议类排除）→ **workflow 续跑三分流**（active workflow 下 `planning_continuation_decision`：取消短语→cancelled 不调 AI；真回答→Continue 吸收进 payload；新意图「帮我看看今日计划/1+1」→handoff，**不再无条件劫持**）→ **PLANNER_TURN_PROTOCOL**（Provider 严格输出 TYPE A clarification（≤5 问，key 字段）/ TYPE B plan_draft / TYPE C handoff_chat；事实优先级 GoalTarget>PersonalProfile>Sources>Blueprint>trusted evidence>用户澄清>legacy candidate）→ **PlanDraft**（严格 JSON；可带 target_proposal）→ **Validation**（失败自动重试一次）→ **Compiler**（无 active GT+target_proposal → **同一 ChangeSet：GT create→GT activate→Blueprint→Phase/Milestone**，未批准 0 落库）→ **ChangeSet** → **Approval** → **Apply**（单事务）→ **Rolling Horizon**（14 天双保险）。
+- **workflow 持久化**：ai_runs.workflow_json = `PlanningWorkflowPayload`（original_request/pending_questions/answered/goal_source/started_from_run_id/updated_by_user_turn——可恢复业务流程，非一句 intent）；latest 读取按 `created_at DESC, rowid DESC`（id 是 UUID，字典序≠时间序，DEV-0060 §11 修复）。
+- **旧本地三问 gate 已移除**（DEV-0060 §12）：不再每轮重读旧 GoalBrief 缺项问固定三问；已有 active GoalTarget 时旧 Brief 永不阻塞（PART L）；无 GT 时由 Provider 按 Protocol 收集（考研至少 院校+专业 → target_proposal）。
+- **用户取消**：取消规划/停止规划/先不做这个计划了 → 确定性 cancelled（不调 AI、无 ChangeSet）。
+- **Active Planner 收口（DEV-0060.1 §11）**：active workflow 下顺序=Explicit Cancel（本地）→ 旧会话澄清兜底 → 显式新规划（gate）→ **Semantic Router 判定续跑 vs 新意图**（`is_new_intent_message` 关键词表不再作为唯一判断）；新意图接管 → 旧 workflow **paused**（不再劫持后续轮次，如澄清中「帮我创建一个今天背单词任务」→ SemanticAction 优先）。
+AI 可创建：GoalTarget（经 target_proposal ChangeSet）/Blueprint/Phase/Milestone/Year/Month/Day/Task/Knowledge/RestDay=✅；Final=Planner 仅 brief update；Document/Session create=**不可**。
+**Runtime VERIFIED?：NO**（真实 Key+真机走通 → TASK §27 H1-H9）。
 
 ## 10. 四模块现状（Search / Memory / Personalization / Vault）
 - **Search**：后端=FTS5+9 实体索引+3 trigger；**DEV-0057 PART L 统一服务（search.rs）**：sync_*（task v1/v2/goal/knowledge/document/session/evaluation 全部用户写路径）+ remove_*（删除路径）+ **rebuild_search_index(profile_id) 命令**（从 Canonical 表完整重建）+ **版本门**（settings KV `search.index.version.{pid}`=2；启动时缺失/变化才一次 rebuild）；ChangeSet apply 同步走 index_upsert/remove（既有）。**维护不对称 RESOLVED**；**UI=无全局搜索入口（D2 OPEN，本轮明确不做）**。
@@ -205,7 +253,7 @@ AI 可创建：Year/Month/Day/Task/Knowledge/RestDay=✅；Final=Planner 仅 bri
 | PDR-005 | StudySession Single Artifact | 唯一学习事件事实源 | 多副本记录 | 全模块 | ACTIVE |
 | PDR-006 | Goal×Knowledge Dual Tree（Task 桥/Session 快照） | 时间与知识两维解耦 | 单树/双记录 | tasks/sessions | ACTIVE |
 | PDR-007 | AI Direct Write = 0 | 用户控制正式数据 | AI 直写+日志 | changeset | ACTIVE（变更需人工决策） |
-| PDR-008 | Readonly/Assistant 双模式 | 安全默认+明确授权 | 单模式 | ai 全家 | ACTIVE |
+| PDR-008 | ~~Readonly/Assistant 双模式~~ → **Unified Higher AI**（DEV-0061R 退役双模式；无用户可见模式切换；写仍恒经 ChangeSet） | 安全由 Approval First 保证，双模式徒增复杂 | 保留双模式 / 纯单写模式 | ai 全家 | **RETIRED→SUPERSEDED（DEV-0061R）** |
 | PDR-009 | Evidence-based Feedback | 爽感可溯源 | XP/连胜/努力分 | Completion/Data | ACTIVE |
 | PDR-010 | Four Layer Model（记录→专注→知识→智能） | 渐进深度 | 一步到位大而全 | 产品分层 | ACTIVE |
 | PDR-011 | No Decorative Data | 四问过滤器 | 装饰仪表盘 | Data/日报 | ACTIVE |
@@ -233,6 +281,8 @@ AI 可创建：Year/Month/Day/Task/Knowledge/RestDay=✅；Final=Planner 仅 bri
 ## 21. Recent Development Ledger（最近 5 DEV；更早→archive/history）
 | DEV | Date | Product | Architecture | Schema | User-visible | Regression | Runtime |
 |---|---|---|---|---|---|---|---|
+| DEV-0060.1 | 08-21 | AI 语义动作（自然语言建任务/重复任务/改状态→ChangeSet 审批）/FastChat 真流式首字直显/日期不再错乱（Runtime Time Truth）/澄清中动作请求不再被 Planner 劫持/TaskModal 重复路径修正 | ai/runtime.rs+skills/+action.rs+trace.rs · Turn Router · Dynamic Tool Scoping · ChangeSet recurring_rule 四操作+task update V2 | **v023**（recurring 三语义字段） | AiPanel 提交带本地时钟；ChangeSetReview 显示"重复任务" | batch0601 33/33+batch060 16/16+指定回归+全量（见 Gate） | 冒烟 ✅/实机 H1-H14 NOT VERIFIED |
+| DEV-0060 | 08-21 | AI 主链修复：当前消息最后/Context=背景/GoalTarget canonical/Planner 恢复与逃生/21 工具契约 | ai/planner.rs payload 状态机+三分流 · ContextPurpose · TOOL_ALLOWLIST | （保持 v022） | AiPanel run-status 兼容 | batch060 16/16+全量 382 | 冒烟 ✅/实机 NOT VERIFIED |
 | DEV-0054 | 08-16 | 效率证据规则/单 Active 守卫/Markdown/产品级 UI 收敛/Preview Guard | — | （保持 v018） | 全局 UI 质感 | 无已知 | 冒烟 ✅/实机 UI 复验 NOT VERIFIED |
 | DEV-0055 | 08-16~17 | Canonical Final Goal/Planning Pipeline/Today 减法/Completion 反馈//data 一级页/Planning 减肥/AI 默认收起 | ai/planner.rs · 6 聚合命令 | v019 | 四导航/Data/目标卡 | 无已知 | 冒烟 ✅/实机 v019 NOT VERIFIED |
 | DEV-0056 | 08-17 | 治理：ENVIRONMENT=唯一 Global Context（HGCTX 制度）/WORKING_RULES/archive 归档/PROJECT 删/Git untrack webview 噪声 | 业务代码零修改 | 保持 v019 | 无界面变化 | 无 | Gate 全绿 |
@@ -246,26 +296,42 @@ Date=2026-08-17 · Audit Context Version=pre-HGCTX（审计时点无版本制）
 ---
 
 # Active Development
-- Task：**DEV-0059.2 · Final Human-Path Guardrails / DONE（§14 Gate 全绿，进入 H1-H11）**（DEV-0059 → DEV-0059.1 → DEV-0059.2 收口：个人事实→目标事实→规划蓝图→安全投影→周期复盘→导入导出 · 一次性收口；基线 Schema v020 → **head v022**）
-- **DEV-0058 处置**：SUPERSEDED_IN_PLACE_BY_DEV-0059 / NOT ACCEPTED AS STANDALONE DEV（§2：不 rollback、不 reset、不删除；兼容部分吸收复用，冲突部分在当前源码上收敛）
-- User Runtime Evidence（继续有效）：v020 VERIFIED BY USER RUNTIME；SAC ON 且不阻塞；旧 BLOCKED 解除；**v021/v022 Human Runtime 尚未验证**
+- Task：**DEV-0061R · Higher AI Runtime Stabilization（Recovery）/ AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING**（接管旧 DEV-0061 半施工 → Turn Interpreter / Semantic Contract v2 / Unified Higher AI / Conversation-Scoped Recent / Planner 边界 / Trace / Rolling Materialization / Task 菜单；Schema v023 保持 0 migration）
+- **旧 DEV-0060/0060.1/0060.2/0059.x 处置**：AUTOMATED GATE PASSED；其 Human Runtime 项已并入 DEV-0061R H01-H22 一次用户实机验证（TASK §69 为准）
+- User Runtime Evidence（继续有效）：v020 VERIFIED BY USER RUNTIME；DEV-0060.1 主骨架已确认；**v021/v022/v023/0060.2/0061R 尚未验证**
 
 # In-Progress Delta
+- 08-22 10:22 收口 | DEV-0061R 全 PART 施工 + Gate（Recovery 审计见 TRAE_RUN PART 0R；RECOVER_KEEP=0059.2→0060.2 全部工作区；无 RECOVER_FINISH/REWRITE/UNRELATED；无粗暴 Reset） | Files：ai/semantic_contract.rs（新）、ai/action.rs、ai/runtime.rs、ai/client.rs、ai/planner.rs、ai/context_builder.rs、ai/grounding.rs、ai/trace.rs、ai/mod.rs、repository/recurring_rule.rs、repository/changeset.rs、lib.rs、components/ai/AiPanel.tsx、components/ai/AiPanelContext.tsx、styles.css、api.ts、pages/PlanningCalendar.tsx、pages/Today.tsx、skills/{task,recurring_task,time}/SKILL.md、tests/batch061r.rs（新 47）+batch0601/0602 适配 | Behavior：见 §8d；Pre-Approval DB Mutation=0 | Data Model：**0 migration（v023）** | UI：双模式 UI 删除/Task 菜单 z-index/Calendar+Today rolling 物化 | **Gate**：check 0 err / batch061r 47/47 / 回归 0601 33+0602 29+060 16+0592 12+ai_assistant 10+ai_panel 8 全绿 / tsc 0 / build ✓ / DeepSeek 0 次自动调用 / full cargo test 未跑（TASK 纪律） | PENDING：**Human Runtime H01-H22（TASK §69，用户实机）** → 用户验证后才可记 DEV-0061R / DONE → STOP
+- 08-21 19:50 收口 | DEV-0060.1 全 PART 施工 + Gate | Files：migrations/v023_recurring_task_semantics.rs（新）+mod.rs、repository/recurring_rule.rs（RuleSemantics+create/update_with_semantics+materialize v2）、repository/task.rs（create_from_rule_v2）、repository/changeset.rs（recurring_rule 四操作+recurring_rule_ref+task update V2+快照/ fetch V2 全字段）、ai/runtime.rs（新：Envelope/TemporalIntent/RecurrenceIntent/Router/FastChat bound_history）、ai/skills/（新：Registry+3 SKILL.md）、skills/{time,task,recurring_task}/SKILL.md（新）、ai/action.rs（新：SemanticAction+Resolver+Compiler+Validator）、ai/trace.rs（新）、ai/tools.rs（tool_definitions_for_scopes/fast_chat_tools/scopes_for_route）、ai/prompts.rs（Knowledge Optional+Semantic Understanding）、lib.rs（ai_start_run+3 参数/Turn Router/FastChat 分支/SemanticAction 分支/Planner 收口/planning_gate 收口/trace 接线/create|update_recurring_rule 三字段）、components/ai/AiPanel.tsx（send 传本地时钟）、components/TaskModal.tsx（重复=规则+materialize）、components/ChangeSetReview.tsx（recurring_rule 标签）、api.ts、types.ts、tests/batch0601.rs（新 33 项 T1-T58）+13 套 schema 版本断言→23 适配 | Behavior：见 §8b/§9；Pre-Approval DB Mutation=0（T18/T19/T53 锁定） | Data Model：**v023（唯一一条）** | UI：TaskModal 重复路径/AiPanel 时钟参数/ChangeSetReview 标签 | **Gate**：check 0 err / batch0601 33/33 / batch060 16/16 / 指定回归全绿 / 全量 **415 passed 0 failed（37 套件）** / tsc 0 / build ✓ / DeepSeek 0 次自动调用 | PENDING：**Human Runtime H1-H14（TASK §38-39，用户实机）** → 用户验证后才可记 DEV-0060.1 / DONE → STOP
+- 08-21 收口 | DEV-0060 全 PART 施工 + Gate | Files：lib.rs（ai_start_run/run_chat_turn 重构）、ai/planner.rs（payload+三分流+Protocol+target_proposal+pure helpers）、ai/context_builder.rs（ContextPurpose+GoalTarget canonical）、ai/tools.rs（Allowlist 21+Adapter+legacy 标记）、ai/prompts.rs（Intent First）、ai/context.rs、components/ai/AiPanel.tsx（run-status 兼容）、tests/batch060.rs（新 16 项）+ batch055/056/057/058/ai_assistant/ai_panel 适配 | Behavior：见 §8/§9；Pre-Approval DB Mutation=0（T13/T14 锁定） | Data Model：**无 schema 变更（v022）** | UI：仅 AiPanel 状态兼容 | **Gate 全绿**：check 0 err / batch060 16/16 / 指定回归全绿 / 全量 **382 passed 0 failed** / tsc 0 / build ✓ / DeepSeek 0 次自动调用 | PENDING：**Human Runtime H1-H9（TASK §27，用户实机）** → 用户验证后才可记 DEV-0060 / DONE → STOP
+- 08-21 启动 | DEV-0060 | Files：.higher/TRAE_RUN.md（PART 0 源码核对表）、.higher/ENVIRONMENT.md | Behavior：— | Data Model：— | UI：— | PENDING：PART A-S 施工 → batch060 → 回归 Gate → Human Runtime
 - 08-18 | DEV-0059.2 | Files：planning_review.rs（prepare_current + ensure_reality_change_due）、lib.rs（prepare_current_planning_review 命令 + confirm/edit_personalization_profile 接 reality_change）、planner.rs（personal_profile_structured_summary / goal_target_detail_summary / resolve_blueprint_scenario / BlueprintDraft.scenario_type+source_review / validator+compiler）、context_builder.rs（flatten_structured 对象数组递归）、tools.rs（read_planning_source 分页 start_char/max_chars/has_more）、GoalTargetPanel.tsx（考研字段表单化）、PlanningTruthSummary.tsx（ChangeSetReview 直审 + 手工新建蓝图 + prepare_current 正式路径）| Behavior：Review ChangeSet 从 Planning 页真实可审阅；cadence 决定周期且不重复；structured facts 真实进 AI Context；PersonalProfile 目标仅 observation；GoalTarget data_json 直接进 Planner；Blueprint scenario 继承；source_review 结构化理由；长文件分页不假装读完；无 AI 可建首份蓝图；Personal 变化只建议复盘不调 AI | Data Model：无 schema 变更（head 保持 v022）| UI：见上述组件 | PENDING：→ Human Runtime H1-H11 → ENV Promotion → STOP
 - 08-18 最终 | 全量回归 + Gates | Files：tests/batch0592.rs（新增 12 项） | Behavior：— | Data Model：— | UI：— | **最终 Gate 全绿**：全量 **366 tests passed / 0 failed**（低并发）、batch0592 12/12、cargo check 0 errors、tsc 0 errors、npm run build 通过；真实 DeepSeek 0 次自动调用 | PENDING：**Human Runtime H1-H11（§61 清单见下，用户实机验证）** → ENV Promotion → STOP
 
-# Human Runtime Checklist（DEV-0059 §61 H1-H11 · 仅无法自动验证项）
-1. **H1 Migration**：旧真实 DB 首次打开 → 数据未丢、schema **v022**、legacy sessions/tasks/knowledge 仍在（迁移日志 `applied v022 personal_xlsx`）
-2. **H2 Zero Barrier**：新建无 GoalTarget/无 Blueprint Profile → Quick Study → 写笔记 → 结束，必须成功
-3. **H3 Time**：>12h 历史异常记录 → Data trusted totals/trend/time-of-day 均不计；confirm/correct 后各 trusted 展示一致
-4. **H4 Personal Sources**：上传 ≥2 份含冲突资料 → AI compile → 冲突可见 → 不自动选择 → confirm v1
-5. **H5 GoalTarget**：考研设置 REACH → 设置 SAFETY → 替换 REACH → 当前始终各最多一个
-6. **H6 Planning Source**：导入真实考研规划 → AI 审查 → 修改有理由 → 正式数据 Apply 前不变
-7. **H7 Plan Apply**：批准 → Active Blueprint + Phase + Milestone + future 14-day Task → Today/Calendar 可见
-8. **H8 Protection**：人工修改一个未来 Blueprint Task → 重新调整 Blueprint → 人工 Task 不被覆盖
-9. **H9 AI Clarification**：真实 Provider「帮我根据我的资料安排」→ AI 问问题 → 用户回答 → 继续原 workflow
-10. **H10 Review**：模拟/到期 → 只提醒不自动扣 Token → 用户点后 AI 运行 → 不需要调整时可原计划继续
-11. **H11 Export**：Word 打开正常、Excel 打开正常、内容完整；再导入只变 Source（export_reimport，绝不 direct overwrite）
+# Human Runtime Checklist（DEV-0061R · TASK §69 H01-H22 · 仅无法自动验证项；真实 Provider 由用户本人测试，Trae 禁止烧真实 Key）
+1. **H01 Generic**：新会话「1+1等于多少？只回答数字。」→ 2
+2. **H02 Create**：「创建一个明天的任务，名字叫 TEST-STABLE，预计30分钟。」→ CreateTask Proposal（tomorrow / 30min）；Apply 前 0 canonical mutation
+3. **H03 Existing Update**：建 TEST-普通任务 20min →「把今天那个TEST普通任务改成30分钟。」→ 20→30（不得再「没有修改字段」）
+4. **H04 Same Conversation Recent**：Apply TEST-RECENT-A →「把刚才那个改成50分钟。」→ 必须命中 TEST-RECENT-A
+5. **H05 Time**：「把刚才那个改到晚上9点。」→ 21:00
+6. **H06 Date**：「把刚才那个挪到后天。」→ local today + 2
+7. **H07 Cross Conversation**：会话 A 建 TEST-RECENT-A；新会话 B「把刚才那个改成20分钟。」→ 必须澄清（命中 A = P0 FAIL）
+8. **H08 Ambiguity**：TEST-英语阅读 + TEST-英语单词 →「把英语任务改成40分钟。」→ 必须问哪个
+9. **H09 Bulk**：「把今天所有没完成的任务挪到明天。」→ ONE ChangeSet / N task updates；Completed 不动
+10. **H10 Recurring Update**：「把每天学408改成晚上9点，每次45分钟。」→ Series Proposal（21:00 / 45min）
+11. **H11 Occurrence**：「今天这次408不要了，但以后每天继续。」→ 只改今天 occurrence
+12. **H12 Series Disable**：「以后不要再安排每天学408。」→ disable rule；历史保留
+13. **H13 Planner Boundary**：「明天下午帮我安排一个30分钟数学复习任务。」→ Task Proposal（不得 Planner）
+14. **H14 Planner**：「根据我的目标和最近学习情况，帮我规划未来两周。」→ 才进 Planner
+15. **H15 Planner Escape**：Planner 过程中「先不规划了，给明天创建一个30分钟英语任务。」→ 退出并 CreateTask
+16. **H16 Page Stability**：Knowledge 页「1+1等于多少？只回答数字。」→ 2
+17. **H17 Mode**：UI 不再存在只读/助手模式
+18. **H18 Error Boundary**：任何失败不得出现 missing field / serde / SQL / ChangeSet至少一个操作 / Rust
+19. **H19 Task Menu**：编辑/调整日期/调整目标/调整知识/修改类型/删除 六项全部真实响应
+20. **H20 Recurring Future**：「从今天开始每天 TEST-DAILY」Apply 后 Calendar 明天/后天/未来数日提前可见 occurrence
+21. **H21 Approval First**：Proposal 未 Apply 时 Today/Planning/Knowledge 无正式变化；Apply 后才变化
+22. **H22 Same Intent Stability**：同一句话（STABILITY-TEST）在新会话首条 / 多轮闲聊后 / 建过任务后 / Planner 退出后 / 出过 Error 后五次 → 业务路径全部 CreateTask/tomorrow/30min/STABILITY-TEST
+**前轮未验项（随本轮一并验）**：v021/v022/v023 迁移与真实数据；DEV-0059 H1-H8 / DEV-0059.2 H1-H11 / DEV-0060 H1-H9 / DEV-0060.1 H1-H14 / DEV-0060.2 Grounding 项——语义已并入上述 H01-H22 与既有页面操作。
 
 ---
 

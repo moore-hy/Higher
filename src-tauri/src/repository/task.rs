@@ -305,10 +305,40 @@ impl<'a> TaskRepository<'a> {
         planned_time: Option<&str>,
         recurring_rule_id: i64,
     ) -> rusqlite::Result<Task> {
+        self.create_from_rule_v2(
+            profile_id, goal_id, learning_item_id, title, planned_date, planned_time,
+            recurring_rule_id, None, "structured", "normal",
+        )
+    }
+
+    /// DEV-0060.1 v023：materialization 继承 Rule 的 estimated_minutes/task_kind/priority。
+    pub fn create_from_rule_v2(
+        &self,
+        profile_id: i64,
+        goal_id: Option<i64>,
+        learning_item_id: Option<i64>,
+        title: &str,
+        planned_date: &str,
+        planned_time: Option<&str>,
+        recurring_rule_id: i64,
+        estimated_minutes: Option<i64>,
+        task_kind: &str,
+        priority: &str,
+    ) -> rusqlite::Result<Task> {
+        let kind = match task_kind {
+            "accumulation" => "accumulation",
+            _ => "structured",
+        };
+        let pri = match priority {
+            "core" => "core",
+            _ => "normal",
+        };
         self.conn.execute(
-            "INSERT INTO tasks (profile_id, goal_id, learning_item_id, title, planned_date, planned_time, recurring_rule_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![profile_id, goal_id, learning_item_id, title, planned_date, planned_time, recurring_rule_id],
+            "INSERT INTO tasks (profile_id, goal_id, learning_item_id, title, planned_date, planned_time, recurring_rule_id,
+                                estimated_minutes, task_kind, priority)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![profile_id, goal_id, learning_item_id, title, planned_date, planned_time,
+                recurring_rule_id, estimated_minutes, kind, pri],
         )?;
         let id = self.conn.last_insert_rowid();
         self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)

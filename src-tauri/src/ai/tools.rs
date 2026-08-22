@@ -16,7 +16,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_profile_summary",
-                "description": "读取当前学习档案摘要（名称、目标、当前情况）",
+                "description": "读取当前学习档案摘要（名称 + legacy 目标描述/日期，legacy 字段仅为历史观察，不是正式 GoalTarget）",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -24,7 +24,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_current_goal",
-                "description": "读取当前激活的学习目标",
+                "description": "（DEV-0060 §8.2 Canonical GoalTarget Adapter）读取正式目标：formal_targets=active GoalTarget（primary=REACH/generic 主目标、safety=风险参考）；legacy_candidates=旧 Final Goal（canonical=false，仅历史候选）",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -32,7 +32,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "get_current_stage",
-                "description": "读取当前学习阶段",
+                "description": "（legacy compatibility）读取旧学习阶段表；正式规划优先 read_active_planning_blueprint",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -40,7 +40,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "list_plans",
-                "description": "读取最近学习计划",
+                "description": "（legacy compatibility）读取旧学习计划表；正式规划优先 read_active_planning_blueprint",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -254,6 +254,51 @@ pub fn tool_definitions() -> serde_json::Value {
     ])
 }
 
+/// DEV-0060.1 PART J（§21.2）· Dynamic Tool Definitions。
+///
+/// `tool_definitions_for_scopes`：按 route/skill affinity 过滤（FastChat → `[]`）。
+/// 集合恒为 TOOL_REGISTRY 子集（T43-T45 锁定；Direct Write 永远 0）。
+pub fn tool_definitions_for_scopes(affinities: &[&str]) -> serde_json::Value {
+    let all = tool_definitions();
+    let allowed: std::collections::HashSet<&str> = super::skills::TOOL_REGISTRY
+        .iter()
+        .filter(|t| affinities.contains(&t.affinity))
+        .map(|t| t.name)
+        .collect();
+    let arr = all
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| {
+            d.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|n| allowed.contains(n))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!(arr)
+}
+
+/// FastChat：tools = 0（T32/T43）。
+pub fn fast_chat_tools() -> serde_json::Value {
+    serde_json::json!([])
+}
+
+/// Route → affinity scopes（§22 Context Loading 对应）。
+pub fn scopes_for_route(route: &str) -> Vec<&'static str> {
+    match route {
+        // FastChat：空（不携带任何工具）
+        "fast_chat" => vec![],
+        // HigherRead：读工具（personal/task/knowledge/read 亲和；legacy/web 不带）
+        "higher_read" => vec!["personal", "task", "knowledge", "read"],
+        // Planning：只暴露真正需要的（含必要 web）
+        "planning" => vec!["planning", "web"],
+        _ => vec!["read"],
+    }
+}
+
 /// 执行一个只读工具（Profile Scope 强制）。返回 JSON 字符串。
 pub fn execute_read_tool(
     conn: &Connection,
@@ -270,38 +315,87 @@ pub fn execute_read_tool(
                 |r| {
                     Ok(json!({
                         "name": r.get::<_, String>(0)?,
-                        "target_description": r.get::<_, String>(1)?,
+                        // DEV-0060 §8.3：旧字段明确降级为 legacy 观察，不得被当成正式 GoalTarget
+                        "legacy_target_description": r.get::<_, String>(1)?,
+                        "legacy_target_date": r.get::<_, String>(3)?,
                         "current_situation": r.get::<_, String>(2)?,
-                        "target_date": r.get::<_, String>(3)?,
+                        "note": "legacy_target_* 仅为历史观察（migration evidence），不是正式目标；正式目标用 list_active_goal_targets",
                     }))
                 },
             ).map_err(|_| "档案不存在".to_string())?;
             row.to_string()
         }
         "get_current_goal" => {
-            // DEV-0057 §38-39：必须按 Canonical Final Goal 语义读取（profile_id + goal_level='final' + 未 archived）。
-            // 不存在 → 返回 null 提示（不得随便找一个 active goal）。
-            let row = conn.query_row(
-                "SELECT id, name, status, COALESCE(description,''), COALESCE(goal_brief_json,'')
-                 FROM goals
-                 WHERE profile_id = ?1 AND goal_level = 'final' AND status != 'archived'
-                 LIMIT 1",
-                params![profile_id],
-                |r| {
-                    Ok(json!({
-                        "id": r.get::<_, i64>(0)?,
-                        "name": r.get::<_, String>(1)?,
-                        "status": r.get::<_, String>(2)?,
-                        "description": r.get::<_, String>(3)?,
-                        "brief_json": r.get::<_, String>(4)?,
-                        "canonical": "final_goal",
-                    }))
+            // DEV-0060 §8.2：Canonical GoalTarget Adapter——正式目标唯一来源是 active GoalTarget；
+            // 旧 goals.goal_level='final' 只进 legacy_candidates（canonical=false），永不覆盖 GoalTarget。
+            let targets = crate::repository::goal_target::GoalTargetRepository::new(conn)
+                .list_active(profile_id, None, None)
+                .unwrap_or_default();
+            let formal: Vec<serde_json::Value> = targets
+                .iter()
+                .map(|t| json!({
+                    "id": t.id, "scenario_type": t.scenario_type, "role": t.role,
+                    "title": t.title, "target_date": t.target_date,
+                    "status": t.status, "data_json": t.data_json,
+                }))
+                .collect();
+            let primary = targets
+                .iter()
+                .find(|t| t.scenario_type == "postgraduate" && t.role == "reach")
+                .or_else(|| targets.iter().find(|t| t.role == "reach"))
+                .or_else(|| targets.first())
+                .map(|t| json!({
+                    "id": t.id, "scenario_type": t.scenario_type, "role": t.role,
+                    "title": t.title, "target_date": t.target_date, "data_json": t.data_json,
+                }));
+            let safety = targets
+                .iter()
+                .find(|t| t.role == "safety")
+                .map(|t| json!({
+                    "id": t.id, "scenario_type": t.scenario_type, "role": t.role,
+                    "title": t.title, "target_date": t.target_date, "data_json": t.data_json,
+                }));
+            let legacy_candidates: Vec<serde_json::Value> = {
+                let mut stmt = match conn.prepare(
+                    "SELECT id, name, COALESCE(description,''), COALESCE(goal_brief_json,'')
+                     FROM goals WHERE profile_id=?1 AND goal_level='final' AND status != 'archived' LIMIT 5",
+                ) {
+                    Ok(s) => s,
+                    Err(_) => return Ok(json!({
+                        "formal_targets": formal, "primary": primary, "safety": safety,
+                        "legacy_candidates": [], "canonical": "goal_target",
+                    }).to_string()),
+                };
+                let rows = stmt
+                    .query_map(params![profile_id], |r| {
+                        Ok(json!({
+                            "id": r.get::<_, i64>(0)?,
+                            "name": r.get::<_, String>(1)?,
+                            "description": r.get::<_, String>(2)?,
+                            "brief_json": r.get::<_, String>(3)?,
+                            "canonical": false,
+                        }))
+                    })
+                    .map(|it| it.filter_map(|x| x.ok()).collect())
+                    .unwrap_or_default();
+                rows
+            };
+            json!({
+                "formal_targets": formal,
+                "primary": primary,
+                "safety": safety,
+                "legacy_candidates": legacy_candidates,
+                "canonical": "goal_target",
+                "note": if targets.is_empty() {
+                    "目前没有已确认的正式 GoalTarget。legacy_candidates 仅历史候选（canonical=false），不得自动当成当前正式目标。"
+                } else {
+                    "正式目标 = active GoalTarget（primary=REACH/generic 主目标，safety=风险参考）。"
                 },
-            );
-            row.map(|v| v.to_string())
-                .unwrap_or_else(|_| json!({"goal": null, "note": "该档案尚未设置最终目标"}).to_string())
+            })
+            .to_string()
         }
         "get_current_stage" => {
+            // DEV-0060 §8.4：legacy compatibility（study_stages 为旧表；正式规划 = read_active_planning_blueprint）
             let row = conn.query_row(
                 "SELECT ss.name, ss.status, COALESCE(ss.start_date,''), COALESCE(ss.end_date,'')
                  FROM study_stages ss JOIN goals g ON ss.goal_id = g.id
@@ -313,12 +407,14 @@ pub fn execute_read_tool(
                         "status": r.get::<_, String>(1)?,
                         "start_date": r.get::<_, String>(2)?,
                         "end_date": r.get::<_, String>(3)?,
+                        "legacy_compatibility": true,
                     }))
                 },
             );
-            row.map(|v| v.to_string()).unwrap_or_else(|_| json!({"stage": null, "note": "当前未设置学习阶段"}).to_string())
+            row.map(|v| v.to_string()).unwrap_or_else(|_| json!({"stage": null, "note": "当前未设置学习阶段（legacy 表；正式规划请读 read_active_planning_blueprint）"}).to_string())
         }
         "list_plans" => {
+            // DEV-0060 §8.4：legacy compatibility（plans 为旧表；正式规划 = read_active_planning_blueprint）
             let mut stmt = conn.prepare(
                 "SELECT p.title, COALESCE(p.start_date,''), COALESCE(p.end_date,''), p.status
                  FROM plans p JOIN goals g ON p.goal_id = g.id
@@ -332,7 +428,8 @@ pub fn execute_read_tool(
                     "status": r.get::<_, String>(3)?,
                 }))
             }).map_err(|e| e.to_string())?.filter_map(|v| v.ok()).collect();
-            json!(rows).to_string()
+            json!({ "legacy_plans": rows, "legacy_compatibility": true,
+                    "note": "旧计划表（legacy）；正式规划请读 read_active_planning_blueprint" }).to_string()
         }
         "list_knowledge_tree" => {
             let mut stmt = conn.prepare(
@@ -701,10 +798,33 @@ pub const TOOL_ALLOWLIST: &[&str] = &[
     "search_higher",
     "search_memory",
     "read_personalization",
+    // DEV-0060 §9.1：四个 Planning Read Tools 正式进入 Allowlist（READ 分类，
+    // 非 Assistant-only；此前 definition 存在但调用被拒）
+    "list_planning_sources",
+    "read_planning_source",
+    "list_active_goal_targets",
+    "read_active_planning_blueprint",
     "web_search",
     "web_open",
     "propose_change_set",
 ];
+
+/// DEV-0060 §9.3：从 tool_definitions() 解析全部可调用工具名（与 Allowlist 一致性测试用）。
+pub fn defined_tool_names() -> Vec<String> {
+    tool_definitions()
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|d| {
+                    d.get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(String::from)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// 助手模式专属（propose；§193：模型永远看不到直接 CRUD 工具）。
 pub const ASSISTANT_TOOLS: &[&str] = &["propose_change_set"];

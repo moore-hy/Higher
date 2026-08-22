@@ -195,7 +195,7 @@ fn test_planning_intent_and_compile_to_changeset() {
     assert!(v.overloaded_days.is_empty());
 
     // §58 Compiler → ops → ChangeSet
-    let ops = compile_to_changeset_ops(Some(f.id), &draft);
+    let ops = compile_to_changeset_ops(Some(f.id), true, &draft);
     assert!(ops.len() >= 5);
     assert!(planner::ops_within_limit(&ops));
     let cs = ChangeSetRepository::new(&conn)

@@ -149,7 +149,7 @@ fn test_scenario_b_draft_valid_changeset_zero_writes_before_apply() {
     let v = validate_plan_draft(&conn, p, &draft);
     assert!(v.errors.is_empty(), "合法 draft 不应有错误：{:?}", v.errors);
 
-    let ops = compile_to_changeset_ops(Some(f.id), &draft);
+    let ops = compile_to_changeset_ops(Some(f.id), true, &draft);
     assert!(!ops.is_empty());
     let cs = ChangeSetRepository::new(&conn)
         .create(p, None, None, "学习计划", "summary", &ops)
@@ -176,7 +176,7 @@ fn test_scenario_cdef_apply_then_queryable_everywhere() {
     let f = grepo.ensure_final(p).unwrap();
     grepo.set_final_brief(p, &mk_ready_brief()).unwrap();
     let draft = mk_draft(&conn, p);
-    let ops = compile_to_changeset_ops(Some(f.id), &draft);
+    let ops = compile_to_changeset_ops(Some(f.id), true, &draft);
     let cs = ChangeSetRepository::new(&conn)
         .create(p, None, None, "学习计划", "s", &ops)
         .unwrap();
@@ -224,7 +224,7 @@ fn test_scenario_g_reject_zero_writes() {
     let grepo = GoalRepository::new(&conn);
     let f = grepo.ensure_final(p).unwrap();
     let draft = mk_draft(&conn, p);
-    let ops = compile_to_changeset_ops(Some(f.id), &draft);
+    let ops = compile_to_changeset_ops(Some(f.id), true, &draft);
     let cs = ChangeSetRepository::new(&conn).create(p, None, None, "t", "s", &ops).unwrap();
     ChangeSetRepository::new(&conn).reject(cs, p).unwrap();
     let tasks: i64 = conn.query_row(
@@ -244,7 +244,7 @@ fn test_scenario_h_selective_apply() {
     let f = grepo.ensure_final(p).unwrap();
     grepo.set_final_brief(p, &mk_ready_brief()).unwrap();
     let draft = mk_draft(&conn, p);
-    let ops = compile_to_changeset_ops(Some(f.id), &draft);
+    let ops = compile_to_changeset_ops(Some(f.id), true, &draft);
     let cs = ChangeSetRepository::new(&conn).create(p, None, None, "t", "s", &ops).unwrap();
     let listed = ChangeSetRepository::new(&conn).list_operations(cs, p).unwrap();
     // §126-128：用户只取消 day goal（保留其下 task）→ task 的 goal_ref 指向未选中
@@ -336,7 +336,7 @@ fn test_scenario_q_duplicate_guard() {
     // ② DB 级：正式库已有同日同名任务 → 再生成报错（Retry Planner 也不得重复添加 §101）
     let mut d2 = mk_draft(&conn, p);
     let _ = d2;
-    let ops = compile_to_changeset_ops(Some(f.id), &mk_draft(&conn, p));
+    let ops = compile_to_changeset_ops(Some(f.id), true, &mk_draft(&conn, p));
     let cs = ChangeSetRepository::new(&conn).create(p, None, None, "t", "s", &ops).unwrap();
     ChangeSetRepository::new(&conn).apply(cs, p, false).unwrap();
     let v2 = validate_plan_draft(&conn, p, &mk_draft(&conn, p));
@@ -386,7 +386,10 @@ fn test_scenario_m_profile_name_not_goal() {
         rusqlite::params![p],
     ).unwrap();
     let out = app_lib::ai::tools::execute_read_tool(&conn, p, "get_current_goal", &json!({})).unwrap();
-    assert!(out.contains("\"canonical\":\"final_goal\"") && !out.contains("活跃旧目标"));
+    // DEV-0060 §8.2：Canonical GoalTarget Adapter——canonical=goal_target（非 final_goal）；
+    // goal_level='legacy' 行既非 formal_targets 也非 legacy_candidates（只收 'final' 行）
+    assert!(out.contains("\"canonical\":\"goal_target\"") && !out.contains("活跃旧目标"));
+    assert!(out.contains("\"formal_targets\":[]"));
 }
 
 #[test]
@@ -399,7 +402,7 @@ fn test_scenario_r_active_session_not_evidence() {
     let report = app_lib::ai::context_builder::build(
         &conn, p, "我现在学得怎么样", &app_lib::ai::context_builder::PageContext {
             page_label: "今日".to_string(), knowledge_path: None, session_title: None, date: None, conversation_id: None,
-        }, "readonly",
+        }, "readonly", app_lib::ai::context_builder::ContextPurpose::Personal,
     ).unwrap();
     let l1 = &report.layers[0].text;
     assert!(l1.contains("当前有学习进行中"), "L1 应包含进行中状态：{l1}");
@@ -421,7 +424,7 @@ fn test_apply_summary_backend_driven_counts() {
     let f = grepo.ensure_final(p).unwrap();
     grepo.set_final_brief(p, &mk_ready_brief()).unwrap();
     let draft = mk_draft(&conn, p);
-    let ops = compile_to_changeset_ops(Some(f.id), &draft);
+    let ops = compile_to_changeset_ops(Some(f.id), true, &draft);
     let cs = ChangeSetRepository::new(&conn).create(p, None, None, "学习计划", "s", &ops).unwrap();
     ChangeSetRepository::new(&conn).apply(cs, p, false).unwrap();
     // get_change_set_apply_summary 复刻（lib.rs 逻辑：status=applied + selected 过滤）
@@ -449,7 +452,7 @@ fn test_plan_does_not_add_actual_time() {
     let grepo = GoalRepository::new(&conn);
     let f = grepo.ensure_final(p).unwrap();
     let draft = mk_draft(&conn, p);
-    let ops = compile_to_changeset_ops(Some(f.id), &draft);
+    let ops = compile_to_changeset_ops(Some(f.id), true, &draft);
     let cs = ChangeSetRepository::new(&conn).create(p, None, None, "t", "s", &ops).unwrap();
     ChangeSetRepository::new(&conn).apply(cs, p, false).unwrap();
     // Data 聚合：任务计划不产生任何学习秒数
@@ -525,7 +528,7 @@ fn test_ops_carry_period_date_fields() {
     let p = mk_profile(&conn);
     let grepo = GoalRepository::new(&conn);
     let f = grepo.ensure_final(p).unwrap();
-    let ops = compile_to_changeset_ops(Some(f.id), &mk_draft(&conn, p));
+    let ops = compile_to_changeset_ops(Some(f.id), true, &mk_draft(&conn, p));
     let day_op = ops.iter().find(|o| {
         o.entity_type == "goal" && o.after.get("goal_level").and_then(|x| x.as_str()) == Some("day")
     }).expect("day goal op");

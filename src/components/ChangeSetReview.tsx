@@ -477,6 +477,12 @@ const ENTITY_LABELS: Record<string, string> = {
   session: "学习记录",
   evaluation: "验证",
   personalization: "私人档案",
+  // DEV-0060.1 PART H
+  recurring_rule: "重复任务",
+  goal_target: "正式目标",
+  planning_blueprint: "规划蓝图",
+  planning_phase: "规划阶段",
+  planning_milestone: "里程碑",
 };
 
 const ACTION_LABELS: Record<string, string> = {
