@@ -89,7 +89,7 @@ fn test_migration_v005_schema_version_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 23);
+    assert_eq!(count, 24);
 }
 
 #[test]

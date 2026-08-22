@@ -71,8 +71,32 @@ impl Trace {
     }
 
     pub fn provider_request_started(&self, conn: &Connection, index: i64, kind: &str, tools: usize) {
-        self.emit(conn, "provider_request_started", json!({
-            "provider_request_index": index, "provider_call_kind": kind, "tool_count": tools }));
+        self.provider_request_started_role(conn, index, kind, tools, "primary", None);
+    }
+
+    /// DEV-0062 §28：Provider Provenance 进 trace（ai_role + profile id/adapter/model；
+    /// 永不记录 API Key / Authorization / 完整 Prompt）。
+    pub fn provider_request_started_role(
+        &self,
+        conn: &Connection,
+        index: i64,
+        kind: &str,
+        tools: usize,
+        ai_role: &str,
+        provider: Option<&crate::ai::provider::AiRuntimeConfig>,
+    ) {
+        let mut data = json!({
+            "provider_request_index": index,
+            "provider_call_kind": kind,
+            "tool_count": tools,
+            "ai_role": ai_role,
+        });
+        if let Some(p) = provider {
+            data["provider_profile_id"] = json!(p.profile_id);
+            data["adapter_kind"] = json!(p.adapter_kind.as_str());
+            data["model"] = json!(p.model);
+        }
+        self.emit(conn, "provider_request_started", data);
     }
 
     pub fn provider_first_delta(&mut self, conn: &Connection, index: i64) {

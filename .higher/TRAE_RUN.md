@@ -1,3 +1,267 @@
+# DEV-0062R.1 · Probe Input/Output Truth Repair · TRAE_RUN
+
+- **DEV ID**: DEV-0062R.1（修复 0062R Human Runtime 新暴露的 H02：Probe A 误报 empty_content → Basic ✗ + 后四项全未检测；Connection Test 语义混淆；响应预算/Response Truth 缺失）
+- **Start**: 2026-08-22T13:56:36+08:00（TASK 读取/Baseline）｜ 施工 14:38-14:57 ｜ **End**: 2026-08-22T14:57:03+08:00（AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING）
+- **Timestamp Source: SYSTEM**
+- **Baseline HEAD**: `c19ce78cf85f6e8d1bb4f616576e9f225b897573`（工作区 = DEV-0062 + DEV-0062R 未提交 + 本 TASK 替换；git status 40 项与审计一致，无 BASELINE_DRIFT）
+- **Human Runtime Evidence Received**：0062R 后用户重测——「测试连接」成功（deepseek-v4-flash）；上一轮 Compatibility 曾 Basic ✓/JSON ✗/其余 ✓（已由 0062R 修 Structured）；本轮 Re-Probe 新结果 = **不兼容：DeepSeek 无法完成基础对话（empty_content）**，Basic ✗ 且 JSON/Tools/Temp0/Streaming 全部「未检测」→ Probe A 成为新前置 false negative，Action 继续被 Guard 安全阻止。
+- **Schema Before**: v024 ｜ **Schema After**: v024 ｜ **Migration**: **0**（无 v025；v001-v024 未动）
+
+## Probe A Root Cause（TASK §3）
+- 3.2 旧 Probe 用极小 max_tokens（8/16）：reasoning 消耗输出预算 → HTTP 200 + final content="" → 误判 basic=false。
+- 3.3 旧 Response DTO 无 finish_reason / reasoning_content：真正空回答 / reasoning-only / length 截断全部压成 empty_content。
+- 3.4 一次空内容即判死并持久化 → Capability Guard → 全部 Action 永久阻断。
+- 3.5 basic 失败后 B-E 全部未检测（诊断缺失；未区分 Hard/Soft）。
+- 3.1 test_ai_connection 成功条件（content.is_some OR tool_calls.is_some）与 Higher Basic Chat 语义混用。
+
+## Test Connection Semantics（§4.1/§17，两命令统一）
+- `connectivity_check(config)`（compatibility.rs）：temp=0 / max_tokens=64 / tools=0 / JSON off / synthetic "Reply briefly."。
+- 成功 = HTTP 成功 + envelope 可解析 + ≥1 choice（content blank 也成功——这不是 Capability Test）；文案「API 连接成功，模型：{model}。Higher 能力请使用「检测 Higher 兼容性」验证。」；失败 = sanitized 人话（认证失败/连接失败/模型不存在/请求失败/响应格式异常）。禁止「模型正常/完全可用/支持 Higher」。
+
+## Response Truth Model（§5，client.rs）
+- `ChatChoice.finish_reason: Option<String>`（Provider 原样；无厂商 enum）；`ChatResponseMessage.reasoning_content: Option<String>`；`Completion` 透出两者。
+- **reasoning_content 持久化/展示 = 0**（只用于 classify_final 分类；禁 final_text/trace/DB/UI/文档）。正常聊天 assistant 文本仍只来自 message.content。
+- `chat_stream` 增加显式温度参数（FastChat=0.3 不变；Probe E=0.0）。
+
+## Token Budgets（§7 常量，禁止调值）
+CONNECTIVITY=64 ｜ BASIC_1=256 / BASIC_2=1024 ｜ STRUCTURED_NATIVE=256 / PROMPT=256 / REPAIR=512 ｜ TOOL=256 ｜ TEMP0_1=256 / TEMP0_2=1024 ｜ STREAMING=256。
+
+## Basic Chat Retry（§8）与 Temperature0 Retry（§11）
+- 合成请求：System "You are a capability probe. Return a short visible final answer." + User "Reply with HIGHER_OK."（无任何用户数据）。
+- Attempt1（256）分类 **FinalText** → true（不要求精确 HIGHER_OK）；**EmptyFinal/ReasoningOnly/LengthTruncated** → Attempt2（1024，同 prompt）→ FinalText = true + detail=pass_after_retry；仍失败 → false + detail=no_final_content / reasoning_only_no_final / length_no_final / unexpected_tool_only。
+
+## Hard vs Soft Failure（§8.8/§13）
+- Hard（认证/授权 401、endpoint/模型 404、connect/DNS 失败——按 client 固定 sanitized 文案匹配，无 400/422 字符串语义、无厂商特判）→ A=false、B-E=skipped_connection_failure、overall=incompatible、UI「未继续检测：连接/认证失败」、仅 1 次请求。
+- Soft（其余 request error，如 500）→ A=false 但 **B-E 继续**（完整诊断；Control 仍严格 basic+json+temp0，不降安全）。
+
+## Full Probe Continuation（§9.1/§13.1）
+- 无 Hard Failure 时 A-E 全部尝试——「Basic soft false → 后四项全未检测」消灭；bounded 最坏 A2+B3+C1+D2+E1 = **9 calls**（R39 锁定）。
+
+## Probe Snapshot（§14）与 Atomic Persistence（§15）
+- lib.rs 命令：开始取 profile snapshot（五字段内存比较，Key 不落盘/不打日志/不 hash）→ run_probe → 保存前 re-read → `capability_fields_changed` = true → **discard**（不覆盖 capabilities/last_tested_at/message，返回「AI 连接配置在检测过程中发生变化，本次结果已丢弃，请重新检测。」）。
+- 持久化只在 A-E 全部完成后一次 `save_probe_result`（单 UPDATE；内部错误 → 旧 truth 保留，无半套结果）。last_test_message 追加 §18.4 安全摘要段 `basic=…; json=…; tools=…; temp0=…; stream=…`（无 response/reasoning/prompt/Authorization/Key 原文）。
+
+## Files Added / Modified
+- 新：`src-tauri/tests/batch062r1.rs`（41 tests R1-R41，localhost fake provider）
+- 改：`src-tauri/src/ai/client.rs`（finish_reason/reasoning_content/Completion 透出；chat_stream+temp）、`src-tauri/src/ai/compatibility.rs`（budget 常量/classify_final/is_hard_connection_failure/ProbeDetails+A-D retry 重编排/connectivity_check/capability_fields_changed/总调用计数）、`src-tauri/src/lib.rs`（两 connection test 走 connectivity_check；compatibility 命令 snapshot guard+原子保存；FastChat stream 0.3）、`src/pages/Settings.tsx`（parseSummary/parseSkipped/basicDetailLabel/temp0DetailLabel；五项行细分+未继续检测（连接失败）；检测中四按钮全 disabled）、`src-tauri/tests/batch062r.rs`（r15 新语义适配）
+- 未动：action.rs / grounding.rs / planner.rs / semantic_contract.rs / action_continuation.rs / ai_pending_action.rs / migrations / 领域 repository（§22 遵守）
+
+## AUTOMATED GATE（2026-08-22T14:57:03+08:00 全绿；默认未跑 full cargo test；真实 Provider 0 次自动调用）
+| Gate | 结果 |
+|---|---|
+| batch062r1（新） | **41/41**（R1-R41；fake provider 仅 127.0.0.1） |
+| batch062r（回归，r15 适配后） | **44/44** |
+| batch062（回归） | **57/57** |
+| batch061r（回归） | **47/47** |
+| batch0602（回归） | **29/29** |
+| batch0601（回归） | **33/33** |
+| batch060（回归） | **16/16** |
+| batch0592（回归） | **12/12** |
+| ai_foundation（回归） | **7/7** |
+| ai_assistant（回归） | **10/10** |
+| ai_panel（回归） | **8/8** |
+| npx tsc --noEmit | **0 errors** |
+| npm run build | **通过** |
+| cargo check -j 1 | **0 errors**（8 warnings 既有遗留） |
+| Schema / Migration | **v024 / 0** |
+| 真实 Provider 自动调用 | **0 次** |
+| Source Conflicts | **NONE** |
+
+### 失败与修复（收敛过程）
+1. 首轮 check：summary format `{}`×6 vs 5 args → 去掉多余占位；`(config, p)` 部分移动 → config 构造改 clone。
+2. batch062r1 首轮 5 失败：`basic_bodies` 把 D/E 同 prompt 请求计入 → 拆 `attempt_a_bodies`（首个 structured 请求之前的 HIGHER_OK 请求）+ 排除 stream；r34 `contains("hash")` 命中自身注释 → 改 sha256/md5 断言。
+3. batch062r r15 旧断言（basic 失败→只 1 请求+全 None）与新 §9.1 冲突 → 重写为「两次空 final → basic=false no_final_content，B-E 继续且 structured=true，status=incompatible」。
+
+### Human Runtime = PENDING
+- **AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING**——TASK §39 H00-H10（启动→连接语义文案→Re-Probe 五项全出→Basic retry truth→预期 DeepSeek Control Truth（basic/json/temp0 ✓）→Fresh Action→Approval First→Ambiguity→「第一个」0 Call 续答→Restart→Cross Conversation）由用户实机验证；Trae 禁止烧真实 Key。
+
+# DEV-0062R · Compatibility Reliability & Provider Truth Repair · TRAE_RUN
+
+- **DEV ID**: DEV-0062R（DEV-0062 Human Runtime 暴露的 Compatibility False Negative + Provider Truth 封闭式修复；非 DEV-0063、不重做 DEV-0062）
+- **Start**: 2026-08-22T13:56:36+08:00 ｜ **End**: 2026-08-22T14:14:58+08:00（AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING）
+- **Timestamp Source: SYSTEM**
+- **Baseline HEAD**: `c19ce78cf85f6e8d1bb4f616576e9f225b897573`（同 DEV-0062；工作区 = DEV-0062 全部未提交实现 + 本任务书替换，与 TASK §1 审计一致，无 BASELINE_DRIFT）
+- **Baseline Git Status**: DIRTY（预期：DEV-0062 未提交工作 + `.higher` 四文档 + TASK.md 替换；无未知用户修改）
+- **Schema Before**: v024 ｜ **Schema After**: v024 ｜ **Migration**: **0**（v001-v024 未动；无 v025）
+- **Human Runtime Evidence Received**: 用户实测 DEV-0062——「测试连接」成功（deepseek-v4-flash）但「检测 Higher 兼容性」= Limited 缺结构化输出（basic=true / structured_json=false 持久化）；随后 Action「把8月25日的TEST-STABLE改成35分钟。」被 control_capability_guard 提前阻断（Guard/Truth Guard 本身工作正常，能力事实错误）；DEV-0061R 同一 Connection 曾真实完成 Interpreter→SemanticAction→Grounding→ChangeSet。
+- **纪律**：TASK 只读（§42）；真实 Provider 0 次自动调用（§35，兼容性行为测试只用 localhost fake provider）；默认不跑 full cargo test；`-j 1`；禁 reset/checkout/restore；STOP 即停
+
+## Audited Root Causes（TASK §3，全部确认并修复）
+| # | 根因 | 修复 |
+|---|---|---|
+| 3.1 P0 | Probe B 用 `client.chat`（temp=0.3）否决 temp=0 的真实 Control Runtime | run_probe 全部 `chat_with_temperature(..., 0.0)`（R11 锁定） |
+| 3.2 P0 | HTTP 200 + invalid JSON 不 fallback（只认 400/422 字符串） | Native 任一失败（200 invalid/empty/request error/response_format 不支持）且 basic 已过 → 必进 PromptOnly（R07/R08） |
+| 3.3 P0 | Parser 只 `is_object()`（{"abc":123} 也过） | 必须通过真实 `runtime::parse_turn_decision` 且 = FastChat（R01-R04） |
+| 3.4 P0 | Re-Probe 被历史 json_strategy=prompt_only 污染（Native 请求实际没发 response_format） | `AiRuntimeConfig.json_mode_override` + `with_forced_json()`（ForceNative/ForcePromptOnly；R05 请求体级断言） |
+| 3.5 P0 | Probe 单次失败即 false（Runtime 有 Repair Once） | PromptOnly 200+非空但 parse 失败 → bounded Repair Once（R09）；上限 3 请求（R12） |
+| 3.6 P0 | 一次错误 Probe → 持久化 false → 全部 Action 堵死 | 修 Capability Truth（Guard 保留未删，STOP-03 遵守） |
+| 3.7 P1 | Control Guard 不查 basic_chat | `control_known_false()` = basic/json/temp0 任一 Some(false)（R23-R25） |
+| 3.8 P0 | Primary Resolver first-enabled 隐藏 fallback | 严格真值：id 不存在/disabled → 明确报错（R28/R29） |
+| 3.9 P0 | Explicit Control 失效偷偷 Follow Primary | Some(id) 不存在/disabled → 报错；仅 None 允许跟随（R30/R31/R32） |
+| 3.10 P1 | legacy save_ai_settings first-enabled fallback | 只认真实 Active Primary（R33） |
+| 3.11 P1 | Primary/Control 切换非原子（partial state） | `set_active_profiles_atomic`：双校验 + BEGIN IMMEDIATE 单事务（R34/R35） |
+| 3.12 P1 | Active Connection 可直接被 disable | update() Disable Guard（primary/control 拒绝 + 至少留一个 enabled；R38-R41） |
+| 3.13 P1 | set_active_primary 注释与实现不一致 | untested 仅拒绝「切换到不同 id」；同 id 维持允许（R36/R37） |
+| 3.14 P1 | Compatibility UI 缺诊断信息 | 卡片五项能力行 + strategy + 最后检测时间 + role 徽标 + follow 警告 + 配置变化提示 |
+
+## Files Added / Modified
+- **新**：`src-tauri/src/ai/compatibility.rs`（Probe orchestration：A-E + structured_output_valid + tool_call_valid + bounded strategy fallback + sanitized report）、`src-tauri/tests/batch062r.rs`（44 tests R01-R44，localhost fake provider）
+- **改（backend）**：`ai/provider.rs`（json_mode_override/with_forced_json/严格 resolver/control_known_false/primary_basic_error/ResolvedAiProfiles+Debug）、`ai/mod.rs`（+compatibility 模块；save_ai_settings 严格真值 → Result<(),String>）、`repository/ai_provider_profile.rs`（update→Result<(),String>+Disable Guard；set_active_primary untested 同 id 修正；+set_active_profiles_atomic）、`lib.rs`（probe 命令改用 compatibility::run_probe；set_active_ai_profiles 原子化；Control Guard=control_known_false；FastChat+PRIMARY guard + primary_client basic_chat 拒绝）
+- **改（frontend）**：`src/pages/Settings.tsx`（capMark/capRow/strategyLabel + 卡片五项行 + role 徽标 + follow 警告 + untested 重检提示）、`src/styles.css`（settings-role/settings-conn__caps/settings-cap 三态）
+- **改（tests）**：`tests/batch062.rs`（t21 适配 control_known_false 新形态 + cfg() +json_mode_override）
+
+## Structured Probe Algorithm（§7）
+- Payload：synthetic TurnDecision `{"route":"fast_chat","skills":[]}`（真实 parse_turn_decision 校验，零业务副作用；wrapper 语义=Runtime 同源：纯 JSON/```json/``` fence/首尾空白 ✓，夹文字/多 JSON/错 shape ✗）
+- Step B1 Native（ForceNative，temp=0）→ 成功 = native；任一失败 → Step B2 PromptOnly（ForcePromptOnly，temp=0）→ 成功 = prompt_only；HTTP 成功+非空但 parse 失败 → Repair Once（只含 synthetic contract + 截断 120 字 invalid output + 安全错误类别；temp=0）→ 成功 = prompt_only+repair_used；否则 structured=false + json_strategy=unknown（禁止保存 native 假装可用）
+- Bounded：Native 1 + PromptOnly 1 + Repair 1 = **≤3 Provider 请求**
+
+## Provider Resolver Truth / Atomic / Disable Guard
+- Resolver（§15）：primary id 必须存在+enabled；control None=Follow（唯一）；Some 失效=报错；Capability 不满足不换 Provider（交 Guard 拒绝）
+- Atomic（§17）：Validate 双方（含 untested 同 id 豁免）→ BEGIN IMMEDIATE → 写 primary+control → COMMIT；失败 ROLLBACK 双值不变
+- Disable Guard（§18）：active primary「请先切换主要 AI 后再停用」；explicit control「请先改为跟随主要 AI或切换 Control 后再停用」；非 active 允许；至少保留一个 enabled
+- §14 Primary Basic Honesty：basic_chat=Some(false) → FastChat/HigherRead/Planner/specialized 均明确人话拒绝（primary_basic_guard），untested legacy 不变
+
+## AUTOMATED GATE（2026-08-22T14:14:58+08:00 全绿；默认未跑 full cargo test；真实 Provider 0 次自动调用）
+| Gate | 结果 |
+|---|---|
+| batch062r（新） | **44/44**（R01-R44，含 localhost fake provider 行为级） |
+| batch062（回归，t21 适配后） | **57/57** |
+| batch061r（回归） | **47/47** |
+| batch0602（回归） | **29/29** |
+| batch0601（回归） | **33/33** |
+| batch060（回归） | **16/16** |
+| batch0592（回归） | **12/12** |
+| ai_foundation（回归） | **7/7** |
+| ai_assistant（回归） | **10/10** |
+| ai_panel（回归） | **8/8** |
+| npx tsc --noEmit | **0 errors** |
+| npm run build | **通过**（10.48s） |
+| cargo check -j 1 | **0 errors**（7 warnings 既有遗留） |
+| Schema | **v024 保持 · Migration 0** |
+| 真实 Provider 自动调用 | **0 次**（fake provider 仅 127.0.0.1） |
+| Source Conflicts | **NONE** |
+
+### 失败与修复（收敛过程）
+1. compatibility.rs 首轮 check：`first_error = e`（E0308 &String）→ `e.clone()`。
+2. batch062r 首轮编译：`ResolvedAiProfiles` 无 Debug（unwrap_err 需要）→ derive(Debug)。
+3. batch062 t21 断言旧实现形态 `control.capabilities.structured_json == Some(false)` → 最小适配为新 `control_known_false(&control.capabilities)` + provider.rs 三项能力源码断言（语义等价超集）。
+4. 测试自身笔误：r43 `contains().collect()` 类型错误 → 简化断言；FakeResponse::Status 分支 format 清理。
+
+### Human Runtime = PENDING
+- **AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING**——TASK §37 H00-H16（启动/迁移安全→DeepSeek 测试连接→Re-Probe（重点 basic/json/temp0=true + strategy=native OR prompt_only，允许 limited）→连续两次检测稳定→新会话 Action 真实 Proposal→Approval First→limited-but-Control-Compatible Action→ambiguity→「第一个」0 Interpreter 续答→重启续答→跨会话隔离→新意图逃逸→Disable Guard→原子切换→Provider Truth→历史 Provenance）由用户实机验证。
+
+# DEV-0062 · Multi-Provider AI Profiles & Stable Action Continuation · TRAE_RUN
+
+- **DEV ID**: DEV-0062（多 AI Connection / Provider-Model 与 Runtime 解耦 / Primary+Control 双角色 / Compatibility 检测 / Action Clarification → 持久化 Control State / 禁止假 Proposal）
+- **Start**: 2026-08-22T12:04:34+08:00 ｜ **End**: 2026-08-22T12:52:17+08:00（AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING）
+- **Timestamp Source: SYSTEM**
+- **Baseline HEAD**: `c19ce78cf85f6e8d1bb4f616576e9f225b897573`（DEV-0061R automated gate passed）
+- **Baseline Git Status**: CLEAN（仅 `.higher/TASK.md` 被替换为本任务书，属预期输入）；`git diff --stat` 仅 TASK.md
+- **Schema Before**: v023 ｜ **Migration**: v024_ai_provider_profiles_and_action_continuation（本轮唯一）
+- **纪律**：TASK 只读（§87）；真实 Provider 0 次自动调用（§80）；默认不跑 full cargo test；`-j 1`；禁 reset/checkout/restore；DECISION_REQUIRED 即停
+
+## PART 0 · Baseline 核对（2026-08-22T12:04）
+- `git rev-parse HEAD` = c19ce78cf85f6e8d1bb4f616576e9f225b897573 ✓（与 TASK §1 审计一致，无 BASELINE_DRIFT）
+- `git status --short` = ` M .higher/TASK.md`（任务书本体）✓
+- `git diff --stat` = 仅 TASK.md（5083 行替换）✓
+- 源码事实核对（与 TASK §2 一致）：`ai/mod.rs` `enum AiProvider { Deepseek }` 单值 + `load_ai_settings` 恒 Deepseek；client.rs thinking 直接改 model（DeepSeek 特有）；无 provider.rs / ai_provider_profile / ai_pending_action。SOURCE_CONFLICT：无。
+
+## PART 1 · Migration v024（本轮唯一；v001-v023 未动、无 v025）
+- **`migrations/v024_ai_provider_profiles_and_action_continuation.rs`（新）**：
+  - `ai_provider_profiles`：name / adapter_kind CHECK(deepseek|openai_compatible) / base_url / api_key / model / thinking_mode CHECK(off|deepseek_model_suffix) / enabled / capabilities 五列三态（basic_chat/structured_json/tool_calls/temperature_zero/streaming 均 NULLABLE bool）/ json_strategy / compatibility_status CHECK(full|limited|incompatible|untested) DEFAULT untested / probe_message / probe_at；idx_enabled。
+  - `ai_pending_actions`：conversation_id FK(ai_conversations) / profile_id / source_run_id FK(ai_runs) / status CHECK(active|resolved|cancelled|expired|stale) / action_json / candidates_json / attempt_count / expires_at / created_at / resolved_at；**partial unique index**（status='active' 时 (profile_id,conversation_id) 唯一——每对至多 1 active）。
+  - `ai_runs` +8 列 provider snapshot（provider_profile_id/provider_profile_name/adapter_kind/provider_model + control_ 四列）。
+  - **Legacy 自动迁移**：profiles 表空时读 settings KV `ai.base_url/api_key/model/thinking_enabled` → 插入首个 DeepSeek Connection（缺省兜底 api.deepseek.com / deepseek-v4-flash）；`ai.active_primary_profile_id` 为空时设为该 Connection；**原 Key 不删除**（STOP-06 安全满足）。
+
+## PART 2 · Provider Architecture（Adapter 边界唯一模块）
+- **`ai/provider.rs`（新）**：`AdapterKind{Deepseek,OpenaiCompatible}` / `ThinkingMode{Off,DeepseekModelSuffix}`（serde 与 DB CHECK 对齐）；`AiRuntimeConfig`（请求级 immutable：profile_id/name/adapter_kind/base_url/api_key/model/thinking_mode/capabilities——§13 与 DB Profile 实体分离）：
+  - `endpoint()`：base 去尾斜杠 + 单个 `/chat/completions`（双斜杠/重复路径=0）。
+  - `effective_model()`：DeepSeek+DeepseekModelSuffix → `{model}-thinking`；**OpenAI Compatible 原样返回**（永不加 -thinking，T12）。
+  - `use_native_json()`：json_strategy=prompt_only → 禁发 response_format。
+  - `resolve_active_ai_profiles()`：读 settings KV active primary/control；control 缺省=follow primary；active 失效（删除/incompatible/disabled）→ 兜底第一个 enabled；无隐藏 Provider fallback（AI-INV-022）。
+  - 用户文案：`control_capability_error` / `primary_tools_error` / `primary_json_error`（确定性中文，不泄漏 raw 400/missing field）。
+  - `probe_tool_schema()` 合成工具 `higher_capability_probe`（真实 tool calling schema，不触正式数据）+ `summarize_probe()` 纯函数。
+- **`ai/client.rs`**：`AiClient { config: AiRuntimeConfig }`；chat/chat_with_temperature/chat_stream 全部经 `config.endpoint()/effective_model()/use_native_json()`——client 零厂商知识。
+- **`repository/ai_provider_profile.rs`（新）**：CRUD + `update`（base_url/model/thinking_mode 变化 → compatibility 重置 untested，SQL CASE 单语句）+ `save_probe_result`（message 截 300 字，无 Key）+ active id 读写（settings KV）+ `set_active_primary`（incompatible/disabled 禁止）+ `set_active_control`（显式 pin 需 control_compatible）+ `delete_guarded`（active/explicit control 不能删；至少留一个可用）。
+- **`ai/mod.rs`**：`load_ai_settings` → resolve active primary（legacy 兼容）；`save_ai_settings` → 写 active primary profile；`AiResult` +provider_profile_name/adapter_kind/provider_model。
+
+## PART 3 · Capability Contract（AI-INV-018）
+- `AiCapabilities` 三态（true/false/null=untested）五项 + json_strategy(native/prompt_only/unknown)。
+- `compute_compatibility_status()` 纯函数：basic_chat=false → **incompatible**；basic+json+tools+temp0 → **full**；其余 → **limited**。
+- `control_compatible()` = basic+json+temp0（**不要求 tools**——T17 锁定）。
+- **Compatibility Probe（Tauri 命令 `test_ai_provider_compatibility`，A-E）**：A 基础 chat（"ping"≤16 tok）/ B structured JSON（native `response_format` 失败且 400/422 → prompt_only 重试并记 strategy）/ C 合成工具调用 / D temperature=0 复诵 / E streaming 首 delta；结果 `summarize_probe()` → `save_probe_result`（**0 Key 落库**）。
+- **Capability Guard 运行时**：仅 `Some(false)` 拒绝（untested/legacy 迁移记录 NULL 保持可运行）——Control 侧 structured_json/temp0 缺失 → `control_capability_error`；Primary 侧 tool_calls 缺失（HigherRead/工具循环）→ `primary_tools_error`；Planning+json 缺失 → `primary_json_error`。
+
+## PART 4 · Primary / Control Role Wiring（§8/§27/§28）
+- `ai_start_run` 开头 `resolve_active_ai_profiles()` 一次 resolve → `run_chat_turn(primary: AiRuntimeConfig, control: AiRuntimeConfig)`（签名替换旧 settings 参数）。
+- run 开头 INSERT ai_runs 带 8 列 snapshot（provider/control profile id+name+adapter_kind+model——**AI-INV-021 历史不漂移**）。
+- **Control 角色**（control_client + `provider_request_started_role(..., "control", config)` trace）：Turn Interpreter / Repair Once / Candidate Selection（temp=0）。
+- **Primary 角色**（"primary" trace）：主回答工具循环 / FastChat / Planner / Mastery/PersonalCompile/PlanningReview/ai_analyze（各 resolve primary + structured_json guard）。
+- **Streaming 降级（§24）**：FastChat streaming=`Some(false)` → 直接 `Err("streaming_disabled")` 转 non-stream（不试 stream）；unknown → 先 stream 失败一次 fallback；**已有 delta 不重请求**。
+- 10 个新 Tauri 命令并注册：list/get/create/update/delete_ai_provider_profile、get/set_active_ai_profiles（set 后 emit `higher:ai-profiles-changed`）、test_ai_provider_connection、test_ai_provider_compatibility。
+
+## PART 5 · Action Continuation（§39-59 · AI-INV-019/020）
+- **`repository/ai_pending_action.rs`（新）**：`PendingCandidate`（derive Default；real_id 仅 Backend 可见）+ `from_grounding`（EntityHint→Candidate 转换）；`find_active`（惰性 expire：过期→expired 状态，不 hijack）/ `create_or_replace`（单事务：旧 active→cancelled 再插入，expires_at=`datetime('now','+24 hours')`）/ `set_status`（resolved_at 条件写）/ `bump_attempt` / `candidates`。
+- **`ai/action_continuation.rs`（新，deterministic resolver · 0 Provider Call）**：`PendingSelection{Selected(real_id,idx)/StillAmbiguous/NoMatch/NotSelection/Cancel}`；`resolve_pending_selection()`：Cancel（短句≤16 字+取消词+非完整命令）→ 约束收集（`leading_ordinal`：第X个/X号，**纯数字仅 allow_pure 且整串**——防"08-24"尾段误判；`extract_date_with_env`：2026-08-24/8月24日/08-24（ASCII 安全字节区间）；`extract_relative_date`：今天/明天/后天 via `recurring_rule::shift_date`；唯一标题）→ `looks_like_new_intent`（1+1 等退出）→ **约束交集必须唯一命中（不猜）**；`candidates_stale`（task: title/date/status 对比；rule: +enabled；实体已删=stale）；`candidates_text`/`no_match_text` 用户文案。
+- **`ai/action.rs`**：`ActionOutcome::Clarification { message, candidates }`（携带真实 Candidate 供持久化；6 处 ambiguous_text 调用点 + Bulk 上限 + compile_action 兼容入口同步）。
+- **`lib.rs` Pending Gate（§44 Turn Priority：Envelope → resolve → Read Pending → Pending Gate → Planner gate → Interpreter，~140 行）**：stale 检查 → resolver → Cancel（cancelled 文案）/ NoMatch（attempt+1 重述候选）/ StillAmbiguous（再列候选）/ NotSelection（旧 pending cancelled，正常走 Interpreter）/ **Selected（反序列化原 action_json → plan_action → 真实 ChangeSet → emit ai://changeset → resolved；不二次询问确认）**。`gate.flatten()` 处理双层 Option。
+- Action 分支 Clarification → `persist_pending`（PendingCandidate::from_grounding 写 ai_pending_actions）。
+- **`ai/runtime.rs`** +`needs_reference_history()`：cue 词表（刚才/刚刚/那个/这个/它/上一个/下一个/第一个/第二个/前一个/后一个/继续/同样/照刚才/那明天/那后天）；完整显式请求不带 recent user history（H20 同句稳定性）。
+- **`repository/recurring_rule.rs`**：`shift_date` fn → pub（resolver 复用）。
+
+## PART 6 · Truth Guard（§62/§63）
+- `lib.rs`：write intent + HigherRead 路由 + 0 ChangeSet → **final_text 整体替换**为确定性真话（非 append；error=`write_route_miss`）——「文字说已有修改方案但没有查看计划按钮」假状态消灭；Proposal UI 只由真实 ChangeSet 驱动。
+
+## PART 7 · Frontend
+- **`src/types.ts`**：AiResult+3 字段；AiCapabilities/AiProviderProfile/AiActiveProfiles。
+- **`src/api.ts`**：10 个新 invoke wrapper。
+- **`src/pages/Settings.tsx`**：AiSection 完全重写——compatLabel 四态徽标 / controlCompatible / ConnectionModal（adapter 条件显示 Thinking checkbox；datalist 模型建议）/ profiles 列表卡 / 主要AI+动作理解AI 下拉 / 添加入口；imports 全换新 API + `listen`。
+- **`src/components/ai/AiPanel.tsx`**：footer「AI [Connection ▾]」（enabled profiles；disabled=runBusy）；diag 显示 `providerProfileName ?? "旧版本未记录"`；reloadConns + `higher:ai-profiles-changed` 监听；删除 getAiSettings/saveAiSettings/changeModel/model state。
+- **`src/components/ai/AiPanelContext.tsx`**：diag+providerProfileName/providerModel 透传。
+- **`src/styles.css`**：settings-conn/settings-compat（full 绿/limited 橙/bad 红/untested 灰）/btn--danger。
+
+## PART 8 · 测试（batch062.rs 新 57 项 T01-T57 + 回归适配）
+- T01-T25 Provider（migration/legacy/active/CRUD/adapter/compatibility/streaming 降级/Key 安全/snapshot）；T26-T32 UI 源码级断言；T33-T53 Action Continuation 全链（resolver 约束/stale/expire/隔离/FK/persist）；T54-T57 Stability。
+- helpers：`mk_conv`（INSERT ai_conversations）+ `mk_run`（INSERT ai_runs）——满足双 FK；`persist_pending_from_clarification` 复现 lib.rs 持久化路径。
+- schema 断言 23→24 批量适配：adjustment_system/attachments/batch03/feedback_system/evaluation_system/knowledge_workspace/profile_system（count）+ batch049 + batch058 + batch0601（t4 改验 v24）+ batch0602（Clarification 结构体字面量）+ ai_assistant（AiResult 3 新字段）。
+
+### 失败与修复（收敛过程）
+1. cargo check 首轮 5 errors：`shift_date is private`（E0603）→ pub fn；`Option<Option<..>>`（E0308 gate 双层）→ `.flatten()`；中文 match `(None,v2)=>v2`（E0308 '十' 特判）→ `(None,_)=>v`；`"月".len_utf8()` 不存在（E0599）→ `.len()`；closure 参数（E0593）→ `unwrap_or(base.clone())`；unused `is_assistant` → `let _legacy_mode`。
+2. batch062 编译：`PendingCandidate: Default` 不满足（E0277×16）→ repository derive Default；`apply()` 3 参（E0061）→ `.apply(cs, fx.p, false)`；`for src in [s,p]` move（E0382）→ `[&s,&p]`。
+3. **FOREIGN KEY constraint failed**（t33-t45/t48-t51/t53 大面积）：ai_pending_actions 双 FK → 新增 mk_conv/mk_run helpers + 各直接调用点补齐（t43/t48/t49/t50/t51/t45 文件 DB 场景）。
+4. t37「08-24」误命中：纯数字 ordinal 匹配尾部"24" → `leading_ordinal(s, allow_pure)`，parse 仅 `i==0` 时 allow_pure。
+5. t17 断言方向反：control_compatible 不要求 tools → `assert!(...)`；t19 分割窗口：锚点加 `{` 后缀 + 匹配串改 `client.chat(msgs`。
+6. t53 resolve_recent 不命中：需 `recency_hint: Some("recent_updated")` EntityHint 覆盖。
+7. batch0601 t4：v==23→24 且 `WHERE version=23` name 断言；ai_assistant AiResult 补 3 None。
+
+### AUTOMATED GATE（2026-08-22T12:49:16+08:00 全绿；默认未跑 full cargo test；真实 Provider 0 次自动调用）
+| Gate | 结果 |
+|---|---|
+| batch062 | **57/57**（T01-T57） |
+| batch061r（回归） | **47/47** |
+| batch0602（回归） | **29/29** |
+| batch0601（回归） | **33/33** |
+| batch060（回归） | **16/16** |
+| batch0592（回归） | **12/12** |
+| ai_foundation（回归） | **7/7** |
+| ai_assistant（回归） | **10/10** |
+| ai_panel（回归） | **8/8** |
+| npx tsc --noEmit | **0 errors** |
+| npm run build | **通过**（10.35s） |
+| cargo check -j 1 | **0 errors**（8 warnings 既有遗留） |
+| Schema Migration | **v024（唯一）**；v001-v023 未动；无 v025 |
+| 真实 Provider 自动调用 | **0 次** |
+| Source Conflicts | **NONE** |
+
+### Human Runtime = PENDING
+- **AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING**——TASK §82 H00-H22（备份→v024 迁移→legacy DeepSeek→第二 Connection→兼容检测→Primary/Control→能力降级→流式→Thinking→Action 澄清/续答/重启/跨会话/新意图逃逸→同句稳定→Direct Write→历史 Provider 显示）由用户实机验证；Trae 禁止烧真实 Key。
+
+### 修改文件（全量）
+- 新：`src-tauri/src/migrations/v024_ai_provider_profiles_and_action_continuation.rs`、`src-tauri/src/ai/provider.rs`、`src-tauri/src/ai/action_continuation.rs`、`src-tauri/src/repository/ai_provider_profile.rs`、`src-tauri/src/repository/ai_pending_action.rs`、`src-tauri/tests/batch062.rs`（57 tests）
+- 改（backend）：`ai/client.rs`、`ai/mod.rs`、`ai/action.rs`、`ai/runtime.rs`、`ai/trace.rs`、`repository/mod.rs`、`repository/recurring_rule.rs`、`migrations/mod.rs`、`lib.rs`
+- 改（frontend）：`src/types.ts`、`src/api.ts`、`src/pages/Settings.tsx`、`src/components/ai/AiPanel.tsx`、`src/components/ai/AiPanelContext.tsx`、`src/styles.css`
+- 改（tests）：adjustment_system / attachments / batch03 / batch049 / batch058 / batch0601 / batch0602 / evaluation_system / feedback_system / knowledge_workspace / profile_system / ai_assistant（schema 23→24 + 结构适配）
+
 # DEV-0061R · Higher AI Runtime Stabilization · Recovery · TRAE_RUN
 
 - **DEV ID**: DEV-0061R（Decision-Complete Recovery Task：接管旧 DEV-0061 半施工状态 → 完成 Unified Higher AI / Turn Interpreter / Semantic Contract v2 / Conversation-Scoped Recent / Planner 边界 / Trace / Recurring Range / Task 菜单 / batch061r）

@@ -186,6 +186,15 @@ RecurringRule canonical
 Task ≠ StudySession
 ```
 
+## 10e. Multi-Provider AI（DEV-0062 起固定）
+
+- **Provider / Model 是基础设施，不是 Higher 产品事实**。Higher 的 Domain Semantics（Task / Session / GoalTarget / PlanningBlueprint / Knowledge / Evidence / ChangeSet）不得依赖某一家模型厂商。
+- **模型能力不足时必须明确 Limited / Incompatible**，不得静默降级或伪装成功。
+- **Higher 支持 Primary AI + optional Control AI**（动作理解层可独立固定）；切换模型 = 切换 Connection，不篡改其他配置；禁止隐式 Provider fallback。
+- **Conversation Prose ≠ Control State**：等待候选选择等执行中业务状态必须由 Higher 结构化持久化，禁止依赖聊天文字恢复。
+- **Direct Write 永远为 0**（多 Provider 不改变审批边界）。
+- 一个 Connection = 一套确定 Provider + Model Config（V1 Adapter：DeepSeek / OpenAI Compatible；OpenAI Compatible 模型名原样发送）。
+
 ## 11. Today 与双树闭环
 
 - **Today = 今日任务 + 今日活动**（只有两区）：任务=当天计划（核心/常规/积累）；活动=当天真实 StudySession（极简行：标题+时间+主要操作；超长待确认记录显示「时间待确认」）

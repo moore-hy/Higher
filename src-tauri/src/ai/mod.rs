@@ -28,6 +28,12 @@ pub mod grounding;
 // DEV-0061R §18：Semantic Contract 唯一事实源（version/examples/prompt fragment）
 pub mod semantic_contract;
 
+pub mod provider;
+
+pub mod compatibility;
+
+pub mod action_continuation;
+
 use serde::{Deserialize, Serialize};
 
 /// AI 服务商（V1 仅 DeepSeek；结构允许未来扩展 openai_compatible，不散落特有字段）。
@@ -70,34 +76,47 @@ impl Default for AiSettings {
 pub const AI_SETTING_KEYS: (&str, &str, &str, &str, &str) =
     ("ai.provider", "ai.base_url", "ai.api_key", "ai.model", "ai.thinking_enabled");
 
-/// 从 settings KV 读取 AI 配置（缺省值兜底）。
-pub fn load_ai_settings(conn: &rusqlite::Connection) -> rusqlite::Result<AiSettings> {
-    let repo = crate::repository::setting::SettingRepository::new(conn);
-    let get = |k: &str| -> Option<String> { repo.get(k).ok().flatten() };
+/// DEV-0062 §66 Legacy 兼容 wrapper：get/save_ai_settings 操作 **Active Primary Profile**。
+/// v024 起旧 ai.* KV 不再是 Canonical Truth（migration 读取一次后不再被 Runtime 消费）。
+pub fn load_ai_settings(conn: &rusqlite::Connection) -> Result<AiSettings, String> {
+    let p = crate::ai::provider::resolve_active_ai_profiles(conn)?.primary;
     Ok(AiSettings {
-        provider: AiProvider::Deepseek,
-        base_url: get(AI_SETTING_KEYS.1).unwrap_or_else(|| "https://api.deepseek.com".into()),
-        api_key: get(AI_SETTING_KEYS.2).unwrap_or_default(),
-        model: get(AI_SETTING_KEYS.3).unwrap_or_else(|| "deepseek-v4-flash".into()),
-        thinking_enabled: get(AI_SETTING_KEYS.4)
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false),
+        provider: AiProvider::Deepseek, // legacy shape（前端不再消费该字段做厂商判断）
+        base_url: p.base_url,
+        api_key: p.api_key,
+        model: p.model,
+        thinking_enabled: p.thinking_mode == provider::ThinkingMode::DeepseekModelSuffix,
     })
 }
 
-/// 保存 AI 配置到 settings KV。
+/// 保存到 Active Primary Profile（legacy 兼容；改能力字段会重置兼容检测结果）。
+/// DEV-0062R §16 Provider Truth：只允许真实 Active Primary——引用失效返回明确错误，
+/// 禁止 first-enabled fallback（AI-INV-022）。
 pub fn save_ai_settings(
     conn: &rusqlite::Connection,
     s: &AiSettings,
-) -> rusqlite::Result<()> {
-    let repo = crate::repository::setting::SettingRepository::new(conn);
-    repo.set(AI_SETTING_KEYS.0, s.provider.as_str())?;
-    repo.set(AI_SETTING_KEYS.1, s.base_url.trim())?;
-    repo.set(AI_SETTING_KEYS.2, s.api_key.trim())?;
-    repo.set(AI_SETTING_KEYS.3, s.model.trim())?;
-    repo.set(
-        AI_SETTING_KEYS.4,
-        if s.thinking_enabled { "true" } else { "false" },
+) -> Result<(), String> {
+    let repo = crate::repository::ai_provider_profile::AiProviderProfileRepository::new(conn);
+    let pid = repo
+        .active_primary_id()
+        .ok_or_else(|| "尚未设置主要 AI。请在「设置 → AI」选择主要 AI。".to_string())?;
+    let old = repo
+        .get(pid)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "当前主要 AI 连接已不存在。请在「设置 → AI」重新选择主要 AI。".to_string())?;
+    repo.update(
+        pid,
+        &old.display_name,
+        &provider::AdapterKind::from_str(&old.adapter_kind).unwrap_or(provider::AdapterKind::Deepseek),
+        &s.base_url,
+        &s.api_key,
+        &s.model,
+        &if s.thinking_enabled {
+            provider::ThinkingMode::DeepseekModelSuffix
+        } else {
+            provider::ThinkingMode::Off
+        },
+        old.enabled,
     )?;
     Ok(())
 }
@@ -189,6 +208,13 @@ pub struct AiResult {
     /// 实际使用的工具轮数（0 = 未进入工具循环；上限 6）。
     #[serde(default)]
     pub tool_rounds: Option<u32>,
+    /// DEV-0062 §31 Provider Provenance：本次调用真实 snapshot（不从当前配置反推）
+    #[serde(default)]
+    pub provider_profile_name: Option<String>,
+    #[serde(default)]
+    pub adapter_kind: Option<String>,
+    #[serde(default)]
+    pub provider_model: Option<String>,
 }
 
 /// assistant_chat 结构化响应（DEV-0023 §47 协议）。

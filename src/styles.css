@@ -3079,6 +3079,80 @@ button.calendar__cell--day:hover {
   gap: 4px;
 }
 
+/* DEV-0062 · AI 连接列表 */
+.settings-conn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+.settings-conn:last-of-type {
+  border-bottom: none;
+}
+.settings-conn__main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.settings-conn__name {
+  font-weight: 600;
+}
+.settings-conn__meta {
+  font-size: 12px;
+}
+.settings-compat {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.settings-compat--full {
+  color: #15803d;
+}
+.settings-compat--limited {
+  color: #b45309;
+}
+.settings-compat--bad {
+  color: #b91c1c;
+}
+.settings-compat--untested {
+  color: var(--fg-muted, #6b7280);
+}
+/* DEV-0062R · 角色徽标 / 单项能力行（轻量，非 Dashboard） */
+.settings-role {
+  font-size: 11px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-weight: 500;
+}
+.settings-conn__caps {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  width: 100%;
+}
+.settings-cap {
+  white-space: nowrap;
+}
+.settings-cap--ok {
+  color: #15803d;
+}
+.settings-cap--bad {
+  color: #b91c1c;
+}
+.settings-cap--untested {
+  color: var(--fg-muted, #6b7280);
+}
+.btn--danger {
+  color: #b91c1c;
+}
+
 .layout__sidebar-footer {
   display: flex;
   flex-direction: column;

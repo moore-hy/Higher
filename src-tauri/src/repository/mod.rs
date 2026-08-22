@@ -1,4 +1,6 @@
 pub mod adjustment;
+pub mod ai_pending_action;
+pub mod ai_provider_profile;
 pub mod attachment;
 pub mod changeset;
 pub mod cleanup;

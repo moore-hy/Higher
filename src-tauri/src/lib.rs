@@ -2029,26 +2029,264 @@ fn save_ai_settings(
     ai::save_ai_settings(&conn, &s).map_err(|e| e.to_string())
 }
 
-/// 测试连接：真实调用配置的 AI API（极小请求），人话错误。
+/// 测试连接（Legacy 兼容 §66）：对 **Active Primary** 做 API connectivity check。
+/// DEV-0062R.1 §4.1/§17：只验证 Base URL/Key/Model 能否完成基础请求并返回可解析
+/// envelope——**不代表** Higher 能力；文案明确指向「检测 Higher 兼容性」。
 #[tauri::command]
 async fn test_ai_connection(state: tauri::State<'_, db::DbState>) -> Result<String, String> {
-    let settings = {
+    let config = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        ai::load_ai_settings(&conn).map_err(|e| e.to_string())?
+        ai::provider::resolve_active_ai_profiles(&conn)?.primary
     };
-    let client = ai::client::AiClient::new(settings);
-    let completion = client
-        .chat(
-            vec![ai::client::ChatMessage::user("回复一个字：好")],
-            false,
-            None,
-            Some(8),
-        )
-        .await?;
-    if completion.content.is_none() && completion.tool_calls.is_none() {
-        return Err("连接成功，但模型返回内容为空，请检查模型名。".to_string());
+    ai::compatibility::connectivity_check(&config).await
+}
+
+/// DEV-0062 §26：Active Primary → client（specialized analyses 一律 PRIMARY，§27）。
+/// DEV-0062R §14：basic_chat 已知 false → 明确人话拒绝（不偷偷换 Connection / 不发必失败请求）。
+fn primary_client(
+    state: &tauri::State<'_, db::DbState>,
+) -> Result<ai::client::AiClient, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let cfg = ai::provider::resolve_active_ai_profiles(&conn)?.primary;
+    if cfg.capabilities.basic_chat == Some(false) {
+        return Err(ai::provider::primary_basic_error(&cfg.display_name));
     }
-    Ok(format!("连接成功，模型：{}", client.model()))
+    Ok(ai::client::AiClient::new(cfg))
+}
+
+// =============== DEV-0062 · AI Provider Profiles（多 AI Connection；§67） ===============
+
+fn parse_adapter(kind: &str) -> Result<ai::provider::AdapterKind, String> {
+    ai::provider::AdapterKind::from_str(kind)
+        .ok_or_else(|| format!("不支持的服务商类型：{kind}（仅 deepseek / openai_compatible）"))
+}
+
+fn parse_thinking(mode: &str) -> Result<ai::provider::ThinkingMode, String> {
+    ai::provider::ThinkingMode::from_str(mode)
+        .ok_or_else(|| format!("不支持的 Thinking 模式：{mode}"))
+}
+
+#[tauri::command]
+fn list_ai_provider_profiles(
+    state: tauri::State<'_, db::DbState>,
+) -> Result<Vec<repository::ai_provider_profile::AiProviderProfile>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+        .list()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_ai_provider_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<repository::ai_provider_profile::AiProviderProfile, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+        .get(profile_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "该 AI 连接不存在。".to_string())
+}
+
+#[tauri::command]
+fn create_ai_provider_profile(
+    state: tauri::State<'_, db::DbState>,
+    display_name: String,
+    adapter_kind: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    thinking_mode: String,
+) -> Result<i64, String> {
+    if display_name.trim().is_empty() {
+        return Err("请填写连接名称。".to_string());
+    }
+    if base_url.trim().is_empty() || model.trim().is_empty() {
+        return Err("请填写 Base URL 与模型名。".to_string());
+    }
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+        .create(
+            &display_name,
+            &parse_adapter(&adapter_kind)?,
+            &base_url,
+            &api_key,
+            &model,
+            &parse_thinking(&thinking_mode)?,
+        )
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_ai_provider_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    display_name: String,
+    adapter_kind: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    thinking_mode: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+        .update(
+            profile_id,
+            &display_name,
+            &parse_adapter(&adapter_kind)?,
+            &base_url,
+            &api_key,
+            &model,
+            &parse_thinking(&thinking_mode)?,
+            enabled,
+        )
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_ai_provider_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+        .delete_guarded(profile_id)
+}
+
+#[tauri::command]
+fn get_active_ai_profiles(
+    state: tauri::State<'_, db::DbState>,
+) -> Result<serde_json::Value, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+    Ok(serde_json::json!({
+        "primary_id": repo.active_primary_id(),
+        "control_id": repo.active_control_id(),
+    }))
+}
+
+#[tauri::command]
+fn set_active_ai_profiles(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, db::DbState>,
+    primary_id: i64,
+    control_id: Option<i64>,
+) -> Result<(), String> {
+    {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+        // DEV-0062R §17：先校验两者，再单事务写入——任一步失败两个值都保持原值
+        repo.set_active_profiles_atomic(primary_id, control_id)?;
+    }
+    // §37.2 Settings / Panel 同步：单一 Canonical active id；切换即广播
+    ai::run::emit(Some(&app), "higher:ai-profiles-changed", "", serde_json::json!({}));
+    Ok(())
+}
+
+/// §19/DEV-0062R.1 §17 测试连接（指定 Connection）：API connectivity only——
+/// HTTP 成功 + envelope 可解析 + ≥1 choice 即成功（content blank 也算，因为这不是
+/// Capability Test）；文案禁止冒充 Higher 能力。
+#[tauri::command]
+async fn test_ai_provider_connection(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<String, String> {
+    let config = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let p = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+            .get(profile_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
+        ai::provider::AiRuntimeConfig {
+            profile_id: p.id,
+            display_name: p.display_name,
+            adapter_kind: parse_adapter(&p.adapter_kind)?,
+            base_url: p.base_url,
+            api_key: p.api_key,
+            model: p.model,
+            thinking_mode: parse_thinking(&p.thinking_mode)?,
+            capabilities: p.capabilities,
+            compatibility_status: p.compatibility_status,
+            json_mode_override: None,
+        }
+    };
+    ai::compatibility::connectivity_check(&config).await
+}
+
+/// §19/DEV-0062R §5-§12 + DEV-0062R.1 检测 Higher 兼容性（Probe A-E；用户主动触发的
+/// 真实调用；自动 Gate 禁止调用真实 Provider）。Probe orchestration 在 ai/compatibility.rs：
+/// temp=0 / 真实 parse_turn_decision / Native→PromptOnly bounded fallback / Repair Once /
+/// A-D bounded retry / Hard vs Soft failure / 总调用 ≤9。
+/// DEV-0062R.1 §14/§15：开始冻结 Connection snapshot；保存前 re-read 比较——配置变化 →
+/// **丢弃结果**（不覆盖 capabilities/last_tested_at）；结果只在 A-E 全部完成后一次落库。
+#[tauri::command]
+async fn test_ai_provider_compatibility(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<serde_json::Value, String> {
+    let (config, snapshot) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let p = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+            .get(profile_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
+        let config = ai::provider::AiRuntimeConfig {
+            profile_id: p.id,
+            display_name: p.display_name.clone(),
+            adapter_kind: parse_adapter(&p.adapter_kind)?,
+            base_url: p.base_url.clone(),
+            api_key: p.api_key.clone(),
+            model: p.model.clone(),
+            thinking_mode: parse_thinking(&p.thinking_mode)?,
+            capabilities: p.capabilities,
+            compatibility_status: p.compatibility_status.clone(),
+            json_mode_override: None, // Probe 内部显式 ForceNative / ForcePromptOnly（§5.1）
+        };
+        (config, p)
+    };
+    let outcome = ai::compatibility::run_probe(&config).await;
+    {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+        // §14.2 Config Changed During Probe → discard（内存比较；不写任何结果）
+        let after = repo
+            .get(profile_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
+        if ai::compatibility::capability_fields_changed(&snapshot, &after) {
+            return Err(
+                "AI 连接配置在检测过程中发生变化，本次结果已丢弃，请重新检测。".to_string(),
+            );
+        }
+        // §15 原子持久化：A-E 全部完成后一次性保存（单 UPDATE；失败保留旧 truth）
+        repo.save_probe_result(
+            profile_id,
+            &outcome.capabilities,
+            outcome.status,
+            &format!(
+                "{}｜{}",
+                outcome.message,
+                outcome.details.summary(
+                    outcome.json_strategy,
+                    outcome.capabilities.tool_calls,
+                    outcome.capabilities.streaming
+                )
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(serde_json::json!({
+        "status": outcome.status,
+        "capabilities": outcome.capabilities,
+        "message": outcome.message,
+        "json_strategy": outcome.json_strategy,
+        "repair_used": outcome.repair_used,
+        "structured_calls": outcome.structured_calls,
+        "total_calls": outcome.total_calls,
+        "details": outcome.details,
+        "failures": outcome.failures,
+    }))
 }
 
 // =============== Session Note / 学习记录（DEV-0017） ===============
@@ -2782,9 +3020,8 @@ async fn assess_mastery(
         return Err(format!("未知的周期类型：{period_type}"));
     }
     // 1) 构建专用 Context（锁内短临界区）
-    let (settings, context) = {
+    let (context, primary_caps) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let settings = ai::load_ai_settings(&conn).map_err(|e| e.to_string())?;
         let ctx = ai::context::build_context(
             &conn,
             &ai::context::ContextInput {
@@ -2796,11 +3033,16 @@ async fn assess_mastery(
                 date: Some(format!("{period_start}..{period_end}")),
             },
         )?;
-        (settings, ctx)
+        // §18 Capability：Mastery 需 PRIMARY structured_json
+        let caps = ai::provider::resolve_active_ai_profiles(&conn)?.primary;
+        (ctx, caps)
     };
+    if primary_caps.capabilities.structured_json != Some(true) {
+        return Err(ai::provider::primary_json_error(&primary_caps.display_name));
+    }
 
     // 2) 单次调用（不进工具循环；一次结构修复重试）
-    let client = ai::client::AiClient::new(settings);
+    let client = primary_client(&state)?;
     let base = format!("{}\n\n{}", context, ai::prompts::user_instruction(ai::AiAction::MasteryAssessment));
     let mut messages = vec![
         ai::client::ChatMessage::system(ai::prompts::SYSTEM_PROMPT),
@@ -3501,17 +3743,21 @@ async fn compile_personalization(
     profile_id: i64,
 ) -> Result<repository::personalization::PersonalizationProfile, String> {
     // 1) 读取全部 chunk（锁内短临界区）
-    let (settings, chunks) = {
+    let (chunks, primary_caps) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let settings = ai::load_ai_settings(&conn).map_err(|e| e.to_string())?;
         let chunks = repository::personalization::PersonalizationRepository::new(&conn)
             .all_chunks(profile_id)?;
-        (settings, chunks)
+        let caps = ai::provider::resolve_active_ai_profiles(&conn)?.primary;
+        (chunks, caps)
     };
+    // §18 Capability：Personal Profile Compile 需 PRIMARY structured_json
+    if primary_caps.capabilities.structured_json != Some(true) {
+        return Err(ai::provider::primary_json_error(&primary_caps.display_name));
+    }
     if chunks.is_empty() {
         return Err("还没有导入任何资料。请先在「添加资料」导入 txt / md / docx / pdf。".to_string());
     }
-    let client = ai::client::AiClient::new(settings);
+    let client = primary_client(&state)?;
     // 2) Map：每 source 提取结构化要点
     let mut facts: Vec<serde_json::Value> = Vec::new();
     let mut by_source: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
@@ -4117,12 +4363,15 @@ async fn run_planning_review_ai(
         }
         rev.evidence_snapshot_json
     };
-    // 2) AI 配置 + client
-    let settings = {
+    // 2) AI 配置 + client（§18：Planning Review 需 PRIMARY structured_json）
+    let primary_caps = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        ai::load_ai_settings(&conn).map_err(|e| e.to_string())?
+        ai::provider::resolve_active_ai_profiles(&conn)?.primary
     };
-    let client = AiClient::new(settings);
+    if primary_caps.capabilities.structured_json != Some(true) {
+        return Err(ai::provider::primary_json_error(&primary_caps.display_name));
+    }
+    let client = primary_client(&state)?;
     // 3) 组装消息（json_mode；只读评估，不给工具）
     let system = "你是学习规划阶段复盘评估助手。基于提供的真实证据快照评估该周期学习执行情况。\
         只输出一个 JSON 对象（不要 markdown 代码块、不要解释文字），结构：\
@@ -4350,10 +4599,11 @@ async fn ai_start_run(
     local_datetime: Option<String>,
     timezone_offset_minutes: Option<i64>,
 ) -> Result<String, String> {
-    // mode（§13：conversation 临时 mode 优先于 profile 偏好）
-    let (settings, mode, web_enabled, brave_key) = {
+    // mode（§13：conversation 临时 mode 优先于 profile 偏好）+ DEV-0062 §26/§30：
+    // Run 开始时一次性 resolve immutable Primary / Control config（此后整个 Run 固定使用）
+    let (profiles, mode, web_enabled, brave_key) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let s = ai::load_ai_settings(&conn).map_err(|e| e.to_string())?;
+        let resolved = ai::provider::resolve_active_ai_profiles(&conn)?;
         let conv_mode = repository::conversation::ConversationRepository::new(&conn)
             .get(conversation_id, profile_id)
             .ok()
@@ -4369,9 +4619,10 @@ async fn ai_start_run(
         let we = SettingRepository::new(&conn).get("websearch.enabled").ok().flatten()
             .map(|v| v == "true").unwrap_or(false);
         let bk = SettingRepository::new(&conn).get("websearch.brave_key").ok().flatten().unwrap_or_default();
-        (s, m, we, bk)
+        (resolved, m, we, bk)
     };
-    let is_assistant = mode == "assistant";
+    // DEV-0061R §34：Unified Higher AI——mode 仅 legacy 读取（不再参与 run_chat_turn 判定）
+    let _legacy_mode = mode;
 
     // 记录用户消息（DEV-0060 §5.3：保存后拿到 AiMessage.id，run_chat_turn 按 ID 排除当前消息）
     let current_message_id = {
@@ -4392,7 +4643,8 @@ async fn ai_start_run(
         let vault = app_handle.state::<crate::ai::vault::VaultState>();
         let result = run_chat_turn(
             &app_handle, &state, &vault, profile_id, conversation_id, &run_id_clone, &token,
-            current_message_id, &user_message, &settings, is_assistant, &page_label, knowledge_path.as_deref(),
+            current_message_id, &user_message, profiles.primary.clone(), profiles.control.clone(),
+            &page_label, knowledge_path.as_deref(),
             session_title.as_deref(), date.as_deref(), web_enabled, &brave_key,
             local_date.as_deref().map(String::from).unwrap_or_default(),
             local_datetime.as_deref().map(String::from).unwrap_or_default(),
@@ -4432,9 +4684,9 @@ async fn run_chat_turn(
     token: &tokio_util::sync::CancellationToken,
     current_message_id: i64,
     user_message: &str,
-    settings: &ai::AiSettings,
-    // DEV-0061R §34：legacy 参数（Unified AI 恒可 Proposal；run_chat_turn 内部恒 true）
-    _is_assistant_legacy: bool,
+    // DEV-0062 §26/§30：Run 开始时 resolve 的 immutable 双角色 config（整 Run 固定）
+    primary: ai::provider::AiRuntimeConfig,
+    control: ai::provider::AiRuntimeConfig,
     page_label: &str,
     knowledge_path: Option<&str>,
     session_title: Option<&str>,
@@ -4447,18 +4699,28 @@ async fn run_chat_turn(
     timezone_offset_minutes: i64,
 ) -> Result<&'static str, String> {
     use ai::client::{AiClient, ChatMessage};
-    let client = AiClient::new(settings.clone());
+    // §27 Provider Role Mapping：PRIMARY（FastChat/HigherRead/Planner/…）｜CONTROL（Interpreter/Repair/Selection）
+    let client = AiClient::new(primary.clone());
+    let control_client = AiClient::new(control.clone());
     vault.record_ai("run_started", run_id, page_label);
     let mut trace = ai::trace::Trace::new(run_id);
     // DEV-0061R §42.1：run 一开始就 INSERT ai_runs(status='running')——
     // 早期 trace event（route/context/provider/grounding…）的 FK 由此满足，不再丢失。
+    // DEV-0062 §29：同 INSERT 写 provider snapshot（本 Run 真实 Primary/Control；历史不漂移）。
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let _ = conn.execute(
-            "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
-             VALUES (?1,?2,?3,'assistant','turn','running','')
+            "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error,
+                primary_ai_profile_id, primary_profile_name, primary_adapter_kind, primary_model,
+                control_ai_profile_id, control_profile_name, control_adapter_kind, control_model)
+             VALUES (?1,?2,?3,'assistant','turn','running','',
+                ?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(id) DO NOTHING",
-            rusqlite::params![run_id, profile_id, conversation_id],
+            rusqlite::params![
+                run_id, profile_id, conversation_id,
+                primary.profile_id, primary.display_name, primary.adapter_kind.as_str(), primary.model,
+                control.profile_id, control.display_name, control.adapter_kind.as_str(), control.model,
+            ],
         );
         trace.turn_started(&conn, page_label);
     }
@@ -4487,6 +4749,149 @@ async fn run_chat_turn(
         conversation_id,
         "assistant",
     )?;
+
+    // ---- DEV-0062 §44 · Pending Action Continuation Gate（Turn Priority #4：
+    // 先于 Planner gate 与 Turn Interpreter；「第一个/8月24日那个」不得先进入 Interpreter） ----
+    {
+        let gate = {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            let repo = repository::ai_pending_action::AiPendingActionRepository::new(&conn);
+            let pending = repo
+                .find_active(profile_id, conversation_id)
+                .map_err(|e| e.to_string())?;
+            pending.map(|p| {
+                let candidates = repo.candidates(&p);
+                // §54 Stale Candidate Protection：候选身份变化（删/日期/状态/标题/enabled）→ stale
+                if ai::action_continuation::candidates_stale(&conn, profile_id, &candidates) {
+                    let _ = repo.set_status(p.id, "stale");
+                    Some((p.id, "stale", "刚才候选中的任务已经发生变化。为避免修改错对象，请重新告诉我现在要修改哪个任务。\n正式数据没有变化。".to_string(), None))
+                } else {
+                    match ai::action_continuation::resolve_pending_selection(
+                        user_message, &candidates, &envelope,
+                    ) {
+                        // §51 取消：本地 0 Provider / 0 ChangeSet
+                        ai::action_continuation::PendingSelection::Cancel => {
+                            let _ = repo.set_status(p.id, "cancelled");
+                            Some((p.id, "cancelled", "已取消刚才这次修改，正式数据没有变化。".to_string(), None))
+                        }
+                        // §53 NoMatch：明显在尝试选择但无命中；pending 保持 active，attempt+1
+                        ai::action_continuation::PendingSelection::NoMatch(refed) => {
+                            let _ = repo.bump_attempt(p.id);
+                            Some((p.id, "active", ai::action_continuation::no_match_text(&refed, &candidates), None))
+                        }
+                        // §50 StillAmbiguous：重新展示候选；不得选第一个
+                        ai::action_continuation::PendingSelection::StillAmbiguous => {
+                            let _ = repo.bump_attempt(p.id);
+                            Some((p.id, "active", format!("还不能确定是哪一个，请从以下候选中选择：{}\n（正式数据没有变化。）", ai::action_continuation::candidates_text(&candidates)), None))
+                        }
+                        // §52 New Intent：旧 pending cancelled，本轮走正常 Runtime（不劫持）
+                        ai::action_continuation::PendingSelection::NotSelection => {
+                            let _ = repo.set_status(p.id, "cancelled");
+                            None
+                        }
+                        // §47/§64 Selected：复用原 SemanticAction + 原 Patch → Domain Compiler
+                        // → 真实 ChangeSet（Turn Interpreter 0 Call / Candidate Selection 0 Call）
+                        ai::action_continuation::PendingSelection::Selected(real_id, _) => {
+                            match serde_json::from_str::<ai::action::SemanticAction>(
+                                &p.semantic_action_json,
+                            ) {
+                                Err(_) => {
+                                    let _ = repo.set_status(p.id, "cancelled");
+                                    None
+                                }
+                                Ok(act) => {
+                                    trace.route_decided(&conn, "pending_continuation", "local", &[]);
+                                    let mut input = ai::action::PlanInput {
+                                        user_message,
+                                        conversation_id,
+                                        ..Default::default()
+                                    };
+                                    if let Some((etype, _)) = act.primary_reference() {
+                                        let resolved =
+                                            ai::grounding::GroundingOutcome::Resolved(real_id);
+                                        if etype == "task" {
+                                            input.pre_task = Some(resolved);
+                                        } else {
+                                            input.pre_rule = Some(resolved);
+                                        }
+                                    }
+                                    match ai::action::plan_action(&conn, profile_id, &envelope, &input, &act) {
+                                        Ok(ai::action::ActionOutcome::ProposalReady { ops, title, summary, .. })
+                                            if !ops.is_empty()
+                                                && ai::action::validate_ops(&envelope, &act, &ops).is_ok() =>
+                                        {
+                                            match repository::changeset::ChangeSetRepository::new(&conn)
+                                                .create(profile_id, Some(conversation_id), Some(run_id), &title, &summary, &ops)
+                                            {
+                                                Ok(cs_id) => {
+                                                    let _ = repo.set_status(p.id, "resolved");
+                                                    let text = format!(
+                                                        "已经准备好修改提案：{title}（{summary}）。共 {} 项操作。\n点击「查看计划」审查后应用；未应用前 Higher 数据不会变化。",
+                                                        ops.len()
+                                                    );
+                                                    Some((p.id, "resolved", text, Some(cs_id)))
+                                                }
+                                                Err(e) => {
+                                                    let _ = repo.set_status(p.id, "cancelled");
+                                                    Some((p.id, "cancelled", format!("提案生成失败：{e}\n\n（正式数据没有变化。）"), None))
+                                                }
+                                            }
+                                        }
+                                        Ok(ai::action::ActionOutcome::NothingToChange(m)) => {
+                                            let _ = repo.set_status(p.id, "resolved");
+                                            Some((p.id, "resolved", m, None))
+                                        }
+                                        Ok(ai::action::ActionOutcome::NotFound(m))
+                                        | Ok(ai::action::ActionOutcome::Unsupported(m))
+                                        | Ok(ai::action::ActionOutcome::ContractFailure(m)) => {
+                                            let _ = repo.set_status(p.id, "resolved");
+                                            Some((p.id, "resolved", m, None))
+                                        }
+                                        Ok(ai::action::ActionOutcome::Clarification { message, .. }) => {
+                                            let _ = repo.set_status(p.id, "resolved");
+                                            Some((p.id, "resolved", message, None))
+                                        }
+                                        Ok(ai::action::ActionOutcome::ProposalReady { .. }) => {
+                                            let _ = repo.set_status(p.id, "resolved");
+                                            Some((p.id, "resolved", "没有产生可执行的修改。正式数据没有变化。".to_string(), None))
+                                        }
+                                        Err(e) => {
+                                            let _ = repo.set_status(p.id, "cancelled");
+                                            Some((p.id, "cancelled", format!("{e}\n\n（正式数据没有变化。）"), None))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        };
+        // None = NotSelection / 反序列化失败 → 旧 pending 已 cancelled，正常 Runtime 继续
+        if let Some((_pid, pending_status, text, cs_id)) = gate.flatten() {
+            let made_changeset = cs_id.is_some();
+            if let Some(cs_id) = cs_id {
+                ai::run::emit(Some(app), "ai://changeset", run_id,
+                    serde_json::json!({ "change_set_id": cs_id }));
+            }
+            {
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                let _ = repository::conversation::ConversationRepository::new(&conn)
+                    .add_message(conversation_id, profile_id, "assistant", &text, Some(run_id));
+                let _ = conn.execute(
+                    "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                     VALUES (?1,?2,?3,'assistant','pending_action',?4,?5)
+                     ON CONFLICT(id) DO UPDATE SET status=excluded.status, error=excluded.error, updated_at=datetime('now')",
+                    rusqlite::params![run_id, profile_id, conversation_id,
+                        if made_changeset { "waiting_approval" } else { "completed" },
+                        format!("pending:{pending_status}")],
+                );
+                trace.run_finished(&conn, if made_changeset { "waiting_approval" } else { "completed" });
+            }
+            vault.record_ai("run_completed", run_id, "pending_action");
+            return Ok(if made_changeset { "waiting_approval" } else { "completed" });
+        }
+    }
 
     // ---- DEV-0060 PART F：先做 workflow/gate 决策（决定 purpose 后再按需构建 Context） ----
     let (last_assistant, workflow_state, workflow_payload) = {
@@ -4597,18 +5002,45 @@ async fn run_chat_turn(
         if use_fast_local {
             ai::runtime::TurnDecision::FastChat
         } else {
+            // §18/§23 Capability Honesty：CONTROL（Interpreter/Repair/Selection）需要
+            // basic_chat + structured_json + temperature_zero（DEV-0062R §13.2 加入
+            // basic_chat）。任一 Known False（Some(false)）→ Provider 调用前安全拒绝
+            // （0 ChangeSet；untested/unknown 的 legacy 迁移连接保持可运行，§13.3）。
+            // §13.4：Limited ≠ Action 禁用——只按能力项判断，不看 overall status。
+            if ai::provider::control_known_false(&control.capabilities) {
+                let msg = ai::provider::control_capability_error(&control.display_name);
+                {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    let _ = repository::conversation::ConversationRepository::new(&conn)
+                        .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+                    let _ = conn.execute(
+                        "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                         VALUES (?1,?2,?3,'assistant','turn','completed','control_capability_guard')
+                         ON CONFLICT(id) DO UPDATE SET status='completed', error='control_capability_guard', updated_at=datetime('now')",
+                        rusqlite::params![run_id, profile_id, conversation_id],
+                    );
+                    trace.run_finished(&conn, "completed");
+                }
+                vault.record_ai("run_completed", run_id, "control_capability_guard");
+                return Ok("completed");
+            }
             // §10：输入只有 当前消息 + Envelope + Planner 摘要 + Skill 摘要
-            // + 最多 3 条 recent user messages（仅指代型辅助）+ Semantic Contract
+            // + 最多 3 条 recent user messages（仅指代型辅助）+ Semantic Contract。
+            // DEV-0062 §60：完整请求不带历史——needs_reference_history 门控（Current User Intent）
             let pending_q: Vec<String> = workflow_payload
                 .pending_questions
                 .iter()
                 .map(|q| q.question.clone())
                 .collect();
-            let recent_user: Vec<String> = recent_msgs
-                .iter()
-                .filter(|(_, r, _)| r == "user")
-                .map(|(_, _, c)| c.clone())
-                .collect();
+            let recent_user: Vec<String> = if ai::runtime::needs_reference_history(user_message) {
+                recent_msgs
+                    .iter()
+                    .filter(|(_, r, _)| r == "user")
+                    .map(|(_, _, c)| c.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let prompt = ai::runtime::turn_interpreter_prompt(
                 user_message,
                 &envelope,
@@ -4618,9 +5050,10 @@ async fn run_chat_turn(
             );
             {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                trace.provider_request_started(&conn, 1, "secondary", 0);
+                // §27/§28：Interpreter = CONTROL AI（trace 带 ai_role + provider snapshot）
+                trace.provider_request_started_role(&conn, 1, "secondary", 0, "control", Some(&control));
             }
-            let raw = client
+            let raw = control_client
                 .chat_with_temperature(
                     vec![ChatMessage::system(prompt)],
                     true,
@@ -4646,9 +5079,9 @@ async fn run_chat_turn(
                 );
                 {
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
-                    trace.provider_request_started(&conn, 2, "secondary", 0);
+                    trace.provider_request_started_role(&conn, 2, "secondary", 0, "control", Some(&control));
                 }
-                let raw2 = client
+                let raw2 = control_client
                     .chat_with_temperature(
                         vec![ChatMessage::system(repair)],
                         true,
@@ -4720,6 +5153,25 @@ async fn run_chat_turn(
 
     // ---- PART D · FastChat：真流式（tools=0 / Memory Extract=0 / 私有 Context=0） ----
     if route == "fast_chat" {
+        // DEV-0062R §14 Primary Basic Capability Honesty：basic_chat 已知 false →
+        // 不发送已知必失败请求（也不偷偷换 Connection）
+        if primary.capabilities.basic_chat == Some(false) {
+            let msg = ai::provider::primary_basic_error(&primary.display_name);
+            {
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                let _ = repository::conversation::ConversationRepository::new(&conn)
+                    .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+                let _ = conn.execute(
+                    "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                     VALUES (?1,?2,?3,'assistant','fast_chat','completed','primary_basic_guard')
+                     ON CONFLICT(id) DO UPDATE SET status='completed', error='primary_basic_guard', updated_at=datetime('now')",
+                    rusqlite::params![run_id, profile_id, conversation_id],
+                );
+                trace.run_finished(&conn, "completed");
+            }
+            vault.record_ai("run_completed", run_id, "primary_basic_guard");
+            return Ok("completed");
+        }
         let hist = ai::runtime::bound_history(&recent_msgs, current_message_id, 8, 14_000);
         let mut msgs: Vec<ChatMessage> = vec![ChatMessage::system(format!(
             "{}\n\n{}",
@@ -4733,15 +5185,22 @@ async fn run_chat_turn(
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
             trace.context_built(&conn, msgs.iter().map(|m| m.content.chars().count()).sum(), &["fast_chat".into()]);
-            trace.provider_request_started(&conn, 1, "main", 0);
+            trace.provider_request_started_role(&conn, 1, "main", 0, "primary", Some(&primary));
         }
+        // DEV-0062 §24 Streaming Degradation：streaming=false（已知）→ 直接单次 non-stream
+        // （完整回答晚一点出现；绝不重复生成两遍答案）。unknown → 先 stream，失败时仅
+        // 未产生任何 delta 才允许一次 non-stream fallback（chat_stream 有部分内容即返回 Ok）。
         let mut first_delta = false;
-        let streamed = client
-            .chat_stream(msgs.clone(), Some(2048), |d| {
-                first_delta = true;
-                ai::run::emit(Some(app), "ai://delta", run_id, serde_json::json!({ "delta": d }));
-            }, token.clone())
-            .await;
+        let streamed = if primary.capabilities.streaming == Some(false) {
+            Err("streaming_disabled".to_string())
+        } else {
+            client
+                .chat_stream(msgs.clone(), Some(2048), 0.3, |d| {
+                    first_delta = true;
+                    ai::run::emit(Some(app), "ai://delta", run_id, serde_json::json!({ "delta": d }));
+                }, token.clone())
+                .await
+        };
         let (final_text, usage) = match streamed {
             Ok((t, u)) => (t, u),
             Err(_) => {
@@ -4826,9 +5285,9 @@ async fn run_chat_turn(
                                 {
                                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                                     trace.candidate_selection_started(&conn, cands.len());
-                                    trace.provider_request_started(&conn, 2, "secondary", 0);
+                                    trace.provider_request_started_role(&conn, 2, "secondary", 0, "control", Some(&control));
                                 }
-                                let raw = client
+                                let raw = control_client
                                     .chat_with_temperature(
                                         vec![ChatMessage::system(prompt)],
                                         true,
@@ -4928,8 +5387,30 @@ async fn run_chat_turn(
                             trace.empty_plan_guarded(&conn, "nothing_to_change");
                             msg
                         }
-                        Ok(ai::action::ActionOutcome::Clarification(msg))
-                        | Ok(ai::action::ActionOutcome::NotFound(msg))
+                        Ok(ai::action::ActionOutcome::Clarification { message, candidates }) => {
+                            // DEV-0062 §43：Ambiguous 澄清 → 持久化 Control State（ai_pending_actions
+                            // active；同会话旧 pending 先 cancelled；restart 可续；0 ChangeSet）
+                            if !candidates.is_empty() {
+                                let pending_cands: Vec<repository::ai_pending_action::PendingCandidate> =
+                                    candidates.iter()
+                                        .map(repository::ai_pending_action::PendingCandidate::from_grounding)
+                                        .collect();
+                                let action_json =
+                                    serde_json::to_string(&act).unwrap_or_default();
+                                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                let _ = repository::ai_pending_action::AiPendingActionRepository::new(&conn)
+                                    .create_or_replace(
+                                        profile_id,
+                                        conversation_id,
+                                        Some(run_id),
+                                        &action_json,
+                                        &pending_cands,
+                                        &message,
+                                    );
+                            }
+                            message
+                        }
+                        Ok(ai::action::ActionOutcome::NotFound(msg))
                         | Ok(ai::action::ActionOutcome::Unsupported(msg))
                         | Ok(ai::action::ActionOutcome::ContractFailure(msg)) => msg,
                 }
@@ -4974,6 +5455,63 @@ async fn run_chat_turn(
     // 缺什么信息由 Provider 按 Protocol 问（≤5、不重复已回答字段）；
     // 已有 active GoalTarget 时旧 Brief 永不阻塞（PART L）。
     // DEV-0060.1：is_planning_request 已由 Turn Router 决定（planner_continuation / planning_gate）。
+
+    // ---- DEV-0062 §18/§23 · PRIMARY Capability Guard（HigherRead / Planner） ----
+    // 已知缺失（Some(false)）→ 用户友好能力错误（0 raw 400 / missing field）；
+    // untested/unknown（含 v024 迁移 legacy DeepSeek）保持可运行。
+    // DEV-0062R §14：basic_chat 已知 false → 不发送已知必失败请求。
+    if primary.capabilities.basic_chat == Some(false) {
+        let msg = ai::provider::primary_basic_error(&primary.display_name);
+        {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            let _ = repository::conversation::ConversationRepository::new(&conn)
+                .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+            let _ = conn.execute(
+                "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                 VALUES (?1,?2,?3,'assistant',?4,'completed','primary_basic_guard')
+                 ON CONFLICT(id) DO UPDATE SET status='completed', error='primary_basic_guard', updated_at=datetime('now')",
+                rusqlite::params![run_id, profile_id, conversation_id, route],
+            );
+            trace.run_finished(&conn, "completed");
+        }
+        vault.record_ai("run_completed", run_id, "primary_basic_guard");
+        return Ok("completed");
+    }
+    if primary.capabilities.tool_calls == Some(false) {
+        // HigherRead（读工具循环）与 Dedicated Planner（planning 工具）都依赖 Tool Calling
+        let msg = ai::provider::primary_tools_error(&primary.display_name);
+        {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            let _ = repository::conversation::ConversationRepository::new(&conn)
+                .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+            let _ = conn.execute(
+                "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                 VALUES (?1,?2,?3,'assistant',?4,'completed','primary_capability_guard')
+                 ON CONFLICT(id) DO UPDATE SET status='completed', error='primary_capability_guard', updated_at=datetime('now')",
+                rusqlite::params![run_id, profile_id, conversation_id, route],
+            );
+            trace.run_finished(&conn, "completed");
+        }
+        vault.record_ai("run_completed", run_id, "primary_capability_guard");
+        return Ok("completed");
+    }
+    if is_planning_request && primary.capabilities.structured_json == Some(false) {
+        let msg = ai::provider::primary_json_error(&primary.display_name);
+        {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            let _ = repository::conversation::ConversationRepository::new(&conn)
+                .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+            let _ = conn.execute(
+                "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
+                 VALUES (?1,?2,?3,'assistant',?4,'completed','primary_capability_guard')
+                 ON CONFLICT(id) DO UPDATE SET status='completed', error='primary_capability_guard', updated_at=datetime('now')",
+                rusqlite::params![run_id, profile_id, conversation_id, route],
+            );
+            trace.run_finished(&conn, "completed");
+        }
+        vault.record_ai("run_completed", run_id, "primary_capability_guard");
+        return Ok("completed");
+    }
     let mut planning_payload = workflow_payload.clone();
     let instruction = if is_planning_request {
         let truth = {
@@ -5040,7 +5578,7 @@ async fn run_chat_turn(
         // 工具循环轮用非流式（需要 tool_calls）；最终轮流式
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            trace.provider_request_started(&conn, _round as i64 + 1, "main", tools.as_array().map(|a| a.len()).unwrap_or(0));
+            trace.provider_request_started_role(&conn, _round as i64 + 1, "main", tools.as_array().map(|a| a.len()).unwrap_or(0), "primary", Some(&primary));
         }
         let completion = client
             .chat(messages.clone(), false, Some(tools.clone()), Some(4096))
@@ -5502,15 +6040,14 @@ async fn run_chat_turn(
 
     // DEV-0061R §34：旧只读协议解析已删除（Unified Higher AI）。
 
-    // ---- DEV-0053 §8-9：Assistant Write Intent Guard ----
-    // requires_change_set = 关键词检测；Run 结束无 ChangeSet → 禁止模型"完成"措辞冒充成功，
-    // 追加系统守卫文案并通知前端提供 [重新生成修改方案]。
+    // ---- DEV-0062 §62 · Truth Guard（禁止假 Proposal） ----
+    // route=HigherRead 且用户是明确 Write Intent 且本轮 0 ChangeSet →
+    // 禁止保留模型「已创建/已修改/提案已准备」文本，最终可见内容改为确定性真话
+    // （error / trace = write_route_miss；主修复是 Pending Action Continuation）。
     let requires_change_set = is_assistant && ai::prompts::detect_write_intent(user_message);
     let mut guard_appended = false;
     if requires_change_set && changeset_ids.is_empty() && !final_text.is_empty() {
-        final_text.push_str(
-            "\n\n——\n（系统校验：Higher AI 没有生成可审批的修改方案，正式数据没有发生变化。以上如有\"已创建/已修改\"等表述均不成立。）",
-        );
+        final_text = "本轮没有生成可审批的修改方案，正式数据没有变化。\n\n如果你是在修改某个任务，请明确任务对象后重试；\n若刚才 Higher 正在让你选择候选，请直接从候选中选择。".to_string();
         guard_appended = true;
     }
 
@@ -5538,7 +6075,7 @@ async fn run_chat_turn(
              ON CONFLICT(id) DO UPDATE SET status='completed', error=excluded.error, updated_at=datetime('now')",
             rusqlite::params![run_id, profile_id, conversation_id, "assistant",
                 "completed",
-                if guard_appended { "no_changeset_guard" } else { "" },
+                if guard_appended { "write_route_miss" } else { "" },
                 usage_total.prompt_tokens, usage_total.completion_tokens, usage_total.total_tokens],
         );
         // §6.8：规划成功生成 ChangeSet → workflow waiting_approval（用户应用后 → applied）
@@ -6573,9 +7110,9 @@ async fn ai_analyze(
     let act = ai::AiAction::from_str(&action)
         .ok_or_else(|| format!("未知的 AI 功能：{}", action))?;
 
-    let (settings, context, page_labels) = {
+    let (context, page_labels, primary_cfg) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let settings = ai::load_ai_settings(&conn).map_err(|e| e.to_string())?;
+        let cfg = ai::provider::resolve_active_ai_profiles(&conn)?.primary;
         let ctx = ai::context::build_context(
             &conn,
             &ai::context::ContextInput {
@@ -6597,10 +7134,10 @@ async fn ai_analyze(
                 extra.push("当前知识节点".to_string());
             }
         }
-        (settings, ctx, extra)
+        (ctx, extra, cfg)
     };
 
-    let client = ai::client::AiClient::new(settings);
+    let client = ai::client::AiClient::new(primary_cfg);
     let mut messages = vec![
         ai::client::ChatMessage::system(ai::prompts::SYSTEM_PROMPT),
     ];
@@ -6660,6 +7197,10 @@ async fn ai_analyze(
                 context_provided: labels,
                 duration_ms: Some(started.elapsed().as_millis() as i64),
                 tool_rounds: Some(rounds),
+                // §31 Provider Provenance：本次调用真实 snapshot
+                provider_profile_name: Some(client.config().display_name.clone()),
+                adapter_kind: Some(client.config().adapter_kind.as_str().to_string()),
+                provider_model: Some(client.config().model.clone()),
             });
         }
 
@@ -6898,6 +7439,15 @@ pub fn run() {
             get_ai_settings,
             save_ai_settings,
             test_ai_connection,
+            list_ai_provider_profiles,
+            get_ai_provider_profile,
+            create_ai_provider_profile,
+            update_ai_provider_profile,
+            delete_ai_provider_profile,
+            get_active_ai_profiles,
+            set_active_ai_profiles,
+            test_ai_provider_connection,
+            test_ai_provider_compatibility,
             // Session Note / 学习记录（DEV-0017）
             update_session_note,
             list_sessions_by_learning_item,

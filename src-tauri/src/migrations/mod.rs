@@ -24,6 +24,7 @@ pub mod v020_goal_truth_convergence;
 pub mod v021_personal_planning_truth;
 pub mod v022_personal_xlsx;
 pub mod v023_recurring_task_semantics;
+pub mod v024_ai_provider_profiles_and_action_continuation;
 
 /// 单个 Migration 定义。
 ///
@@ -154,6 +155,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 23,
         name: "recurring_task_semantics",
         up: v023_recurring_task_semantics::up,
+    },
+    Migration {
+        version: 24,
+        name: "ai_provider_profiles_and_action_continuation",
+        up: v024_ai_provider_profiles_and_action_continuation::up,
     },
 ];
 

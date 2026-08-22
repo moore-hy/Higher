@@ -1,10 +1,10 @@
-//! DeepSeek（OpenAI-compatible）REST 客户端。
+//! AI REST 客户端（DEV-0062 起接收 `AiRuntimeConfig`，Provider 差异集中在 provider.rs Adapter）。
 //!
 //! - 仅 reqwest + rustls，无大型 SDK
-//! - Authorization: Bearer（Key 来自 settings，绝不硬编码 / 打日志）
+//! - Authorization: Bearer（Key 来自 Connection 配置，绝不硬编码 / 打日志）
 //! - 人话错误映射：401 / 429 / 网络 / 超时 / 模型错误 / JSON 异常
 
-use super::{AiProvider, AiSettings};
+use super::provider::AiRuntimeConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,12 +63,20 @@ struct ChatResponse {
 #[derive(Debug, Deserialize)]
 struct ChatChoice {
     message: ChatResponseMessage,
+    /// DEV-0062R.1 §5.1：Final Content Truth——Provider 返回什么记什么（stop/length/
+    /// tool_calls/content_filter/其他兼容字符串），不做厂商硬编码 enum。
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatResponseMessage {
     #[serde(default)]
     content: Option<String>,
+    /// DEV-0062R.1 §5.2：reasoning models 的隐藏推理。只用于响应分类
+    /// （ReasoningOnly / LengthTruncated 判定），**绝不**进入用户可见文本/trace/DB。
+    #[serde(default)]
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Option<serde_json::Value>,
 }
@@ -83,35 +91,39 @@ pub struct Usage {
     pub total_tokens: i64,
 }
 
-/// 单次补全结果（content 或 tool_calls）。
+/// 单次补全结果（content 或 tool_calls；附带 Final Content Truth 元数据）。
 pub struct Completion {
     pub content: Option<String>,
+    /// 仅用于响应分类（ReasoningOnly/LengthTruncated）；禁止展示/持久化（§5.2）。
+    pub reasoning_content: Option<String>,
+    /// Provider 原样 finish_reason（stop/length/tool_calls/…；无厂商 enum）。
+    pub finish_reason: Option<String>,
     pub tool_calls: Option<serde_json::Value>,
     pub usage: Usage,
 }
 
-/// 客户端（无状态，可复用）。
+/// 客户端（无状态，可复用；持有本次请求的 immutable Runtime Config）。
 pub struct AiClient {
-    settings: AiSettings,
+    config: AiRuntimeConfig,
     http: reqwest::Client,
 }
 
 impl AiClient {
-    pub fn new(settings: AiSettings) -> Self {
+    pub fn new(config: AiRuntimeConfig) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
             .expect("reqwest client");
-        Self { settings, http }
+        Self { config, http }
     }
 
-    pub fn provider(&self) -> AiProvider {
-        self.settings.provider.clone()
+    pub fn config(&self) -> &AiRuntimeConfig {
+        &self.config
     }
 
     pub fn model(&self) -> &str {
-        &self.settings.model
+        &self.config.model
     }
 
     /// chat/completions。json_mode=true 时要求 json_object 输出。
@@ -138,34 +150,29 @@ impl AiClient {
         max_tokens: Option<i64>,
         temp: f64,
     ) -> Result<Completion, String> {
-        if self.settings.api_key.trim().is_empty() {
+        if self.config.api_key.trim().is_empty() {
             return Err("尚未配置 API Key。请先在「设置 → AI」中填写。".to_string());
         }
-        let base = self.settings.base_url.trim().trim_end_matches('/');
-        let url = format!("{}/chat/completions", base);
+        let url = self.config.endpoint();
 
-        // thinking 模式：按 DeepSeek 兼容接口传递（出错时向上返回人话提示，不写死业务）
-        let mut body = ChatRequestBody {
-            model: self.settings.model.clone(),
+        // §14/§15/§25：model transform / json strategy / thinking 全部经 Adapter（provider.rs）
+        let body = ChatRequestBody {
+            model: self.config.effective_model(),
             messages,
             max_tokens,
             temperature: Some(temp),
-            response_format: json_mode.then(|| ResponseFormat { kind: "json_object".into() }),
+            response_format: self
+                .config
+                .use_native_json(json_mode)
+                .then(|| ResponseFormat { kind: "json_object".into() }),
             tools,
             stream: false,
         };
-        if self.settings.thinking_enabled {
-            // DeepSeek 兼容参数：以 model 变体区分 thinking（v4 系列以 -thinking 后缀）；
-            // 若服务商返回模型错误，用户可在设置关闭 thinking 或改回标准模型名。
-            if !body.model.contains("thinking") {
-                body.model = format!("{}-thinking", body.model);
-            }
-        }
 
         let resp = self
             .http
             .post(&url)
-            .bearer_auth(&self.settings.api_key)
+            .bearer_auth(&self.config.api_key)
             .json(&body)
             .send()
             .await
@@ -192,43 +199,43 @@ impl AiClient {
 
         Ok(Completion {
             content: choice.message.content,
+            reasoning_content: choice.message.reasoning_content,
+            finish_reason: choice.finish_reason,
             tool_calls: choice.message.tool_calls,
             usage: parsed.usage.unwrap_or_default(),
         })
     }
     /// DEV-0052 §16 流式（OpenAI-compatible SSE；reqwest chunk() 逐块，无 futures 依赖）。
     /// on_delta 逐段回调；每块检查取消。返回 (完整文本, usage)。
+    /// DEV-0062R.1 §12：温度显式参数（FastChat=0.3；Compatibility Probe E=0.0）。
     pub async fn chat_stream<F>(
         &self,
         messages: Vec<ChatMessage>,
         max_tokens: Option<i64>,
+        temp: f64,
         mut on_delta: F,
         token: tokio_util::sync::CancellationToken,
     ) -> Result<(String, Usage), String>
     where
         F: FnMut(&str),
     {
-        if self.settings.api_key.trim().is_empty() {
+        if self.config.api_key.trim().is_empty() {
             return Err("尚未配置 API Key。请先在「设置 → AI」中填写。".to_string());
         }
-        let base = self.settings.base_url.trim().trim_end_matches('/');
-        let url = format!("{}/chat/completions", base);
-        let mut model = self.settings.model.clone();
-        if self.settings.thinking_enabled && !model.contains("thinking") {
-            model = format!("{}-thinking", model);
-        }
+        let url = self.config.endpoint();
+        let model = self.config.effective_model();
         let body = serde_json::json!({
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
-            "temperature": 0.3,
+            "temperature": temp,
             "stream": true,
             "stream_options": { "include_usage": true },
         });
         let mut resp = self
             .http
             .post(&url)
-            .bearer_auth(&self.settings.api_key)
+            .bearer_auth(&self.config.api_key)
             .json(&body)
             .send()
             .await

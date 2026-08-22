@@ -374,8 +374,13 @@ pub enum ActionOutcome {
         /// 该动作是否消耗了一次 Candidate Selection Provider Call（trace/预算）
         selection_provider_called: bool,
     },
-    /// 真正歧义 → 必须问（AI-GND-009；0 mutation）
-    Clarification(String),
+    /// 真正歧义 → 必须问（AI-GND-009；0 mutation）。
+    /// DEV-0062 §42：升级为 typed outcome——携带真实 Candidate（供 ai_pending_actions 持久化），
+    /// 不再只剩 String；非 grounding 澄清（如 Bulk 超上限）candidates 为空。
+    Clarification {
+        message: String,
+        candidates: Vec<Candidate>,
+    },
     NotFound(String),
     /// DB 已是要求值（diff 后无变化）——与 ContractFailure 严格分离（DEV-0061R §20）
     NothingToChange(String),
@@ -829,7 +834,7 @@ pub fn plan_action(
                         selection_provider_called: sel_called,
                     })
                 }
-                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification(ambiguous_text("任务", &c))),
+                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification { message: ambiguous_text("任务", &c), candidates: c }),
                 GroundingOutcome::NotFound(_) => Ok(ActionOutcome::NotFound(not_found_text("任务", target))),
                 GroundingOutcome::Unsupported(m) => Ok(ActionOutcome::Unsupported(m)),
             }
@@ -866,7 +871,7 @@ pub fn plan_action(
                 GroundingOutcome::ResolvedMany(_) => Ok(ActionOutcome::Unsupported(
                     "一次只能修改一个任务的状态；批量状态修改请说明具体范围。".into(),
                 )),
-                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification(ambiguous_text("任务", &c))),
+                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification { message: ambiguous_text("任务", &c), candidates: c }),
                 GroundingOutcome::NotFound(_) => Ok(ActionOutcome::NotFound(not_found_text("任务", target))),
                 GroundingOutcome::Unsupported(m) => Ok(ActionOutcome::Unsupported(m)),
             }
@@ -894,7 +899,7 @@ pub fn plan_action(
                 GroundingOutcome::ResolvedMany(_) => Ok(ActionOutcome::Unsupported(
                     "一次只能删除一个任务；要删除多个请逐个说明或使用明确范围。".into(),
                 )),
-                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification(ambiguous_text("任务", &c))),
+                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification { message: ambiguous_text("任务", &c), candidates: c }),
                 GroundingOutcome::NotFound(_) => Ok(ActionOutcome::NotFound(not_found_text("任务", target))),
                 GroundingOutcome::Unsupported(m) => Ok(ActionOutcome::Unsupported(m)),
             }
@@ -917,7 +922,7 @@ pub fn plan_action(
                     return Ok(ActionOutcome::Unsupported("一次只能修改一个重复任务规则。".into()))
                 }
                 GroundingOutcome::Ambiguous(c) => {
-                    return Ok(ActionOutcome::Clarification(ambiguous_text("重复任务", &c)))
+                    return Ok(ActionOutcome::Clarification { message: ambiguous_text("重复任务", &c), candidates: c })
                 }
                 GroundingOutcome::NotFound(_) => {
                     return Ok(ActionOutcome::NotFound(not_found_text("重复任务", target)))
@@ -1037,7 +1042,7 @@ pub fn plan_action(
                     return Ok(ActionOutcome::Unsupported("一次只能操作一个重复任务规则。".into()))
                 }
                 GroundingOutcome::Ambiguous(c) => {
-                    return Ok(ActionOutcome::Clarification(ambiguous_text("重复任务", &c)))
+                    return Ok(ActionOutcome::Clarification { message: ambiguous_text("重复任务", &c), candidates: c })
                 }
                 GroundingOutcome::NotFound(_) => {
                     return Ok(ActionOutcome::NotFound(not_found_text("重复任务", target)))
@@ -1101,7 +1106,7 @@ pub fn plan_action(
                     return Ok(ActionOutcome::Unsupported("一次只能删除一个重复任务规则。".into()))
                 }
                 GroundingOutcome::Ambiguous(c) => {
-                    return Ok(ActionOutcome::Clarification(ambiguous_text("重复任务", &c)))
+                    return Ok(ActionOutcome::Clarification { message: ambiguous_text("重复任务", &c), candidates: c })
                 }
                 GroundingOutcome::NotFound(_) => {
                     return Ok(ActionOutcome::NotFound(not_found_text("重复任务", target)))
@@ -1152,9 +1157,12 @@ pub fn plan_action(
             }
             let (tasks, total) = retrieve_bulk_tasks(conn, profile_id, filter, env)?;
             if total > MAX_BULK {
-                return Ok(ActionOutcome::Clarification(format!(
-                    "这次操作会涉及 {total} 个任务，超过单次 {MAX_BULK} 个的安全上限。请缩小范围（例如指定某一天或某一类）。正式数据没有变化。"
-                )));
+                return Ok(ActionOutcome::Clarification {
+                    message: format!(
+                        "这次操作会涉及 {total} 个任务，超过单次 {MAX_BULK} 个的安全上限。请缩小范围（例如指定某一天或某一类）。正式数据没有变化。"
+                    ),
+                    candidates: vec![],
+                });
             }
             if tasks.is_empty() {
                 let d = filter
@@ -1217,7 +1225,7 @@ pub fn compile_action(
     let input = PlanInput::default();
     match plan_action(conn, profile_id, env, &input, action)? {
         ActionOutcome::ProposalReady { ops, title, summary, .. } => Ok(CompiledAction { ops, title, summary }),
-        ActionOutcome::Clarification(_) => Err(format!(
+        ActionOutcome::Clarification { .. } => Err(format!(
             "AMBIGUOUS_{}:multi",
             if matches!(action.primary_reference(), Some(("recurring_rule", _))) { "RULE" } else { "TASK" }
         )),

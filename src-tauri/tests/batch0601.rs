@@ -152,7 +152,8 @@ fn t4_latest_schema_v023() {
     let v: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 23, "T4: 最新 Schema = v023");
+    // DEV-0062 起 v024；本测试锁定「v023 recurring 语义仍在迁移链中」
+    assert_eq!(v, 24, "T4: 最新 Schema = v024（DEV-0062）");
     let name: String = conn
         .query_row("SELECT name FROM schema_migrations WHERE version=23", [], |r| r.get(0))
         .unwrap();

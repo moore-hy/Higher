@@ -7,12 +7,13 @@ import {
   aiStartRun,
   archiveAiConversation,
   createAiConversation,
-  getAiSettings,
+  getActiveAiProfiles,
   listAiConversations,
   listAiMessages,
+  listAiProviderProfiles,
   listLearningItemsByProfile,
   openExternalUrl,
-  saveAiSettings,
+  setActiveAiProfiles,
 } from "../../api";
 import AiProposalReview from "../AiProposalReview";
 import ChangeSetReview from "../ChangeSetReview";
@@ -23,6 +24,7 @@ import { useActiveProfile } from "../../contexts/ActiveProfileContext";
 import type {
   AiConversation,
   AiMessage,
+  AiProviderProfile,
   ToolTraceEntry,
   WebSource,
 } from "../../types";
@@ -75,8 +77,11 @@ export default function AiPanel() {
   const { activeProfile, triggerRefresh } = useActiveProfile();
   const navigate = useNavigate();
   const [input, setInput] = useState("");
-  const [model, setModel] = useState("deepseek-v4-flash");
-  const [modelLoaded, setModelLoaded] = useState(false);
+  // DEV-0062 §37：AI Connection dropdown（enabled ai_provider_profiles；切换 = 修改 active
+  // Primary Profile，不是修改 Connection 内容；runBusy 时 disabled）
+  const [conns, setConns] = useState<AiProviderProfile[]>([]);
+  const [activePrimaryId, setActivePrimaryId] = useState<number | null>(null);
+  const [activeControlId, setActiveControlId] = useState<number | null>(null);
   const [confirmNew, setConfirmNew] = useState(false);
   const [showProposal, setShowProposal] = useState(false);
   /** §61：上下文 chips 默认收起 */
@@ -121,27 +126,32 @@ export default function AiPanel() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [convoMsgs.length, messages.length, busy, streamText, streamError, pendingChangeSet]);
 
-  // 模型与设置同源（settings KV；不维护第二套 model state）
-  useEffect(() => {
-    getAiSettings()
-      .then((s) => setModel(s.model || "deepseek-v4-flash"))
-      .catch(() => {})
-      .finally(() => setModelLoaded(true));
+  // §37.2 Settings / Panel 共享同一 active primary truth；切换即广播同步
+  const reloadConns = useCallback(() => {
+    Promise.all([listAiProviderProfiles(), getActiveAiProfiles()])
+      .then(([list, act]) => {
+        setConns(list.filter((p) => p.enabled));
+        setActivePrimaryId(act.primary_id);
+        setActiveControlId(act.control_id);
+      })
+      .catch(() => {});
   }, []);
+  useEffect(() => {
+    reloadConns();
+    const un = listen<void>("higher:ai-profiles-changed", () => reloadConns());
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [reloadConns]);
 
-  async function changeModel(next: string) {
-    if (!modelLoaded || next === model) return;
+  async function switchPrimary(next: number) {
+    if (next === activePrimaryId) return;
     try {
-      const s = await getAiSettings();
-      await saveAiSettings({
-        baseUrl: s.base_url,
-        apiKey: s.api_key,
-        model: next,
-        thinkingEnabled: s.thinking_enabled,
-      });
-      setModel(next);
+      await setActiveAiProfiles(next, activeControlId);
+      reloadConns();
     } catch {
-      // 失败保持原模型
+      // 失败保持原选择（Settings 中可见错误详情）
+      reloadConns();
     }
   }
 
@@ -798,8 +808,8 @@ export default function AiPanel() {
               <details className="aipanel__diag">
                 <summary>本次请求详情</summary>
                 <div className="aipanel__diag-body">
-                  <span>Provider：DeepSeek</span>
-                  <span>Model：{model}</span>
+                  <span>AI：{m.diag.providerProfileName ?? "旧版本未记录"}</span>
+                  <span>Model：{m.diag.providerModel ?? "旧版本未记录"}</span>
                   <span>Scope：{m.diag.action}</span>
                   <span>工具调用：{m.diag.toolCount} 次（{m.diag.toolRounds} 轮，上限 6）</span>
                   {m.diag.promptTokens != null && <span>prompt_tokens：{m.diag.promptTokens}</span>}
@@ -996,19 +1006,23 @@ export default function AiPanel() {
             </button>
           )}
           <span className="aipanel__model-inline">
-            <span className="muted">模型</span>
+            <span className="muted">AI</span>
             <select
               className="aipanel__model-select"
-              value={
-                ["deepseek-v4-flash", "deepseek-v4-pro"].includes(model) ? model : "__custom"
-              }
+              value={activePrimaryId ?? ""}
+              disabled={runBusy}
               onChange={(e) => {
-                if (e.target.value !== "__custom") void changeModel(e.target.value);
+                const v = Number(e.target.value);
+                if (v) void switchPrimary(v);
               }}
             >
-              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-              <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-              <option value="__custom">{modelLoaded ? model : "自定义"}</option>
+              {conns.length === 0 && <option value="">（未配置）</option>}
+              {conns.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.display_name}
+                  {c.compatibility_status === "limited" ? "（有限兼容）" : ""}
+                </option>
+              ))}
             </select>
           </span>
         </div>

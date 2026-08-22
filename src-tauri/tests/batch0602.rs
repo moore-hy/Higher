@@ -190,7 +190,7 @@ fn t5_model_ambiguous_no_changeset() {
     };
     let out = plan_action(&conn, p, &e, &default_plan("把英语任务改成45分钟"), &act).unwrap();
     match out {
-        ActionOutcome::Clarification(msg) => {
+        ActionOutcome::Clarification { message: msg, .. } => {
             assert!(msg.contains("哪一个"), "T5: 澄清问句");
             assert!(msg.contains("背10个英语单词") && msg.contains("复习英语单词"), "T5: 列出候选");
         }
@@ -575,7 +575,7 @@ fn t21_bulk_over_limit_scope_too_broad() {
     };
     let out = plan_action(&conn, p, &e, &default_plan("全部挪走"), &act).unwrap();
     match out {
-        ActionOutcome::Clarification(msg) => {
+        ActionOutcome::Clarification { message: msg, .. } => {
             assert!(msg.contains("上限") || msg.contains("缩小"), "T21: ScopeTooBroad 文案：{msg}");
         }
         other => panic!("T21: >50 必须 NeedsClarification/ScopeTooBroad，得到 {other:?}"),

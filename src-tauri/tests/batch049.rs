@@ -260,8 +260,8 @@ fn test_fresh_db_reaches_v014() {
     let ver: u32 = conn
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(ver, 23);
-    assert_eq!(app_lib::migrations::latest_version(), 23);
+    assert_eq!(ver, 24);
+    assert_eq!(app_lib::migrations::latest_version(), 24);
 }
 
 /// 富文本 Session 的 note 纯文本投影参与既有 note 链路（摘要/AI 仍读 note）。

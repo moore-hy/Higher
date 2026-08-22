@@ -134,6 +134,15 @@ AI-GND-016 普通 Action Provider Call 必须 bounded（semantic 1 + selection �
 AI-GND-017 Grounding Runtime 禁止读取源码。
 AI-GND-018 所有 Grounding / ActionPlan 核心修改必须运行 batch060 + batch0601 + batch0602。
 
+# PART 7 · Permanent Provider & Continuation Invariants（DEV-0062 起永久）
+
+AI-INV-017 Provider Isolation：Provider-specific 行为只存在 Adapter 层（ai/provider.rs）；action/planner/grounding/runtime/tools/lib 禁止出现 if provider == ... 分支。
+AI-INV-018 Capability Honesty：模型能聊天 ≠ 完整兼容 Higher；缺能力必须显式报告（Full / Limited / Incompatible），不得静默降级或伪装成功。
+AI-INV-019 Control State ≠ Conversation History：执行中的业务状态（等待候选选择 / Planner 补字段 / Action 参数）必须结构化持久化，禁止依赖聊天文字恢复。
+AI-INV-020 Action Continuation Scoped：Pending Action 必须 profile + conversation 隔离；重启可恢复（SQLite）；跨 conversation 不传播。
+AI-INV-021 Provider Provenance：每个 Run 记录真实 Primary / Control Provider + Model snapshot；历史不得使用当前配置冒充。
+AI-INV-022 No Hidden Provider Fallback：模型切换只能来自用户显式 Primary / Control 配置；Higher 不得偷偷调用另一家 Provider。
+
 # 开发节奏
 * **BATCH WHEN CLEAR**：产品语义已定 + 技术可从源码验证 + 风险可自动测试 → 一次性施工。
 * **STOP WHEN HUMAN SIGNAL REQUIRED**：仅真实 AI 行为/真实 UI 体验/真实迁移结果/真实异常数据/真实用户路径无法自动确认时才停，标 `HUMAN_RUNTIME_REQUIRED`。

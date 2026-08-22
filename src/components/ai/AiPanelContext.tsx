@@ -58,7 +58,7 @@ export interface AiChatMessage {
   tokens?: number | null;
   /** 结构化结果（快捷 Action 时）：按 action 存原始结果 */
   structured?: AiResult;
-  /** 本次请求详情（DEV-0023 §58：不含 API Key） */
+  /** 本次请求详情（DEV-0023 §58：不含 API Key；DEV-0062 §31 Provider snapshot） */
   diag?: {
     action: string;
     toolCount: number;
@@ -67,6 +67,8 @@ export interface AiChatMessage {
     completionTokens: number | null;
     totalTokens: number | null;
     durationMs: number | null;
+    providerProfileName: string | null;
+    providerModel: string | null;
   };
   /** 结构化对话响应类型（assistant_chat：message / knowledge_proposal） */
   chatType?: "message" | "knowledge_proposal";
@@ -382,7 +384,7 @@ function actionLabel(a: AiActionName): string {
   }
 }
 
-/** 「本次请求详情」（DEV-0023 §58）：仅含 Model 侧安全信息，绝不含 API Key / Authorization。 */
+/** 「本次请求详情」（DEV-0023 §58 / DEV-0062 §31）：本次调用真实 Provider snapshot，绝不含 API Key。 */
 function buildDiag(r: AiResult): AiChatMessage["diag"] {
   return {
     action: r.action,
@@ -392,6 +394,8 @@ function buildDiag(r: AiResult): AiChatMessage["diag"] {
     completionTokens: r.completion_tokens ?? null,
     totalTokens: r.total_tokens ?? null,
     durationMs: r.duration_ms ?? null,
+    providerProfileName: r.provider_profile_name ?? null,
+    providerModel: r.provider_model ?? null,
   };
 }
 

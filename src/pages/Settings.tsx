@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
   requestPermission,
@@ -7,25 +8,30 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import {
   compilePersonalization,
   confirmPersonalizationProfile,
+  createAiProviderProfile,
   deletePersonalizationSource,
+  deleteAiProviderProfile,
   editPersonalizationProfile,
-  getAiSettings,
+  getActiveAiProfiles,
   getNotificationEnabled,
   getPersonalizationProfile,
   getRequirementTemplate,
   getWebSearchSettings,
   importPersonalizationFiles,
+  listAiProviderProfiles,
   listBackups,
   listArchivedTasksByProfile,
   listPersonalizationSources,
-  saveAiSettings,
+  setActiveAiProfiles,
   setNotificationEnabled,
   setWebSearchSettings,
   setUiSetting,
   getUiSetting,
   syncNotifications,
-  testAiConnection,
+  testAiProviderCompatibility,
+  testAiProviderConnection,
   unarchiveTask,
+  updateAiProviderProfile,
   vaultCreateSnapshot,
   vaultExportEvents,
   vaultListEvents,
@@ -41,6 +47,7 @@ import {
 import { createStudyProfile, executeProfileCleanup, previewProfileCleanup, updateStudyProfile } from "../api";
 import { PROFILE_TYPE_LABELS } from "../types";
 import type {
+  AiProviderProfile,
   CleanupPreview,
   PersonalizationProfile,
   PersonalizationSource,
@@ -729,47 +736,149 @@ function ProfileCreateInline({
   );
 }
 
-// ---------------- AI 设置 ----------------
+// ---------------- AI 设置（DEV-0062 · 多 AI Connection） ----------------
 
-function AiSection() {
-  const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("deepseek-v4-flash");
-  const [thinking, setThinking] = useState(false);
-  const [loading, setLoading] = useState(true);
+/** 兼容性徽标文案（§32） */
+function compatLabel(s: string): { text: string; cls: string } {
+  switch (s) {
+    case "full":
+      return { text: "完整兼容", cls: "settings-compat settings-compat--full" };
+    case "limited":
+      return { text: "有限兼容", cls: "settings-compat settings-compat--limited" };
+    case "incompatible":
+      return { text: "不兼容", cls: "settings-compat settings-compat--bad" };
+    default:
+      return { text: "未检测", cls: "settings-compat settings-compat--untested" };
+  }
+}
+
+/** §22 显式 Control 要求（前端过滤；后端同样校验） */
+function controlCompatible(p: AiProviderProfile): boolean {
+  return (
+    p.enabled &&
+    p.capabilities.basic_chat === true &&
+    p.capabilities.structured_json === true &&
+    p.capabilities.temperature_zero === true
+  );
+}
+
+/** DEV-0062R §20 单项能力显示：✓ / ✗ / 未检测（Structured JSON 附策略） */
+function capMark(v: boolean | null | undefined): string {
+  if (v === true) return "✓";
+  if (v === false) return "✗";
+  return "未检测";
+}
+
+function capRow(label: string, v: boolean | null | undefined, extra?: string) {
+  const cls = v === true ? "settings-cap--ok" : v === false ? "settings-cap--bad" : "settings-cap--untested";
+  return (
+    <span className={`settings-cap ${cls}`}>
+      {label} {capMark(v)}
+      {extra ? `（${extra}）` : ""}
+    </span>
+  );
+}
+
+/** §20 Structured JSON 策略文案 */
+function strategyLabel(p: AiProviderProfile): string | undefined {
+  if (p.capabilities.structured_json !== true) return undefined;
+  switch (p.capabilities.json_strategy) {
+    case "native":
+      return "Native";
+    case "prompt_only":
+      return "Prompt Only";
+    default:
+      return undefined;
+  }
+}
+
+/** DEV-0062R.1 §18.1/§18.2：从 last_test_message 安全摘要解析 basic=/temp0= 细分值 */
+function parseSummary(p: AiProviderProfile, key: "basic" | "temp0"): string {
+  const m = p.last_test_message.match(new RegExp(`(?:^|[;｜])\\s*${key}=([^;｜]+)`));
+  return m ? m[1].trim() : "";
+}
+
+function parseSkipped(p: AiProviderProfile): boolean {
+  return p.last_test_message.includes("skipped=skipped_connection_failure");
+}
+
+/** Basic Chat 细分文案（§18.1；不显示 reasoning 原文） */
+function basicDetailLabel(v: string): string {
+  switch (v) {
+    case "pass_after_retry":
+      return "（二次尝试成功）";
+    case "no_final_content":
+      return "（✗ 无最终文本）";
+    case "reasoning_only_no_final":
+      return "（✗ 仅 reasoning，无最终文本）";
+    case "length_no_final":
+      return "（✗ 输出被长度截断且重试仍无最终文本）";
+    case "unexpected_tool_only":
+      return "（✗ 意外只返回工具调用）";
+    case "request_error":
+      return "（✗ 请求失败）";
+    default:
+      return "";
+  }
+}
+
+/** Temperature 0 细分文案（§18.2） */
+function temp0DetailLabel(v: string): string {
+  switch (v) {
+    case "pass_after_retry":
+      return "（二次尝试成功）";
+    case "no_final_content":
+    case "reasoning_only_no_final":
+    case "length_no_final":
+      return "（✗ 无最终文本）";
+    case "request_error":
+      return "（✗ 请求失败）";
+    default:
+      return "";
+  }
+}
+
+/** Connection 编辑 Modal（新增 / 编辑共用；§33/§34） */
+function ConnectionModal({
+  initial,
+  onClose,
+  onSaved,
+}: {
+  initial: AiProviderProfile | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(initial?.display_name ?? "");
+  const [adapter, setAdapter] = useState(initial?.adapter_kind ?? "deepseek");
+  const [baseUrl, setBaseUrl] = useState(initial?.base_url ?? "https://api.deepseek.com");
+  const [apiKey, setApiKey] = useState(initial?.api_key ?? "");
+  const [model, setModel] = useState(initial?.model ?? "deepseek-v4-flash");
+  const [thinking, setThinking] = useState(
+    initial?.thinking_mode === "deepseek_model_suffix",
+  );
+  const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const s = await getAiSettings();
-        setBaseUrl(s.base_url || "https://api.deepseek.com");
-        setApiKey(s.api_key ?? "");
-        setModel(s.model || "deepseek-v4-flash");
-        setThinking(!!s.thinking_enabled);
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
 
   async function save() {
     setSaving(true);
-    setMessage("");
     setError("");
     try {
-      await saveAiSettings({
-        baseUrl: baseUrl.trim() || "https://api.deepseek.com",
+      const args = {
+        displayName: name.trim(),
+        adapterKind: adapter,
+        baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim(),
-        model: model.trim() || "deepseek-v4-flash",
-        thinkingEnabled: thinking,
-      });
-      setMessage("已保存");
+        model: model.trim(),
+        thinkingMode: adapter === "deepseek" && thinking ? "deepseek_model_suffix" : "off",
+      };
+      if (initial) {
+        await updateAiProviderProfile({ profileId: initial.id, ...args, enabled });
+      } else {
+        await createAiProviderProfile(args);
+      }
+      onSaved();
+      onClose();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -777,89 +886,334 @@ function AiSection() {
     }
   }
 
-  async function test() {
-    setTesting(true);
-    setMessage("");
-    setError("");
-    try {
-      // 先保存当前输入再测试（避免测试旧配置）
-      await saveAiSettings({
-        baseUrl: baseUrl.trim() || "https://api.deepseek.com",
-        apiKey: apiKey.trim(),
-        model: model.trim() || "deepseek-v4-flash",
-        thinkingEnabled: thinking,
-      });
-      const r = await testAiConnection();
-      setMessage(r);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  if (loading) return <section className="card"><p className="muted">加载中…</p></section>;
-
   return (
-    <>
-      <section className="card">
-        <h2 className="card__title">AI 设置（DeepSeek）</h2>
+    <div className="modal-overlay" role="dialog">
+      <div className="modal">
+        <h2 className="modal__title">{initial ? "编辑 AI 连接" : "添加 AI 连接"}</h2>
         {error && <div className="alert alert--error">{error}</div>}
-        {message && <div className="alert alert--ok">{message}</div>}
 
         <label className="modal__field">
-          Provider
-          <select className="modal__input" value="deepseek" disabled>
+          连接名称
+          <input
+            className="modal__input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="例如：DeepSeek Flash / GLM"
+          />
+        </label>
+
+        <label className="modal__field">
+          服务商 / 兼容类型
+          <select
+            className="modal__input"
+            value={adapter}
+            onChange={(e) => setAdapter(e.target.value)}
+          >
             <option value="deepseek">DeepSeek</option>
+            <option value="openai_compatible">OpenAI Compatible</option>
           </select>
         </label>
 
         <label className="modal__field">
           API Base URL
-          <input className="modal__input" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.deepseek.com" />
+          <input
+            className="modal__input"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="https://api.deepseek.com"
+          />
         </label>
 
         <label className="modal__field">
           API Key（明文显示与保存，仅保存在本机数据库）
-          <input className="modal__input" type="text" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." autoComplete="off" />
+          <input
+            className="modal__input"
+            type="text"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="sk-..."
+            autoComplete="off"
+          />
         </label>
 
         <label className="modal__field">
           Model
-          <select
-            className="modal__input"
-            value={["deepseek-v4-flash", "deepseek-v4-pro"].includes(model) ? model : "__custom"}
-            onChange={(e) => {
-              if (e.target.value !== "__custom") setModel(e.target.value);
-            }}
-          >
-            <option value="deepseek-v4-flash">deepseek-v4-flash</option>
-            <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-            <option value="__custom">{model ? `自定义：${model}` : "自定义模型名"}</option>
-          </select>
           <input
             className="modal__input"
-            style={{ marginTop: 6 }}
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder="或直接输入其他模型名"
+            placeholder="模型名"
+            list="deepseek-model-suggestions"
           />
+          <datalist id="deepseek-model-suggestions">
+            <option value="deepseek-v4-flash" />
+            <option value="deepseek-v4-pro" />
+          </datalist>
         </label>
 
-        <label className="modal__field" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input type="checkbox" checked={thinking} onChange={(e) => setThinking(e.target.checked)} />
-          Thinking Mode（深度思考；若服务商返回模型错误请关闭）
-        </label>
+        {adapter === "deepseek" ? (
+          <label className="modal__field" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={thinking} onChange={(e) => setThinking(e.target.checked)} />
+            Thinking Mode（深度思考；若服务商返回模型错误请关闭）
+          </label>
+        ) : (
+          <p className="muted" style={{ fontSize: 12 }}>
+            如服务商提供独立推理模型，请直接填写对应模型名称。Higher 不会修改模型名。
+          </p>
+        )}
+
+        {initial && (
+          <label className="modal__field" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            启用该连接
+          </label>
+        )}
 
         <div className="btn-row">
           <button className="btn btn--primary" onClick={save} disabled={saving}>
             {saving ? "保存中…" : "保存"}
           </button>
-          <button className="btn" onClick={test} disabled={testing}>
-            {testing ? "测试中…" : "测试连接"}
+          <button className="btn" onClick={onClose} disabled={saving}>
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AiSection() {
+  const [profiles, setProfiles] = useState<AiProviderProfile[]>([]);
+  const [active, setActive] = useState<{ primary_id: number | null; control_id: number | null }>({
+    primary_id: null,
+    control_id: null,
+  });
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<AiProviderProfile | "new" | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function reload() {
+    try {
+      const [list, act] = await Promise.all([listAiProviderProfiles(), getActiveAiProfiles()]);
+      setProfiles(list);
+      setActive(act);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+    // §37.2 Settings / Panel 同步：任一侧切换 active 即广播刷新
+    const un = listen<void>("higher:ai-profiles-changed", () => void reload());
+    return () => {
+      void un.then((f) => f());
+    };
+  }, []);
+
+  async function applyActive(primaryId: number, controlId: number | null) {
+    setError("");
+    setMessage("");
+    try {
+      await setActiveAiProfiles(primaryId, controlId);
+      setMessage("已切换 AI。");
+      await reload();
+    } catch (e) {
+      setError(String(e));
+      await reload();
+    }
+  }
+
+  async function onTest(p: AiProviderProfile) {
+    setBusyId(p.id);
+    setError("");
+    setMessage("");
+    try {
+      const r = await testAiProviderConnection(p.id);
+      setMessage(r);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onProbe(p: AiProviderProfile) {
+    setBusyId(p.id);
+    setError("");
+    setMessage("");
+    try {
+      const r = await testAiProviderCompatibility(p.id);
+      setMessage(r.message);
+      await reload();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onDelete(p: AiProviderProfile) {
+    setError("");
+    setMessage("");
+    try {
+      await deleteAiProviderProfile(p.id);
+      setMessage("已删除该 AI 连接。");
+      await reload();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  if (loading) return <section className="card"><p className="muted">加载中…</p></section>;
+
+  const enabled = profiles.filter((p) => p.enabled);
+  const controlCandidates = profiles.filter(controlCompatible);
+
+  return (
+    <>
+      <section className="card">
+        <h2 className="card__title">AI 设置</h2>
+        {error && <div className="alert alert--error">{error}</div>}
+        {message && <div className="alert alert--ok">{message}</div>}
+
+        <label className="modal__field">
+          主要 AI
+          <select
+            className="modal__input"
+            value={active.primary_id ?? ""}
+            onChange={(e) => {
+              const id = Number(e.target.value);
+              if (id) void applyActive(id, active.control_id);
+            }}
+          >
+            {enabled.length === 0 && <option value="">（请先添加 AI 连接）</option>}
+            {enabled.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_name}
+                {p.compatibility_status === "limited" ? "（有限兼容）" : ""}
+                {p.compatibility_status === "untested" ? "（未检测）" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="modal__field">
+          动作理解 AI（高级；默认跟随主要 AI）
+          <select
+            className="modal__input"
+            value={active.control_id ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              void applyActive(active.primary_id ?? enabled[0]?.id ?? 0, v ? Number(v) : null);
+            }}
+          >
+            <option value="">跟随主要 AI</option>
+            {controlCandidates.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <section className="card">
+        <h2 className="card__title">AI 连接</h2>
+        {(() => {
+          // §20.1：Control = Follow Primary 且当前 Primary 不满足 Control 要求 → 提前警告
+          const primary = profiles.find((p) => p.id === active.primary_id);
+          const followWarning =
+            active.control_id == null &&
+            primary != null &&
+            primary.capabilities.basic_chat === true &&
+            primary.capabilities.structured_json === false;
+          return followWarning ? (
+            <div className="alert alert--error" style={{ marginBottom: 12 }}>
+              当前动作理解跟随主要 AI，但此连接不满足 Higher Action 要求；修改类指令会被安全拒绝。请检测兼容性或单独选择动作理解 AI。
+            </div>
+          ) : null;
+        })()}
+        {profiles.map((p) => {
+          const badge = compatLabel(p.compatibility_status);
+          const isPrimary = p.id === active.primary_id;
+          const isControl = p.id === active.control_id;
+          const skipped = parseSkipped(p);
+          const busy = busyId === p.id;
+          // §18.3：Hard Connection Failure 时 B-E 显示「未继续检测（连接失败）」
+          const skippedMark = skipped ? "未继续检测（连接失败）" : undefined;
+          return (
+            <div key={p.id} className="settings-conn">
+              <div className="settings-conn__main">
+                <span className="settings-conn__name">
+                  {p.display_name}
+                  {!p.enabled && <span className="muted">（已停用）</span>}
+                  {isPrimary && <span className="settings-role">主要 AI</span>}
+                  {isControl && <span className="settings-role">动作理解 AI</span>}
+                </span>
+                <span className="muted settings-conn__meta">
+                  {p.adapter_kind === "deepseek" ? "DeepSeek" : "OpenAI Compatible"} · {p.model}
+                </span>
+                <span className={badge.cls}>{badge.text}</span>
+                {/* DEV-0062R §20 + 0062R.1 §18：五项能力 + 策略 + 细分 + 最后检测时间 */}
+                <span className="settings-conn__caps">
+                  {capRow("基础对话", p.capabilities.basic_chat, basicDetailLabel(parseSummary(p, "basic")))}
+                  {capRow("结构化输出", p.capabilities.structured_json, strategyLabel(p) ?? skippedMark)}
+                  {capRow("工具调用", p.capabilities.tool_calls, skippedMark)}
+                  {capRow("温度 0", p.capabilities.temperature_zero, temp0DetailLabel(parseSummary(p, "temp0")))}
+                  {capRow("流式", p.capabilities.streaming, skippedMark)}
+                </span>
+                <span className="muted settings-conn__meta">
+                  {p.last_tested_at
+                    ? `最后检测：${formatDateTime(p.last_tested_at)}`
+                    : "尚未检测兼容性"}
+                </span>
+                {p.compatibility_status === "untested" && (
+                  <span className="muted settings-conn__meta">
+                    连接配置已变化或从未检测，Higher 兼容性需要重新检测。
+                  </span>
+                )}
+              </div>
+              <div className="btn-row">
+                {/* §19：Probe 完成前该连接全部按钮 disabled（防并发 Probe） */}
+                <button className="btn btn--small" onClick={() => setEditing(p)} disabled={busy}>
+                  编辑
+                </button>
+                <button className="btn btn--small" onClick={() => void onTest(p)} disabled={busy}>
+                  测试连接
+                </button>
+                <button className="btn btn--small" onClick={() => void onProbe(p)} disabled={busy}>
+                  {busy ? "检测中…" : "检测 Higher 兼容性"}
+                </button>
+                <button
+                  className="btn btn--small btn--danger"
+                  onClick={() => void onDelete(p)}
+                  disabled={busy}
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        <div className="btn-row">
+          <button className="btn" onClick={() => setEditing("new")}>
+            + 添加 AI 连接
           </button>
         </div>
       </section>
+
+      {editing && (
+         <ConnectionModal
+           initial={editing === "new" ? null : editing}
+           onClose={() => setEditing(null)}
+           onSaved={() => void reload()}
+         />
+       )}
 
       <section className="card">
         <h2 className="card__title">AI 权限说明</h2>

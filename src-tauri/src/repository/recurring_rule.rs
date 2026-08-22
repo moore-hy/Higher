@@ -450,8 +450,8 @@ pub const ROLLING_HORIZON_DAYS: i64 = 30;
 /// Range 上限防御（§54 bounded；Calendar 一次最多一个月，400 天绝对富余）。
 const MAX_RANGE_DAYS: i64 = 400;
 
-/// 纯日期 +n（SQLite julianday；无时区语义）。
-fn shift_date(base: &str, n: i64) -> Result<String, String> {
+/// 纯日期 +n（SQLite julianday；无时区语义）。pub：DEV-0062 action_continuation 相对日解析复用。
+pub fn shift_date(base: &str, n: i64) -> Result<String, String> {
     Connection::open_in_memory()
         .and_then(|c| {
             c.query_row(

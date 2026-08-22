@@ -268,6 +268,17 @@ pub fn fast_chat_shortcut(user_message: &str) -> bool {
     false
 }
 
+/// DEV-0062 §60 · Current User Intent 稳定化：只有明显**不完整引用语义**时，
+/// Turn Interpreter 才注入 recent user messages；完整请求（无下列 cue）历史 = 0，
+/// 长对话与新对话中的完整命令不被无关历史污染（聊天主路径的 bounded history 不受影响，§61）。
+pub fn needs_reference_history(user_message: &str) -> bool {
+    const CUES: &[&str] = &[
+        "刚才", "刚刚", "那个", "这个", "它", "上一个", "下一个", "第一个", "第二个",
+        "前一个", "后一个", "继续", "同样", "照刚才", "那明天", "那后天",
+    ];
+    CUES.iter().any(|c| user_message.contains(c))
+}
+
 /// Router 输出（§10.4）。route=action 时 skills/action 由 Provider 一次给出；
 /// 本结构体用于解析 Provider JSON（serde tag = route）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -194,6 +194,42 @@ export interface AiResult {
   duration_ms?: number | null;
   /** 实际使用的工具轮数（0 = 未进入工具循环；上限 6） */
   tool_rounds?: number | null;
+  /** DEV-0062 §31 Provider Provenance：本次调用真实 snapshot（旧记录缺失 → UI 显示「旧版本未记录」） */
+  provider_profile_name?: string | null;
+  adapter_kind?: string | null;
+  provider_model?: string | null;
+}
+
+/** DEV-0062 · AiCapabilities（三态 bool + json_strategy） */
+export interface AiCapabilities {
+  basic_chat: boolean | null;
+  structured_json: boolean | null;
+  json_strategy: "native" | "prompt_only" | "unknown" | string;
+  tool_calls: boolean | null;
+  streaming: boolean | null;
+  temperature_zero: boolean | null;
+}
+
+/** DEV-0062 · AI Connection（多 Provider Profile；API Key 明文本地保存） */
+export interface AiProviderProfile {
+  id: number;
+  display_name: string;
+  adapter_kind: "deepseek" | "openai_compatible" | string;
+  base_url: string;
+  api_key: string;
+  model: string;
+  thinking_mode: "off" | "deepseek_model_suffix" | string;
+  enabled: boolean;
+  capabilities: AiCapabilities;
+  compatibility_status: "untested" | "full" | "limited" | "incompatible" | string;
+  last_test_message: string;
+  last_tested_at: string | null;
+}
+
+/** Active 双角色（control_id = null → Follow Primary） */
+export interface AiActiveProfiles {
+  primary_id: number | null;
+  control_id: number | null;
 }
 
 /** assistant_chat 结构化响应（DEV-0023：message / knowledge_proposal 两类） */

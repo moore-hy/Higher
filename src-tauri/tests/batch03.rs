@@ -69,7 +69,7 @@ fn test_v010_schema_and_old_data_preserved() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 23);
+    assert_eq!(count, 24);
     let cols: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(tasks)").unwrap();
         stmt.query_map([], |r| r.get::<_, String>(1))

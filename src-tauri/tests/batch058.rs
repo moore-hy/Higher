@@ -42,13 +42,13 @@ fn mk_profile(conn: &Connection) -> i64 {
 fn test_migration_latest_is_v021_and_idempotent() {
     let conn = setup();
     // DEV-0060.1 §17：新增 v023（recurring_task_semantics）后最新版本为 23
-    assert_eq!(latest_version(), 23);
+    assert_eq!(latest_version(), 24);
     // 幂等：重复执行不报错、不重复应用
     app_lib::migrations::run_migrations(&conn).unwrap();
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 23);
+    assert_eq!(n, 24);
 }
 
 #[test]

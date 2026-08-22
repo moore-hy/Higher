@@ -16,9 +16,12 @@ import type {
   TrendPoint,
   Adjustment,
   ActiveSessionBrief,
+  AiActiveProfiles,
+  AiCapabilities,
   AiConversation,
   AiMessage,
   AiMode,
+  AiProviderProfile,
   AiResult,
   AiSettings,
   AttachmentImageData,
@@ -966,6 +969,73 @@ export const saveAiSettings = (args: {
 
 /** 测试连接（真实调用配置的 AI API，人话错误） */
 export const testAiConnection = () => invoke<string>("test_ai_connection");
+
+// ---- DEV-0062 · AI Provider Profiles（多 AI Connection） ----
+
+export const listAiProviderProfiles = () =>
+  invoke<AiProviderProfile[]>("list_ai_provider_profiles");
+
+export const getAiProviderProfile = (profileId: number) =>
+  invoke<AiProviderProfile>("get_ai_provider_profile", { profileId });
+
+export const createAiProviderProfile = (args: {
+  displayName: string;
+  adapterKind: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  thinkingMode: string;
+}) =>
+  invoke<number>("create_ai_provider_profile", {
+    displayName: args.displayName,
+    adapterKind: args.adapterKind,
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.model,
+    thinkingMode: args.thinkingMode,
+  });
+
+export const updateAiProviderProfile = (args: {
+  profileId: number;
+  displayName: string;
+  adapterKind: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  thinkingMode: string;
+  enabled: boolean;
+}) =>
+  invoke<void>("update_ai_provider_profile", {
+    profileId: args.profileId,
+    displayName: args.displayName,
+    adapterKind: args.adapterKind,
+    baseUrl: args.baseUrl,
+    apiKey: args.apiKey,
+    model: args.model,
+    thinkingMode: args.thinkingMode,
+    enabled: args.enabled,
+  });
+
+export const deleteAiProviderProfile = (profileId: number) =>
+  invoke<void>("delete_ai_provider_profile", { profileId });
+
+export const getActiveAiProfiles = () =>
+  invoke<AiActiveProfiles>("get_active_ai_profiles");
+
+/** controlId = null → Follow Primary */
+export const setActiveAiProfiles = (primaryId: number, controlId: number | null) =>
+  invoke<void>("set_active_ai_profiles", { primaryId, controlId });
+
+/** 测试连接（指定 Connection；用户主动触发的真实调用） */
+export const testAiProviderConnection = (profileId: number) =>
+  invoke<string>("test_ai_provider_connection", { profileId });
+
+/** 检测 Higher 兼容性（Probe A-E；用户主动触发；结果写回 Connection） */
+export const testAiProviderCompatibility = (profileId: number) =>
+  invoke<{ status: string; capabilities: AiCapabilities; message: string }>(
+    "test_ai_provider_compatibility",
+    { profileId },
+  );
 
 // ---- Session Note / 学习记录（DEV-0017） ----
 

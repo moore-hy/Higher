@@ -523,6 +523,9 @@ fn test_diagnostics_no_secrets() {
         context_provided: vec!["学习档案".into()],
         duration_ms: Some(1234),
         tool_rounds: Some(2),
+        provider_profile_name: None,
+        adapter_kind: None,
+        provider_model: None,
     };
     let s = serde_json::to_string(&r).unwrap();
     // 诊断字段存在
