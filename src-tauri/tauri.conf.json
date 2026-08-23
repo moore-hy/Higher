@@ -45,7 +45,9 @@
         "installMode": "currentUser",
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false,
-        "startMenuFolder": "Higher"
+        "startMenuFolder": "Higher",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     },
     "android": {
