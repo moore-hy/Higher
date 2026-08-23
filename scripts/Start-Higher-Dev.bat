@@ -1,12 +1,17 @@
 @echo off
 chcp 65001 >nul
-title Higher 测试环境
+title Higher Dev
 
-echo Higher 测试环境启动中...
-echo 项目目录：C:\Users\37653\Desktop\Higher
+rem DEV-0065.3 §9：仓库根从脚本位置相对解析（scripts\ 的上一级），
+rem 不再硬编码 C:\Users\37653\Desktop\Higher。
+set "ROOT=%~dp0.."
+for %%i in ("%ROOT%") do set "ROOT=%%~fi"
+
+echo Higher dev environment starting...
+echo Repo root: %ROOT%
 echo.
 
-cd /d "C:\Users\37653\Desktop\Higher"
+cd /d "%ROOT%"
 
 set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 
@@ -24,7 +29,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-npm run tauri dev
+call npm run tauri dev
 
 echo.
 echo Higher 已停止或启动失败。

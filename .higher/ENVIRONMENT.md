@@ -6,20 +6,22 @@
 ## Metadata
 | 字段 | 值 |
 |---|---|
-| Context Version | **HGCTX-0017**（DEV-0065.2R Clean Windows Release：AUTOMATED GATE PASSED · INSTALLER BUILT · HUMAN RUNTIME PENDING） |
-| Active Development | **DEV-0065.2R** |
-| Windows Release | **0.3.0 NSIS 安装包已产出**（mainBinaryName=Higher.exe · currentUser · SimpChinese · WebView2 offlineInstaller · startMenuFolder=Higher · targets=nsis only · useLocalToolsDir=true 工具链进 target\.tauri 不污染 AppData；`release\Higher_0.3.0_Setup.exe` 221,679,004 bytes + SHA256.txt；Build-Higher-Release.ps1 十步门禁；release/ gitignored） |
+| Context Version | **HGCTX-0018**（DEV-0065.3 v1 Release Cleanup：GATE PASSED · HUMAN REVIEW PENDING） |
+| Active Development | **DEV-0065.3**（仓库收敛清理：零功能变更 / 零 schema / 零依赖） |
+| App Icon | **已定版**：白/象牙色 H 图标（用户提交 c8e1172「chore: replace Higher app icon」；`src-tauri\icons\**` + `branding\higher-icon.png` 已入库；旧黄蓝占位图标不再使用） |
+| Windows Release | **0.3.0 NSIS 安装包曾产出并经用户入库提交**（005006e；mainBinaryName=Higher.exe · currentUser · SimpChinese · WebView2 offlineInstaller · startMenuFolder=Higher · targets=nsis only · useLocalToolsDir=true 工具链进 target\.tauri；Build-Higher-Release.ps1 十步门禁）。**DEV-0065.3 起本地 release\ 构建产物已删除**（可再生成，不影响已安装应用；v1.0.0 冻结后从源码重产） |
 | Prod Data Root | **`%LOCALAPPDATA%\com.higher.desktop\`**（app_local_data_dir；higher.db / attachments / vault / backups / WebView2 存储同根；lib.rs 五处 prod 分支 + db.rs 一致，R09-R11 锁定；**禁 app_data_dir()=Roaming**） |
 | Persistence Contract | higher.db=用户永久库：升级/重装/修复/卸载默认**一律保留**；未来迁移=先备份到 `backups\`（带时间戳/版本）→ 前向迁移同一库谱系，**永不删除重建**（除非用户显式 reset）；首次安装=干净空壳（bundle 零开发数据，.data/.webview-data 仅 dev cfg(debug_assertions)） |
 | Desktop Shell | Custom Titlebar **implemented**（34px/--h-titlebar-height · fixed top · z-index 1200 · var(--h-sidebar) 半透明 · data-tauri-drag-region + 双击最大化 · 三控件 min/max/close 纯 CSS 图标 · 浏览器 isTauriRuntime 屏蔽；App = WallpaperLayers → DesktopTitlebar → app-shell__content(100vh-34px) > ProfileGate 全阶段恒渲染） |
 | Native Decorations | **OFF**（lib.rs 唯一 builder 加 .decorations(false)；tauri.conf windows 仍 []；无 transparent/fullscreen；capabilities 精确加 core:window:allow-close/minimize/toggle-maximize/start-dragging 四权限，无越权） |
 | Higher AI | **Expanded / Collapsed only**（三态废止：Closed 分支/FAB/X 全删；整 46px rail = aipanel__rail-hit 单按钮可点；missing→collapsed；唯一偏好 higher.aiPanel.mode；ui.ai_panel_open 前端不再消费不迁移——DB 旧值 stale 兼容；Panel 恒挂载，收起↔展开会话/流/Proposal 不重建；页面 AI 入口经 pending-send/actionBusy 自动展开；Context 删 open/setOpen，Today/FinalGoalCard/PlanningTruthSummary 三处 setOpen 消费行连锁删除（仅删调用行，handler 链零变化）） |
 | Schema | **v024**（0 migration；Backend Domain 0；AI Runtime 0；Dependency 0；**版本五处对齐 0.3.0**：tauri.conf/package/package-lock×2/Cargo.toml/Cargo.lock） |
-| Last Updated | 2026-08-23（DEV-0065.2R 收口，系统时间） |
-| Source Fingerprint | Git：main @ **295d4e0**；**WORKTREE DIRTY：YES**（DEV-0065.2R 未提交；HEAD≠当前代码，以工作区为准） |
-| Runtime Status | b14e237=stable AI runtime；295d4e0=65.1 Desktop Shell；**65.2R 安装包已构建但 H01-H14 安装级 Human Runtime 未验证**（干净首装/持久化/重装保留/卸载默认保留/快捷方式/离线安装）——不得写 Runtime Verified |
-| Gate Status | **DEV-0065.2R recorded automated gate**：tsc **0 errors** / npm build **通过** / cargo check **0 errors** / **batch0652_release 20/20**（R01-R20 release 契约）/ batch0651_ui **20/20**（T20 §50 授权改依赖集合比对）/ batch064r2_ui **27/27**（r2_u22 基线修正+r2_u24 授权调整）/ batch064_ui **28/28**（u27/u28 授权调整）/ batch063_ui **18/18** / ai_panel **8/8** / batch062r1 **41/41** / batch062r **44/44** / batch062 **57/57**（串行）；**installer built：release\Higher_0.3.0_Setup.exe（NSIS/unsigned/P2 icon）** |
+| Last Updated | 2026-08-23（DEV-0065.3 收口，系统时间） |
+| Source Fingerprint | Git：main @ **c8e1172**（65.2R 入库 005006e + 图标 c8e1172）；**WORKTREE DIRTY：DEV-0065.3 cleanup 未提交**（变更=归档移动/文档收敛/启动脚本迁移/生成物删除，零产品源码 diff） |
+| Runtime Status | b14e237=stable AI runtime baseline；65.2R Windows 发布+持久化已由用户提交入库（005006e/c8e1172）；**DEV-0065.3 清理后 tauri dev 冒烟 + Gate 已过，人类复核 PENDING**（生产 AppLocalData 未触碰） |
+| Gate Status | **DEV-0065.3 recorded gate**：tsc **0 errors** / npm build **通过** / cargo check **0 errors** / batch0652_release **20/20** / batch0651_ui **20/20** / batch064r2_ui **27/27** / batch064_ui **28/28** / batch063_ui **18/18** / ai_panel **8/8** / batch062r1 **41/41** / batch062r **44/44** / batch062 **57/57**（串行；前轮 65.2R gate 见 archive/history/reports/TRAE_RUN-through-DEV-0065.2R.md）；installer 0.3.0 曾构建（unsigned；图标已定版白象牙 H，非 P2） |
 | Known Deferred P2 | Planning Week 上/下切周后旧选中日详情残留（不修）；旧长会话偶发 no_changeset（不修，Runtime 调查另轮） |
+| Dead UI Candidates | **仅记录 · 本轮未删**（DEV-0065.3 §16）：`src/pages/Progress.tsx`、`src/pages/Review.tsx`（/progress、/review 现重定向 /planning）、`src/components/Donut.tsx`、`src/components/NoteView.tsx`、`src/components/ProfileCalendar.tsx`（仅被 Progress/Review 引用）、`src/components/LearningDataPanel.tsx`、`src/components/LearningEditor.tsx`（无源码 importer）——自 src/main.tsx 静态不可达；删除属代码收敛需独立任务+全量回归 |
 | Document Status | 本文件 CURRENT；`archive/audit/`=审计时点证据（非永久当前）；`archive/history/`=仅历史；`archive/reference/`=速查参考；`progress/CURRENT.md`=跳转页 |
 
 ## Documentation Authority（文件权威表）
@@ -185,7 +187,7 @@ AI 可创建：GoalTarget（经 target_proposal ChangeSet）/Blueprint/Phase/Mil
 - **Search**：后端=FTS5+9 实体索引+3 trigger；**DEV-0057 PART L 统一服务（search.rs）**：sync_*（task v1/v2/goal/knowledge/document/session/evaluation 全部用户写路径）+ remove_*（删除路径）+ **rebuild_search_index(profile_id) 命令**（从 Canonical 表完整重建）+ **版本门**（settings KV `search.index.version.{pid}`=2；启动时缺失/变化才一次 rebuild）；ChangeSet apply 同步走 index_upsert/remove（既有）。**维护不对称 RESOLVED**；**UI=无全局搜索入口（D2 OPEN，本轮明确不做）**。
 - **Memory**：写入=run 后二次调用≤5 条（**5 可达类型**；key 归一稳定生成）；检索=权重×recency 取 12。**Key 归一 RESOLVED DEV-0057**；无删除 UI（dismiss API 孤儿，低优先遗留）。
 - **Personalization**：Import→Chunk→Compile→确认；user_edit 直写 confirmed+记忆。**Known Issues**："自动维护"开关后端无消费；编辑与 chunks 同步弱（低优先遗留）。
-- **Vault**：定位=**审计与备份**（Settings Tab7 已更名，测试锁文案明确"不代表数据加密"）：vault_events+snapshots（manual/changeset 自动；daily 未实现；blob 死代码）。**prod 快照路径 RESOLVED DEV-0057**（runtime_db_path 抽象：dev=项目 .data / prod=app_data_dir）；无加密、密码 root（真加密明确不做，本轮只修 Bug+文案）。
+- **Vault**：定位=**审计与备份**（Settings Tab7 已更名，测试锁文案明确"不代表数据加密"）：vault_events+snapshots（manual/changeset 自动；daily 未实现；blob 死代码）。**prod 快照路径 RESOLVED DEV-0057，DEV-0065.2R 起真值更新**（runtime_db_path 抽象：dev=项目 .data / prod=app_local_data_dir，即 %LOCALAPPDATA%\com.higher.desktop\）；无加密、密码 root（真加密明确不做，本轮只修 Bug+文案）。
 
 ## 11. Analytics & Evidence（Data 页 Allowlist）
 默认展示且仅展示：累计（学习天数/累计时长/日均——**统一 `19h37m` 人类格式**）· 今天（今日学习/任务完成，无任务=「暂无计划」禁 0%）· 趋势单图（日/周/月/年）· 时间去哪了（Knowledge 一级分类，可下钻，**0 分钟节点隐藏**，未归类单列）· 学习时段（7 段，纯事实）· 计划 vs 实际（14 天）。**无综合学习效率**（第一层不显示）。
