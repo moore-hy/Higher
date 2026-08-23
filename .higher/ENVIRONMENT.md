@@ -6,16 +6,19 @@
 ## Metadata
 | 字段 | 值 |
 |---|---|
-| Context Version | **HGCTX-0016**（DEV-0065.1 Desktop Shell：AUTOMATED GATE PASSED · HUMAN RUNTIME PENDING） |
-| Active Development | **DEV-0065.1** |
+| Context Version | **HGCTX-0017**（DEV-0065.2R Clean Windows Release：AUTOMATED GATE PASSED · INSTALLER BUILT · HUMAN RUNTIME PENDING） |
+| Active Development | **DEV-0065.2R** |
+| Windows Release | **0.3.0 NSIS 安装包已产出**（mainBinaryName=Higher.exe · currentUser · SimpChinese · WebView2 offlineInstaller · startMenuFolder=Higher · targets=nsis only · useLocalToolsDir=true 工具链进 target\.tauri 不污染 AppData；`release\Higher_0.3.0_Setup.exe` 221,679,004 bytes + SHA256.txt；Build-Higher-Release.ps1 十步门禁；release/ gitignored） |
+| Prod Data Root | **`%LOCALAPPDATA%\com.higher.desktop\`**（app_local_data_dir；higher.db / attachments / vault / backups / WebView2 存储同根；lib.rs 五处 prod 分支 + db.rs 一致，R09-R11 锁定；**禁 app_data_dir()=Roaming**） |
+| Persistence Contract | higher.db=用户永久库：升级/重装/修复/卸载默认**一律保留**；未来迁移=先备份到 `backups\`（带时间戳/版本）→ 前向迁移同一库谱系，**永不删除重建**（除非用户显式 reset）；首次安装=干净空壳（bundle 零开发数据，.data/.webview-data 仅 dev cfg(debug_assertions)） |
 | Desktop Shell | Custom Titlebar **implemented**（34px/--h-titlebar-height · fixed top · z-index 1200 · var(--h-sidebar) 半透明 · data-tauri-drag-region + 双击最大化 · 三控件 min/max/close 纯 CSS 图标 · 浏览器 isTauriRuntime 屏蔽；App = WallpaperLayers → DesktopTitlebar → app-shell__content(100vh-34px) > ProfileGate 全阶段恒渲染） |
 | Native Decorations | **OFF**（lib.rs 唯一 builder 加 .decorations(false)；tauri.conf windows 仍 []；无 transparent/fullscreen；capabilities 精确加 core:window:allow-close/minimize/toggle-maximize/start-dragging 四权限，无越权） |
 | Higher AI | **Expanded / Collapsed only**（三态废止：Closed 分支/FAB/X 全删；整 46px rail = aipanel__rail-hit 单按钮可点；missing→collapsed；唯一偏好 higher.aiPanel.mode；ui.ai_panel_open 前端不再消费不迁移——DB 旧值 stale 兼容；Panel 恒挂载，收起↔展开会话/流/Proposal 不重建；页面 AI 入口经 pending-send/actionBusy 自动展开；Context 删 open/setOpen，Today/FinalGoalCard/PlanningTruthSummary 三处 setOpen 消费行连锁删除（仅删调用行，handler 链零变化）） |
-| Schema | **v024**（0 migration；Backend Domain 0；AI Runtime 0；Dependency 0） |
-| Last Updated | 2026-08-22（DEV-0065.1 收口，系统时间） |
-| Source Fingerprint | Git：main @ **b14e237**；**WORKTREE DIRTY：YES**（DEV-0063+0064+0064R.2+0065.1 未提交；HEAD≠当前代码，以工作区为准） |
-| Runtime Status | b14e237 = 用户实测 stable AI runtime baseline；**DEV-0065.1 真实 Windows 无边框 UX 尚未验证**（自动测试无法证明拖拽/双击最大化/缩放）——不得写 Runtime Verified |
-| Gate Status | **DEV-0065.1 recorded automated gate**：tsc **0 errors** / npm build **通过** / cargo check **0 errors**（capability schema 通过）/ **batch0651_ui 20/20**（T01-T20 source-contract）/ batch064_ui **28/28**（U21 按两态真值改写、U28 收窄为"lib.rs 仅 decorations"）/ batch064r2_ui **27/27**（R2-U23 §46 授权收窄）/ batch063_ui **18/18** / ai_panel **8/8** / batch062r1 **41/41** / batch062r **44/44** / batch062 **57/57** / batch061r **47/47** / batch0602 **29/29**（串行）；**Frozen：tauri.conf.json/package*/Cargo*/api.ts/types.ts/appearance/**/ai·repository·migrations·db.rs 零 diff；壁纸图片消费者仍=2（titlebar/rail=0）** |
+| Schema | **v024**（0 migration；Backend Domain 0；AI Runtime 0；Dependency 0；**版本五处对齐 0.3.0**：tauri.conf/package/package-lock×2/Cargo.toml/Cargo.lock） |
+| Last Updated | 2026-08-23（DEV-0065.2R 收口，系统时间） |
+| Source Fingerprint | Git：main @ **295d4e0**；**WORKTREE DIRTY：YES**（DEV-0065.2R 未提交；HEAD≠当前代码，以工作区为准） |
+| Runtime Status | b14e237=stable AI runtime；295d4e0=65.1 Desktop Shell；**65.2R 安装包已构建但 H01-H14 安装级 Human Runtime 未验证**（干净首装/持久化/重装保留/卸载默认保留/快捷方式/离线安装）——不得写 Runtime Verified |
+| Gate Status | **DEV-0065.2R recorded automated gate**：tsc **0 errors** / npm build **通过** / cargo check **0 errors** / **batch0652_release 20/20**（R01-R20 release 契约）/ batch0651_ui **20/20**（T20 §50 授权改依赖集合比对）/ batch064r2_ui **27/27**（r2_u22 基线修正+r2_u24 授权调整）/ batch064_ui **28/28**（u27/u28 授权调整）/ batch063_ui **18/18** / ai_panel **8/8** / batch062r1 **41/41** / batch062r **44/44** / batch062 **57/57**（串行）；**installer built：release\Higher_0.3.0_Setup.exe（NSIS/unsigned/P2 icon）** |
 | Known Deferred P2 | Planning Week 上/下切周后旧选中日详情残留（不修）；旧长会话偶发 no_changeset（不修，Runtime 调查另轮） |
 | Document Status | 本文件 CURRENT；`archive/audit/`=审计时点证据（非永久当前）；`archive/history/`=仅历史；`archive/reference/`=速查参考；`progress/CURRENT.md`=跳转页 |
 
@@ -85,6 +88,16 @@ Study First（先学再归档）· Profile First（档案=隔离容器，非账�
 - v021 变更（DEV-0059）：`trusted_study_sessions` VIEW（排除 needs_review）｜`ai_runs` +workflow_type/state/json（Planner 显式状态机）｜`personalization_profiles` 重建为 version rows（draft/confirmed/superseded）+ `personalization_profile_sources` 快照｜`goal_targets`（scenario_type/role/status + 考研 partial unique）｜`planning_sources/chunks`、`planning_blueprints/phases/milestones`、`planning_reviews`｜`evaluations` Evidence V1 列（session_id/source_kind/source_ref/trust_state）｜`tasks` +origin/planning_blueprint_id/planning_phase_id/projection_key/user_modified_at + projection UNIQUE 索引。
 - 表分类：核心业务 8（profiles/goals/tasks/sessions/learning_items/knowledge_documents/evaluations/recurring_rules）· 反馈主线 2（feedbacks/adjustments）· AI 全家族 7（conversations/messages/runs/sources/memory/personalization×3/change_sets+operations）· 基础设施 4（search_index+FTS5/settings/attachments）· **DEV-0059 新增**（personalization version rows+profile_sources / goal_targets / planning_sources+chunks / planning_blueprints+phases+milestones / planning_reviews）。完整字段/FK/索引 → `archive/audit/HIGHER_DATA_MODEL.md`（v019 时点 + v020-022 增量见本节）。
 - **Canonical Data Ownership（摘要）**：Goal=goal_brief_json（**title=唯一语义标题，goals.name=同步投影**；冲突源：profile.target_*、goals.description）｜Session/Note=sessions 行（原子双写）｜Knowledge 树=items、正文=documents（content=secondary legacy）｜Analytics=纯计算视图无表｜Search Index=**可重建派生副本（统一同步+版本门+rebuild，DEV-0057 起）**｜Mastery=append-only 表｜Vault=独立 SQLite。
+
+## 6r. Windows Release & Production Data Contract（DEV-0065.2R 起 · 永久产品契约）
+- **生产数据根（Canonical）**：`%LOCALAPPDATA%\com.higher.desktop\`——一律经 `app.path().app_local_data_dir()`（lib.rs 五处 prod 分支：db_dir/att_root/vault_dir/backups_dir/runtime_db_path；db.rs database_path 同指）；**禁止 `app_data_dir()`（Roaming）承载 Higher 生产数据**。dev 数据（`src-tauri/.data`、`.webview-data`）仅存在于 `cfg!(debug_assertions)` 分支，永不进入安装包。
+- **目录布局**：higher.db ｜ attachments\ ｜ vault\ ｜ backups\ ｜ WebView2 application storage（Tauri 托管）——全部同根；attachments/vault/backups 禁入 Program Files/安装目录/项目目录。
+- **数据库持久化契约（§11 永久）**：higher.db 是用户永久库。升级/修复/重装/启动/换版本/换程序文件/重建快捷方式**一律不得删除**；未来版本必须继续打开同一路径。
+- **未来迁移契约（§12-§13，本 DEV 0 migration）**：任何未来破坏性/结构性 schema 迁移前，**先备份 higher.db 到 `%LOCALAPPDATA%\com.higher.desktop\backups\`**（带时间戳/版本元数据），再前向迁移、保持同一库谱系；**永不"删旧库建新库"**，除非用户显式要求 reset。显式数据重置必须是独立的、明确的用户动作（卸载≠删除学习史）。
+- **安装器（0.3.0）**：NSIS only（不做 MSI）· currentUser（无需管理员）· SimpChinese · WebView2 offlineInstaller（安装本身离线可完成）· mainBinaryName=Higher（无用户面 app.exe）· startMenuFolder=Higher · identifier=com.higher.desktop（永久身份，未来更新不得随意改）。未签名（P2；SmartScreen/Unknown Publisher 可能出现，不绕过 Windows 安全）。
+- **干净首装（§7 绝对规则）**：bundle 携带**零**开发/测试个人数据（无 .data/.webview-data/*.db/*.sqlite/.env/API key/壁纸 blob）；旧「Migrate-DevData-ToRelease.ps1」需求已废止，**不得创建**。
+- **构建入口**：`scripts/Build-Higher-Release.ps1`（verify clean worktree → HEAD → tsc → vite build → cargo check → batch0652_release → tauri build → 定位 NSIS → 拷贝 release\ → SHA256）；产物 `release\Higher_<ver>_Setup.exe` + `Higher_<ver>_SHA256.txt`（release/ 已 gitignore）；`bundle.useLocalToolsDir=true` 使 NSIS 工具链缓存在 `src-tauri/target/.tauri/`。
+- **验收锁定**：`src-tauri/tests/batch0652_release.rs` R01-R20（身份/版本五处对齐/Higher.exe/NSIS/currentUser/SimpChinese/offlineInstaller/动态窗口/AppLocalData 五分支/DB 路径一致/三目录同根/零个人数据/gitignore/AI 冻结/v024/零迁移/脚本安全/无迁移脚本/安装包无开发数据/零新依赖）。
 
 ## 7. Final Goal（v020 收口后）
 - **Canonical Source**：`goals.goal_brief_json`（仅 final 行；七字段 title/outcome/deadline/success_criteria[]/scope[]/constraints[]/unresolved[]）。

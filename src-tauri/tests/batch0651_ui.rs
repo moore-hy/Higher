@@ -325,15 +325,60 @@ fn t19_no_new_wallpaper_consumer() {
 
 #[test]
 fn t20_no_new_dependencies() {
-    let out = git_diff(&[
-        "../package.json",
-        "../package-lock.json",
-        "Cargo.toml",
-        "Cargo.lock",
-        "tauri.conf.json",
-    ]);
-    assert!(
-        out.is_empty(),
-        "T20: 依赖与 tauri.conf.json 零 diff（发现：{out}）"
+    // DEV-0065.2R §4/§31/§50 授权调整：版本对齐 0.3.0 与 NSIS 发布配置是本轮
+    // mandated 变更（package*/Cargo*/tauri.conf.json 必然有 diff）；冻结语义收窄为
+    // 「依赖名集合与 HEAD 完全一致 + conf 产品身份不变」。
+    fn show(path: &str) -> String {
+        let out = std::process::Command::new("git")
+            .args(["show", &format!("HEAD:{path}")])
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."))
+            .output()
+            .expect("git show 失败");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+    fn npm_deps(text: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(text).expect("package.json 解析失败");
+        let mut ks: Vec<String> = Vec::new();
+        for s in ["dependencies", "devDependencies"] {
+            if let Some(o) = v.get(s).and_then(|d| d.as_object()) {
+                ks.extend(o.keys().cloned());
+            }
+        }
+        ks.sort();
+        ks
+    }
+    fn cargo_deps(text: &str) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        let mut in_dep = false;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                in_dep = t == "[dependencies]" || t == "[build-dependencies]";
+            } else if in_dep {
+                if let Some(name) = t.split('=').next() {
+                    let name = name.trim();
+                    if !name.is_empty() && !name.starts_with('#') {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+        names.sort();
+        names
+    }
+    assert_eq!(
+        npm_deps(&read_src("../package.json")),
+        npm_deps(&show("package.json")),
+        "T20: npm 依赖名集合不得变化"
     );
+    assert_eq!(
+        cargo_deps(&read_src("Cargo.toml")),
+        cargo_deps(&show("src-tauri/Cargo.toml")),
+        "T20: Cargo 依赖名集合不得变化"
+    );
+    let conf: serde_json::Value =
+        serde_json::from_str(&read_src("tauri.conf.json")).expect("tauri.conf.json 解析失败");
+    assert_eq!(conf["productName"], "Higher", "T20: productName 身份不变");
+    assert_eq!(conf["identifier"], "com.higher.desktop", "T20: identifier 身份不变");
+    assert_eq!(conf["app"]["windows"], serde_json::json!([]), "T20: 动态主窗口不变");
 }

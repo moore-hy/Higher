@@ -1,3 +1,38 @@
+# DEV-0065.2R · Higher Clean Windows Release + Persistent Data · TRAE_RUN
+
+- **DEV ID**: DEV-0065.2R（干净 Windows 发布 + 持久化数据；核心产品决策：**不迁移任何开发数据，首装=干净空壳，未来升级保留用户生产数据**）
+- **Timestamp Source**: SYSTEM · Start 2026-08-23（+08:00）
+- **Baseline HEAD**: 295d4e02ffb689cf77709f17522e58c321293ce1 · **Branch**: main · **Worktree Before**: clean（仅 ?? 本任务书）——BASELINE GATE PASS
+
+## Phase 0 · 源码审计（编辑前实测）
+- **路径不一致确认（§14 根因）**：lib.rs 四个功能点五处 prod 分支用 `app.path().app_data_dir()`（Roaming）——setup db_dir（L7258）/att_root（L7291）/vault_dir（L7303）/backups_dir（L2637）/runtime_db_path（L2653）；而 db.rs database_path 用 LOCALAPPDATA env（Local）——Roaming/Local 分裂。
+- **版本不对齐**：tauri.conf 1.0.0 / package 1.0.0 / package-lock ×2 / Cargo.toml 0.1.0。
+- main.rs 标准 windows_subsystem 入口（不动）；.gitignore 已有 .data/.webview-data、无 release/；capabilities 无 asset scope（配置在 tauri.conf.json）。
+
+## Phase A · 版本对齐 + bundle 配置
+- 五处版本 → **0.3.0**：tauri.conf.json / package.json / package-lock.json（root + packages.""）/ Cargo.toml（+description 中文化）/ Cargo.lock（cargo check 自动重生成）。
+- tauri.conf.json bundle：targets=["nsis"] · mainBinaryName="Higher" · nsis{installMode=currentUser, languages=["SimpChinese"], displayLanguageSelector=false, startMenuFolder="Higher"} · windows.webviewInstallMode={type:offlineInstaller}（**修错**：首版误放 nsis 内，tauri-build 报 unknown field → 移至 bundle.windows 层级）· **useLocalToolsDir=true**（NSIS 工具链缓存进 src-tauri\target\.tauri，绕开沙箱对 %LOCALAPPDATA%\tauri 的写限制）。
+- asset scope 增 `$LOCALDATA/attachments/**` 与 `$LOCALDATA/com.higher.desktop/attachments/**`（覆盖新生产路径；未放宽到任意文件系统，§32 无 ASSET_SCOPE_CONFLICT）。
+
+## Phase B · 生产数据根 AppLocalData（§9/§14/§15）
+- lib.rs **五处 prod 分支** `app_data_dir()` → `app_local_data_dir()`（db_dir/att_root/vault_dir/backups_dir/runtime_db_path）+ 三处注释路径真值更新（%LOCALAPPDATA%\com.higher.desktop\）；db.rs database_path 已指 Local（LOCALAPPDATA+com.higher.desktop+higher.db）无需改——全源码一致，无 Roaming/Local 分裂。
+- **事故与修复**：并行编辑同一 lib.rs 导致 att_root 修改被 vault_dir 编辑覆盖（工具报成功但文件回退）→ 重新应用并全量 grep 验证 5/5。教训：同文件编辑必须串行。
+- cargo check PASS（0 errors）。
+
+## Phase C · 构建脚本 + gitignore + R01-R20
+- 新建 `scripts/Build-Higher-Release.ps1`（§21 十步：clean worktree 校验[-AllowDirty 逃生门，§53 Commit:NO 场景] → HEAD → tsc → vite build → cargo check → batch0652_release → tauri build → 定位 NSIS → 拷贝 release\ → SHA256；**编码事故**：无 BOM UTF-8 被 PowerShell 5.1 按 ANSI 误读解析炸裂 → 重写为 UTF-8 BOM）。
+- .gitignore + release/。
+- 新建 **batch0652_release R01-R20 20/20**：R01 身份/R02 版本五处/R03 Higher.exe/R04 NSIS only/R05 currentUser/R06 SimpChinese+startMenuFolder/R07 offlineInstaller/R08 动态窗口/R09 五分支 app_local_data_dir+禁 app_data_dir/R10 DB 路径一致（lib+db.rs）/R11 attachments·vault·backups 同根+scope/R12 零 resources·externalBin·db/R13 release/ gitignore/R14 ai 零 diff/R15 v024 无 v025/R16 migrations 零 diff/R17 脚本十步标记+无迁移引用/R18 无 Migrate* 脚本/R19 脚本与 conf 无 .data/.webview-data/R20 依赖名集合=HEAD（npm+lock+cargo）。
+- **§50 授权的旧测试最小调整（4 处，mandated 变更直接矛盾旧零 diff 断言）**：batch064 u27（→依赖名集合比对 HEAD）、u28（lib.rs 新增行白名单 decorations|app_local_data_dir|AppLocalData|%LOCALAPPDATA%，不再要求 any(decorations)——HEAD 已含）；batch064r2 r2_u24（→依赖集合比对）、**r2_u22（基线期已损坏**：FROZEN_PREEXISTING 脏集已随 295d4e0 提交，diff 实测=""，assert_eq 必败——修正为「已提交，自 HEAD 起零 diff」）；batch0651 t20（→依赖集合比对+conf 身份三断言）。
+
+## Phase D · Automated Gate + 安装包
+- **Gate 全绿**：tsc 0 / npm build ✓ / cargo check 0 / batch0652 **20/20** / batch0651 **20/20** / batch064r2 **27/27** / batch064 **28/28** / batch063 **18/18** / ai_panel **8/8** / batch062r1 **41/41** / batch062r **44/44** / batch062 **57/57**（串行 RUST_TEST_THREADS=1；useLocalToolsDir 加入后全部复跑）。
+- **tauri build**：Higher.exe 产出 → NSIS 下载/校验/解压（首次因沙箱拒写 %LOCALAPPDATA%\tauri 失败 os error 5 → useLocalToolsDir=true 解决）→ makensis → `Higher_0.3.0_x64-setup.exe`。
+- **产物**：`release\Higher_0.3.0_Setup.exe`（221,679,004 bytes ≈211MB，含 WebView2 离线安装器）+ `release\Higher_0.3.0_SHA256.txt`（79c0734b135a7844d68ef0018cf066f0889b80f4ca131997eca6bf989f4d02b3）。
+- **Forbidden Diff 审计**：本轮 M = tauri.conf.json/package.json/package-lock.json/Cargo.toml/Cargo.lock/lib.rs/.gitignore/batch064_ui/batch064r2_ui/batch0651_ui（后三=§50 授权调整）+ ?? scripts/Build-Higher-Release.ps1/batch0652_release.rs；**src/**（前端）与 src-tauri/src/ai|repository|migrations|db.rs 零 diff**；未 commit/push/tag（§53）。
+- **AI Runtime Changes: 0 · Domain Changes: 0 · Schema v024 · Migration 0 · Dependency 0**；P2：最终图标未定（当前用占位 icon pack）、unsigned。
+- **HUMAN RUNTIME PENDING（H01-H14）**：干净首装→建 INSTALL-PERSIST 测试数据→重启持久化→DB 物理位置确认→同版本重装保留→程序独立性→功能/AI 冒烟→卸载默认保留（若默认删数据=STOP UNINSTALL_DATA_DEFAULT_UNSAFE）→卸载后重装数据回归→桌面/开始菜单→窗口 Shell→版本元数据→（可选）断网安装。
+
 # DEV-0065.1 · Higher Desktop Shell（Custom Titlebar + Two-State AI Rail）· TRAE_RUN
 
 - **DEV ID**: DEV-0065.1（A. 自定义桌面标题栏；B. Higher AI 三态→两态；无学习域/AI Runtime 改动）

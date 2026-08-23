@@ -341,6 +341,8 @@ const FROZEN_PREEXISTING: &str = "src/Layout.tsx\nsrc/components/ChangeSetReview
 
 #[test]
 fn r2_u22_frozen_jsx_unchanged() {
+    // DEV-0065.2R 基线修正：FROZEN_PREEXISTING 脏集已随 295d4e0 提交入库，
+    // 自 HEAD 起 frozen JSX 的合法 diff 恒为空（旧 assert_eq 与提交后状态直接矛盾）。
     let out = git_diff(&[
         "../src/Layout.tsx",
         "../src/components/ai/AiPanel.tsx",
@@ -351,9 +353,9 @@ fn r2_u22_frozen_jsx_unchanged() {
         "../src/pages/Today.tsx",
         "../src/components/ChangeSetReview.tsx",
     ]);
-    assert_eq!(
-        out, FROZEN_PREEXISTING,
-        "R2-U22: frozen JSX diff 必须与轮前一致（不得新增修改）"
+    assert!(
+        out.is_empty(),
+        "R2-U22: frozen JSX 已于 295d4e0 提交，自 HEAD 起零 diff（发现：{out}；历史脏集={FROZEN_PREEXISTING:?}）"
     );
 }
 
@@ -376,8 +378,61 @@ fn r2_u23_backend_freeze() {
 
 #[test]
 fn r2_u24_dependency_freeze() {
-    let out = git_diff(&["../package.json", "../package-lock.json", "Cargo.toml", "Cargo.lock"]);
-    assert!(out.is_empty(), "R2-U24: 依赖零 diff（发现：{out}）");
+    // DEV-0065.2R §4/§50 授权调整：版本对齐 0.3.0 使四个版本文件必然有 diff；
+    // R.2 冻结语义收窄为「依赖名集合与 HEAD 完全一致」。
+    fn show(path: &str) -> String {
+        let out = std::process::Command::new("git")
+            .args(["show", &format!("HEAD:{path}")])
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."))
+            .output()
+            .expect("git show 失败");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+    fn npm_deps(text: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(text).expect("package.json 解析失败");
+        let mut ks: Vec<String> = Vec::new();
+        for s in ["dependencies", "devDependencies"] {
+            if let Some(o) = v.get(s).and_then(|d| d.as_object()) {
+                ks.extend(o.keys().cloned());
+            }
+        }
+        ks.sort();
+        ks
+    }
+    fn cargo_deps(text: &str) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        let mut in_dep = false;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                in_dep = t == "[dependencies]" || t == "[build-dependencies]";
+            } else if in_dep {
+                if let Some(name) = t.split('=').next() {
+                    let name = name.trim();
+                    if !name.is_empty() && !name.starts_with('#') {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+        names.sort();
+        names
+    }
+    assert_eq!(
+        npm_deps(&read_src("../package.json")),
+        npm_deps(&show("package.json")),
+        "R2-U24: npm 依赖名集合不得变化"
+    );
+    assert_eq!(
+        npm_deps(&read_src("../package-lock.json")),
+        npm_deps(&show("package-lock.json")),
+        "R2-U24: package-lock 依赖树不得变化"
+    );
+    assert_eq!(
+        cargo_deps(&read_src("Cargo.toml")),
+        cargo_deps(&show("src-tauri/Cargo.toml")),
+        "R2-U24: Cargo 依赖名集合不得变化"
+    );
 }
 
 #[test]

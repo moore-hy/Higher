@@ -1,7 +1,7 @@
 {
   "name": "higher",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Higher - 本地个人学习系统",
   "scripts": {

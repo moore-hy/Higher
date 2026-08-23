@@ -2624,7 +2624,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 // =============== Profile Data Cleanup（DEV-0030） ===============
 
-/// 备份目录（dev = 项目 .higher/backups；prod = app_data_dir/backups）。
+/// 备份目录（dev = 项目 .higher/backups；prod = AppLocalData/backups，DEV-0065.2R §15）。
 fn backups_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = if cfg!(debug_assertions) {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2634,7 +2634,7 @@ fn backups_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     } else {
         use tauri::Manager;
         app.path()
-            .app_data_dir()
+            .app_local_data_dir()
             .map_err(|e| e.to_string())?
             .join("backups")
     };
@@ -2650,7 +2650,7 @@ fn runtime_db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     } else {
         use tauri::Manager;
         app.path()
-            .app_data_dir()
+            .app_local_data_dir()
             .map(|d| d.join("higher.db"))
             .unwrap_or_else(|_| {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db")
@@ -7252,11 +7252,11 @@ pub fn run() {
 
             // 初始化本地 SQLite 数据库
             // 开发模式：放在 src-tauri/.data/，便于重置与在受限环境中调试
-            // 发布模式：放在系统 AppData 目录（com.higher.desktop）
+            // 发布模式：放在 %LOCALAPPDATA%\com.higher.desktop\（AppLocalData，DEV-0065.2R §9）
             let db_dir = if cfg!(debug_assertions) {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data")
             } else {
-                app.path().app_data_dir()?
+                app.path().app_local_data_dir()?
             };
             std::fs::create_dir_all(&db_dir)?;
             let db_path = db_dir.join("higher.db");
@@ -7283,13 +7283,13 @@ pub fn run() {
             // 附件根目录
             // 开发模式：与 DB 一致放 src-tauri/.data/attachments（项目自管路径，沙箱安全；
             //           与 DEV-0009 起 DB/WebView 的 dev 约定保持一致）
-            // 发布模式：系统 AppData /attachments
+            // 发布模式：%LOCALAPPDATA%\com.higher.desktop\attachments（与 DB 同根，DEV-0065.2R §15）
             let att_root = if cfg!(debug_assertions) {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join(".data")
                     .join("attachments")
             } else {
-                app.path().app_data_dir()?.join("attachments")
+                app.path().app_local_data_dir()?.join("attachments")
             };
             std::fs::create_dir_all(&att_root)?;
             app.manage(AttachmentDir(att_root));
@@ -7301,7 +7301,7 @@ pub fn run() {
                     .join(".data")
                     .join("vault")
             } else {
-                app.path().app_data_dir()?.join("vault")
+                app.path().app_local_data_dir()?.join("vault")
             };
             std::fs::create_dir_all(&vault_dir)?;
             app.manage(ai::vault::VaultState::new(vault_dir));

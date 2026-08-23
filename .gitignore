@@ -7,6 +7,9 @@ dist/
 # Tauri / Rust 构建产物
 src-tauri/target/
 
+# 发布产物（DEV-0065.2R §21：安装包不进 git）
+release/
+
 # 日志
 *.log
 npm-debug.log*

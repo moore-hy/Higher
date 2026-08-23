@@ -389,29 +389,75 @@ fn u26_no_new_important() {
 
 #[test]
 fn u27_no_dependency_changes() {
-    let out = std::process::Command::new("git")
-        .args(["diff", "--name-only", "HEAD", "--", "package.json", "package-lock.json", "../package.json", "../package-lock.json"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("git diff 失败");
-    let txt = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    assert!(
-        txt.is_empty(),
-        "U27: package.json / package-lock.json 不得有 diff（发现：{txt}）"
+    // DEV-0065.2R §4/§50 授权调整：版本对齐 0.3.0（package.json / package-lock.json /
+    // Cargo.toml / Cargo.lock）是本轮 mandated 变更，与旧「零 diff」断言直接矛盾。
+    // 冻结语义收窄为「依赖名集合与 HEAD 完全一致」（版本/描述字段不影响依赖集合）。
+    fn show(path: &str) -> String {
+        let out = std::process::Command::new("git")
+            .args(["show", &format!("HEAD:{path}")])
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."))
+            .output()
+            .expect("git show 失败");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+    fn read_p(rel: &str) -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel),
+        )
+        .unwrap_or_default()
+    }
+    fn npm_deps(text: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(text).expect("package.json 解析失败");
+        let mut ks: Vec<String> = Vec::new();
+        for s in ["dependencies", "devDependencies"] {
+            if let Some(o) = v.get(s).and_then(|d| d.as_object()) {
+                ks.extend(o.keys().cloned());
+            }
+        }
+        ks.sort();
+        ks
+    }
+    fn cargo_deps(text: &str) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        let mut in_dep = false;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                in_dep = t == "[dependencies]" || t == "[build-dependencies]";
+            } else if in_dep {
+                if let Some(name) = t.split('=').next() {
+                    let name = name.trim();
+                    if !name.is_empty() && !name.starts_with('#') {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+        names.sort();
+        names
+    }
+    assert_eq!(
+        npm_deps(&read_p("..\\package.json")),
+        npm_deps(&show("package.json")),
+        "U27: npm 依赖名集合不得变化"
     );
-    let cargo = std::process::Command::new("git")
-        .args(["diff", "--name-only", "HEAD", "--", "Cargo.toml", "Cargo.lock"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("git diff 失败");
-    let txt2 = String::from_utf8_lossy(&cargo.stdout).trim().to_string();
-    assert!(txt2.is_empty(), "U27: Cargo.toml / Cargo.lock 不得有 diff（发现：{txt2}）");
+    assert_eq!(
+        npm_deps(&read_p("..\\package-lock.json")),
+        npm_deps(&show("package-lock.json")),
+        "U27: package-lock 依赖树不得变化"
+    );
+    assert_eq!(
+        cargo_deps(&read_p("Cargo.toml")),
+        cargo_deps(&show("src-tauri/Cargo.toml")),
+        "U27: Cargo 依赖名集合不得变化"
+    );
 }
 
 #[test]
 fn u28_no_src_tauri_src_diff() {
-    // DEV-0065.1 §46 授权修改：lib.rs 的 decorations(false) 是本轮合法改动。
-    // 收窄断言 = src/ 下除 lib.rs 外零 diff（lib.rs 仅允许 decorations 这一处变更）。
+    // DEV-0065.1 §46 + DEV-0065.2R §9/§14/§50 授权修改：lib.rs 的合法改动 =
+    // decorations(false)（65.1）+ 生产数据根 app_local_data_dir 路径真值（65.2R）。
+    // 收窄断言 = src/ 下除 lib.rs 外零 diff（lib.rs 仅允许上述两类变更）。
     let out = std::process::Command::new("git")
         .args(["diff", "--name-only", "HEAD", "--", "src"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -426,9 +472,9 @@ fn u28_no_src_tauri_src_diff() {
         .join("\n");
     assert!(
         txt.is_empty(),
-        "U28: src-tauri/src 除 lib.rs（DEV-0065.1 decorations）外零 diff（发现：{txt}）"
+        "U28: src-tauri/src 除 lib.rs（65.1 decorations / 65.2R 路径真值）外零 diff（发现：{txt}）"
     );
-    // lib.rs 的 diff 只允许是 decorations 窗口修饰变更
+    // lib.rs 的新增行只允许 decorations 或 AppLocalData 生产路径真值
     let lib = std::process::Command::new("git")
         .args(["diff", "HEAD", "--", "src/lib.rs"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -439,10 +485,13 @@ fn u28_no_src_tauri_src_diff() {
         .lines()
         .filter(|l| l.starts_with("+") && !l.starts_with("+++"))
         .collect();
-    assert!(
-        added.iter().any(|l| l.contains("decorations(false)")),
-        "U28: lib.rs 唯一新增行为 = decorations(false)（DEV-0065.1 §13）"
-    );
+    let allowed = ["decorations(false)", "app_local_data_dir", "AppLocalData", "%LOCALAPPDATA%"];
+    for l in &added {
+        assert!(
+            allowed.iter().any(|k| l.contains(k)),
+            "U28: lib.rs 新增行超出 65.1/65.2R 授权范围（{l}）"
+        );
+    }
     // 前端契约文件同样冻结（§44 Forbidden Diff）
     let out2 = std::process::Command::new("git")
         .args(["diff", "--name-only", "HEAD", "--", "../src/api.ts", "../src/types.ts"])
