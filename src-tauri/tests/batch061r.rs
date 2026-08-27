@@ -24,7 +24,7 @@ use app_lib::ai::action::{
 };
 use app_lib::ai::context_builder::{detect_context_purpose, ContextPurpose, PageContext};
 use app_lib::ai::grounding::{
-    load_recent_from_applied, recent_map_for_test, record_apply, resolve_recent,
+    load_recent_from_applied, record_apply, resolve_recent,
     GroundingOutcome,
 };
 use app_lib::ai::grounding::BulkFilter;
@@ -48,6 +48,17 @@ use serde_json::json;
 
 const CONV: i64 = 601;
 const CONV_B: i64 = 602;
+
+/// R07-R11 Recent（全局内存 map）并行隔离键：cargo test 并行线程下各测试使用
+/// 独立 (profile, conversation) 键且不互相 clear（原 clear() 全量清场在并行下为竞态 flaky；
+/// 每测试独立 in-memory DB 的 profile id 恒为 1，故键冲突源是共享 CONV 常量）。
+const CONV_R07: i64 = 921;
+const CONV_R08: i64 = 922;
+const CONV_R08_B: i64 = 927;
+const CONV_R09: i64 = 923;
+const CONV_R10: i64 = 924;
+const CONV_R10_B: i64 = 925;
+const CONV_R11: i64 = 926;
 
 fn setup() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
@@ -238,15 +249,14 @@ fn mk_applied_changeset_with_task(conn: &Connection, p: i64, conv: i64, title: &
 
 #[test]
 fn r07_same_conversation_recent() {
-    recent_map_for_test().lock().unwrap().clear();
     let conn = setup();
     let p = mk_profile(&conn);
-    let cs = mk_applied_changeset_with_task(&conn, p, CONV, "TEST-A");
-    record_apply(&conn, p, CONV, cs);
+    let cs = mk_applied_changeset_with_task(&conn, p, CONV_R07, "TEST-A");
+    record_apply(&conn, p, CONV_R07, cs);
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
-    match resolve_recent(&conn, p, CONV, &h).unwrap() {
+    match resolve_recent(&conn, p, CONV_R07, &h).unwrap() {
         GroundingOutcome::Resolved(id) => {
             let title: String = conn
                 .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| r.get(0))
@@ -255,60 +265,54 @@ fn r07_same_conversation_recent() {
         }
         other => panic!("R07: 应 Resolved，得到 {other:?}"),
     }
-    recent_map_for_test().lock().unwrap().clear();
 }
 
 #[test]
 fn r08_cross_conversation_isolation() {
-    recent_map_for_test().lock().unwrap().clear();
     let conn = setup();
     let p = mk_profile(&conn);
     // Conversation A：创建并 Apply TEST-A
-    let cs = mk_applied_changeset_with_task(&conn, p, CONV, "TEST-A");
-    record_apply(&conn, p, CONV, cs);
+    let cs = mk_applied_changeset_with_task(&conn, p, CONV_R08, "TEST-A");
+    record_apply(&conn, p, CONV_R08, cs);
     // Conversation B：recent_created 不得得到 TEST-A（内存隔离）
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
-    match resolve_recent(&conn, p, CONV_B, &h).unwrap() {
+    match resolve_recent(&conn, p, CONV_R08_B, &h).unwrap() {
         GroundingOutcome::NotFound(_) => {}
         other => panic!("R08: 跨会话必须 NotFound（内存隔离），得到 {other:?}"),
     }
-    recent_map_for_test().lock().unwrap().clear();
 }
 
 #[test]
 fn r09_cross_profile_isolation() {
-    recent_map_for_test().lock().unwrap().clear();
     let conn = setup();
     let p = mk_profile(&conn);
     let p2 = mk_profile(&conn);
-    let cs = mk_applied_changeset_with_task(&conn, p, CONV, "TEST-P1");
-    record_apply(&conn, p, CONV, cs);
+    let cs = mk_applied_changeset_with_task(&conn, p, CONV_R09, "TEST-P1");
+    record_apply(&conn, p, CONV_R09, cs);
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
-    match resolve_recent(&conn, p2, CONV, &h).unwrap() {
+    match resolve_recent(&conn, p2, CONV_R09, &h).unwrap() {
         GroundingOutcome::NotFound(_) => {}
         other => panic!("R09: 跨 Profile 必须 NotFound，得到 {other:?}"),
     }
-    recent_map_for_test().lock().unwrap().clear();
 }
 
 #[test]
 fn r10_restart_fallback_same_conversation_only() {
-    recent_map_for_test().lock().unwrap().clear();
     let conn = setup();
     let p = mk_profile(&conn);
     // 模拟重启：内存为空；同 (p, CONV) 有已 Apply ChangeSet
-    let _cs = mk_applied_changeset_with_task(&conn, p, CONV, "TEST-RESTART");
-    let cs_b = mk_applied_changeset_with_task(&conn, p, CONV_B, "TEST-OTHER-CONV");
+    let _cs = mk_applied_changeset_with_task(&conn, p, CONV_R10, "TEST-RESTART");
+    let cs_b = mk_applied_changeset_with_task(&conn, p, CONV_R10_B, "TEST-OTHER-CONV");
     let _ = cs_b;
-    assert!(load_recent_from_applied(&conn, p, CONV), "R10: 同会话 fallback 恢复成功");
+    assert!(load_recent_from_applied(&conn, p, CONV_R10), "R10: 同会话 fallback 恢复成功");
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
-    match resolve_recent(&conn, p, CONV, &h).unwrap() {
+    match resolve_recent(&conn, p, CONV_R10, &h).unwrap() {
         GroundingOutcome::Resolved(id) => {
             let title: String = conn
                 .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| r.get(0))
@@ -317,11 +321,10 @@ fn r10_restart_fallback_same_conversation_only() {
         }
         other => panic!("R10: 应 Resolved，得到 {other:?}"),
     }
-    recent_map_for_test().lock().unwrap().clear();
     // 另一会话 fallback：不得拿到 CONV 的实体
-    assert!(!load_recent_from_applied(&conn, p, CONV_B) || {
+    assert!(!load_recent_from_applied(&conn, p, CONV_R10_B) || {
         // CONV_B 自己的 applied 也可恢复，但绝不能是 TEST-RESTART
-        match resolve_recent(&conn, p, CONV_B, &h).unwrap() {
+        match resolve_recent(&conn, p, CONV_R10_B, &h).unwrap() {
             GroundingOutcome::Resolved(id) => {
                 let title: String = conn
                     .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| r.get(0))
@@ -331,12 +334,10 @@ fn r10_restart_fallback_same_conversation_only() {
             _ => true,
         }
     }, "R10: 禁止跨 Conversation 恢复");
-    recent_map_for_test().lock().unwrap().clear();
 }
 
 #[test]
 fn r11_pending_proposal_not_canonical_recent() {
-    recent_map_for_test().lock().unwrap().clear();
     let conn = setup();
     let p = mk_profile(&conn);
     // 只 create Proposal（未 Apply）→ 不得进入 Recent
@@ -349,17 +350,16 @@ fn r11_pending_proposal_not_canonical_recent() {
         operation_ref: None,
     }];
     let _cs = ChangeSetRepository::new(&conn)
-        .create(p, Some(CONV), Some("run-pending"), "t", "t", &ops)
+        .create(p, Some(CONV_R11), Some("run-pending"), "t", "t", &ops)
         .unwrap();
     // 不 Apply → recent 无该会话条目
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
-    match resolve_recent(&conn, p, CONV, &h).unwrap() {
+    match resolve_recent(&conn, p, CONV_R11, &h).unwrap() {
         GroundingOutcome::NotFound(_) => {}
         other => panic!("R11: 未 Apply Proposal 不得成为 Canonical Recent，得到 {other:?}"),
     }
-    recent_map_for_test().lock().unwrap().clear();
 }
 
 // ==================== R12-R13 · Task Update ====================

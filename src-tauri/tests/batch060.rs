@@ -152,14 +152,17 @@ fn test_t4_generic_context_minimal() {
         "INSERT INTO goals (profile_id, name, status, goal_level) VALUES (?1,'考研2027','active','final')",
         params![p],
     ).unwrap();
-    MemoryRepository::new(&conn).insert(&MemoryRecord {
+    // DEV-0076：v027 后记忆走确认闭环——候选 pending → 用户 confirm 后生效
+    let mem_repo = MemoryRepository::new(&conn);
+    let mem_id = mem_repo.create_pending_memory(&MemoryRecord {
         id: 0, profile_id: p, memory_type: "user_fact".into(), category: "chat".into(),
         memory_key: "chat::m".into(), memory_value: "用户偏好晚上学习".into(),
         source_kind: "user_message".into(), source_ref: String::new(),
         source_excerpt: "我晚上学习".into(), importance: 3, confidence: "medium".into(),
-        status: "active".into(), valid_from: None, valid_to: None, supersedes_id: None,
+        status: "pending_confirmation".into(), valid_from: None, valid_to: None, supersedes_id: None,
         created_at: String::new(), updated_at: String::new(), last_used_at: None,
     }).unwrap();
+    mem_repo.confirm_memory(mem_id, p).unwrap();
 
     let page = PageContext { page_label: "今日".into(), knowledge_path: None, session_title: None, date: None, conversation_id: None };
     let q = "1+1等于多少";
@@ -405,6 +408,7 @@ fn proposal_draft(today: &str) -> PlanDraft {
                 title: "高数：极限基础题 15 题".into(),
                 planned_date: today.to_string(),
                 estimated_minutes: Some(90),
+                grounding: None,
             }],
             ..Default::default()
         }),
@@ -478,13 +482,14 @@ fn test_t14_apply_activates_target_and_blueprint() {
     assert_eq!(active[0].scenario_type, "postgraduate");
     let bp = PlanningRepository::new(&conn).get_active(p).unwrap().expect("Apply 后 Blueprint active");
     assert_eq!(bp.title, "2027 考研蓝图");
+    // DEV-0077.2 F1：AI 编译路径 skip_projection——future_tasks 由本包 task ops 创建。
     let projected: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE planning_blueprint_id=?1 AND origin='blueprint' AND archived_at IS NULL",
-            params![bp.id], |r| r.get(0),
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NULL",
+            params![p], |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(projected, 1, "future_tasks 已投影");
+    assert_eq!(projected, 1, "future_tasks 已由 task ops 写入");
 }
 
 // ==================== T15 · Existing GoalTarget ====================

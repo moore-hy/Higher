@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "skipLibCheck": true,
+    "types": [],
+    "outDir": ".ai-runtime-test-build",
+    "rootDir": "."
+  },
+  "include": [
+    "src/components/ai/runtimeState.ts",
+    "tests/ai-runtime/**/*.ts"
+  ]
+}

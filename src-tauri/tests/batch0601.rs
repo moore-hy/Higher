@@ -153,7 +153,10 @@ fn t4_latest_schema_v023() {
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
     // DEV-0062 起 v024；本测试锁定「v023 recurring 语义仍在迁移链中」
-    assert_eq!(v, 24, "T4: 最新 Schema = v024（DEV-0062）");
+    // DEV-0066 Phase E 追加 v025（ai_runs waiting_user）
+    // DEV-0070 Phase F v2.0 追加 v026（user_context_storage）
+    // DEV-0076 §四追加 v027（memory_confirmation_lifecycle）
+    assert_eq!(v, 27, "T4: 最新 Schema = v027");
     let name: String = conn
         .query_row("SELECT name FROM schema_migrations WHERE version=23", [], |r| r.get(0))
         .unwrap();
@@ -701,8 +704,10 @@ fn t35_t39_semantic_action_call_profile() {
     let conn = setup();
     let p = mk_profile(&conn);
     let e = env();
-    // T35：SemanticAction 不携带完整 21 Tool（action provider 调用 tools=None）
-    assert_eq!(TOOL_ALLOWLIST.len(), 21, "全量 allowlist 仍为 21（读取路径）");
+    // T35：SemanticAction 不携带完整 Tool（action provider 调用 tools=None）
+    // DEV-0066 Phase B：读取路径 21 → 24（新增 get_higher_overview / list_personalization_sources /
+    // read_personalization_source；本 Phase 授权变更的直接后果，非顺手修复）
+    assert_eq!(TOOL_ALLOWLIST.len(), 24, "全量 allowlist 为 24（0066 Phase B 读取路径）");
     assert_eq!(tool_definitions_for_scopes(&[]), json!([]), "T35: action 调用 0 工具");
     // T36：Action Provider 只加载 Envelope + selected Skills + 最小上下文
     let prompt = semantic_action_prompt("帮我创建今天背单词任务", &e, &["task".to_string(), "time".to_string()]);

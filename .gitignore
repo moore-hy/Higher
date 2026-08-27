@@ -7,6 +7,9 @@ dist/
 # Tauri / Rust 构建产物
 src-tauri/target/
 
+# DEV-0077.3 前端 runtime 测试编译产物（npm run test:ai-runtime）
+.ai-runtime-test-build/
+
 # 发布产物（DEV-0065.2R §21：安装包不进 git）
 release/
 

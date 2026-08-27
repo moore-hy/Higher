@@ -125,8 +125,9 @@ fn t01_latest_schema_v024() {
     let v: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 24, "T01: schema = v024");
-    assert_eq!(app_lib::migrations::latest_version(), 24);
+    // DEV-0076 §四：v027（memory_confirmation_lifecycle）已追加
+    assert_eq!(v, 27, "T01: schema = v027");
+    assert_eq!(app_lib::migrations::latest_version(), 27);
     // 新表存在
     assert_eq!(count(&conn, "ai_provider_profiles"), 1, "T01: legacy 迁移出 1 个连接");
     let (tbl,): (i64,) = conn

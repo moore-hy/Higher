@@ -41,20 +41,23 @@ fn mk_ready_brief() -> GoalBrief {
 
 #[test]
 fn test_planning_gate_three_states() {
-    // 写意图 + assistant → Planning（三入口同一管线）
+    // 写意图 + assistant → Planning（三入口同一管线；0061R §12-13 收口后的模式）
     for m in [
         "帮我安排未来14天并加入Higher",
-        "帮我排一下接下来两周",
-        "把接下来学习安排进去",
         "根据我的最终目标和个人情况，帮我安排未来14天学习计划，并加入 Higher。",
         "按我的目标给我排个日程",
     ] {
         assert_eq!(planning_gate(m, true), PlanningGate::Planning, "assistant 写意图应进 Planning：{m}");
     }
-    // 写意图 + readonly → NeedsAssistant（确定性分支；不再赌模型输出 needs_assistant JSON）
+    // 0061R §12-13：broad 裸词已删除（单日/裸安排 → Action→Agent；gate 恒 None）
+    for m in ["帮我排一下接下来两周", "把接下来学习安排进去"] {
+        assert_eq!(planning_gate(m, true), PlanningGate::None, "0061R 已删除 broad 裸词，不应命中：{m}");
+    }
+    // DEV-0061R §34：mode 不再阻止——readonly 写意图同样 Planning
+    //（NeedsAssistant 保留为 legacy 枚举值但不再产生；正式写入仍走 ChangeSet 边界）
     assert_eq!(
         planning_gate("帮我安排未来14天并加入Higher", false),
-        PlanningGate::NeedsAssistant
+        PlanningGate::Planning
     );
     // Advice-only → None（普通回答，无 ChangeSet）
     for m in ["你觉得408应该怎么复习？", "考研数学应该怎么学？", "给我一些计划建议"] {
@@ -65,11 +68,11 @@ fn test_planning_gate_three_states() {
 
 #[test]
 fn test_readonly_needs_assistant_semantics() {
-    // §55-57：readonly 命中写意图 → NeedsAssistant（前端提示「切换到助手模式并继续」，
-    // resumeWithAssistant 用同一条原始消息重跑 → 不需要重新输入）。
+    // DEV-0061R §34：Unified Higher AI——mode 不再阻止 Proposal；
+    // readonly 写意图同样 Planning（NeedsAssistant 不再产生，保留 legacy 枚举）。
     let g = planning_gate("帮我做个两周计划并放到Higher", false);
-    assert_eq!(g, PlanningGate::NeedsAssistant);
-    // 切到 assistant 后同一消息 → Planning（continuation 语义）
+    assert_eq!(g, PlanningGate::Planning);
+    // 切到 assistant 后同一消息 → 同样 Planning
     assert_eq!(
         planning_gate("帮我做个两周计划并放到Higher", true),
         PlanningGate::Planning

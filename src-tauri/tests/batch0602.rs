@@ -79,11 +79,13 @@ fn hint(entity: &str, title: &str, today: bool) -> EntityHint {
 }
 
 /// DEV-0061R：Recent 为 (profile, conversation) HashMap——测试统一用 conv=901 隔离
+///（T8/T9/T10/recent_record_apply 改用各自独立 conv 911-914：全局 map 并行测试下
+/// 互不清场、互不串键——原 reset_recent() 全量 clear 在并行下为竞态 flaky）
 const CONV: i64 = 901;
-
-fn reset_recent() {
-    recent_map_for_test().lock().unwrap().clear();
-}
+const CONV_RECENT_T8: i64 = 911;
+const CONV_RECENT_T9: i64 = 912;
+const CONV_RECENT_T10: i64 = 913;
+const CONV_RECENT_APPLY: i64 = 914;
 
 fn default_plan(msg: &str) -> PlanInput<'_> {
     PlanInput { user_message: msg, conversation_id: CONV, ..Default::default() }
@@ -246,7 +248,6 @@ fn t7_recurring_semantic_selection() {
 
 #[test]
 fn t8_recent_single() {
-    reset_recent();
     let conn = setup();
     let p = mk_profile(&conn);
     let t = TaskRepository::new(&conn)
@@ -255,12 +256,12 @@ fn t8_recent_single() {
     // 模拟 Apply 后记录（record_grounded/created 通道；DEV-0061R 经 (p, CONV) 键注入）
     {
         let mut map = recent_map_for_test().lock().unwrap();
-        map.entry((p, CONV)).or_default().last_created_task_ids.push(t.id);
+        map.entry((p, CONV_RECENT_T8)).or_default().last_created_task_ids.push(t.id);
     }
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
-    match resolve_recent(&conn, p, CONV, &h).unwrap() {
+    match resolve_recent(&conn, p, CONV_RECENT_T8, &h).unwrap() {
         GroundingOutcome::Resolved(id) => assert_eq!(id, t.id, "T8: 刚才那个 → Task A"),
         other => panic!("T8: 应 Resolved，得到 {other:?}"),
     }
@@ -268,7 +269,6 @@ fn t8_recent_single() {
 
 #[test]
 fn t9_recent_plural() {
-    reset_recent();
     let conn = setup();
     let p = mk_profile(&conn);
     let t1 = TaskRepository::new(&conn)
@@ -279,7 +279,7 @@ fn t9_recent_plural() {
         .unwrap();
     {
         let mut map = recent_map_for_test().lock().unwrap();
-        let ctx = map.entry((p, CONV)).or_default();
+        let ctx = map.entry((p, CONV_RECENT_T9)).or_default();
         ctx.last_created_task_ids.push(t1.id);
         ctx.last_created_task_ids.push(t2.id);
     }
@@ -287,7 +287,7 @@ fn t9_recent_plural() {
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
     h.quantity = "plural".into();
-    match resolve_recent(&conn, p, CONV, &h).unwrap() {
+    match resolve_recent(&conn, p, CONV_RECENT_T9, &h).unwrap() {
         GroundingOutcome::ResolvedMany(ids) => assert_eq!(ids.len(), 2, "T9: 刚才创建的两个 → ResolvedMany 2"),
         other => panic!("T9: 应 ResolvedMany，得到 {other:?}"),
     }
@@ -295,7 +295,6 @@ fn t9_recent_plural() {
 
 #[test]
 fn t10_recent_empty_no_hallucination() {
-    reset_recent();
     let conn = setup();
     let p = mk_profile(&conn);
     // DB 有任务但 Recent Context 为空 → 不得把任意对象当"刚才那个"
@@ -305,7 +304,7 @@ fn t10_recent_empty_no_hallucination() {
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
-    match resolve_recent(&conn, p, CONV, &h).unwrap() {
+    match resolve_recent(&conn, p, CONV_RECENT_T10, &h).unwrap() {
         GroundingOutcome::NotFound(_) => {}
         other => panic!("T10: 无 Recent Context 必须 NotFound（禁幻想），得到 {other:?}"),
     }
@@ -936,7 +935,6 @@ fn t35_grounding_prompt_minimal_no_source_scan() {
 
 #[test]
 fn recent_record_apply_from_changeset() {
-    reset_recent();
     let conn = setup();
     let p = mk_profile(&conn);
     let e = env();
@@ -950,22 +948,21 @@ fn recent_record_apply_from_changeset() {
     }];
     let cs = ChangeSetRepository::new(&conn).create(p, None, Some("run-recent"), "t", "t", &ops).unwrap();
     ChangeSetRepository::new(&conn).apply(cs, p, false).unwrap();
-    app_lib::ai::grounding::record_apply(&conn, p, CONV, cs);
+    app_lib::ai::grounding::record_apply(&conn, p, CONV_RECENT_APPLY, cs);
     {
         let map = recent_map_for_test().lock().unwrap();
-        let ctx = map.get(&(p, CONV)).expect("Apply 后 (p,CONV) 条目存在");
+        let ctx = map.get(&(p, CONV_RECENT_APPLY)).expect("Apply 后 (p,CONV) 条目存在");
         assert_eq!(ctx.last_created_task_ids.len(), 1, "Apply 后 create 的真实 id 进入 Recent");
     }
     // H7 语义：之后"刚才那个"能指到它
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
-    match resolve_recent(&conn, p, CONV, &h).unwrap() {
+    match resolve_recent(&conn, p, CONV_RECENT_APPLY, &h).unwrap() {
         GroundingOutcome::Resolved(id) => {
             let title: String = conn.query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| r.get(0)).unwrap();
             assert_eq!(title, "概率论复习", "Recent → 刚才那个 = 概率论复习");
         }
         other => panic!("应 Resolved，得到 {other:?}"),
     }
-    reset_recent();
 }

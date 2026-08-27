@@ -187,6 +187,7 @@ fn test_planning_intent_and_compile_to_changeset() {
         priority: "core".into(),
         goal_ref: "D1".into(),
         knowledge_ref: "K1".into(),
+        grounding: None,
     });
 
     // §55/§56 验证通过
@@ -234,20 +235,20 @@ fn test_validator_rejections() {
     // 休息日有任务 → 拒
     let mut d1 = PlanDraft::default();
     d1.day_goals.push(PlanGoalNode { name: "周日休息".into(), period: "2026-08-16".into(), parent_ref: "".into(), rest_day: true, operation_ref: "D1".into() });
-    d1.tasks.push(PlanTask { title: "偷跑任务".into(), date: "2026-08-16".into(), estimated_minutes: Some(30), task_kind: "structured".into(), priority: "normal".into(), goal_ref: "D1".into(), knowledge_ref: "".into() });
+    d1.tasks.push(PlanTask { title: "偷跑任务".into(), date: "2026-08-16".into(), estimated_minutes: Some(30), task_kind: "structured".into(), priority: "normal".into(), goal_ref: "D1".into(), knowledge_ref: "".into(), grounding: None });
     let v = validate_plan_draft(&conn, p, &d1);
     assert!(v.errors.iter().any(|e| e.contains("休息日")));
 
     // 超载 → OVERLOADED 标记（§57）
     let mut d2 = PlanDraft { daily_available_minutes: Some(120), ..Default::default() };
-    d2.tasks.push(PlanTask { title: "A".into(), date: "2026-08-17".into(), estimated_minutes: Some(90), task_kind: "accumulation".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into() });
-    d2.tasks.push(PlanTask { title: "B".into(), date: "2026-08-17".into(), estimated_minutes: Some(90), task_kind: "accumulation".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into() });
+    d2.tasks.push(PlanTask { title: "A".into(), date: "2026-08-17".into(), estimated_minutes: Some(90), task_kind: "accumulation".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into(), grounding: None });
+    d2.tasks.push(PlanTask { title: "B".into(), date: "2026-08-17".into(), estimated_minutes: Some(90), task_kind: "accumulation".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into(), grounding: None });
     let v2 = validate_plan_draft(&conn, p, &d2);
     assert!(!v2.overloaded_days.is_empty(), "180>120 应 OVERLOADED");
 
     // 占位名 / 重复 / 非法日期 / 非法分钟
     let mut d3 = PlanDraft::default();
-    let bad_task = PlanTask { title: "学习任务1".into(), date: "2026/08/17".into(), estimated_minutes: Some(0), task_kind: "structured".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into() };
+    let bad_task = PlanTask { title: "学习任务1".into(), date: "2026/08/17".into(), estimated_minutes: Some(0), task_kind: "structured".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into(), grounding: None };
     d3.tasks.push(bad_task.clone());
     d3.tasks.push(bad_task);
     let v3 = validate_plan_draft(&conn, p, &d3);

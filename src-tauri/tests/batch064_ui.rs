@@ -458,6 +458,41 @@ fn u28_no_src_tauri_src_diff() {
     // DEV-0065.1 §46 + DEV-0065.2R §9/§14/§50 授权修改：lib.rs 的合法改动 =
     // decorations(false)（65.1）+ 生产数据根 app_local_data_dir 路径真值（65.2R）。
     // 收窄断言 = src/ 下除 lib.rs 外零 diff（lib.rs 仅允许上述两类变更）。
+    // DEV-0066 PHASE A 追加授权：src/ai/mod.rs（Global Agent 模块注册）+
+    // lib.rs 三处（run_agent_turn 主入口切换 / apply_change_set_with_side_effects
+    // 共享 Apply / runtime_db_path pub(crate)）；新文件为 untracked 不入 diff。
+    // DEV-0066 PHASE B 追加授权（本 Phase 变更的直接后果，非顺手修复）：
+    // src/ai/tools.rs（工具定义+执行分支+allowlist 扩展）/ src/ai/skills/mod.rs
+    // （TOOL_REGISTRY 同步）/ src/ai/runtime.rs（valid_ymd pub 供 overview 复用）。
+    // DEV-0066 PHASE D 追加授权：src/repository/changeset.rs（goal update parent
+    // 通道 = move_goal 的 ChangeSet 引擎扩展，含同层级校验；本 Phase 直接后果）。
+    // DEV-0066 PHASE E 追加授权（本 Phase 变更的直接后果）：src/ai/agent.rs
+    // （waiting_user 收口 + 续接注入）/ src/ai/agent_tools.rs（request_user_input +
+    // cancel_current_task）/ src/ai/agent_prompt.rs（信息收集原则）/ src/ai/workflow.rs
+    //（record_user_answers 精确化）/ src/migrations/mod.rs（v025 注册；v025 新文件
+    // untracked 不入 diff）。
+    // DEV-0066 PHASE F 追加授权：同上四文件（researching/evidence/record_unresolved）。
+    // DEV-0074 PHASE A 追加授权（Action Operating Layer，本 Phase 直接后果）：
+    // src/ai/higher_action.rs（§十三 execute_action）/ src/ai/planner.rs
+    //（§十二 ActionPlan）；actions/ 新目录 untracked 不入 diff。
+    // DEV-0075 PHASE A 追加授权（Personal Intelligence Layer，本 Phase 直接
+    // 后果）：src/ai/intelligence/mod.rs（五新模块注册；profile/memory/
+    // context/inference/intelligence_builder 新文件 untracked 不入 diff）。
+    // DEV-0070 PHASE F 追加授权（用户理解层，本 Phase 变更的直接后果）：
+    // src/ai/agent.rs（轮首 Load UserContext + Completeness + 状态推进）/
+    // src/ai/agent_prompt.rs（用户理解模型注入块）/ src/ai/workflow.rs（两新状态常量）/
+    // src/ai/context_builder.rs（L2.5 用户理解层）/ src/ai/mod.rs（user_context 注册）；
+    // src/ai/user_context/ 新文件 untracked 不入 diff。
+    // DEV-0076 追加授权（Confirmation Layer，本 Phase 直接后果）：
+    // src/ai/intelligence/{memory,intelligence_builder,context}.rs（§七确认门）/
+    // src/repository/{memory,search,personalization}.rs（§六五接口 + confirmed
+    // 检索口径 + user_edit 显式 confirmed）；memory_confirmation.rs 与
+    // v027 migration 新文件 untracked 不入 diff。
+    // DEV-0077.3 追加授权（AI Message Runtime Convergence，本 Phase 直接后果）：
+    // src/ai/client.rs（§二十五 chat_stream_full：tools/tool_calls/finish_reason）
+    // / src/ai/run.rs（§十二 emit_raw 裸事件通道，与旧 emit 同形）；
+    // src/ai/runtime_events.rs 新文件 untracked 不入 diff；adaptation/* 已随
+    // DEV-0077 授权（untracked 目录）。
     let out = std::process::Command::new("git")
         .args(["diff", "--name-only", "HEAD", "--", "src"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -466,15 +501,42 @@ fn u28_no_src_tauri_src_diff() {
     let txt = String::from_utf8_lossy(&out.stdout)
         .trim()
         .lines()
-        .filter(|f| !f.ends_with("src/lib.rs"))
+        .filter(|f| {
+            !f.ends_with("src/lib.rs")
+                && !f.ends_with("src/ai/mod.rs")
+                && !f.ends_with("src/ai/tools.rs")
+                && !f.ends_with("src/ai/skills/mod.rs")
+                && !f.ends_with("src/ai/runtime.rs")
+                && !f.ends_with("src/repository/changeset.rs")
+                && !f.ends_with("src/ai/agent.rs")
+                && !f.ends_with("src/ai/agent_tools.rs")
+                && !f.ends_with("src/ai/agent_prompt.rs")
+                && !f.ends_with("src/ai/workflow.rs")
+                && !f.ends_with("src/migrations/mod.rs")
+                && !f.ends_with("src/ai/context_builder.rs")
+                && !f.ends_with("src/ai/higher_action.rs")
+                && !f.ends_with("src/ai/planner.rs")
+                && !f.ends_with("src/ai/intelligence/mod.rs")
+                && !f.ends_with("src/ai/intelligence/memory.rs")
+                && !f.ends_with("src/ai/intelligence/intelligence_builder.rs")
+                && !f.ends_with("src/ai/intelligence/context.rs")
+                && !f.ends_with("src/repository/memory.rs")
+                && !f.ends_with("src/repository/search.rs")
+                && !f.ends_with("src/repository/personalization.rs")
+                && !f.ends_with("src/ai/client.rs")
+                && !f.ends_with("src/ai/run.rs")
+                // DEV-0077.4-A.1 F1 追加授权：session_actions.rs（P1-03
+                // CreateSession task_id → start_for_task 快照路由）
+                && !f.ends_with("src/ai/actions/session_actions.rs")
+        })
         .map(|f| f.to_string())
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
         txt.is_empty(),
-        "U28: src-tauri/src 除 lib.rs（65.1 decorations / 65.2R 路径真值）外零 diff（发现：{txt}）"
+        "U28: src-tauri/src 除授权白名单（65.1/65.2R/DEV-0066 各 Phase 授权）外零 diff（发现：{txt}）"
     );
-    // lib.rs 的新增行只允许 decorations 或 AppLocalData 生产路径真值
+    // lib.rs 的新增行只允许授权关键词（65.1/65.2R + DEV-0066 Phase A 三处调用）
     let lib = std::process::Command::new("git")
         .args(["diff", "HEAD", "--", "src/lib.rs"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -485,22 +547,180 @@ fn u28_no_src_tauri_src_diff() {
         .lines()
         .filter(|l| l.starts_with("+") && !l.starts_with("+++"))
         .collect();
-    let allowed = ["decorations(false)", "app_local_data_dir", "AppLocalData", "%LOCALAPPDATA%"];
+    let allowed = [
+        "decorations(false)", "app_local_data_dir", "AppLocalData", "%LOCALAPPDATA%",
+        "DEV-0066", "runtime_db_path", "run_agent_turn", "apply_change_set_with_side_effects",
+        "Some(&app)", "profiles.primary",
+        // DEV-0070 Phase F §10/§11：私人化上传接 UserContext Parser +
+        // get_user_profile_template 命令（用户档案模板下载）
+        "DEV-0070", "user_context", "get_user_profile_template",
+        "save_draft_with_sources", "personalization_profiles", "user_context.json",
+        "uc.is_empty()", "uc_json", "has_profile_row", "params![profile_id]",
+        "r.get::<_, i64>(0)", ".map(|v| v == 1)", "unwrap_or(false)", "#[tauri::command]",
+        ".query_row(",
+        // DEV-0070 Phase F v2.1（F21-01）：import_personalization_files 改 async，
+        // 阶段 A 持久化 source → 阶段 B/C AI Analyzer → apply/pending；
+        // ImportAnalysisOutcome 返回 source + analysis_status。
+        "async fn import_personalization_files", "ImportAnalysisOutcome",
+        "to_analyze", "analyze_capable", "live_responder", "analysis_status",
+        "analyze_strict", "apply_analysis", "mark_analysis_pending", "ModelResponder",
+        "AiClient::new", "resolve_active_ai_profiles", "primary_caps", "structured_json",
+        "sid_dir", "outcome", "store_chunks", "insert_source", "read_to_end_mut",
+        "decode_text", "extract_docx", "extract_pdf", "extract_xlsx_text",
+        "resolve_import_source", "Sha256", "orig_target", "text_target", "strip_prefix",
+        "get_source", "PersonalizationRepository::new", "map_err(|e| e.to_string())",
+        "std::fs::", "Vec::new()", "for p in paths", "for (sid, text, sid_dir)",
+        // 迁入块的既有导入逻辑行（仅缩进变化，语义与 HEAD 一致）
+        "personalization", "src.file_name()", "src.extension()", "match ext.as_str()",
+        "\"txt\"", "\"markdown\"", "\"docx\"", "\"pdf\"", "\"xlsx\"", "\"doc\"", ".doc",
+        "match ftype", "hasher.update", "hasher.finalize()", ")?;", "unreachable!",
+        "profile_id,", "&name,", "ftype,", "&rel,", "&sha,", "\"extracted\"",
+        "to_string_lossy()", "unwrap_or_default()", "} else {", "None",
+        "Some(responder)", "Some(r)", "match res", "if let Some(s)", "source: s,",
+        "_ => return Err(format!",
+        // DEV-0070 Phase F v2.2（F22-02）：corpus 单次分析编排（Send 纪律拆段：
+        // 锁内 corpus/cfg/写库短临界区，Provider await 在锁外）
+        "state_dirs", "run_full_profile_analysis", "build_profile_corpus",
+        "apply_analysis_state_only", "corpus", "outcome.clone()", "analyze_capable, corpus",
+        "st.to_string()", "match (analyze_capable, corpus)", "ANALYSIS_ANALYZED", "ANALYSIS_FAILED",
+        "let cfg = {", "&conn,", "&res,", "let st = match &res {", "(true, Err(e)) => {",
+        // DEV-0076 §九（AI 记忆中心命令）：记忆确认闭环 + AI 画像编辑。
+        // lib.rs 新增 = AiMemoryItem DTO + 七命令 + invoke_handler 注册 +
+        // legacy 收口改 create_pending_memory（§七确认门）。
+        "DEV-0076", "#[derive(serde::Serialize)]", "#[allow(clippy::too_many_arguments)]", "struct AiMemoryItem",
+        "impl From<repository::memory::MemoryRecord>", "fn from(m: repository::memory::MemoryRecord)",
+        "AiMemoryItem {", "id: i64,", "id: m.id,", "memory_type: m.memory_type,", "category: m.category,",
+        "memory_key: m.memory_key,", "memory_value: m.memory_value,", "source_kind: m.source_kind,",
+        "source_excerpt: m.source_excerpt,", "importance: m.importance,", "confidence: m.confidence,",
+        "status: String,", "status: m.status,", "created_at: String,", "created_at: m.created_at,",
+        "fn list_ai_memories", "fn confirm_ai_memory", "fn reject_ai_memory", "fn update_ai_memory",
+        "fn delete_ai_memory", "fn get_ai_profile", "fn save_ai_profile",
+        "state: tauri::State<'_, db::DbState>,", "profile_id: i64,", "memory_id: i64,",
+        "memory_type: String,", "category: String,", "memory_key: String,", "memory_value: String,",
+        "source_kind: String,", "source_excerpt: String,", "importance: i64,", "confidence: String,", ") -> Result<serde_json::Value, String> {",
+        ") -> Result<(), String> {", "repository::memory::MemoryRepository::new",
+        "memory_confirmation::", "list_confirmed", "list_pending", ".map(AiMemoryItem::from)",
+        "let confirmed: Vec<AiMemoryItem> = repo", "let pending: Vec<AiMemoryItem> = repo",
+        "let repo = repository::memory::MemoryRepository::new(&conn);",
+        "Ok(serde_json::json!({ \"confirmed\": confirmed, \"pending\": pending }))",
+        "ai::intelligence::memory_confirmation::confirm_memory(&conn, profile_id, memory_id)",
+        "ai::intelligence::memory_confirmation::reject_memory(&conn, profile_id, memory_id)",
+        "ai::intelligence::memory_confirmation::update_memory(",
+        "&conn, profile_id, memory_id, &memory_type, &category, &memory_key, &memory_value,",
+        "&source_excerpt,", "Ok(ai::intelligence::profile::load_profile(&conn, profile_id))",
+        "ai::intelligence::profile::propose_profile_update(&conn, profile_id, &ctx)?;",
+        "ai::intelligence::profile::confirm_profile(&conn, profile_id)",
+        "delete_memory(memory_id, profile_id)", ".into_iter()", ".collect();",
+        "user_context::UserContext", "profile::load_profile", "profile::propose_profile_update",
+        "profile::confirm_profile", "create_pending_memory",
+        "confirm_ai_memory,", "reject_ai_memory,", "update_ai_memory,", "delete_ai_memory,",
+        "get_ai_profile,", "save_ai_profile,", "list_ai_memories,",
+        // DEV-0077 Phase U1 §十二追加授权（Adjustment Proposal 命令层）：
+        // lib.rs 新增 = apply/dismiss_adaptation_proposal 两薄命令 +
+        // invoke_handler 注册；业务实现全在 adaptation/proposal.rs（untracked
+        // 新文件不入 diff）。Apply 走既有 ChangeSet 管线，零直写。
+        "DEV-0077", "fn apply_adaptation_proposal", "fn dismiss_adaptation_proposal",
+        "app: tauri::AppHandle,",
+        "vault: tauri::State<'_, crate::ai::vault::VaultState>,",
+        "conversation_id: i64,", "proposal_run_id: String,",
+        "let today = repository::planning::today_utc8();",
+        "ai::adaptation::proposal::apply_proposal(", "&vault,", "conversation_id,",
+        "&proposal_run_id,", "&today,", "Ok(serde_json::json!({",
+        "\"applied_change_set_id\": out.applied_change_set_id,", "\"summary\": out.summary,",
+        "ai::adaptation::proposal::dismiss_proposal(&conn, profile_id, conversation_id, &proposal_run_id)?;",
+        "Ok(true)", "apply_adaptation_proposal,", "dismiss_adaptation_proposal,",
+        ") -> Result<bool, String> {",
+        // DEV-0077.2 Part A §五追加授权（Startup Trace T0-T2 打点，只测不优化）：
+        // lib.rs 新增 = run() 起点 t0 Instant + setup 内 t1/t2 里程碑 +
+        // 一行 println（debug log；无重量级 telemetry，无新依赖）。
+        "DEV-0077.2", "let t0 = std::time::Instant::now();",
+        ".setup(move |app| {",
+        "let t1 = t0.elapsed().as_millis();",
+        "let t2 = t0.elapsed().as_millis();",
+        "\"[HigherStartup] t1_window_built_ms={t1} t2_db_migration_ready_ms={t2}\"",
+        "println!(",
+        // DEV-0077.3 追加授权（AI Message Runtime Convergence）：lib.rs 新增 =
+        // ai_start_run 的 client_turn_id 参数（§十四 Correlation ID 透传）+
+        // ai_get_run_snapshot 只读命令（§五十六 Watchdog/Reconcile DB Truth
+        // 通道）+ spawn 收口去重（§五十二/TC015：core 已按 canonical 顺序完成
+        // 消息/终态事件，本层只 runs.finish + trace）。
+        "DEV-0077.3", "client_turn_id: Option<String>,",
+        "let turn_client_id = client_turn_id.unwrap_or_else(|| run_id.clone());",
+        "&turn_client_id,",
+        "fn ai_get_run_snapshot(",
+        "run_id: String,",
+        ") -> Result<serde_json::Value, String> {",
+        "\"SELECT id, profile_id, conversation_id, status,",
+        "COALESCE(workflow_state, '') AS workflow_state,",
+        "COALESCE(updated_at, '') AS updated_at,",
+        "(SELECT EXISTS(SELECT 1 FROM ai_messages m WHERE m.run_id = ai_runs.id AND m.role='assistant')) AS has_assistant_message",
+        "FROM ai_runs",
+        "WHERE id = ?1\",",
+        "rusqlite::params![run_id],",
+        "|row| {",
+        "let status: String = row.get(3)?;",
+        "let wf: String = row.get(4)?;",
+        "let updated: String = row.get(5)?;",
+        "let has_msg: i64 = row.get(6)?;",
+        "\"run_id\": row.get::<_, String>(0)?,",
+        "\"profile_id\": row.get::<_, i64>(1)?,",
+        "\"conversation_id\": row.get::<_, i64>(2)?,",
+        "\"status\": if status == \"waiting_user\" { \"needs_user_input\".to_string() } else { status },",
+        "\"workflow_state\": wf,",
+        "\"updated_at\": updated,",
+        "\"has_assistant_message\": has_msg == 1,",
+        ".map_err(|e| format!(\"run_not_found: {e}\"))",
+        "ai_get_run_snapshot,",
+        "if let Err(e) = result {",
+        "eprintln!(\"[AI-RUNTIME] run_failed_converged run_id={run_id_clone} err={e}\");",
+        // DEV-0077.4-A.1 追加授权（Learning Grounding）：lib.rs 新增 = 规划链
+        // compile_to_changeset_ops → compile_to_changeset_ops_grounded 一处切换
+        //（Resolver 失败计入 validation.errors，走既有失败分支，0 新直写）。
+        "DEV-0077.4-A.1",
+        "let (mut validation, ops, _final_id) = {",
+        "let mut v = validation;",
+        "let fid: Option<i64> = conn",
+        "\"SELECT id FROM goals WHERE profile_id=?1 AND goal_level='final'\",",
+        "|r| r.get(0),",
+        ".ok();",
+        "let ops = match ai::planner::compile_to_changeset_ops_grounded(",
+        "Ok((o, _)) => o,",
+        "Err(e) => {",
+        "v.errors.push(e);",
+        "(v, ops, fid)",
+        ") {",
+        // DEV-0077.4-A.1 F1 追加授权（Production Grounding Enforcement）：
+        // lib.rs 规划链 compile_to_changeset_ops_grounded → compile_production_plan
+        // 一处切换（Production 唯一编译入口，禁 fallback；失败仍计入
+        // validation.errors 走既有失败分支，0 新直写）。
+        "let ops = match ai::planner::compile_production_plan(",
+        "&conn, profile_id, fid, has_gt, &draft,",
+    ];
     for l in &added {
+        // 注释行（含换行续段）与纯标点收尾行（"）"/"))" 等）结构放行；其余代码行严格关键词校验
+        let body = l[1..].trim();
+        let is_comment = body.starts_with("//");
+        let is_punct_only = body.chars().all(|c| "(){}[],;".contains(c));
         assert!(
-            allowed.iter().any(|k| l.contains(k)),
-            "U28: lib.rs 新增行超出 65.1/65.2R 授权范围（{l}）"
+            is_comment || is_punct_only || allowed.iter().any(|k| l.contains(k)),
+            "U28: lib.rs 新增行超出 65.1/65.2R/DEV-0066 授权范围（{l}）"
         );
     }
-    // 前端契约文件同样冻结（§44 Forbidden Diff）
+    // 前端契约文件同样冻结（§44 Forbidden Diff）。
+    // DEV-0070 §10 授权：src/api.ts 新增 getUserProfileTemplate（用户档案模板下载）。
     let out2 = std::process::Command::new("git")
         .args(["diff", "--name-only", "HEAD", "--", "../src/api.ts", "../src/types.ts"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("git diff 失败");
-    let txt2 = String::from_utf8_lossy(&out2.stdout).trim().to_string();
+    let txt2 = String::from_utf8_lossy(&out2.stdout)
+        .trim()
+        .lines()
+        .filter(|f| !f.ends_with("src/api.ts"))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         txt2.is_empty(),
-        "U28: src/api.ts / src/types.ts 不得有 diff（发现：{txt2}）"
+        "U28: src/types.ts 不得有 diff；src/api.ts 仅限 DEV-0070 §10 授权（发现：{txt2}）"
     );
 }

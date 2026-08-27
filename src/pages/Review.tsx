@@ -690,19 +690,34 @@ function Review() {
           <section className="card">
             <div className="lw-att__head">
               <h2 className="card__title">✨ AI 帮我复盘</h2>
-              <button
-                className="btn btn--small btn--primary"
-                onClick={() =>
-                  void aiSendChat(
-                    `请帮我复盘${winLabel}的学习：我真正学了什么、留下了什么、接下来建议怎么做？（请基于真实记录回答）`
-                  )
-                }
-              >
-                开始复盘
-              </button>
+              <div className="btn-row">
+                <button
+                  className="btn btn--small btn--primary"
+                  onClick={() =>
+                    void aiSendChat(
+                      `请帮我复盘${winLabel}的学习：我真正学了什么、留下了什么、接下来建议怎么做？（请基于真实记录回答）`
+                    )
+                  }
+                >
+                  开始复盘
+                </button>
+                {/* DEV-0077 §二十四入口2：AI 复盘与调整（进入同一 Adaptation Workflow；
+                    分析计划 vs 实际 → 建议仅展示，明确同意后才写入，且只改未来） */}
+                <button
+                  className="btn btn--small"
+                  onClick={() =>
+                    void aiSendChat(
+                      "帮我复盘最近的学习并调整后续计划（基于最近 7/14/30 天真实执行情况分析计划与实际的偏差，只调整未来的安排，不改动历史记录）"
+                    )
+                  }
+                >
+                  AI 复盘与调整
+                </button>
+              </div>
             </div>
             <p className="muted" style={{ fontSize: 12 }}>
-              AI 在右侧面板分析当前窗口的学习记录；不会自动创建任务。
+              AI 在右侧面板分析当前窗口的学习记录；「开始复盘」不会自动创建任务，
+              「AI 复盘与调整」先给出建议，经你确认后才修改未来计划（可撤销）。
             </p>
           </section>
 

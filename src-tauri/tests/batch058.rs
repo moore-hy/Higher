@@ -42,13 +42,17 @@ fn mk_profile(conn: &Connection) -> i64 {
 fn test_migration_latest_is_v021_and_idempotent() {
     let conn = setup();
     // DEV-0060.1 §17：新增 v023（recurring_task_semantics）后最新版本为 23
-    assert_eq!(latest_version(), 24);
+    // DEV-0066 Phase E：新增 v025（ai_runs waiting_user）后最新版本为 25
+    // DEV-0070 Phase F v2.0：新增 v026（user_context_storage）后最新版本为 26
+    // DEV-0076 §四：新增 v027（memory_confirmation_lifecycle）后最新版本为 27
+    assert_eq!(latest_version(), 27);
     // 幂等：重复执行不报错、不重复应用
     app_lib::migrations::run_migrations(&conn).unwrap();
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 24);
+    // DEV-0076 §四：v027 追加后 27 条
+    assert_eq!(n, 27);
 }
 
 #[test]
@@ -549,11 +553,13 @@ fn bp_mk_blueprint(today: &str) -> BlueprintDraft {
                 title: "高数：极限计算基础题 15 题".into(),
                 planned_date: d1.clone(),
                 estimated_minutes: Some(120),
+                grounding: None,
             },
             BlueprintTaskDraft {
                 title: "英语：词汇复习 30min".into(),
                 planned_date: d2,
                 estimated_minutes: Some(30),
+                grounding: None,
             },
         ],
         assumptions: vec!["每天可学习 3 小时".into()],
@@ -569,7 +575,10 @@ fn test_bp_compile_blueprint_ops_structure() {
     let today = app_lib::repository::planning::today_utc8();
     let draft = PlanDraft { blueprint: Some(bp_mk_blueprint(&today)), ..Default::default() };
     let ops = compile_to_changeset_ops(None, true, &draft);
-    assert_eq!(ops.len(), 5, "蓝图编译 ops 数量：blueprint+phases+milestones");
+    // DEV-0077.2 §二十四/§三十四：blueprint 分支不再提前 return——
+    // future_tasks 同包编译为 task create ops（Execution Planning Contract）。
+    // ops = blueprint(1) + phases(2) + milestones(2) + future_tasks(2) = 7。
+    assert_eq!(ops.len(), 7, "蓝图编译 ops 数量：blueprint+phases+milestones+future_tasks");
     assert_eq!(ops[0].entity_type, "planning_blueprint");
     assert_eq!(ops[0].action, "create");
     assert_eq!(ops[0].operation_ref.as_deref(), Some("BP1"));
@@ -584,6 +593,12 @@ fn test_bp_compile_blueprint_ops_structure() {
     assert_eq!(ops[3].entity_type, "planning_milestone");
     assert_eq!(ops[3].after["date_precision"], "day");
     assert_eq!(ops[4].after["date_precision"], "month", "month 精度保留，不伪造某一天");
+    // §三十四：future_tasks → task create ops（FT 序号；蓝图近期任务入执行层）
+    assert_eq!(ops[5].entity_type, "task");
+    assert_eq!(ops[5].action, "create");
+    assert_eq!(ops[5].operation_ref.as_deref(), Some("FT0"));
+    assert_eq!(ops[6].entity_type, "task");
+    assert_eq!(ops[6].operation_ref.as_deref(), Some("FT1"));
     let md = ops[0].after["content_md"].as_str().unwrap();
     assert!(md.contains("三阶段"));
     assert!(md.contains("目标院校是否变动"));
@@ -655,6 +670,7 @@ fn test_bp_validate_blueprint_draft_errors() {
         title: "高数：远窗口任务".into(),
         planned_date: bp_add_days(&today, 3),
         estimated_minutes: Some(2000),
+        grounding: None,
     });
     let draft = PlanDraft { blueprint: Some(bp), ..Default::default() };
     let v = validate_plan_draft(&conn, p, &draft);
@@ -674,6 +690,7 @@ fn test_bp_validate_blueprint_rejects_over_window() {
         title: "高数：30 天后".into(),
         planned_date: bp_add_days(&today, 30),
         estimated_minutes: Some(60),
+        grounding: None,
     });
     let draft = PlanDraft { blueprint: Some(bp), ..Default::default() };
     let v = validate_plan_draft(&conn, p, &draft);
@@ -706,25 +723,36 @@ fn test_bp_changeset_apply_blueprint_full_chain() {
     assert_eq!(phases[0].blueprint_id, active.id);
     let mss = repo.list_milestones(active.id).unwrap();
     assert_eq!(mss.len(), 2);
+    // DEV-0077.2 F1：AI 编译路径 skip_projection（R2-01：任务生成走本 ChangeSet
+    // 的 task create ops，activate 期不再二次投影）。future_tasks 的正式任务 =
+    // ops 创建行（archived_at IS NULL），projection_key 幂等通道不再参与。
     let projected: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE planning_blueprint_id=?1 AND origin='blueprint' AND archived_at IS NULL",
-            rusqlite::params![active.id],
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NULL",
+            rusqlite::params![p],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(projected, 2, "future_tasks 应被投影为正式任务");
-    // 幂等：重放同 ops 不得重复投影（旧蓝图任务归档、新蓝图任务投影 → 未归档总数仍为 2）
+    assert_eq!(projected, 2, "future_tasks 应编译为本包 task ops（正式任务）");
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE origin='blueprint'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap(),
+        0,
+        "F1：AI 路径不得产生投影行（双写禁止）"
+    );
+    // 重放：新 ChangeSet = 新 ops（ChangeSet 各自审计/Undo；ops 通道无投影幂等语义）
     let csid2 = ChangeSetRepository::new(&conn).create(p, None, None, "AI 蓝图规划(重放)", "重放", &ops).unwrap();
     ChangeSetRepository::new(&conn).apply(csid2, p, false).unwrap();
     let projected2: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE origin='blueprint' AND archived_at IS NULL",
-            [],
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NULL",
+            rusqlite::params![p],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(projected2, 2, "projection_key 幂等，重放不得重复投影");
+    assert_eq!(projected2, 4, "重放 = 第二包 ops 再建 2 条（各自可 Undo）");
 }
 
 #[test]
@@ -752,12 +780,13 @@ fn test_bp_changeset_apply_blueprint_replaces_previous_active() {
     assert_eq!(old.unwrap(), "superseded");
     let active = repo.get_active(p).unwrap().expect("V2 应 active");
     assert_eq!(active.title, "2027 考研全程规划 V2");
+    // DEV-0077.2 F1：ops 通道——两包 ops 各建 2 条（不再走 origin='blueprint' 投影/归档）
     let n_active_bp_tasks: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE origin='blueprint' AND status='pending' AND planned_date > (SELECT date('now','+8 hours')) AND archived_at IS NULL",
-            [],
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NULL",
+            rusqlite::params![p],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(n_active_bp_tasks, 2, "仅新蓝图保留 2 条投影任务");
+    assert_eq!(n_active_bp_tasks, 4, "A/B 两包 task ops 各 2 条（B 生效，A 待其自身 Undo）");
 }

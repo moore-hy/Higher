@@ -147,8 +147,45 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "read_personalization",
-                "description": "读取当前档案的私人化学习档案（用户已确认的综合资料）",
+                "description": "读取当前档案的私人化学习档案（结构化全文 + 已有/缺失信息分节 + 未解决项 + 来源数）",
                 "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_higher_overview",
+                "description": "DEV-0066 §10.1：当前 Higher 全局概览（Profile/私人档案状态/GoalTarget(REACH+SAFETY)/最终目标/目标树摘要/active Blueprint/近期任务/Knowledge 摘要/最近学习/明显空缺）。开始复杂任务时先调用本工具，而非逐表读取。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "date": { "type": "string", "description": "任务统计基准日（YYYY-MM-DD，可选；默认今天）" }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_personalization_sources",
+                "description": "DEV-0066 §10.3：列出用户导入的私人资料原始文件（名称/类型/状态/字符数），供按需读取",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_personalization_source",
+                "description": "DEV-0066 §10.3：分页读取私人资料原始文本（has_more=true 时用 next_start_char 续读，禁止一次读完超大文件）",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source_id": { "type": "integer" },
+                        "start_char": { "type": "integer", "description": "起始字符偏移（默认 0）" },
+                        "max_chars": { "type": "integer", "description": "本页字符数（默认 12000，最大 16000）" }
+                    },
+                    "required": ["source_id"]
+                }
             }
         },
         {
@@ -627,18 +664,133 @@ pub fn execute_read_tool(
             json!(mems).to_string()
         }
         "read_personalization" => {
-            let p = crate::repository::personalization::PersonalizationRepository::new(conn)
-                .get_profile(profile_id)
+            // DEV-0066 §10.2：draft 不再返回空 md——AI 必须能真正检查私人档案
+            //（status/version/structured/md/unresolved/source count/confirmed 标记）。
+            let repo = crate::repository::personalization::PersonalizationRepository::new(conn);
+            let (pp, confirmed): (Option<crate::repository::personalization::PersonalizationProfile>, bool) = {
+                let c = repo.get_confirmed_profile(profile_id).map_err(|e| e.to_string())?;
+                match c {
+                    Some(p) => (Some(p), true),
+                    None => (repo.get_draft_profile(profile_id).map_err(|e| e.to_string())?, false),
+                }
+            };
+            let source_count = repo.list_sources(profile_id).map_err(|e| e.to_string())?.len();
+            let (status, filled, missing, unresolved_count) = match &pp {
+                Some(p) => {
+                    let (filled, missing) = personalization_section_status(p.structured_json.as_deref());
+                    let unresolved_count = p
+                        .structured_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        .and_then(|v| v.get("unresolved").and_then(|u| u.as_array()).map(|a| a.len()))
+                        .unwrap_or(0);
+                    (p.status.clone(), filled, missing, unresolved_count)
+                }
+                None => ("none".to_string(), vec![], vec![], 0),
+            };
+            json!({
+                "status": status,
+                "confirmed": confirmed,
+                "version": pp.as_ref().map(|p| p.version),
+                "structured_json": pp.as_ref().and_then(|p| p.structured_json.clone()),
+                "md_content": pp.as_ref().map(|p| p.md_content.clone()).unwrap_or_default(),
+                "filled_sections": filled,
+                "missing_sections": missing,
+                "unresolved_count": unresolved_count,
+                "source_count": source_count,
+                "note": if pp.is_none() {
+                    "尚无私人档案版本（可先用 list_personalization_sources 查看已导入资料）"
+                } else if !confirmed {
+                    "存在 draft 版本但尚未确认；以下内容为草稿，不作为正式事实"
+                } else {
+                    "confirmed 版本为正式事实；missing_sections 为档案尚未覆盖的信息"
+                },
+            })
+            .to_string()
+        }
+        "get_higher_overview" => {
+            let date = arguments
+                .get("date")
+                .and_then(|v| v.as_str())
+                .filter(|d| crate::ai::runtime::valid_ymd(d))
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| {
+                    conn.query_row("SELECT date('now','localtime')", [], |r| r.get::<_, String>(0))
+                        .unwrap_or_default()
+                });
+            crate::ai::overview::build_higher_overview(conn, profile_id, &date)
+                .map_err(|e| e.to_string())?
+        }
+        "list_personalization_sources" => {
+            let repo = crate::repository::personalization::PersonalizationRepository::new(conn);
+            let rows: Vec<serde_json::Value> = repo
+                .list_sources(profile_id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|s| {
+                    let chars: i64 = conn
+                        .query_row(
+                            "SELECT COALESCE(SUM(LENGTH(content)),0) FROM personalization_source_chunks WHERE source_id=?1 AND profile_id=?2",
+                            params![s.id, profile_id],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0);
+                    json!({
+                        "id": s.id,
+                        "file_name": s.file_name,
+                        "file_type": s.file_type,
+                        "status": s.status,
+                        "chars": chars,
+                        "created_at": s.created_at,
+                    })
+                })
+                .collect();
+            json!(rows).to_string()
+        }
+        "read_personalization_source" => {
+            let source_id = arguments
+                .get("source_id")
+                .and_then(|v| v.as_i64())
+                .ok_or("缺少 source_id")?;
+            // §10.3：与 read_planning_source 相同的分页协议（start_char/max_chars/has_more）
+            let start_char = arguments
+                .get("start_char")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .max(0) as usize;
+            let max_chars = arguments
+                .get("max_chars")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(12000)
+                .clamp(1, 16000) as usize;
+            let repo = crate::repository::personalization::PersonalizationRepository::new(conn);
+            let src = repo
+                .get_source(source_id, profile_id)
+                .map_err(|e| e.to_string())?
+                .ok_or("资料不存在或不属于当前档案")?;
+            let mut stmt = conn
+                .prepare("SELECT content FROM personalization_source_chunks WHERE source_id=?1 AND profile_id=?2 ORDER BY chunk_index")
                 .map_err(|e| e.to_string())?;
-            match p {
-                Some(pp) if pp.status == "confirmed" => json!({
-                    "status": "confirmed",
-                    "version": pp.version,
-                    "md": pp.md_content,
-                }).to_string(),
-                Some(_) => json!({"status": "draft", "md": ""}).to_string(),
-                None => json!({"status": "none", "md": ""}).to_string(),
-            }
+            let text: String = stmt
+                .query_map(params![source_id, profile_id], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?
+                .filter_map(|v| v.ok())
+                .collect::<Vec<_>>()
+                .join("");
+            let total_chars = text.chars().count();
+            let start = start_char.min(total_chars);
+            let chunk: String = text.chars().skip(start).take(max_chars).collect();
+            let next = start + chunk.chars().count();
+            json!({
+                "source_id": source_id,
+                "file_name": src.file_name,
+                "text": chunk,
+                "start_char": start,
+                "next_start_char": next,
+                "has_more": next < total_chars,
+                "total_chars": total_chars,
+            })
+            .to_string()
         }
         "list_planning_sources" => {
             let repo = crate::repository::planning_source::PlanningSourceRepository::new(conn);
@@ -743,6 +895,43 @@ pub fn execute_read_tool(
     Ok(out)
 }
 
+/// DEV-0066 §10.2：解析 structured_json → (已有信息分节, 缺失信息分节)。
+/// 分节集合与 build_personal_structured 的字段一一对应；空/缺字段即"档案未覆盖"。
+fn personalization_section_status(structured_json: Option<&str>) -> (Vec<&'static str>, Vec<&'static str>) {
+    const SECTIONS: &[(&str, &[&str])] = &[
+        ("basic_info", &["basics", "basic_info"]),
+        ("capabilities", &["capabilities"]),
+        ("strengths", &["strengths"]),
+        ("weaknesses", &["weaknesses"]),
+        ("habits", &["habits"]),
+        ("preferences", &["preferences"]),
+        ("constraints", &["constraints"]),
+        ("time_conditions", &["availability", "time_conditions"]),
+        ("current_state", &["current_state", "state"]),
+        ("progress", &["current_state", "progress"]),
+    ];
+    let v: serde_json::Value = structured_json
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let mut filled = Vec::new();
+    let mut missing = Vec::new();
+    for (label, path) in SECTIONS {
+        let node = path
+            .iter()
+            .fold(Some(&v), |acc, k| acc.and_then(|n| n.get(*k)));
+        let non_empty = node
+            .and_then(|n| n.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        if non_empty {
+            filled.push(*label);
+        } else {
+            missing.push(*label);
+        }
+    }
+    (filled, missing)
+}
+
 /// 单条真实工具调用记录（只记录真正发生过的 Tool Call，禁止伪造）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolTraceEntry {
@@ -768,6 +957,9 @@ pub fn tool_label(name: &str) -> &'static str {
         "search_higher" => "搜索 Higher 数据",
         "search_memory" => "检索长期记忆",
         "read_personalization" => "读取私人化档案",
+        "get_higher_overview" => "Higher 全局概览",
+        "list_personalization_sources" => "列出私人资料",
+        "read_personalization_source" => "读取私人资料",
         "list_planning_sources" => "列出规划资料",
         "read_planning_source" => "读取规划资料",
         "list_active_goal_targets" => "查看正式目标",
@@ -798,6 +990,10 @@ pub const TOOL_ALLOWLIST: &[&str] = &[
     "search_higher",
     "search_memory",
     "read_personalization",
+    // DEV-0066 §10 Phase B：Global Agent 全量读能力（overview + 私人资料 source）
+    "get_higher_overview",
+    "list_personalization_sources",
+    "read_personalization_source",
     // DEV-0060 §9.1：四个 Planning Read Tools 正式进入 Allowlist（READ 分类，
     // 非 Assistant-only；此前 definition 存在但调用被拒）
     "list_planning_sources",

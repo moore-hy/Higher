@@ -381,9 +381,10 @@ impl<'a> PersonalizationRepository<'a> {
         let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let _ = user_edit_in_tx(&tx, profile_id, md)?;
         tx.commit().map_err(|e| e.to_string())?;
+        // DEV-0076 §十二：用户亲手编辑 = 用户事实（非 AI 推断）→ 直接 confirmed
         let _ = self.conn.execute(
-            "INSERT INTO memory_records (profile_id, memory_type, category, memory_key, memory_value, source_kind, source_excerpt, importance, confidence)
-             VALUES (?1,'user_fact','personalization','私人化档案（用户编辑）',?2,'user_edit',?3,5,'high')",
+            "INSERT INTO memory_records (profile_id, memory_type, category, memory_key, memory_value, source_kind, source_excerpt, importance, confidence, status)
+             VALUES (?1,'user_fact','personalization','私人化档案（用户编辑）',?2,'user_edit',?3,5,'high','confirmed')",
             params![profile_id, md, md],
         );
         Ok(())

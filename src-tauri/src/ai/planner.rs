@@ -450,9 +450,12 @@ pub fn build_planning_truth_context(conn: &Connection, profile_id: i64) -> Plann
     // —— Trusted Learning Evidence（sessions + evaluations）——
     let evidence_text = trusted_evidence_summary(conn, profile_id);
 
+    // —— DEV-0077.4-A.1：已有学习单元（G5 复用依据；批量读取 + 内存树渲染）——
+    let units_text = existing_learning_units_text(conn, profile_id);
+
     let instruction = format!(
-        "【Confirmed PersonalProfile】\n{}\n\n【Active GoalTargets】（正式目标主源；旧 Final Goal 仅 legacy fallback，不得覆盖 active GoalTarget）\n{}\n【Available Planning Sources】（仅列出可用资料；请只审查用户选中的 source ids，用 read_planning_source 按需分页读取至 has_more=false，禁止声称已读全文）\n{}\n【Current Active Blueprint】\n{}\n【Trusted Learning Evidence】\n{}\n当前日期：{}（学习日 UTC+8）。",
-        profile_text, targets_text, sources_text, blueprint_text, evidence_text, crate::repository::planning::today_utc8()
+        "【Confirmed PersonalProfile】\n{}\n\n【Active GoalTargets】（正式目标主源；旧 Final Goal 仅 legacy fallback，不得覆盖 active GoalTarget）\n{}\n【Available Planning Sources】（仅列出可用资料；请只审查用户选中的 source ids，用 read_planning_source 按需分页读取至 has_more=false，禁止声称已读全文）\n{}\n【Current Active Blueprint】\n{}\n【Existing Learning Units】（已有学习单元；规划时优先复用：learning_units 里对已有节点按同名同父引用，或在 ref 上填 existing_learning_item_id）\n{}\n【Trusted Learning Evidence】\n{}\n当前日期：{}（学习日 UTC+8）。",
+        profile_text, targets_text, sources_text, blueprint_text, units_text, evidence_text, crate::repository::planning::today_utc8()
     );
 
     PlanningTruthContext {
@@ -461,6 +464,58 @@ pub fn build_planning_truth_context(conn: &Connection, profile_id: i64) -> Plann
         safety_title,
         instruction,
     }
+}
+
+/// DEV-0077.4-A.1 §二十/G5：已有学习单元树文本（供 Planner 复用；1 条批量 SELECT）。
+/// 渲染 `路径 > 名（id=N）`，防环（visited 深度上限），上限 120 行 / 3000 字防 Context 膨胀。
+fn existing_learning_units_text(conn: &Connection, profile_id: i64) -> String {
+    let mut stmt = match conn.prepare(
+        "SELECT id, parent_id, name FROM learning_items WHERE profile_id=?1 ORDER BY id",
+    ) {
+        Ok(s) => s,
+        Err(_) => return "（暂不可读）".to_string(),
+    };
+    let rows: Vec<(i64, Option<i64>, String)> = match stmt.query_map(
+        rusqlite::params![profile_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ) {
+        Ok(it) => it.filter_map(|x| x.ok()).collect(),
+        Err(_) => return "（暂不可读）".to_string(),
+    };
+    if rows.is_empty() {
+        return "（尚无学习单元——按 G4 只为当前规划窗口创建必要单元）".to_string();
+    }
+    let by_id: std::collections::HashMap<i64, (Option<i64>, String)> =
+        rows.iter().map(|(i, p, n)| (*i, (*p, n.clone()))).collect();
+    let mut lines: Vec<String> = Vec::new();
+    for (id, _, name) in &rows {
+        let mut path: Vec<String> = vec![name.clone()];
+        let mut cur = *id;
+        let mut guard = 0;
+        while let Some((Some(p), _)) = by_id.get(&cur) {
+            guard += 1;
+            if guard > 64 {
+                break; // 环防御
+            }
+            if let Some((_, pn)) = by_id.get(p) {
+                path.push(pn.clone());
+                cur = *p;
+            } else {
+                break;
+            }
+        }
+        path.reverse();
+        lines.push(format!("- {}（id={}）", path.join(" > "), id));
+        if lines.len() >= 120 {
+            lines.push(format!("…（共 {} 个，已截断）", rows.len()));
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if out.chars().count() > 3000 {
+        out = out.chars().take(3000).collect::<String>() + "\n…（已截断）";
+    }
+    out
 }
 
 /// DEV-0059.2 §5：GoalTarget data_json → 结构化摘要（考研字段优先；不允许只靠 title 猜）。
@@ -580,6 +635,10 @@ pub struct PlanTask {
     pub goal_ref: String,
     #[serde(default)]
     pub knowledge_ref: String,
+    /// DEV-0077.4-A.1 §十二：结构化 Grounding（learning=恰1 unit / meta=0）。
+    /// 存在时优先于 knowledge_ref（后者已废弃）。
+    #[serde(default)]
+    pub grounding: Option<super::learning_grounding::TaskGroundingDraft>,
 }
 fn default_kind() -> String { "structured".into() }
 fn default_priority() -> String { "normal".into() }
@@ -621,6 +680,10 @@ pub struct PlanDraft {
     pub tasks: Vec<PlanTask>,
     #[serde(default)]
     pub knowledge_nodes: Vec<PlanKnowledgeNode>,
+    /// DEV-0077.4-A.1 §十：学习单元草稿（Grounding 契约；替代 knowledge_nodes）。
+    /// 非空 = 契约激活：所有任务必须 grounding（learning 恰 1 unit / meta 0）。
+    #[serde(default)]
+    pub learning_units: Vec<super::learning_grounding::LearningUnitDraft>,
     /// §47 Rolling Horizon 假设（如 每天可学 3h）
     #[serde(default)]
     pub assumptions: Vec<String>,
@@ -760,6 +823,9 @@ pub struct BlueprintTaskDraft {
     pub planned_date: String,
     #[serde(default)]
     pub estimated_minutes: Option<i64>,
+    /// DEV-0077.4-A.1：蓝图近期任务同样必须 Grounded（修复恒 NULL 根因 2）。
+    #[serde(default)]
+    pub grounding: Option<super::learning_grounding::TaskGroundingDraft>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -790,6 +856,35 @@ pub struct TargetChangeDraft {
     pub evidence: String,
 }
 
+// =============== DEV-0074 §十二 · ActionPlan ===============
+
+/// DEV-0074：Planner 产物从 PlanDraft 扩展为 ActionPlan
+///（PlanDraft → ChangeSet 审批链保留；ActionPlan 为直执行链）。
+/// ```json
+/// {"actions":[{"type":"CreateGoal","payload":{"name":"2028考研"}},
+///             {"type":"CreatePlan","payload":{"duration":"2年"}}]}
+/// ```
+pub struct ActionPlan {
+    pub actions: Vec<crate::ai::actions::registry::HigherAction>,
+}
+
+impl ActionPlan {
+    /// 解析 Planner 输出 JSON（容忍 ```json 围栏）→ ActionPlan。
+    /// 非 ActionPlan 形态（无 actions 数组）→ Err（调用方回退其他解析）。
+    pub fn parse(text: &str) -> Result<ActionPlan, String> {
+        let trimmed = text
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+        let v: serde_json::Value = serde_json::from_str(trimmed)
+            .map_err(|e| format!("ActionPlan 非法 JSON：{e}"))?;
+        let actions = crate::ai::actions::registry::parse_actions(&v)?;
+        Ok(ActionPlan { actions })
+    }
+}
+
 /// §43-44：结构化 PlanDraft 请求指令（替代自由 Markdown）。
 /// DEV-0059 §23：支持两种模式——goal-tree 短期滚动 或 blueprint 长期规划（二选一，可同时）。
 pub const PLAN_DRAFT_INSTRUCTION: &str = r#"生成正式学习计划。只输出一个 JSON 对象（不要 markdown 代码块、不要解释文字），结构：
@@ -799,8 +894,12 @@ pub const PLAN_DRAFT_INSTRUCTION: &str = r#"生成正式学习计划。只输出
   "year_goals": [{"name":"可读的具体名称","period":"YYYY-MM-DD..YYYY-MM-DD","parent_ref":"","operation_ref":"G1"}],
   "month_goals": [{"name":"…","period":"YYYY-MM","parent_ref":"G1","operation_ref":"G2"}],
   "day_goals": [{"name":"…","period":"YYYY-MM-DD","parent_ref":"月ref","rest_day":false,"operation_ref":"D1"}],
-  "knowledge_nodes": [{"name":"学科/章节/稳定主题","parent_ref":"","operation_ref":"K1"}],
-  "tasks": [{"title":"具体任务","date":"YYYY-MM-DD","estimated_minutes":60,"task_kind":"structured|accumulation","priority":"core|normal","goal_ref":"D1","knowledge_ref":"K1"}],
+  "knowledge_nodes": [],（已废弃：改用 learning_units；两者禁止同时出现）
+  "learning_units": [{"ref_key":"math","name":"数学","parent_ref":"","description":"…"},
+                     {"ref_key":"math.calculus","name":"高等数学","parent_ref":"math"},
+                     {"ref_key":"math.limit","name":"极限","parent_ref":"math.calculus"}],
+  "tasks": [{"title":"具体任务","date":"YYYY-MM-DD","estimated_minutes":60,"task_kind":"structured|accumulation","priority":"core|normal","goal_ref":"D1","grounding":{"mode":"learning","unit_refs":["math.limit"]}},
+            {"title":"整理考研资料","date":"YYYY-MM-DD","estimated_minutes":30,"task_kind":"structured","priority":"normal","goal_ref":"D1","grounding":{"mode":"meta","unit_refs":[]}}],
   "assumptions": ["如：每天可学习3小时"],
   "unresolved": ["无法确定的事项"],
   "daily_available_minutes": 180,
@@ -824,6 +923,20 @@ pub const PLAN_DRAFT_INSTRUCTION: &str = r#"生成正式学习计划。只输出
 8. 任务必须具体可执行：格式「科目：内容 + 量」（如「数据结构：线性表基本概念 + 10道基础题」「高数：极限计算基础题 15题」「英语：词汇复习 30min」）。禁止「学习数学」「复习英语」「继续努力」这类无信息量任务名。
 9. 与用户已有正式任务重复的（同一天同名）不要再次生成；只生成新增内容。
 10. 不确定的事实（考试日期/科目大纲/院校政策/用户每天可用时间/当前基础）写入 unresolved 或 assumptions，禁止编造。
+DEV-0077.4-A.1 F1 · PRODUCTION REQUIREMENT（硬性，违反将被系统拒绝）：
+P1. You MUST output learning_units whenever the plan contains learning tasks.
+P2. Every task MUST contain grounding——learning task: mode="learning" + exactly one unit_ref；meta task（整理资料/报名检查/周复盘/环境准备）: mode="meta" + zero unit_refs。
+P3. Never output a mixed-subject learning task（如「高数+英语+408」一条任务会被系统拒绝并要求拆分）。
+P4. Never omit grounding——缺失 grounding 的任务无法创建。
+P5. 只更新 Final Goal Brief 等不创建 Task 的规划可不带 learning_units。
+DEV-0077.4-A.1 学习关联（Grounding）硬规则：
+G1. Every learning task must reference exactly one learning unit（grounding.mode="learning" 且 unit_refs 恰 1 个）。Do not combine unrelated subjects in one task——「高数极限 + 英语词汇」必须拆成两个 Task 并重新分配 estimated_minutes（总和接近原预算，不得机械均分）。
+G2. Learning units are reusable knowledge/skill concepts, not dated activities——「极限/线性表/进程调度」合法；「8月29日学习极限90分钟/今日数学任务」是 Task 不是 Unit，禁止创建。
+G3. Meta tasks（整理资料/检查报名/周复盘/制定计划/环境配置/资料下载）must be marked grounding.mode="meta" and have no learning unit（unit_refs=[]）。
+G4. Create only learning units needed for the current detailed planning horizon（约未来 14 天）+ 必要 parent chain；不要预生成未来一年的全部知识点。
+G5. Reuse existing units whenever exact grounded identity exists——系统给出的「已有学习单元」列表里同 parent 下同名节点必须用其 ref_key/指定 id 引用，不要重复创建；不确定是否同一知识时宁可新建（禁止语义猜测合并）。同名不同 parent 是不同单元。
+G6. 综合模拟类任务（如「数学全真模拟卷1套」）链接最合适的 Subject/root 单元即可，不要拆成几十个知识点。
+G7. learning_units 的 ref_key 在本 JSON 内唯一；parent_ref 只能指向本 JSON 中更早出现的 ref_key（空=根学科）。
 DEV-0059 §23 blueprint 模式（当用户要求"蓝图/长期规划/整体规划"时使用；短期安排仍用上方 goal-tree 字段）：
 B1. blueprint.phases 覆盖整个目标周期（阶段划分），milestones 是阶段内关键节点。
 B2. future_tasks 只放未来 14 天内（滚动窗口），任务标题规则同规则 8；蓝图本身是长期 Canonical，任务逐期生成。
@@ -1280,6 +1393,58 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
             }
         }
     }
+
+    // ===== DEV-0077.4-A.1 §四一/§六一：Grounding / Task Atomicity 契约 =====
+    // 契约激活 = learning_units 非空 或 任一 task 携带 grounding（Prompt 不能代替 Validator）。
+    {
+        use super::learning_grounding as lg;
+        let bp_grounded = draft
+            .blueprint
+            .as_ref()
+            .map(|b| b.future_tasks.iter().any(|t| t.grounding.is_some()))
+            .unwrap_or(false);
+        let grounded = !draft.learning_units.is_empty()
+            || draft.tasks.iter().any(|t| t.grounding.is_some())
+            || bp_grounded;
+        if grounded {
+            if !draft.knowledge_nodes.is_empty() {
+                v.errors.push(
+                    "learning_units 与 knowledge_nodes 禁止混用（knowledge_nodes 已废弃，请全部改用 learning_units）".into(),
+                );
+            }
+            v.errors.extend(lg::validate_unit_graph(&draft.learning_units));
+            let mut pairs: Vec<(String, Option<&lg::TaskGroundingDraft>)> = draft
+                .tasks
+                .iter()
+                .map(|t| (t.title.clone(), t.grounding.as_ref()))
+                .collect();
+            if let Some(bp) = &draft.blueprint {
+                for t in &bp.future_tasks {
+                    pairs.push((t.title.clone(), t.grounding.as_ref()));
+                }
+            }
+            v.errors.extend(lg::validate_task_groundings(&pairs, &draft.learning_units));
+            for t in &draft.tasks {
+                if !t.knowledge_ref.is_empty() {
+                    v.errors.push(format!(
+                        "任务「{}」使用了已废弃的 knowledge_ref；请改用 grounding（mode + unit_refs）",
+                        t.title
+                    ));
+                }
+            }
+            // §三九/§四〇：Planning Completion Contract——有学习任务则 Grounding Rate 必须 100%
+            let c = lg::grounding_completeness(&pairs.iter().map(|p| p.1).collect::<Vec<_>>());
+            if c.rate < 1.0 {
+                v.errors.push(format!(
+                    "Grounding Completeness = {:.0}%（{}/{} 学习任务已关联），不足 100%；\
+                     缺失任务必须补 grounding 或标记 meta",
+                    c.rate * 100.0,
+                    c.grounded_learning_task_count,
+                    c.learning_task_count
+                ));
+            }
+        }
+    }
     v
 }
 
@@ -1331,14 +1496,245 @@ fn is_placeholder_name(n: &str) -> bool {
 
 // =============== ⑤ Deterministic Compiler（PART 16 §58-59） ===============
 
-/// PlanDraft → Vec<ProposedOp>（由 ChangeSetRepository::create 落库；ForwardRef 由既有
-/// create 期 Guard + apply 期 resolve 兜底）。op 顺序：goal(final 调整若 need)→year→month
-/// →knowledge→day→task，保证 ref 只向前指已出现项。
-/// final_id：该 Profile 的 Final Goal 真实 id（year 的 parent_goal_id 直接注入）。
+/// DEV-0077.4-A.1 §三十四：Grounded 编译产物附带的人类可读摘要（§九七）。
+#[derive(Debug, Clone)]
+pub struct GroundedCompileReport {
+    pub completeness: super::learning_grounding::GroundingCompleteness,
+    pub created_units: usize,
+    pub reused_units: usize,
+    /// §九七 ReadBack 汇总行（不显示数据库 id，ref_key 仅系统用）。
+    pub summary_line: String,
+}
+
+/// PlanDraft → Vec<ProposedOp>（**legacy/test-only**：无 Grounding Resolution，旧行为）。
+///
+/// DEV-0077.4-A.1 F1 §十五/§九一：Production caller = 0。仅允许测试与
+/// legacy 兼容 helper 调用；Production 规划必须走 [`compile_production_plan`]。
+#[deprecated(
+    note = "Legacy planner compiler. Production planning must use compile_production_plan (grounded)."
+)]
 pub fn compile_to_changeset_ops(
     final_id: Option<i64>,
     has_active_goal_target: bool,
     draft: &PlanDraft,
+) -> Vec<ProposedOp> {
+    #[allow(deprecated)]
+    compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, None)
+}
+
+/// DEV-0077.4-A.1 F1 §四 · 最终 Production Contract：
+/// 只要 Draft 创建任何未来 Task（tasks 或 blueprint.future_tasks），
+/// 每一个 Task 必须显式 grounding（Learning=恰1 unit / Meta=0）；
+/// 空任务规划（不创建 Task）与 Meta-only 规划合法（§十二/§十三）。
+/// **禁止依赖「模型是否输出 learning_units」决定是否强制**（§十）。
+pub fn validate_production_grounding_contract(
+    draft: &PlanDraft,
+) -> Result<super::learning_grounding::GroundingCompleteness, Vec<String>> {
+    use super::learning_grounding as lg;
+    let has_tasks = !draft.tasks.is_empty()
+        || draft
+            .blueprint
+            .as_ref()
+            .map(|b| !b.future_tasks.is_empty())
+            .unwrap_or(false);
+    if !has_tasks {
+        // §十三 空任务规划：learning_units 允许为空（如只更新 Final Goal Brief）
+        return Ok(lg::grounding_completeness(&[]));
+    }
+    let mut errs: Vec<String> = Vec::new();
+    let mut pairs: Vec<(String, Option<&lg::TaskGroundingDraft>)> = draft
+        .tasks
+        .iter()
+        .map(|t| (t.title.clone(), t.grounding.as_ref()))
+        .collect();
+    if let Some(bp) = &draft.blueprint {
+        for t in &bp.future_tasks {
+            pairs.push((t.title.clone(), t.grounding.as_ref()));
+        }
+    }
+    errs.extend(lg::validate_unit_graph(&draft.learning_units));
+    errs.extend(lg::validate_task_groundings(&pairs, &draft.learning_units));
+    // §六二 ProductionGroundingCompletion：invalid=0 且 learning==grounded
+    let c = lg::grounding_completeness(&pairs.iter().map(|p| p.1).collect::<Vec<_>>());
+    if c.invalid_unlinked_learning_task_count > 0 || c.learning_task_count != c.grounded_learning_task_count {
+        errs.push(format!(
+            "planning_grounding_required: Grounding Rate {:.0}%（{}/{} 学习任务已关联），\
+             Production 要求 100%；每个任务必须 grounding.mode=learning(unit_refs 恰1) 或 meta(unit_refs 空)",
+            c.rate * 100.0,
+            c.grounded_learning_task_count,
+            c.learning_task_count
+        ));
+    }
+    if errs.is_empty() {
+        Ok(c)
+    } else {
+        Err(errs)
+    }
+}
+
+/// DEV-0077.4-A.1 F1 §六八 · Production 唯一编译入口。
+/// 1) Production Contract（§四）2) Unit Graph 3) Task Atomicity
+/// 4) Resolve Existing LearningItems 5) 必要 knowledge create ops
+/// 6) Task 显式关联 learning_item 7) GroundingCompleteness 8) Rate=100%
+/// 9) ONE ChangeSet ops。
+/// **任何 Grounding 缺失 → Err（§十七：严禁内部 fallback legacy compile）**；
+/// 上层只能进入 Repair（≤1 次）或 failed（§六九）。
+pub fn compile_production_plan(
+    conn: &Connection,
+    profile_id: i64,
+    final_id: Option<i64>,
+    has_active_goal_target: bool,
+    draft: &PlanDraft,
+) -> Result<(Vec<ProposedOp>, Option<GroundedCompileReport>), String> {
+    use super::learning_grounding as lg;
+    // §十一/§六七：Production Validation——不因 learning_units.is_empty() 关闭契约
+    match validate_production_grounding_contract(draft) {
+        Ok(_) => {}
+        Err(errs) => {
+            println!(
+                "[AI-PLANNING] PRODUCTION_GROUNDING_CONTRACT_INVALID errors={}",
+                errs.len()
+            );
+            return Err(format!("planning_grounding_invalid: {}", errs.join("；")));
+        }
+    }
+    let resolution = match lg::resolve_grounding(conn, profile_id, &draft.learning_units) {
+        Ok(r) => r,
+        Err(e) => {
+            let code = if e.contains("ambiguity") || e.contains("同名历史节点") {
+                "planning_grounding_ambiguous"
+            } else {
+                "planning_grounding_invalid"
+            };
+            println!("[AI-PLANNING] GROUNDING_RESOLUTION_FAILED code={code}");
+            return Err(format!("{code}: {e}"));
+        }
+    };
+    // §六二 最终完成度（resolve 后再核一次，含复用/新建绑定）
+    let mut pairs: Vec<Option<&lg::TaskGroundingDraft>> = draft
+        .tasks
+        .iter()
+        .map(|t| t.grounding.as_ref())
+        .collect();
+    if let Some(bp) = &draft.blueprint {
+        for t in &bp.future_tasks {
+            pairs.push(t.grounding.as_ref());
+        }
+    }
+    let completeness = lg::grounding_completeness(&pairs);
+    let total_tasks = draft.tasks.len()
+        + draft.blueprint.as_ref().map(|b| b.future_tasks.len()).unwrap_or(0);
+    if completeness.invalid_unlinked_learning_task_count > 0
+        || completeness.learning_task_count != completeness.grounded_learning_task_count
+    {
+        return Err(format!(
+            "planning_grounding_required: 任务 {} 条中学习任务 {}/{} 已关联，不足 100%",
+            total_tasks,
+            completeness.grounded_learning_task_count,
+            completeness.learning_task_count
+        ));
+    }
+    let report = GroundedCompileReport {
+        completeness: completeness.clone(),
+        created_units: resolution.create.len(),
+        reused_units: resolution.reuse.len(),
+        summary_line: format!(
+            "知识节点：{}（新建 {} · 复用 {}）\n学习任务：{}（{}/{} 已关联具体学习内容）\nMeta 任务：{}",
+            resolution.create.len() + resolution.reuse.len(),
+            resolution.create.len(),
+            resolution.reuse.len(),
+            completeness.learning_task_count,
+            completeness.grounded_learning_task_count,
+            completeness.learning_task_count,
+            completeness.meta_task_count
+        ),
+    };
+    let ops = compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, Some(&resolution));
+    println!(
+        "[AI-PLANNING] PRODUCTION_COMPILE_GROUNDED ops={} units(new={},reuse={}) tasks={}",
+        ops.len(),
+        resolution.create.len(),
+        resolution.reuse.len(),
+        total_tasks
+    );
+    Ok((ops, Some(report)))
+}
+
+/// DEV-0077.4-A.1 Grounded 编译入口（A.1 主体版，含 legacy fallback）。
+///
+/// **DEV-0077.4-A.1 F1 §十/§十七：本函数的 `if !grounded → legacy` silent fallback
+/// 已在 Production 禁用——保留仅为 legacy 测试兼容**；Production caller 一律改走
+/// [`compile_production_plan`]（严禁依赖「模型是否输出 learning_units」）。
+#[deprecated(
+    note = "A.1 grounded compiler with legacy fallback for tests. Production must use compile_production_plan."
+)]
+pub fn compile_to_changeset_ops_grounded(
+    conn: &Connection,
+    profile_id: i64,
+    final_id: Option<i64>,
+    has_active_goal_target: bool,
+    draft: &PlanDraft,
+) -> Result<(Vec<ProposedOp>, Option<GroundedCompileReport>), String> {
+    use super::learning_grounding as lg;
+    let bp_grounded = draft
+        .blueprint
+        .as_ref()
+        .map(|b| b.future_tasks.iter().any(|t| t.grounding.is_some()))
+        .unwrap_or(false);
+    let grounded = !draft.learning_units.is_empty()
+        || draft.tasks.iter().any(|t| t.grounding.is_some())
+        || bp_grounded;
+    if !grounded {
+        return Ok((compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, None), None));
+    }
+    // §六一 defense in depth：validate 已拦，这里再拦一次（resolver 前置条件）
+    let mut errs = lg::validate_unit_graph(&draft.learning_units);
+    let mut pairs: Vec<(String, Option<&lg::TaskGroundingDraft>)> = draft
+        .tasks
+        .iter()
+        .map(|t| (t.title.clone(), t.grounding.as_ref()))
+        .collect();
+    if let Some(bp) = &draft.blueprint {
+        for t in &bp.future_tasks {
+            pairs.push((t.title.clone(), t.grounding.as_ref()));
+        }
+    }
+    errs.extend(lg::validate_task_groundings(&pairs, &draft.learning_units));
+    if !errs.is_empty() {
+        return Err(errs.join("；"));
+    }
+    let resolution = lg::resolve_grounding(conn, profile_id, &draft.learning_units)?;
+    let completeness = lg::grounding_completeness(&pairs.iter().map(|p| p.1).collect::<Vec<_>>());
+    if completeness.rate < 1.0 {
+        return Err(format!(
+            "Grounding Completeness < 100%（{}/{}）",
+            completeness.grounded_learning_task_count, completeness.learning_task_count
+        ));
+    }
+    let report = GroundedCompileReport {
+        completeness: completeness.clone(),
+        created_units: resolution.create.len(),
+        reused_units: resolution.reuse.len(),
+        summary_line: format!(
+            "知识节点：{}（新建 {} · 复用 {}）\n学习任务：{}（{}/{} 已关联具体学习内容）\nMeta 任务：{}",
+            resolution.create.len() + resolution.reuse.len(),
+            resolution.create.len(),
+            resolution.reuse.len(),
+            completeness.learning_task_count,
+            completeness.grounded_learning_task_count,
+            completeness.learning_task_count,
+            completeness.meta_task_count
+        ),
+    };
+    let ops = compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, Some(&resolution));
+    Ok((ops, Some(report)))
+}
+
+fn compile_to_changeset_ops_inner(
+    final_id: Option<i64>,
+    has_active_goal_target: bool,
+    draft: &PlanDraft,
+    grounding: Option<&super::learning_grounding::GroundingResolution>,
 ) -> Vec<ProposedOp> {
     let mut ops: Vec<ProposedOp> = Vec::new();
 
@@ -1390,6 +1786,10 @@ pub fn compile_to_changeset_ops(
             });
         }
     }
+
+    // DEV-0077.4-A.1：Grounded 蓝图任务延迟入列（learning_item_ref 需 knowledge create
+    // 更早出现；legacy 保持原顺序不变）
+    let mut deferred_ft_ops: Vec<ProposedOp> = Vec::new();
 
     // DEV-0059 §23：Blueprint 模式编译（长期规划 Canonical；suggested_target_changes 只记录不自动改目标）
     if let Some(bp) = &draft.blueprint {
@@ -1472,6 +1872,12 @@ pub fn compile_to_changeset_ops(
                 "provenance_json": serde_json::json!({ "source": "higher_ai_planning", "workflow": "draft_review_apply" }).to_string(),
                 "review_interval_days": bp.review_interval_days,
                 "status": "active",
+                // DEV-0077.2 F1：AI 编译路径禁用 activate 期 Rolling Horizon 投影
+                //（R2-01 语义：AI 路径只做 supersede+activate）。future_tasks 已由
+                // 本 ChangeSet 的 task create ops 显式编译（Execution Planning
+                // Contract）；若再走 project_tasks_in_tx 会以真实系统日期二次
+                // 投影同一批任务（双写），且 Undo 无法回滚投影行。
+                "skip_projection": true,
             }),
             reason: "AI 蓝图规划（用户批准后激活并投影）".into(),
             operation_ref: Some("BP1".into()),
@@ -1515,26 +1921,102 @@ pub fn compile_to_changeset_ops(
                 operation_ref: None,
             });
         }
-        return ops;
+        // DEV-0077.2 §三十/§三十一/§三十九（问题 C 根因修复）：future_tasks 不再
+        // 只进 structured_json 安全投影——编译为 task create ops，使未来 7 天
+        // 真实可执行（Planning Calendar / Today 可读；「未来 7 天 0 项计划任务」
+        // 即此前只投影不落行的直接后果）。
+        for (i, t) in bp.future_tasks.iter().enumerate() {
+            if t.title.trim().is_empty() || t.planned_date.trim().is_empty() {
+                continue;
+            }
+            let mut after = json!({ "title": t.title, "planned_date": t.planned_date });
+            if let Some(m) = t.estimated_minutes {
+                after["estimated_minutes"] = json!(m);
+            }
+            // DEV-0077.4-A.1：蓝图近期任务同样 Grounded（修复恒 NULL 根因 2）。
+            // 注意：future_tasks 编译点位于 knowledge create 之前（BP1 段），
+            // learning_item_ref 需要 knowledge 更早 → 这里只写复用真实 id 与标记，
+            // 新建 ref 的任务改走下方「Grounded 蓝图任务重排」补丁（见 ops 重排）。
+            match (&t.grounding, grounding) {
+                (Some(g), Some(gr)) => {
+                    after["grounding_mode"] = json!(g.mode.as_str());
+                    if g.mode == super::learning_grounding::TaskGroundingMode::Learning {
+                        if let Some(r) = g.unit_refs.first() {
+                            if let Some((key, val)) = gr.task_item_binding(r) {
+                                after[key] = val;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            let ft_op = ProposedOp {
+                entity_type: "task".into(),
+                entity_id: None,
+                action: "create".into(),
+                after,
+                reason: "蓝图近期任务（Execution Planning Contract）".into(),
+                operation_ref: Some(format!("FT{i}")),
+            };
+            if grounding.is_some() {
+                deferred_ft_ops.push(ft_op);
+            } else {
+                ops.push(ft_op);
+            }
+        }
+        // DEV-0077.2 §二十四/§三十七（问题 D 根因修复）：不再提前 return——
+        // Final Goal Brief / 年/月目标与 blueprint 同包编译（ONE ChangeSet 含
+        // 全部层次；此前 final_goal_adjustment 被跳过 → Goal Tree 有根但
+        // Final Goal 卡「目标待完善」）。
     }
 
     // Final Goal Brief 调整（§198：经 ChangeSet 更新，不直接改）
+    // DEV-0077.2 §二十五/§二十六（问题 D）：blueprint 模式不再被提前 return 跳过；
+    // 无 final 根时按 compile_final_goal_brief 同构两 op（create 根 + 写 brief），
+    // 消除「Goal Tree 有根但 Final Goal 待完善」的数据不一致。
     if let Some(b) = &draft.final_goal_adjustment {
         if !b.outcome.trim().is_empty() {
-            ops.push(ProposedOp {
-                entity_type: "goal".into(),
-                entity_id: final_id, // apply 引擎按 id+final 校验
-                action: "update".into(),
-                after: json!({ "goal_level": "final", "goal_brief": b }),
-                reason: "规划前完善最终目标".into(),
-                operation_ref: Some("F0".into()),
-            });
+            match final_id {
+                Some(fid) => ops.push(ProposedOp {
+                    entity_type: "goal".into(),
+                    entity_id: Some(fid), // apply 引擎按 id+final 校验
+                    action: "update".into(),
+                    after: json!({ "goal_level": "final", "goal_brief": b }),
+                    reason: "规划前完善最终目标".into(),
+                    operation_ref: Some("F0".into()),
+                }),
+                None => {
+                    let name = if b.title.trim().is_empty() {
+                        b.outcome.chars().take(30).collect()
+                    } else {
+                        b.title.trim().to_string()
+                    };
+                    ops.push(ProposedOp {
+                        entity_type: "goal".into(),
+                        entity_id: None,
+                        action: "create".into(),
+                        after: json!({ "goal_level": "final", "name": name, "day_kind": "study" }),
+                        reason: "规划创建最终目标根（Final Goal Contract）".into(),
+                        operation_ref: Some("F0".into()),
+                    });
+                    ops.push(ProposedOp {
+                        entity_type: "goal".into(),
+                        entity_id: None,
+                        action: "update".into(),
+                        after: json!({ "goal_level": "final", "goal_brief": b }),
+                        reason: "规划写入最终目标 Brief（无根时按 final 定位首写）".into(),
+                        operation_ref: Some("F0B".into()),
+                    });
+                }
+            }
         }
     }
     for y in &draft.year_goals {
         let mut after = json!({ "goal_level": "year", "name": y.name, "period": y.period });
-        if let Some(fid) = final_id {
-            after["parent_goal_id"] = json!(fid);
+        match final_id {
+            Some(fid) => { after["parent_goal_id"] = json!(fid); }
+            // 无 final 根：同包前序 F0 create（apply 期 resolve_refs → parent_real_id）
+            None => { after["parent_ref"] = json!("F0"); }
         }
         ops.push(ProposedOp {
             entity_type: "goal".into(),
@@ -1556,20 +2038,60 @@ pub fn compile_to_changeset_ops(
             operation_ref: Some(if m.operation_ref.is_empty() { "GM_".into() } else { m.operation_ref.clone() }),
         });
     }
-    for k in &draft.knowledge_nodes {
-        let mut after = json!({ "name": k.name });
-        if !k.parent_ref.is_empty() {
-            after["parent_ref"] = json!(k.parent_ref);
-        }
-        ops.push(ProposedOp {
-            entity_type: "knowledge".into(),
-            entity_id: None,
-            action: "create".into(),
-            after,
-            reason: "知识结构".into(),
-            operation_ref: Some(if k.operation_ref.is_empty() { "K_".into() } else { k.operation_ref.clone() }),
-        });
-    }
+    // DEV-0077.4-A.1 §二九：知识 create（Grounded 来自 Resolution——复用项不发 op，
+    // Undo 绝不触碰用户已有节点；legacy 为 knowledge_nodes 老路径）。
+    // 先收集、day_goals 之后再入 ops：unit 的 goal_ref 可指向 year/month/day goal ref
+    // （check_forward_refs 要求 ref 只指向更早出现的 create）。
+    let knowledge_ops: Vec<ProposedOp> = if let Some(gr) = grounding {
+        gr.create
+            .iter()
+            .map(|c| {
+                let mut after = json!({ "name": c.name });
+                match &c.parent {
+                    super::learning_grounding::ParentSpec::Root => {}
+                    super::learning_grounding::ParentSpec::Existing(pid) => {
+                        after["parent_id"] = json!(pid);
+                    }
+                    super::learning_grounding::ParentSpec::PackRef(r) => {
+                        after["parent_ref"] = json!(r);
+                    }
+                }
+                if let Some(d) = &c.description {
+                    after["description"] = json!(d);
+                }
+                if let Some(g) = &c.goal_ref {
+                    after["goal_ref"] = json!(g);
+                }
+                ProposedOp {
+                    entity_type: "knowledge".into(),
+                    entity_id: None,
+                    action: "create".into(),
+                    after,
+                    reason: "学习单元（Learning Grounding）".into(),
+                    operation_ref: Some(c.ref_key.clone()),
+                }
+            })
+            .collect()
+    } else {
+        draft
+            .knowledge_nodes
+            .iter()
+            .map(|k| {
+                let mut after = json!({ "name": k.name });
+                if !k.parent_ref.is_empty() {
+                    after["parent_ref"] = json!(k.parent_ref);
+                }
+                ProposedOp {
+                    entity_type: "knowledge".into(),
+                    entity_id: None,
+                    action: "create".into(),
+                    after,
+                    reason: "知识结构".into(),
+                    operation_ref: Some(if k.operation_ref.is_empty() { "K_".into() } else { k.operation_ref.clone() }),
+                }
+            })
+            .collect()
+    };
     for d in &draft.day_goals {
         ops.push(ProposedOp {
             entity_type: "goal".into(),
@@ -1581,26 +2103,51 @@ pub fn compile_to_changeset_ops(
             operation_ref: Some(if d.operation_ref.is_empty() { "D_".into() } else { d.operation_ref.clone() }),
         });
     }
-    for t in &draft.tasks {
-        let mut after = json!({ "title": t.title, "planned_date": t.date,
-                                "task_kind": t.task_kind, "priority": t.priority });
-        if let Some(m) = t.estimated_minutes {
-            after["estimated_minutes"] = json!(m);
+    // DEV-0077.4-A.1：知识 create 在 day goals 之后入列（goal_ref 可安全前向引用），
+    // 随后补 Grounded 蓝图任务（learning_item_ref 指向已出现的 knowledge create）
+    ops.extend(knowledge_ops);
+    ops.extend(deferred_ft_ops);
+    // DEV-0077.2：goal-tree 模式任务源；blueprint 模式任务已由 future_tasks
+    // 编译（上方），跳过此处避免同包重复创建。
+    if draft.blueprint.is_none() {
+        for t in &draft.tasks {
+            let mut after = json!({ "title": t.title, "planned_date": t.date,
+                                    "task_kind": t.task_kind, "priority": t.priority });
+            if let Some(m) = t.estimated_minutes {
+                after["estimated_minutes"] = json!(m);
+            }
+            if !t.goal_ref.is_empty() {
+                after["goal_ref"] = json!(t.goal_ref);
+            }
+            // DEV-0077.4-A.1 §三一：Grounding 优先——任务出生即携带 Resolved 引用
+            //（复用 → learning_item_id 真实 id；新建 → learning_item_ref 同包 ref）。
+            // grounding_mode 标记供 verify_written_ops ReadBack 核验（§三八）。
+            match (&t.grounding, grounding) {
+                (Some(g), Some(gr)) => {
+                    after["grounding_mode"] = json!(g.mode.as_str());
+                    if g.mode == super::learning_grounding::TaskGroundingMode::Learning {
+                        if let Some(r) = g.unit_refs.first() {
+                            if let Some((key, val)) = gr.task_item_binding(r) {
+                                after[key] = val;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if !t.knowledge_ref.is_empty() {
+                        after["learning_item_ref"] = json!(t.knowledge_ref);
+                    }
+                }
+            }
+            ops.push(ProposedOp {
+                entity_type: "task".into(),
+                entity_id: None,
+                action: "create".into(),
+                after,
+                reason: "计划任务".into(),
+                operation_ref: None,
+            });
         }
-        if !t.goal_ref.is_empty() {
-            after["goal_ref"] = json!(t.goal_ref);
-        }
-        if !t.knowledge_ref.is_empty() {
-            after["learning_item_ref"] = json!(t.knowledge_ref);
-        }
-        ops.push(ProposedOp {
-            entity_type: "task".into(),
-            entity_id: None,
-            action: "create".into(),
-            after,
-            reason: "计划任务".into(),
-            operation_ref: None,
-        });
     }
     ops
 }
@@ -1608,8 +2155,414 @@ pub fn compile_to_changeset_ops(
 /// §47 禁止单 ChangeSet 数百操作（默认上限 120；14 天滚动天然满足）。
 pub const MAX_PLAN_OPS: usize = 120;
 
+/// DEV-0077.4-A.1 F1 §十九-§二十四 · Grounding Repair Pass（最多 1 次）。
+/// 输入：原始 PlanDraft + Grounding 错误；只允许修 learning_units / task grounding /
+/// multi-unit 拆分 / meta 分类（§二十），禁止重写战略（§二十一）。
+/// 返回 Repair 指令文本（不流式展示给用户，§五一）。
+pub const MAX_GROUNDING_REPAIR: usize = 1;
+
+pub fn grounding_repair_prompt(draft: &PlanDraft, errors: &[String]) -> String {
+    // §二十：只给 invalid 部分 + 可用 unit refs，禁止重做整个计划
+    let units: Vec<String> = draft
+        .learning_units
+        .iter()
+        .map(|u| format!("- {}（{}）", u.ref_key, u.name))
+        .collect();
+    let task_lines: Vec<String> = draft
+        .tasks
+        .iter()
+        .map(|t| render_task_grounding_line(&t.title, t.grounding.as_ref()))
+        .chain(
+            draft
+                .blueprint
+                .iter()
+                .flat_map(|b| b.future_tasks.iter())
+                .map(|t| render_task_grounding_line(&t.title, t.grounding.as_ref())),
+        )
+        .collect();
+    format!(
+        "你刚才输出的学习计划未通过「学习关联（Grounding）」系统校验，无法创建。\n\n\
+         校验错误：\n{}\n\n\
+         当前 learning_units：\n{}\n\n\
+         当前 tasks：\n{}\n\n\
+         修复规则（只能做以下修改，不得改动 Final Goal / GoalTarget / REACH / SAFETY / \
+         Phase / Milestone / Year/Month Goal / 任务日期与战略内容）：\n\
+         1. 混合学科任务拆成多个 Task（每 Task 恰 1 个 unit_ref），重新分配 \
+         estimated_minutes（总和接近原预算）；\n\
+         2. 缺 grounding 的任务补 grounding（学习任务 mode=learning + 1 个 unit_ref；\
+         杂务 mode=meta + 空 unit_refs）；\n\
+         3. 需要新学习单元时在 learning_units 增补（父链完整，只为当前窗口创建）；\n\
+         4. 其余内容原样保留。\n\n\
+         严格只返回完整修复后的 PlanDraft JSON（同一 schema，不要解释文字）。",
+        errors.join("\n"),
+        if units.is_empty() { "（空）".to_string() } else { units.join("\n") },
+        task_lines.join("\n")
+    )
+}
+
+fn t_title(t: &impl TaskTitleLike) -> String {
+    t.title()
+}
+
+/// Repair prompt 的任务行渲染（PlanTask / BlueprintTaskDraft 共用）。
+fn render_task_grounding_line(title: &str, g: Option<&super::learning_grounding::TaskGroundingDraft>) -> String {
+    let g = match g {
+        Some(g) => format!("mode={} unit_refs={:?}", g.mode.as_str(), g.unit_refs),
+        None => "（无 grounding）".to_string(),
+    };
+    format!("- {title} [{g}]")
+}
+
+/// PlanTask / BlueprintTaskDraft 的标题抽象（repair prompt 渲染用）。
+pub trait TaskTitleLike {
+    fn title(&self) -> String;
+}
+impl TaskTitleLike for PlanTask {
+    fn title(&self) -> String {
+        self.title.clone()
+    }
+}
+impl TaskTitleLike for BlueprintTaskDraft {
+    fn title(&self) -> String {
+        self.title.clone()
+    }
+}
+
+/// DEV-0077.4-A.1 F1 §一一五：日志标记（Debug 观测用；不打印完整 Prompt/档案）。
+pub fn log_grounding_event(event: &str) {
+    println!("[AI-PLANNING] {event}");
+}
+
+// =====================================================================
+// DEV-0077.4-A.1 F2 · Waiting-User Planning Continuation & Future
+// Task Replacement（§十九/§二九-§六七/§六九）
+// =====================================================================
+
+/// F2 §二九/§三十：替换意图（replacement intent）确定性检测。
+/// 触发源 = original_request（Turn 1 原始请求）+ 本轮回答（第 N 项答案
+/// 常为「替换现有旧任务」）；不依赖模型自觉。纯文本语义，只用于
+/// **Planner 上下文与替换编译开关**，不作为任何权限旁路。
+pub fn is_replacement_intent(text: &str) -> bool {
+    let t: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    if t.is_empty() {
+        return false;
+    }
+    // 替换类动词（「重新生成/重新规划」本身蕴含以新代旧的执行语义）
+    let has_verb = ["替换", "取代", "代替", "覆盖", "重新生成", "重新规划", "作废", "清空"]
+        .iter()
+        .any(|v| t.contains(v));
+    if !has_verb {
+        return false;
+    }
+    // 计划域名词共现（防「清空桌面」类误报；规划请求语境下通常恒真）
+    ["任务", "计划", "安排", "旧", "现有", "目前", "规划"]
+        .iter()
+        .any(|n| t.contains(n))
+}
+
+/// F2 §三一：替换窗口 [today, today+13]（14 天）。
+pub fn replacement_window(today: &str) -> (String, String) {
+    let end = super::runtime::add_days(today, 13).unwrap_or_else(|_| today.to_string());
+    (today.to_string(), end)
+}
+
+/// F2 §六五/§六六：可替换未来任务选择器（read-only；不用 LLM）。
+/// 选择条件（§三二/§四〇/§四一/§四二，四重保护与蓝图重投影/recurring 同构）：
+/// 同 profile + 窗口内（含今天）+ 未归档 + 未完成（pending/in_progress）+ 用户未手改。
+/// completed 永不选中（即使日期在窗口内）；有历史 Session 的不选中（§四二
+/// 历史事实保护——留待正式确认时用户裁决）；批量 SELECT 无 N+1（§一一八）。
+pub fn select_replaceable_future_tasks(
+    conn: &Connection,
+    profile_id: i64,
+    window_start: &str,
+    window_end: &str,
+) -> Vec<(i64, String, Option<i64>)> {
+    let mut stmt = match conn.prepare(
+        "SELECT id, title, learning_item_id FROM tasks
+         WHERE profile_id=?1 AND archived_at IS NULL AND status IN ('pending','in_progress')
+           AND planned_date IS NOT NULL AND planned_date >= ?2 AND planned_date <= ?3
+           AND user_modified_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM study_sessions ss WHERE ss.task_id = tasks.id)
+         ORDER BY planned_date, id",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map(
+        rusqlite::params![profile_id, window_start, window_end],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?)),
+    )
+    .map(|rows| rows.filter_map(|x| x.ok()).collect())
+    .unwrap_or_default()
+}
+
+/// F2 §六七：替换编译——Production Plan ops（已含 Grounding）+ 旧任务软归档
+/// ops 合并为 ONE ChangeSet 序列。旧任务走 `task update archived_at="now"`
+/// （非破坏方案 B，§三四；Undo 可恢复）；新计划 ops 保持原序在前（其
+/// operation_ref 前向引用不受影响——归档 ops 只按 entity_id 定向）。
+pub fn compile_future_task_replacement(
+    selected_old: &[(i64, String, Option<i64>)],
+    new_plan_ops: Vec<ProposedOp>,
+    reason: &str,
+) -> Vec<ProposedOp> {
+    let mut ops = new_plan_ops;
+    for (id, title, _item) in selected_old {
+        ops.push(ProposedOp {
+            entity_type: "task".into(),
+            entity_id: Some(*id),
+            action: "update".into(),
+            after: json!({ "archived_at": "now" }),
+            reason: format!("替换旧未来任务：{title}（{reason}）"),
+            operation_ref: None,
+        });
+    }
+    ops
+}
+
+/// F2 §六三：Planner Truth 新区块——当前替换窗口内已有任务（模型必须知道
+/// 旧任务存在；规则 9 的「去重」语义因此失效，改由 replacement 通道处理）。
+/// 只读批量 SELECT；行数/字符上限防 Context 膨胀；不打印 learning_item 之外信息。
+pub fn future_tasks_truth_block(conn: &Connection, profile_id: i64, today: &str) -> String {
+    let (ws, we) = replacement_window(today);
+    let rows: Vec<(String, Option<String>, String)> = match conn.prepare(
+        "SELECT title, planned_date, status FROM tasks
+         WHERE profile_id=?1 AND archived_at IS NULL
+           AND planned_date IS NOT NULL AND planned_date >= ?2 AND planned_date <= ?3
+         ORDER BY planned_date, id LIMIT 60",
+    ) {
+        Ok(mut s) => s
+            .query_map(rusqlite::params![profile_id, ws, we], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?))
+            })
+            .map(|rows| rows.filter_map(|x| x.ok()).collect())
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    if rows.is_empty() {
+        return format!(
+            "【Current Future Tasks in Replacement Window（{ws} ~ {we}）】\n窗口内暂无已有任务。\n"
+        );
+    }
+    let mut lines = String::new();
+    let mut chars = 0usize;
+    let total = rows.len();
+    for (i, (title, date, status)) in rows.iter().enumerate() {
+        let line = format!(
+            "- {}（{} · {}）\n",
+            title.chars().take(60).collect::<String>(),
+            date.as_deref().unwrap_or("—"),
+            status
+        );
+        chars += line.chars().count();
+        if chars > 1600 && i + 1 < total {
+            lines.push_str(&format!("（其余 {} 条略——同窗口未列出）\n", total - i - 1));
+            break;
+        }
+        lines.push_str(&line);
+    }
+    format!(
+        "【Current Future Tasks in Replacement Window（{ws} ~ {we}）】\n以下旧任务已存在。用户如要求替换：不要重复生成同名任务；新任务照常输出，系统会在同一 ChangeSet 内把旧未来任务安全归档（completed/有学习记录的旧任务会被保留）。\n{lines}"
+    )
+}
+
+/// F2 §一一二：continuation Debug Trace（只记 keys/counts/ids）。
+pub fn log_continuation_event(event: &str) {
+    println!("[AI-CONTINUATION] {event}");
+}
+
+
 pub fn ops_within_limit(ops: &[ProposedOp]) -> bool {
     ops.len() <= MAX_PLAN_OPS
+}
+
+/// DEV-0077.2 F1 §六 · Apply 后 ReadBack 实际创建清单（自 DB 读取，零编造）。
+/// 返回「- Final Goal：…\n- REACH：…\n…」多行文本，供 Assistant Final Response；
+/// 各行只在真实存在时输出（REACH/SAFETY 缺行即如实缺行，不伪造）。
+pub fn planning_apply_readback_summary(conn: &rusqlite::Connection, profile_id: i64, today: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // Final Goal（active final 根）
+    let final_name: Option<String> = conn
+        .query_row(
+            "SELECT name FROM goals WHERE profile_id=?1 AND goal_level='final' AND status!='archived'",
+            rusqlite::params![profile_id],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(n) = final_name {
+        lines.push(format!("- Final Goal：{n}"));
+    }
+    // REACH / SAFETY（active）
+    let mut stmt = match conn.prepare(
+        "SELECT role, title FROM goal_targets WHERE profile_id=?1 AND status='active' ORDER BY role",
+    ) {
+        Ok(s) => s,
+        Err(_) => return lines.join("\n"),
+    };
+    let rows: Vec<(String, String)> = stmt
+        .query_map(rusqlite::params![profile_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map(|it| it.filter_map(|x| x.ok()).collect())
+        .unwrap_or_default();
+    drop(stmt);
+    for role in ["reach", "safety", "primary"] {
+        if let Some((_, title)) = rows.iter().find(|(r, _)| r == role) {
+            let label = match role {
+                "reach" => "REACH",
+                "safety" => "SAFETY",
+                _ => "Primary",
+            };
+            lines.push(format!("- {label}：{title}"));
+        }
+    }
+    // Blueprint（active 最新版）+ Phase / Milestone
+    let bp: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT id, title FROM planning_blueprints WHERE profile_id=?1 AND status='active'
+             ORDER BY version DESC LIMIT 1",
+            rusqlite::params![profile_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    if let Some((bid, title)) = bp {
+        let (ph, ms): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM planning_phases WHERE blueprint_id=?1),
+                        (SELECT COUNT(*) FROM planning_milestones WHERE blueprint_id=?1)",
+                rusqlite::params![bid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((0, 0));
+        lines.push(format!("- Blueprint：{title}"));
+        lines.push(format!("- Phase：{ph} 个"));
+        lines.push(format!("- Milestone：{ms} 个"));
+    }
+    // Formal Goal Tree（year 层）
+    let year_n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM goals WHERE profile_id=?1 AND goal_level='year' AND status!='archived'",
+            rusqlite::params![profile_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if year_n > 0 {
+        lines.push(format!("- Goal：年度目标 {year_n} 个"));
+    }
+    // 未来 7 天任务（含今天）
+    let horizon = super::runtime::add_days(today, 6).unwrap_or_else(|_| today.to_string());
+    let t7: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND planned_date>=?2 AND planned_date<=?3",
+            rusqlite::params![profile_id, today, horizon],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    lines.push(format!("- 未来7天任务：{t7} 项"));
+    lines.join("\n")
+}
+
+/// DEV-0077.2 §三十四/§三十五 · Planning Completion Contract 完整性校验。
+///
+/// 「只创建 Blueprint ≠ 规划完成」：explicit planning request 的完整 Draft 必须
+/// 覆盖 Final Goal / Blueprint / Phase / Milestone / 近期 Task。校验基于
+/// 「本轮 ops + DB 既有事实」双口径（例如 Final 根已存在且 brief 完整时，
+/// 本轮无需重复写）。
+///
+/// 分级（§三十七 Atomic Planning Completion）：
+/// - `missing_tasks`（返回 true）= 阻断级：execution planning 缺口，触发一次
+///   repair pass；repair 后仍缺 → 不得以「完整计划」名义交付；
+/// - 其余缺失（final_goal / milestone / reach_safety）= 提示级：战略层仍可
+///   交付审阅，但最终回复必须如实列出（禁止「计划已完成」话术）。
+pub struct PlanningCompleteness {
+    /// 阻断级：近期任务为 0（未来 7 天无 Task op）
+    pub missing_tasks: bool,
+    /// 提示级缺失清单（人话，供最终回复如实报告）
+    pub notes: Vec<String>,
+}
+
+pub fn validate_planning_completeness(
+    conn: &Connection,
+    profile_id: i64,
+    ops: &[ProposedOp],
+) -> PlanningCompleteness {
+    let mut notes = Vec::new();
+
+    // Final Goal：DB 已有完整 brief（outcome 非空）或 本轮写 brief
+    let final_brief_ready = {
+        let db_brief: Option<String> = conn
+            .query_row(
+                "SELECT goal_brief_json FROM goals WHERE profile_id=?1 AND goal_level='final'",
+                rusqlite::params![profile_id],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        let db_ok = db_brief
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .map(|b| {
+                b.get("outcome")
+                    .and_then(|x| x.as_str())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        let op_writes_brief = ops
+            .iter()
+            .any(|o| o.entity_type == "goal" && o.after.get("goal_brief").is_some());
+        db_ok || op_writes_brief
+    };
+    if !final_brief_ready {
+        notes.push("最终目标（Final Goal）尚未完善".to_string());
+    }
+
+    // Blueprint / Phase / Milestone（本轮 ops 口径——explicit planning 请求必须自含）
+    if !ops
+        .iter()
+        .any(|o| o.entity_type == "planning_blueprint" && o.action == "create")
+    {
+        notes.push("规划蓝图（Blueprint）缺失".to_string());
+    }
+    if !ops.iter().any(|o| o.entity_type == "planning_phase" && o.action == "create") {
+        notes.push("规划阶段（Phase）缺失".to_string());
+    }
+    if !ops
+        .iter()
+        .any(|o| o.entity_type == "planning_milestone" && o.action == "create")
+    {
+        notes.push("规划里程碑（Milestone）缺失".to_string());
+    }
+
+    // REACH / SAFETY：goal_targets 既有事实（目标对话产物；planner 不补写）
+    let (has_reach, has_safety) = {
+        let roles: Vec<String> = conn
+            .prepare(
+                "SELECT role FROM goal_targets WHERE profile_id=?1 AND status='active'",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map(rusqlite::params![profile_id], |r| r.get::<_, String>(0))
+                    .map(|it| it.filter_map(|x| x.ok()).collect())
+            })
+            .unwrap_or_default();
+        (roles.iter().any(|r| r == "reach"), roles.iter().any(|r| r == "safety"))
+    };
+    if !has_reach {
+        notes.push("REACH 主目标尚未设置（建议先在目标对话中确认）".to_string());
+    }
+    if !has_safety {
+        notes.push("SAFETY 保底目标尚未设置（建议先在目标对话中确认）".to_string());
+    }
+
+    // 阻断级：近期任务
+    let task_count = ops
+        .iter()
+        .filter(|o| o.entity_type == "task" && o.action == "create")
+        .count();
+    let missing_tasks = task_count == 0;
+    if missing_tasks {
+        notes.push("近期执行任务（未来 7 天）为 0".to_string());
+    }
+
+    PlanningCompleteness { missing_tasks, notes }
 }
 
 /// DEV-0059.2 §7：Blueprint scenario_type 解析（compile 前必须调用）。
@@ -1711,7 +2664,19 @@ pub fn apply_review_assessment(
                 serde_json::from_value(bp_val).map_err(|e| format!("AI 蓝图输出无法解析：{}", e))?;
             // DEV-0059.2 §7：Review 调整继承当前 active Blueprint 场景（不让模型随意改场景）
             bp.scenario_type = resolve_blueprint_scenario(conn, profile_id, &bp, true);
-            let draft = PlanDraft { blueprint: Some(bp.clone()), ..Default::default() };
+            // DEV-0077.4-A.1 F1 §四：Review 蓝图的 future_tasks 同受 Production
+            // Grounding Contract 约束 → 复盘输出可携带 learning_units（与 Planner
+            // 同契约；缺失且蓝图含任务 → compile 阶段 planning_grounding_required 拒绝）
+            let units: Vec<super::learning_grounding::LearningUnitDraft> = parsed
+                .get("learning_units")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            let draft = PlanDraft {
+                blueprint: Some(bp.clone()),
+                learning_units: units,
+                ..Default::default()
+            };
             let validation = validate_plan_draft(conn, profile_id, &draft);
             if !validation.errors.is_empty() {
                 let _ = rrepo.set_status(review_id, profile_id, "failed");
@@ -1725,7 +2690,14 @@ pub fn apply_review_assessment(
                 .list_active(profile_id, None, None)
                 .unwrap_or_default()
                 .is_empty();
-            let ops = compile_to_changeset_ops(None, has_active_gt, &draft);
+            // DEV-0077.4-A.1 F1：复盘调整路径同样走 Production 编译（禁 fallback；失败 → 0 mutation）
+            let ops = match compile_production_plan(conn, profile_id, None, has_active_gt, &draft) {
+                Ok((o, _)) => o,
+                Err(e) => {
+                    let _ = rrepo.set_status(review_id, profile_id, "failed");
+                    return Err(format!("学习关联校验未通过（正式数据未变化）：{e}"));
+                }
+            };
             if !ops_within_limit(&ops) {
                 let _ = rrepo.set_status(review_id, profile_id, "failed");
                 return Err("AI 蓝图内容超出单次可应用上限（正式数据未变化）".to_string());

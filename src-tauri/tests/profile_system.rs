@@ -60,7 +60,7 @@ fn test_migration_v005_schema_version_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
 
     // study_profiles 表存在
     let tables: Vec<String> = {
@@ -89,7 +89,7 @@ fn test_migration_v005_schema_version_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 24);
+    assert_eq!(count, 27);
 }
 
 #[test]

@@ -89,7 +89,8 @@ impl AiRuntimeEnvelope {
     }
 }
 
-fn valid_ymd(s: &str) -> bool {
+/// YYYY-MM-DD 格式 + 真实日历日校验（DEV-0066 §10.1：overview date 参数复用）。
+pub fn valid_ymd(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 10
         && b[4] == b'-'

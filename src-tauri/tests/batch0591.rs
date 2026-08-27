@@ -10,6 +10,7 @@
 //! T9 XLSX Personal Import（extract_xlsx_text → source saved）
 //! T10 No AI Manual Planning（无 Provider 可手工完成 GoalTarget+Blueprint+Phase+Milestone）
 
+use app_lib::ai::learning_grounding::{TaskGroundingDraft, TaskGroundingMode};
 use app_lib::ai::planner::{
     apply_review_assessment, build_planning_truth_context, BlueprintDraft, BlueprintMilestoneDraft,
     BlueprintPhaseDraft, BlueprintTaskDraft,
@@ -67,10 +68,17 @@ fn bp_fixture(today: &str) -> BlueprintDraft {
             date_precision: "month".into(),
             date_status: "estimated".into(),
         }],
+        // DEV-0077.4-A.1 F1：Production Contract（P1-P5）——future_tasks
+        // 逐条 grounding；fixture 同步（断言不变）。
         future_tasks: vec![BlueprintTaskDraft {
             title: "高数：强化题 20 题".into(),
             planned_date: today.to_string(),
             estimated_minutes: Some(120),
+            grounding: Some(TaskGroundingDraft {
+                mode: TaskGroundingMode::Learning,
+                unit_refs: vec!["math.adv".into()],
+                rationale: None,
+            }),
         }],
         assumptions: vec![],
         unresolved: vec![],
@@ -222,6 +230,11 @@ fn test_t5_review_change_blueprint_v2_chain() {
         "assessment_md": "建议进入强化阶段。",
         "risk_state": "attention",
         "recommendation": ["增加练习量"],
+        // DEV-0077.4-A.1 F1：复盘输出同 Planner 契约携带 learning_units
+        "learning_units": [
+            {"ref_key":"math","name":"数学","parent_ref":""},
+            {"ref_key":"math.adv","name":"高等数学强化","parent_ref":"math"}
+        ],
         "blueprint": serde_json::to_value(&bp2_draft).unwrap()
     })).unwrap();
     let outcome = apply_review_assessment(&conn, p, rid, &fixture).unwrap();
@@ -244,10 +257,12 @@ fn test_t5_review_change_blueprint_v2_chain() {
     assert_eq!(rev2.status, "completed");
     assert_eq!(rev2.user_decision, "change_applied");
     assert!(rev2.resulting_blueprint_id.is_some(), "应回填 resulting_blueprint_id");
+    // DEV-0077.2 F1：AI 编译路径 skip_projection——v2 的未来任务由本包 task ops
+    // 创建（不再 origin='blueprint' 投影）。
     let projected: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE planning_blueprint_id=?1 AND origin='blueprint' AND archived_at IS NULL",
-        params![active.id], |r| r.get(0)).unwrap();
-    assert_eq!(projected, 1, "v2 激活后投影未来任务");
+        "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NULL",
+        params![p], |r| r.get(0)).unwrap();
+    assert_eq!(projected, 1, "v2 激活后 task ops 创建未来任务");
 }
 
 // ==================== T6 · Evidence Trust ====================

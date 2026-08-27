@@ -60,6 +60,9 @@ impl<'a> SearchRepository<'a> {
 
     /// §44 search_higher：FTS5 查询 + snippet + rank + deep_link；强制 profile 隔离。
     /// query 为空 → 返回空（不当作全量扫描通道）。
+    /// DEV-0076 F.2 §三：Memory 命中二次校验——Search Index 只作候选，
+    /// 数据库真实状态（memory_records.status='confirmed'）是最终授权判断；
+    /// 历史/脏 FTS 中的 pending/rejected/dismissed/superseded 行不得返回。
     pub fn search(
         &self,
         profile_id: i64,
@@ -131,6 +134,8 @@ impl<'a> SearchRepository<'a> {
                 timestamp: ts,
             });
         }
+        // DEV-0076 F.2 §三：memory 实体二次授权（DB status = 事实源）
+        out = self.filter_memory_hits(out, profile_id)?;
         if !out.is_empty() {
             return Ok(out);
         }
@@ -161,7 +166,31 @@ impl<'a> SearchRepository<'a> {
                 timestamp: ts,
             });
         }
+        // CJK fallback 同样过 memory 授权门（两路一致，§三）
+        out = self.filter_memory_hits(out, profile_id)?;
         Ok(out)
+    }
+
+    /// DEV-0076 F.2 §三：Memory 命中二次授权——对 hits 中 entity_type="memory"
+    /// 的行，仅保留 memory_records 中 status='confirmed' 的（同 profile）。
+    /// Search Index = 候选；数据库真实状态 = 最终授权（脏/历史 FTS 兜底）。
+    fn filter_memory_hits(&self, mut hits: Vec<SearchHit>, profile_id: i64) -> Result<Vec<SearchHit>, String> {
+        let needs = hits.iter().any(|h| h.entity_type == "memory");
+        if !needs {
+            return Ok(hits);
+        }
+        let confirmed: std::collections::HashSet<i64> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM memory_records WHERE profile_id=?1 AND status='confirmed'")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![profile_id], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<std::collections::HashSet<_>, _>>().map_err(|e| e.to_string())?
+        };
+        hits.retain(|h| h.entity_type != "memory" || confirmed.contains(&h.entity_id));
+        Ok(hits)
     }
 
     /// Memory 检索（§35 权重：相关度 × importance × confidence × recency × superseded × source）。
@@ -193,12 +222,13 @@ impl<'a> SearchRepository<'a> {
             ids
         };
         // 加权排序（相关命中 + 活跃 + 权重/置信/新近；两步法：候选再内存排序）
+        // DEV-0076 §七：AI 检索口径 = confirmed（v027 后无 'active' 态）
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT id, memory_type, importance, confidence, created_at, status, source_kind
                  FROM memory_records
-                 WHERE profile_id = ?1 AND status = 'active'
+                 WHERE profile_id = ?1 AND status = 'confirmed'
                    AND (?2 = '' OR memory_key LIKE '%' || ?2 || '%' OR memory_value LIKE '%' || ?2 || '%')",
             )
             .map_err(|e| e.to_string())?;
@@ -224,7 +254,7 @@ impl<'a> SearchRepository<'a> {
             if !cands.iter().any(|c| c.0 == id) {
                 let ok = self.conn.query_row(
                     "SELECT id, memory_type, importance, confidence, created_at, 1 FROM memory_records
-                     WHERE id = ?1 AND profile_id = ?2 AND status = 'active'",
+                     WHERE id = ?1 AND profile_id = ?2 AND status = 'confirmed'",
                     params![id, profile_id],
                     |r| {
                         Ok((
@@ -474,9 +504,12 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
         }
     }
     // memory（memory_key；content=value）
+    // DEV-0076 F.2 §二：通用索引只收 confirmed——pending_confirmation/
+    // rejected/dismissed/superseded/draft 均不得进入 AI 可搜索索引
+    //（FINAL AUDIT P0：rebuild 旁路泄漏未确认记忆）。
     {
         let mut stmt = tx
-            .prepare("SELECT id, memory_key, memory_value FROM memory_records WHERE profile_id=?1 AND status!='superseded'")
+            .prepare("SELECT id, memory_key, memory_value FROM memory_records WHERE profile_id=?1 AND status='confirmed'")
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, String, String)> = stmt
             .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))

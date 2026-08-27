@@ -65,11 +65,11 @@ fn seed(conn: &Connection) -> Seed {
 #[test]
 fn test_v010_schema_and_old_data_preserved() {
     let conn = setup();
-    // v010 表 + 列存在；版本记录 10 条
+    // v010 表 + 列存在；版本记录 27 条（DEV-0076 §四：v027 追加）
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 24);
+    assert_eq!(count, 27);
     let cols: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(tasks)").unwrap();
         stmt.query_map([], |r| r.get::<_, String>(1))

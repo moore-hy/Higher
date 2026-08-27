@@ -1,4 +1,4 @@
-﻿//! DEV-0060.1 PART B · Skill System（Higher 自己的 Domain Skill Foundation）。
+//! DEV-0060.1 PART B · Skill System（Higher 自己的 Domain Skill Foundation）。
 //!
 //! - 不是 Claude Code Runtime / 外部 Agent Framework；Skill 随程序版本编译期嵌入
 //!   （include_str!），运行时 **0 次源码扫描**（AI-INV-004/005/013）。
@@ -63,6 +63,11 @@ pub const TOOL_REGISTRY: &[ToolSpec] = &[
     ToolSpec { name: "search_higher", permission: ToolPermission::Read, category: "read", affinity: "read" },
     ToolSpec { name: "search_memory", permission: ToolPermission::Read, category: "read", affinity: "personal" },
     ToolSpec { name: "read_personalization", permission: ToolPermission::Read, category: "read", affinity: "personal" },
+    // DEV-0066 §10 Phase B：Global Agent 全量读能力（overview 优先 + 私人资料 source 分页读；
+    // affinity="read" → Agent scopes（含 read）与 higher_read route 均可见）
+    ToolSpec { name: "get_higher_overview", permission: ToolPermission::Read, category: "read", affinity: "read" },
+    ToolSpec { name: "list_personalization_sources", permission: ToolPermission::Read, category: "read", affinity: "read" },
+    ToolSpec { name: "read_personalization_source", permission: ToolPermission::Read, category: "read", affinity: "read" },
     ToolSpec { name: "list_planning_sources", permission: ToolPermission::Read, category: "planning", affinity: "planning" },
     ToolSpec { name: "read_planning_source", permission: ToolPermission::Read, category: "planning", affinity: "planning" },
     ToolSpec { name: "list_active_goal_targets", permission: ToolPermission::Read, category: "planning", affinity: "planning" },

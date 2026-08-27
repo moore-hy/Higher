@@ -9496,6 +9496,128 @@ html[data-h-wallpaper="on"] .hdoc__codeblock {
   overflow-wrap: anywhere;
 }
 
+/* ---- DEV-0076 §八：AI 认知卡片（Memory Proposal；绿边） ---- */
+
+.aipanel__memcard {
+  margin: 6px 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(63, 185, 80, 0.45);
+  border-radius: 10px;
+  background: rgba(63, 185, 80, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aipanel__memcard-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ok);
+  line-height: 1.5;
+}
+
+.aipanel__memcard-q {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.aipanel__memcard-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.aipanel__memcard-ask {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.aipanel__memcard-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aipanel__memcard-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+/* ---- DEV-0077 Phase U1 §十四：AI 调整建议卡（Adaptation Proposal；蓝边） ---- */
+
+.aipanel__adapt-card {
+  margin: 6px 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aipanel__adapt-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent, #3b82f6);
+  line-height: 1.5;
+}
+
+.aipanel__adapt-evidence {
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.6;
+}
+
+.aipanel__adapt-reason {
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.aipanel__adapt-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.aipanel__adapt-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.aipanel__adapt-detail {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+.aipanel__adapt-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 4px;
+  line-height: 1.6;
+}
+
+.aipanel__adapt-result {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
 /* system 消息（§11 Apply 结果行） */
 .aipanel__msg--system {
   align-self: stretch;

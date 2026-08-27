@@ -1,3 +1,42 @@
+# DEV-0065.4 · Higher v1.0.0 Release Freeze · TRAE_RUN
+
+- **DEV ID**: DEV-0065.4（版本冻结 1.0.0 · WebView2 轻量化 · 浏览器 mock 发布隔离 · RC 构建；release engineering only）
+- **Timestamp Source**: SYSTEM · 2026-08-23（+08:00）
+- **Baseline**: **release/1.0.0** @ `bde225d022b7f9d13204049f0c1a798a44e16e24`（bde225d v1 预备基线）；Worktree Before: clean（仅 ?? 本任务书）——BASELINE GATE PASS
+- **角色边界**: 全部 18 项发布决策（§0.1）由 ChatGPT 预定，Trae 仅实现；RC 为 **RELEASE CANDIDATE ≠ Final Release**。
+
+## 执行记录
+### 1) 版本冻结（§5）
+`npm version 1.0.0 --no-git-tag-version`（package.json + lock root + packages[""]，**仅 3 行 version，零依赖解析变更**，无 UNEXPECTED_NPM_LOCK_DIFF）→ Cargo.toml 0.3.0→1.0.0 → cargo check 触发 Cargo.lock 自动更新（**仅 1 行 version diff**）→ tauri.conf.json 0.3.0→1.0.0 → README §2 状态表（版本 1.0.0 / release/1.0.0 freeze candidate / 最终 tag 待 Human Runtime，未宣称 RELEASED）。
+### 2) WebView2 轻量化（§4）
+tauri.conf `webviewInstallMode.type`: offlineInstaller → **downloadBootstrapper**（唯一决策，未用 skip/fixedRuntime/embedBootstrapper）；installerIcon/uninstallerIcon=icons/icon.ico 与 startMenuFolder 等 NSIS 字段为 bde225d 已备真值，保持不动。README §25 补三态安装语义 + 「不再内嵌 ~127MB 离线载荷」。
+### 3) 浏览器 mock 发布隔离（§7-§8）
+- `index.html`：mock 注入加 `if (window.__TAURI_INTERNALS__) return;` guard（真实 Tauri 不请求 /mock/inject.js；业务行为零变化）。
+- `vite.config.ts`：`publicDir: process.env.HIGHER_RELEASE_BUILD === "1" ? false : "public"`（普通 dev/build 不受影响；零新依赖）。
+- `public/mock/inject.js` 源保留未删。
+### 4) 构建脚本升级（§9-§16）
+Build-Higher-Release.ps1 重写：头部 = "Higher v1 Windows NSIS Release Build"；**HIGHER_RELEASE_BUILD=1 save→set→finally 恢复**（原值 null→Remove-Item；覆盖 npm run build 与 tauri build 的 beforeBuildCommand 二次构建）；**dist 双阶段卫生门**（首次构建后 + Tauri 构建后：禁 mock/.higher/.git/src/src-tauri/tests/node_modules/target/.data/.webview-data/README/package*/Cargo*/.env/.env.*/\*.ts/\*.tsx/\*.rs/\*.map → RELEASE_FRONTEND_CONTAMINATED）；**尺寸预算**（>125,829,120 → INSTALLER_SIZE_BUDGET_MISS）；**SHA256 独立复验**（Get-FileHash 重读 vs txt → SHA256_MISMATCH）；版本动态读 conf.version（Higher_${Version}_Setup.exe / _SHA256.txt）；UTF-8 BOM 重写（PS5.1 中文必需）。
+### 5) 新测试 + 授权更新（§27-§29）
+- 新建 **batch0654_release_freeze V01-V11 11/11**：版本六处/身份三冻结+变体禁列/Bundle（nsis-only·无 msi·useLocalToolsDir·frontendDist=../dist·windows=[]）/NSIS 全字段八项/WebView2=downloadBootstrapper+四禁/mock 源保留+index guard 先于注入/vite HIGHER_RELEASE_BUILD 开关/脚本设 env+finally/无 resources+externalBin（子串扫描排除 identifier 与 $schema 合法引用）/gitignore 八规则/脚本契约（动态版本·命名·worktree 门·卫生门·125829120·SHA 复验·v1 头部）。
+- **§29 授权旧断言更新 3 处**：batch0652 r02（0.3.0×6→1.0.0×6）、r07（offlineInstaller→downloadBootstrapper）、r19（「全文不得含 .data/.webview-data」→「不得存在复制/打包该数据的行」——与 §11 卫生门必须列出禁止项直接矛盾，语义收窄）。
+- **测试编写期 2 次自伤修复**：v09 首版禁 `.higher` 子串误中 identifier `com.higher.desktop`、禁 `node_modules` 误中 `$schema` 编辑器引用行 → 改为结构性断言（无 resources/externalBin）+ 排除 $schema 行的子串扫描。
+### 6) Regression Gate（§29）——全绿 274 项
+tsc 0 errors / npm run build ✓（release 模式实测 dist/mock=absent）/ cargo check 0 errors / **0654 11/11 · 0652 20/20 · 0651 20/20 · 064r2 27/27 · 064 28/28 · 063 18/18 · ai_panel 8/8 · 062r1 41/41 · 062r 44/44 · 062 57/57**（串行 RUST_TEST_THREADS=1）。
+### 7) RC 构建（§31-§35，-AllowDirty）
+脚本 14 步全过：worktree dirty 清单（10 M + 2 ??）→ HEAD bde225d → env=1 → tsc → vite(release) → 卫生门 clean → cargo check → 0652 20/20 → tauri build → 卫生门 clean → 定位 NSIS → 尺寸预算 → 拷贝 → SHA 复验 match → **finally env 恢复（实测 HIGHER_RELEASE_BUILD=[]）**。
+### 8) 审计结果（§32-§36/§43-§44）
+- **dist**（Tauri 构建后实测）：仅 `index.html + assets\`，14 文件 **3,131,381 B**；扩展分布 1 html/11 js/2 css；**mock/README/package*/Cargo*/.higher/.map/.ts/.tsx/.rs 全部 absent**。
+- **RC 产物**：源 `src-tauri\target\release\bundle\nsis\Higher_1.0.0_x64-setup.exe` → 公开 `release\Higher_1.0.0_Setup.exe`；**6,025,655 bytes = 5.75 MiB**（预算 ≤120 MiB ✓，优于偏好 <100 MiB ✓）；前值 221,745,349 → **节省 215,719,694 bytes，↓97.28%**（真值来自文件系统）；Higher.exe 21,758,464 bytes；SHA256 `f727665b14a375bf054b348a7d4c6f9798b20796b7317c9d9724e9f0694b6bd0`（独立复验 match）。
+- **§43 Secret 扫描**：tracked 文本零命中（sk-…/BEGIN PRIVATE KEY/Bearer）；api_key 命中全部为 schema 字段名/代码引用（§43 允许）。**§44 DevData**：.data/.webview-data/\*.db/.env 零 tracked。
+- **§36 边界**：未宣称安装包内部逐文件证明；自动化证据 = 输入配置 clean + dist clean + 无额外资源映射 + 尺寸达标。生产 `%LOCALAPPDATA%\com.higher.desktop\` 零触碰；未运行安装器。
+### 9) Git（§41/§53）——见最终报告
+Authorized 12 文件：package.json/package-lock.json/Cargo.toml/Cargo.lock/tauri.conf.json/index.html/vite.config.ts/scripts/Build-Higher-Release.ps1/README.md/.higher×2 + 新增 tests/batch0654_release_freeze.rs；**§24 冻结目录（src/pages|components|contexts|appearance|lib|utils + src-tauri/src）零 diff**；Schema v024 / Migration 0 / Dependency 0；**Commit=NO · Push=NO · Tag=NO · GitHub Release=NO**。
+
+## 后续（Human/ChatGPT，§47-§50）
+ChatGPT diff review → 人工 commit+push release/1.0.0 → **clean HEAD 无 -AllowDirty 重建** → 该产物做 Human Runtime（干净安装/页面/安装目录 runtime-only/重启持久化/重装保留/图标快捷方式卸载/SHA）→ 通过后 tag v1.0.0（指向实测 commit，不移动）→ GitHub Release「Higher v1.0.0」上传实测 EXE+SHA。**RC ≠ Final**。
+
+---
+
 # DEV-0065.3 · Higher v1 Release Cleanup & Repository Convergence · TRAE_RUN
 
 - **DEV ID**: DEV-0065.3（v1.0.0 冻结前的仓库收敛清理；**零功能 / 零 schema / 零依赖 / 不碰生产数据 / 不提交**）

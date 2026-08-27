@@ -34,6 +34,36 @@ pub mod compatibility;
 
 pub mod action_continuation;
 
+// DEV-0074 Phase A · Action Operating Layer（ActionPlan → Action Registry →
+// higher_action::execute_action → repository；目录结构按任务书 §六固定）
+pub mod actions;
+
+// DEV-0066 · Higher AI 2.0 Global Agent（Phase A：主运行时 + 短 Prompt + 工具集 +
+// global_agent workflow + §13 共享 Apply 实现；旧路径保留 legacy）
+pub mod agent;
+pub mod agent_prompt;
+pub mod agent_tools;
+pub mod commands;
+pub mod workflow;
+// DEV-0066 Phase B §10.1：get_higher_overview（全局概览，纯只读摘要）
+pub mod overview;
+// DEV-0066 Phase C §7/§11/§12：HigherAction 统一契约 + Permission Policy（Level 0-3）
+pub mod higher_action;
+pub mod permission;
+// DEV-0070 Phase F v2.0：Intelligence Layer（用户理解/目标理解/缺失判定/决策）
+pub mod intelligence;
+// DEV-0077：Continuous Planning & Adaptation Layer（§六固定文件，无 executor；
+// 写入统一经 higher_action::execute_higher_action_pack → ONE ChangeSet）
+pub mod adaptation;
+// DEV-0077.3：Canonical AI Runtime Event Protocol v1（唯一事件出口）
+pub mod runtime_events;
+// DEV-0077.4-A：Learning Load Evidence Layer（纯只读情报聚合；§二 Evidence ≠
+// Planning——不接 Planner Prompt，不触碰 Runtime Freeze 面）
+pub mod learning_load;
+// DEV-0077.4-A.1：Learning Grounding & Task Atomicity（Draft 单元解析/复用/校验；
+// 零写库——写入只能经 planner 编译的 ProposedOp → ONE ChangeSet）
+pub mod learning_grounding;
+
 use serde::{Deserialize, Serialize};
 
 /// AI 服务商（V1 仅 DeepSeek；结构允许未来扩展 openai_compatible，不散落特有字段）。

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Higher",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "identifier": "com.higher.desktop",
   "mainBinaryName": "Higher",
   "build": {
@@ -39,7 +39,7 @@
     ],
     "windows": {
       "webviewInstallMode": {
-        "type": "offlineInstaller"
+        "type": "downloadBootstrapper"
       },
       "nsis": {
         "installMode": "currentUser",

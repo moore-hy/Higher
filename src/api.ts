@@ -1379,7 +1379,7 @@ export const undoAiChangeSet = (profileId: number, id: number) =>
 
 /** 导入资料文件（txt / md / docx / pdf；后端提取文本 + sha256 去重） */
 export const importPersonalizationFiles = (profileId: number, paths: string[]) =>
-  invoke<PersonalizationSource[]>("import_personalization_files", { profileId, paths });
+  invoke<PersonalizationImportOutcome[]>("import_personalization_files", { profileId, paths });
 
 export const listPersonalizationSources = (profileId: number) =>
   invoke<PersonalizationSource[]>("list_personalization_sources", { profileId });
@@ -1404,6 +1404,83 @@ export const editPersonalizationProfile = (profileId: number, mdContent: string)
 /** 需求采集模板（Markdown 文本，前端下载保存） */
 export const getRequirementTemplate = () =>
   invoke<string>("get_requirement_template");
+
+/** DEV-0070 Phase F v2.0 §10：Higher 用户档案模板（Markdown 文本，前端下载保存） */
+export const getUserProfileTemplate = () =>
+  invoke<string>("get_user_profile_template");
+
+// =============== DEV-0076 · AI 记忆中心（Settings AI记忆 Tab + Chat 认知卡片） ===============
+
+/** DEV-0076 §九.1：AI 画像（UserContext 七字段，与后端 user_context.rs 对齐） */
+export interface AiProfile {
+  basic_information: string | null;
+  current_status: string | null;
+  abilities: string[];
+  resources: string[];
+  constraints: string[];
+  preferences: string[];
+  long_term_goals: string[];
+}
+
+/** DEV-0076 §九.2/§九.3：记忆条目 */
+export interface AiMemoryItem {
+  id: number;
+  memory_type: string;
+  category: string;
+  memory_key: string;
+  memory_value: string;
+  source_kind: string;
+  source_excerpt: string;
+  importance: number;
+  confidence: string;
+  status: string;
+  created_at: string;
+}
+
+export const listAiMemories = (profileId: number) =>
+  invoke<{ confirmed: AiMemoryItem[]; pending: AiMemoryItem[] }>("list_ai_memories", { profileId });
+
+export const confirmAiMemory = (profileId: number, memoryId: number) =>
+  invoke<void>("confirm_ai_memory", { profileId, memoryId });
+
+export const rejectAiMemory = (profileId: number, memoryId: number) =>
+  invoke<void>("reject_ai_memory", { profileId, memoryId });
+
+export const updateAiMemory = (
+  profileId: number,
+  memoryId: number,
+  fields: {
+    memory_type: string;
+    category: string;
+    memory_key: string;
+    memory_value: string;
+    source_excerpt: string;
+  },
+) =>
+  invoke<void>("update_ai_memory", {
+    profileId,
+    memoryId,
+    memoryType: fields.memory_type,
+    category: fields.category,
+    memoryKey: fields.memory_key,
+    memoryValue: fields.memory_value,
+    sourceExcerpt: fields.source_excerpt,
+  });
+
+export const deleteAiMemory = (profileId: number, memoryId: number) =>
+  invoke<void>("delete_ai_memory", { profileId, memoryId });
+
+export const getAiProfile = (profileId: number) =>
+  invoke<AiProfile>("get_ai_profile", { profileId });
+
+export const saveAiProfile = (profileId: number, ctx: AiProfile) =>
+  invoke<void>("save_ai_profile", { profileId, ctx });
+
+/** DEV-0070 Phase F v2.1 F21-01：导入返回项（source + 明确分析状态） */
+export interface PersonalizationImportOutcome {
+  source: PersonalizationSource;
+  analysis_status: string; // analyzed | analysis_pending | analysis_failed
+}
 
 // =============== DEV-0059 · PersonalProfile / GoalTarget / Planning / Review ===============
 
@@ -1741,8 +1818,8 @@ export const vaultExportEvents = () => invoke<string>("vault_export_events");
 
 /**
  * 启动一轮后台对话（立即返回 run_id）。
- * 事件（payload = { run_id, data }）：ai://delta / ai://source / ai://changeset /
- * ai://run-status（completed | cancelled | waiting_approval | failed）/ ai://error。
+ * 事件（payload = { run_id, data }）：ai://runtime（DEV-0077.3 canonical）/
+ * ai://delta / ai://source / ai://changeset / ai://run-status / ai://error。
  */
 export const aiStartRun = (args: {
   profileId: number;
@@ -1756,6 +1833,9 @@ export const aiStartRun = (args: {
   localDate?: string | null;
   localDatetime?: string | null;
   timezoneOffsetMinutes?: number | null;
+  /** DEV-0077.3 §十四-§十六：invoke 前生成的 Runtime Correlation ID——
+   * run_id 尚未返回时前端已可凭它匹配 ai://runtime 事件（防 run_id race） */
+  clientTurnId?: string | null;
 }) =>
   invoke<string>("ai_start_run", {
     profileId: args.profileId,
@@ -1768,13 +1848,79 @@ export const aiStartRun = (args: {
     localDate: args.localDate ?? null,
     localDatetime: args.localDatetime ?? null,
     timezoneOffsetMinutes: args.timezoneOffsetMinutes ?? null,
+    clientTurnId: args.clientTurnId ?? null,
   });
 
 /** 取消正在运行的 run（返回是否成功发出取消） */
 export const aiCancelRun = (runId: string) =>
   invoke<boolean>("ai_cancel_run", { runId });
 
+/** DEV-0077.3 §五十六：Run Snapshot（read-only；Watchdog/Reconcile 的 DB Truth 通道） */
+export interface AiRunSnapshot {
+  run_id: string;
+  conversation_id: number;
+  profile_id: number;
+  /** running | completed | needs_user_input | failed | cancelled（事件语义统一） */
+  status: string;
+  workflow_state: string;
+  updated_at: string;
+  has_assistant_message: boolean;
+}
+
+export const aiGetRunSnapshot = (runId: string) =>
+  invoke<AiRunSnapshot>("ai_get_run_snapshot", { runId });
+
 export const aiActiveRunCount = () => invoke<number>("ai_active_run_count");
+
+// ---- DEV-0077 Phase U1 · Adjustment Proposal ----
+
+/** ai://adaptation_proposal 事件 payload（前端不解析 final_text，§七固定协议） */
+export interface AdaptationProposalEvent {
+  run_id: string;
+  profile_id: number;
+  conversation_id: number;
+  /** pending | applied | dismissed */
+  state: string;
+  reason: string;
+  confidence: number;
+  evidence: {
+    window_days: number;
+    planned_minutes: number;
+    actual_minutes: number;
+    completed_task_count: number;
+    unfinished_task_count: number;
+    overdue_task_count: number;
+  };
+  deviations: { type: string; explanation: string }[];
+  adjustments: { kind: string; summary: string }[];
+}
+
+/** 应用调整建议（后端 Stored Proposal 原 intents → ONE ChangeSet → ReadBack；不重新调用 Analyzer） */
+export const applyAdaptationProposal = (args: {
+  profileId: number;
+  conversationId: number;
+  proposalRunId: string;
+}) =>
+  invoke<{ applied_change_set_id: number | null; summary: string }>(
+    "apply_adaptation_proposal",
+    {
+      profileId: args.profileId,
+      conversationId: args.conversationId,
+      proposalRunId: args.proposalRunId,
+    }
+  );
+
+/** 暂不调整（pending → dismissed；0 business mutation） */
+export const dismissAdaptationProposal = (args: {
+  profileId: number;
+  conversationId: number;
+  proposalRunId: string;
+}) =>
+  invoke<boolean>("dismiss_adaptation_proposal", {
+    profileId: args.profileId,
+    conversationId: args.conversationId,
+    proposalRunId: args.proposalRunId,
+  });
 
 /** 用系统浏览器打开来源 URL（sid 优先从 Source Registry 解析；SSRF 校验在后端） */
 export const openExternalUrl = (

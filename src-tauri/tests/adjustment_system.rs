@@ -65,7 +65,11 @@ fn test_migration_v008_applied_and_idempotent() {
     };
     // DEV-0059.1 §9：v022（personalization_sources 支持 xlsx）已追加
     // DEV-0060.1 §17：v023（recurring_task_semantics）已追加
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+    // v024（ai_provider_profiles / action continuation）已追加（DEV-0066 Gate 修正：预存断言停在 23）
+    // v025（ai_runs.status 增加 waiting_user，DEV-0066 Phase E）已追加
+    // v026（personalization_profiles.user_context_json，DEV-0070 Phase F v2.0）已追加
+    // v027（memory_confirmation_lifecycle，DEV-0076 §四）已追加
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
 
     let columns: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(adjustments)").unwrap();
@@ -87,7 +91,8 @@ fn test_migration_v008_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 24);
+    // DEV-0076 §四：v027 追加后 27 条
+    assert_eq!(count, 27);
 }
 
 #[test]

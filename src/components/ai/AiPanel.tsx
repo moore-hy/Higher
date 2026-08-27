@@ -4,23 +4,48 @@ import { useNavigate } from "react-router-dom";
 import { isTauriRuntime } from "../../utils/tauriEnv";
 import {
   aiCancelRun,
+  aiGetRunSnapshot,
   aiStartRun,
+  applyAdaptationProposal,
   archiveAiConversation,
+  confirmAiMemory,
   createAiConversation,
+  dismissAdaptationProposal,
   getActiveAiProfiles,
   listAiConversations,
+  listAiMemories,
   listAiMessages,
   listAiProviderProfiles,
   listLearningItemsByProfile,
   openExternalUrl,
+  rejectAiMemory,
   setActiveAiProfiles,
+  updateAiMemory,
 } from "../../api";
+import type { AdaptationProposalEvent } from "../../api";
 import AiProposalReview from "../AiProposalReview";
 import ChangeSetReview from "../ChangeSetReview";
 import Markdown, { type MdCitation } from "./Markdown";
 import { humanizeError, useAiPanel } from "./AiPanelContext";
 import type { AiScope } from "./AiPanelContext";
+import {
+  bindRunId,
+  confirmHydrated,
+  createClientTurnId,
+  initialRuntimeState,
+  isBusyPhase,
+  isTerminalStatus,
+  legacyDeltaInto,
+  legacyErrorInto,
+  legacyRunStatusInto,
+  reduceAiRuntimeEvent,
+  stageLabel,
+  startTurn,
+  watchdogResolve,
+} from "./runtimeState";
+import type { AiRuntimeUiState, RuntimeEventPayload } from "./runtimeState";
 import { useActiveProfile } from "../../contexts/ActiveProfileContext";
+import { startupMark } from "../../startupTrace";
 import type {
   AiConversation,
   AiMessage,
@@ -33,6 +58,14 @@ import type {
 interface RunEvent<T> {
   run_id: string;
   data: T;
+}
+
+/** DEV-0076 §八：ai://memory_proposals 事件卡片项（与后端 MemoryProposalCard 对齐） */
+interface MemoryProposalCardData {
+  memory_id: number;
+  kind: string;
+  memory_type: string;
+  question: string;
 }
 
 /** 消息分页大小（加载最近 50 / 「加载更早」） */
@@ -50,6 +83,14 @@ function localIsoDate(d = new Date()): string {
 function localIsoDatetime(d = new Date()): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${localIsoDate(d)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** DEV-0077 Phase U1 §十四：建议卡证据分钟的人话展示（1680 → 28h / 760 → 12h40m） */
+function fmtAdaptMinutes(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h <= 0) return `${m}m`;
+  return m === 0 ? `${h}h` : `${h}h${m}m`;
 }
 
 /**
@@ -121,7 +162,14 @@ export default function AiPanel() {
   const [hasMoreMsgs, setHasMoreMsgs] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
-  const [streamText, setStreamText] = useState("");
+  /**
+   * DEV-0077.3 §十八/§十九：Runtime 状态机（唯一事实源；纯 reducer，可测试）。
+   * streamText 从 rt 派生（§四十三：terminal 后保留，hydrate 确认后才清）。
+   */
+  const [rt, setRt] = useState<AiRuntimeUiState>(initialRuntimeState);
+  const rtRef = useRef(rt);
+  rtRef.current = rt;
+  const streamText = rt.streamText;
   const [streamSources, setStreamSources] = useState<WebSource[]>([]);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [stopped, setStopped] = useState(false);
@@ -135,6 +183,24 @@ export default function AiPanel() {
   const [guardMsg, setGuardMsg] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [conversations, setConversations] = useState<AiConversation[]>([]);
+  // DEV-0076 §八：AI 认知卡片（本轮 run 收口产生的 Memory Proposal）
+  const [memoryProposals, setMemoryProposals] = useState<MemoryProposalCardData[]>([]);
+  /** 卡片「修改」内联编辑（拉取 pending 完整条目；仅编辑内容，保存后仍待用户确认） */
+  const [memEdit, setMemEdit] = useState<{
+    id: number;
+    memory_type: string;
+    category: string;
+    memory_key: string;
+    memory_value: string;
+    source_excerpt: string;
+  } | null>(null);
+  const [memoryBusy, setMemoryBusy] = useState<number | null>(null);
+  // DEV-0077 Phase U1 §十四：AI 调整建议卡（Proactive SuggestAdjustment → Proposal Card；
+  // 应用=后端 Stored 原 intents → ONE ChangeSet；暂不=dismissed；详情=纯前端展开）
+  const [adaptProposal, setAdaptProposal] = useState<AdaptationProposalEvent | null>(null);
+  const [adaptDetail, setAdaptDetail] = useState(false);
+  const [adaptBusy, setAdaptBusy] = useState<"apply" | "dismiss" | null>(null);
+  const [adaptResult, setAdaptResult] = useState<string | null>(null);
 
   // 事件回调里读取最新值（listener 只注册一次）
   const runIdRef = useRef<string | null>(null);
@@ -143,6 +209,15 @@ export default function AiPanel() {
   const lastUserTextRef = useRef<string>("");
 
   profileIdRef.current = activeProfile?.id ?? null;
+
+  /**
+   * DEV-0077.2 §十二：hydration 请求序号——Only latest hydration may commit state。
+   * 旧请求（慢返回）不得覆盖新会话/新 run 已刷新的消息列表。
+   */
+  const hydrationSeqRef = useRef(0);
+  const commitIfLatest = useCallback((seq: number, commit: () => void) => {
+    if (seq === hydrationSeqRef.current) commit();
+  }, []);
 
   const busy = runBusy || actionBusy;
 
@@ -192,31 +267,83 @@ export default function AiPanel() {
     }
   }, [proposal, activeProfile, proposalItems.length, setProposalItems]);
 
-  /** 从 DB 刷新当前会话消息（completed / waiting_approval / cancelled 后） */
+  /** 从 DB 刷新当前会话消息（message_committed / 任何 terminal 后，§四十二/§四十四） */
   const refreshMessages = useCallback(async () => {
     const pid = profileIdRef.current;
     const cid = conversationIdRef.current;
     if (pid == null || cid == null) return;
+    // DEV-0077.2 §十二：登记本次 hydration 序号；仅最新请求允许提交 state
+    const seq = ++hydrationSeqRef.current;
     try {
       const msgs = await listAiMessages(pid, cid, MSG_PAGE);
-      setConvoMsgs(msgs);
-      setMsgOffset(msgs.length);
-      setHasMoreMsgs(msgs.length >= MSG_PAGE);
-      // 最终落库消息替换流式占位
-      setStreamText("");
-      setStreamSources([]);
+      commitIfLatest(seq, () => {
+        setConvoMsgs(msgs);
+        setMsgOffset(msgs.length);
+        setHasMoreMsgs(msgs.length >= MSG_PAGE);
+        // DEV-0077.3 §四十二/§四十三（UI-TC005/006）：只有确认 persisted
+        // assistant message 真正出现在 convoMsgs 后才清 transient ——
+        // terminal 已到但 hydrate 未完成期间流式内容保持可见（防内容消失）。
+        const cur = rtRef.current;
+        const rid = cur.runId;
+        const hasCommitted =
+          cur.committedMessageId != null
+            ? msgs.some((m) => m.id === cur.committedMessageId)
+            : msgs.some(
+                (m) => m.role === "assistant" && rid != null && m.run_id === rid,
+              );
+        const next = confirmHydrated(cur, hasCommitted);
+        setRt(next);
+        if (next.streamText === "") setStreamSources([]);
+      });
     } catch {
       /* 刷新失败保留流式内容 */
     }
-  }, []);
+  }, [commitIfLatest]);
+
+  /**
+   * §十八：runBusy 由 Runtime phase 派生（legacy 事件也经 reducer 归一）。
+   * §四十五-§四十七（UI-TC007）：Event 全丢兜底 watchdog——busy 期间
+   * 每 1200ms 低频查询 DB snapshot（本地 SQLite 可承受；禁 100ms 轮询）。
+   */
+  useEffect(() => {
+    setRunBusy(isBusyPhase(rt.phase));
+  }, [rt.phase]);
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const cur = rtRef.current;
+    if (!isBusyPhase(cur.phase) || cur.runId == null) return;
+    let halted = false;
+    const tick = async () => {
+      if (halted) return;
+      try {
+        const snap = await aiGetRunSnapshot(cur.runId!);
+        if (halted) return;
+        if (isTerminalStatus(snap.status)) {
+          // §四十六：DB 终态 → reconcile 并结束 watchdog（§三 DB=Truth）
+          setRt((s) => watchdogResolve(s, snap.status));
+          void refreshMessages();
+        }
+      } catch {
+        /* run_not_found（极早期 tick）：继续等待 */
+      }
+    };
+    const h = window.setInterval(() => void tick(), 1200);
+    return () => {
+      halted = true;
+      window.clearInterval(h);
+    };
+  }, [rt.phase, rt.runId, refreshMessages]);
 
   /** 加载会话消息（历史抽屉点击 / 档案初始化共用） */
   const loadConversation = useCallback(async (pid: number, cid: number) => {
+    const seq = ++hydrationSeqRef.current;
     const msgs = await listAiMessages(pid, cid, MSG_PAGE);
-    setConvoMsgs(msgs);
-    setMsgOffset(msgs.length);
-    setHasMoreMsgs(msgs.length >= MSG_PAGE);
-  }, []);
+    commitIfLatest(seq, () => {
+      setConvoMsgs(msgs);
+      setMsgOffset(msgs.length);
+      setHasMoreMsgs(msgs.length >= MSG_PAGE);
+    });
+  }, [commitIfLatest]);
 
   /** 档案切换 / 首次挂载：恢复最近会话（无则新建；DEV-0061R §33 统一 mode=assistant legacy 值） */
   useEffect(() => {
@@ -226,25 +353,37 @@ export default function AiPanel() {
     setConversationId(null);
     conversationIdRef.current = null;
     setConvoMsgs([]);
-    setStreamText("");
+    // §四十九：切档案 = 更换 client_turn scope + 清 transient（不动后台 run）
+    setRt(initialRuntimeState());
     setStreamSources([]);
     setStreamError(null);
     setPendingChangeSet(null);
     setGuardMsg(null);
     setStopped(false);
     setRunBusy(false);
+    setMemoryProposals([]);
+    setMemEdit(null);
+    // DEV-0077 Phase U1 §十八：切档案/会话清理建议卡（workflow payload 中状态仍真实存在）
+    setAdaptProposal(null);
+    setAdaptDetail(false);
+    setAdaptResult(null);
+    setAdaptBusy(null);
     runIdRef.current = null;
     setRunId(null);
     (async () => {
       try {
         const convs = await listAiConversations(pid, 20);
         if (cancelled) return;
+        // DEV-0077.2 Part A §五：T6 = AiPanel conversations loaded
+        startupMark("t6_ai_conversations_ready");
         const latest = convs.length > 0 ? convs[0] : null;
         const conv = latest ?? (await createAiConversation(pid, "assistant"));
         if (cancelled) return;
         conversationIdRef.current = conv.id;
         setConversationId(conv.id);
         await loadConversation(pid, conv.id);
+        // T7 = AiPanel latest messages hydrated
+        startupMark("t7_ai_messages_ready");
       } catch {
         /* 会话初始化失败：发送时再补建 */
       }
@@ -270,8 +409,44 @@ export default function AiPanel() {
       });
     };
 
-    reg<{ delta: string }>("ai://delta", (d) => {
-      setStreamText((t) => t + (d.delta ?? ""));
+    // DEV-0077.3 §七/§十七/§五十：canonical `ai://runtime`（Protocol v1）。
+    // 过滤四元组：client_turn_id + profile_id + conversation_id（run_id 在
+    // reducer 内绑定校验）——run_id 尚未返回时凭 client_turn_id 即可接收
+    //（UI-TC002，防 run_id race）。
+    void listen<RuntimeEventPayload>("ai://runtime", (e) => {
+      const p = e.payload;
+      const cur = rtRef.current;
+      if (cur.activeClientTurnId == null || p.client_turn_id == null) return;
+      if (p.client_turn_id !== cur.activeClientTurnId) return; // UI-TC003
+      if (
+        profileIdRef.current != null &&
+        p.profile_id != null &&
+        p.profile_id !== profileIdRef.current
+      )
+        return;
+      if (
+        conversationIdRef.current != null &&
+        p.conversation_id != null &&
+        p.conversation_id !== conversationIdRef.current
+      )
+        return;
+      setRt((s) => reduceAiRuntimeEvent(s, p));
+      // §四十二：message_committed 立即 refresh；§四十四：任何 terminal 都 reconcile
+      if (p.kind === "message_committed" || p.kind === "terminal") {
+        void refreshMessages();
+      }
+    }).then((u) => {
+      if (alive) unsubs.push(u);
+      else u();
+    });
+
+    // ---- §五十四：legacy 兼容通道（经 reducer Adapter 归一，双听过渡期） ----
+    // DEV-0077.2 §九（BUG-1 修复）：agent 路径后端 payload key 为 "text"（非流式
+    // 轮全文补发），legacy 路径为 "delta"——双 key 兼容；流式轮后端只走 canonical
+    // delta（round_streamed 抑制 legacy 重发），两通道不会双份。
+    reg<{ delta?: string; text?: string }>("ai://delta", (d, rid) => {
+      const chunk = d.delta ?? d.text ?? "";
+      if (chunk) setRt((s) => legacyDeltaInto(s, rid, chunk));
     });
     reg<WebSource>("ai://source", (s) => {
       setStreamSources((prev) => (prev.some((x) => x.sid === s.sid) ? prev : [...prev, s]));
@@ -279,8 +454,9 @@ export default function AiPanel() {
     reg<{ change_set_id: number; title: string; count: number }>("ai://changeset", (d) => {
       setPendingChangeSet(d);
     });
-    reg<{ status: string; needs_assistant?: string; message?: string }>("ai://run-status", (d) => {
-      setRunBusy(false);
+    reg<{ status: string; needs_assistant?: string; message?: string }>("ai://run-status", (d, rid) => {
+      // §五十四：legacy 终态经 Adapter 归一（runBusy 由 phase 派生）
+      setRt((s) => legacyRunStatusInto(s, rid, d.status));
       if (d.status === "waiting_approval") {
         // DEV-0061R §34：needs_assistant 语义已废弃（Unified AI）；waiting_approval =
         // ChangeSet 已生成，刷新会话展示提案卡
@@ -309,8 +485,19 @@ export default function AiPanel() {
         d.status === "handoff_chat"
       ) {
         void refreshMessages();
+      } else if (
+        // DEV-0077.2 §九（BUG-2 修复）：waiting_user / adaptation 问询挂起与
+        // adaptation failed——assistant 消息已在 run 返回前落库（agent.rs 收口
+        // ⑦ 先持久化后 emit），此前这两个状态无分支 → 消息落库却不可见，
+        // 直到下一轮 run 才被顺带刷出（问题 A「下一轮才出现」的主因之一）。
+        d.status === "needs_user_input" ||
+        d.status === "waiting_user" ||
+        d.status === "failed"
+      ) {
+        void refreshMessages();
       }
-      // failed：由 ai://error 展示
+      // provider 级 Err：由 ai://error 展示（已完成路径的 failed 也走上面 refresh
+      // 让落库的失败说明可见）
     });
     // DEV-0058 §144-152：Apply 后全系统同步——广播事件触发全局数据刷新
     // （Planning/Today/Calendar/Knowledge 同源重查；非 run 事件，不过滤 runId）
@@ -320,9 +507,21 @@ export default function AiPanel() {
       if (alive) unsubs.push(u);
       else u();
     });
-    reg<{ error: string }>("ai://error", (d) => {
-      setRunBusy(false);
+    reg<{ error: string }>("ai://error", (d, rid) => {
+      // §五十二/§五十四：错误展示保留；终态化由后续 terminal（canonical/legacy）完成
+      setRt((s) => legacyErrorInto(s, rid, String(d.error)));
       setStreamError(humanizeError(String(d.error)));
+    });
+    // DEV-0076 §八：收口产生的 Memory Proposal → AI 认知卡片（确认保存/修改/忽略）
+    reg<{ proposals: MemoryProposalCardData[] }>("ai://memory_proposals", (d) => {
+      setMemoryProposals((prev) => [...prev, ...(d.proposals ?? [])]);
+    });
+    // DEV-0077 Phase U1 §七/§十四：Adaptation Proposal Card（结构化事件，不解析 final_text）
+    reg<AdaptationProposalEvent>("ai://adaptation_proposal", (d) => {
+      setAdaptProposal(d);
+      setAdaptDetail(false);
+      setAdaptResult(null);
+      setAdaptBusy(null);
     });
 
     return () => {
@@ -353,6 +552,48 @@ export default function AiPanel() {
 
   // ---------------- 发送 / 停止 / 模式 ----------------
 
+  // ---- DEV-0077 Phase U1 §十五/§十七：建议卡按钮（不得发自然语言让模型重新理解） ----
+  async function onApplyAdaptProposal() {
+    const pid = profileIdRef.current;
+    const cid = conversationIdRef.current;
+    if (!adaptProposal || adaptBusy != null || pid == null || cid == null) return;
+    setAdaptBusy("apply");
+    try {
+      const out = await applyAdaptationProposal({
+        profileId: pid,
+        conversationId: cid,
+        proposalRunId: adaptProposal.run_id,
+      });
+      setAdaptProposal((p) => (p ? { ...p, state: "applied" } : p));
+      setAdaptResult(`已应用。${out.summary}`);
+      triggerRefresh();
+    } catch (e) {
+      setAdaptResult(`应用未生效：${humanizeError(String(e))}`);
+    } finally {
+      setAdaptBusy(null);
+    }
+  }
+
+  async function onDismissAdaptProposal() {
+    const pid = profileIdRef.current;
+    const cid = conversationIdRef.current;
+    if (!adaptProposal || adaptBusy != null || pid == null || cid == null) return;
+    setAdaptBusy("dismiss");
+    try {
+      await dismissAdaptationProposal({
+        profileId: pid,
+        conversationId: cid,
+        proposalRunId: adaptProposal.run_id,
+      });
+      setAdaptProposal((p) => (p ? { ...p, state: "dismissed" } : p));
+      setAdaptResult("已暂不调整（数据未变化）。之后仍可重新发起复盘，生成新的建议。");
+    } catch (e) {
+      setAdaptResult(humanizeError(String(e)));
+    } finally {
+      setAdaptBusy(null);
+    }
+  }
+
   /** §16：本地 push 用户消息 → aiStartRun（立即返回 runId）→ busy，按钮变停止 */
   async function send(text: string) {
     const pid = profileIdRef.current;
@@ -375,8 +616,11 @@ export default function AiPanel() {
     setShowChangeSet(false);
     setGuardMsg(null);
     setStreamError(null);
-    setStreamText("");
     setStreamSources([]);
+    // DEV-0077.3 §十四/§二十（UI-TC001）：invoke 之前创建 client_turn_id 并
+    // 立即进入 starting —— 点击 Send 零空白等待（「正在处理…」即刻可见）。
+    const clientTurnId = createClientTurnId();
+    setRt((s) => startTurn(s, clientTurnId));
     setConvoMsgs((m) => [
       ...m,
       {
@@ -413,13 +657,20 @@ export default function AiPanel() {
         localDate: localIsoDate(),
         localDatetime: localIsoDatetime(),
         timezoneOffsetMinutes: -new Date().getTimezoneOffset(),
+        // DEV-0077.3 §十六：Correlation ID 透传（invoke 前已知 → 事件可先于
+        // run_id 返回到达，前端凭它匹配，UI-TC002）
+        clientTurnId,
       });
       runIdRef.current = rid;
       setRunId(rid);
+      // §十七：run_id 返回后绑定（此后同 turn 错误 run_id 拒绝）
+      setRt((s) => bindRunId(s, rid));
     } catch (e) {
       setRunBusy(false);
       runIdRef.current = null;
       setRunId(null);
+      // invoke 失败：本轮 runtime 收口 failed（无 run 可 reconcile，错误即时可见）
+      setRt((s) => ({ ...s, phase: "failed", terminalStatus: "failed" }));
       setStreamError(humanizeError(String(e)));
     }
   }
@@ -457,6 +708,70 @@ export default function AiPanel() {
     }
   }
 
+  // ---------------- DEV-0076 §八：AI 认知卡片操作 ----------------
+
+  /** 确认保存（pending → confirmed）/ 忽略（pending → rejected）；成功后移除卡片 */
+  async function resolveMemoryProposal(memoryId: number, action: "confirm" | "reject") {
+    const pid = profileIdRef.current;
+    if (pid == null) return;
+    setMemoryBusy(memoryId);
+    try {
+      if (action === "confirm") await confirmAiMemory(pid, memoryId);
+      else await rejectAiMemory(pid, memoryId);
+      setMemoryProposals((prev) => prev.filter((p) => p.memory_id !== memoryId));
+      setMemEdit(null);
+    } catch (e) {
+      setStreamError(humanizeError(String(e)));
+    } finally {
+      setMemoryBusy(null);
+    }
+  }
+
+  /** 修改：拉取 pending 完整条目 → 内联编辑内容（保存后卡片显示新值，仍待确认） */
+  async function openMemoryEdit(card: MemoryProposalCardData) {
+    const pid = profileIdRef.current;
+    if (pid == null) return;
+    try {
+      const { pending } = await listAiMemories(pid);
+      const m = pending.find((x) => x.id === card.memory_id);
+      setMemEdit({
+        id: card.memory_id,
+        memory_type: m?.memory_type ?? card.memory_type,
+        category: m?.category ?? "",
+        memory_key: m?.memory_key ?? "",
+        memory_value: m?.memory_value ?? card.question,
+        source_excerpt: m?.source_excerpt ?? "",
+      });
+    } catch (e) {
+      setStreamError(humanizeError(String(e)));
+    }
+  }
+
+  /** 保存修改（update_ai_memory，source_kind → user_edit）；卡片 question 同步为修改后内容 */
+  async function saveMemoryEdit() {
+    const pid = profileIdRef.current;
+    if (pid == null || !memEdit) return;
+    setMemoryBusy(memEdit.id);
+    try {
+      await updateAiMemory(pid, memEdit.id, {
+        memory_type: memEdit.memory_type,
+        category: memEdit.category,
+        memory_key: memEdit.memory_key,
+        memory_value: memEdit.memory_value,
+        source_excerpt: memEdit.source_excerpt,
+      });
+      const value = memEdit.memory_value;
+      setMemoryProposals((prev) =>
+        prev.map((p) => (p.memory_id === memEdit.id ? { ...p, question: value } : p)),
+      );
+      setMemEdit(null);
+    } catch (e) {
+      setStreamError(humanizeError(String(e)));
+    } finally {
+      setMemoryBusy(null);
+    }
+  }
+
   // DEV-0061R §33：模式切换 / 旧续跑入口已删除（Unified Higher AI，
   // 无双模式；写入恒走 ChangeSet Approval Boundary）
 
@@ -479,12 +794,15 @@ export default function AiPanel() {
     setHistoryOpen(false);
     conversationIdRef.current = c.id;
     setConversationId(c.id);
-    setStreamText("");
+    // §四十九：切会话 = 更换 client_turn scope + 清 transient（旧会话事件被过滤）
+    setRt(initialRuntimeState());
     setStreamSources([]);
     setStreamError(null);
     setPendingChangeSet(null);
     setGuardMsg(null);
     setStopped(false);
+    setMemoryProposals([]);
+    setMemEdit(null);
     try {
       await loadConversation(pid, c.id);
     } catch (e) {
@@ -517,13 +835,15 @@ export default function AiPanel() {
       setConvoMsgs([]);
       setMsgOffset(0);
       setHasMoreMsgs(false);
-      setStreamText("");
+      setRt(initialRuntimeState());
       setStreamSources([]);
       setStreamError(null);
       setPendingChangeSet(null);
       setShowChangeSet(false);
       setGuardMsg(null);
       setStopped(false);
+      setMemoryProposals([]);
+      setMemEdit(null);
       setHistoryOpen(false);
     } catch (e) {
       setStreamError(humanizeError(String(e)));
@@ -773,7 +1093,9 @@ export default function AiPanel() {
           >
             <div className="aipanel__msg-content">
               {streamText === "" ? (
-                "正在思考…"
+                /* §二十/§二十一：无 delta 时只显示当前 stage（不堆叠成消息）；
+                 * starting 态 = 立即反馈「正在处理…」 */
+                stageLabel(rt.phase === "starting" ? "starting" : rt.stage)
               ) : (
                 <Markdown text={streamText} citeOf={citeOf} />
               )}
@@ -800,6 +1122,66 @@ export default function AiPanel() {
         {stopped && !runBusy && (
           <div className="aipanel__stopped">■ 已停止</div>
         )}
+
+        {/* DEV-0076 §八：AI 认知卡片（Memory Proposal：确认保存 / 修改 / 忽略） */}
+        {memoryProposals.map((p) => (
+          <div key={p.memory_id} className="aipanel__memcard">
+            <div className="aipanel__memcard-title">我发现一个可能有帮助的信息：</div>
+            <p className="aipanel__memcard-q">“{p.question}”</p>
+            {p.kind === "derived" && (
+              <p className="aipanel__memcard-note">（AI 根据对话推断，非你的原话）</p>
+            )}
+            <p className="aipanel__memcard-ask">是否保存到我的长期记忆？</p>
+            {memEdit?.id === p.memory_id ? (
+              <div className="aipanel__memcard-edit">
+                <textarea
+                  className="aipanel__memcard-input"
+                  rows={2}
+                  value={memEdit.memory_value}
+                  onChange={(e) =>
+                    setMemEdit((m) => (m ? { ...m, memory_value: e.target.value } : m))
+                  }
+                />
+                <div className="btn-row">
+                  <button
+                    className="btn btn--small btn--primary"
+                    disabled={memoryBusy === p.memory_id || !memEdit.memory_value.trim()}
+                    onClick={() => void saveMemoryEdit()}
+                  >
+                    保存修改
+                  </button>
+                  <button className="btn btn--small" onClick={() => setMemEdit(null)}>
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="btn-row">
+                <button
+                  className="btn btn--small btn--primary"
+                  disabled={memoryBusy === p.memory_id}
+                  onClick={() => void resolveMemoryProposal(p.memory_id, "confirm")}
+                >
+                  确认保存
+                </button>
+                <button
+                  className="btn btn--small"
+                  disabled={memoryBusy === p.memory_id}
+                  onClick={() => void openMemoryEdit(p)}
+                >
+                  修改
+                </button>
+                <button
+                  className="btn btn--small"
+                  disabled={memoryBusy === p.memory_id}
+                  onClick={() => void resolveMemoryProposal(p.memory_id, "reject")}
+                >
+                  忽略
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
 
         {/* 快捷 Action 结果（旧流程：runAction / Review 页 sendChat） */}
         {messages.map((m, i) => (
@@ -872,6 +1254,96 @@ export default function AiPanel() {
         )}
 
         {/* DEV-0061R §33：旧双模式入口卡片已删除（Unified Higher AI） */}
+
+        {/* DEV-0077 Phase U1 §十四：AI 调整建议卡（应用/查看详情/暂不调整；
+            前端零业务直写——Apply 走后端 Stored Proposal → ONE ChangeSet 管线） */}
+        {adaptProposal && !runBusy && (
+          <div className="aipanel__msg aipanel__msg--assistant">
+            <div className="aipanel__msg-content">
+              <div className="aipanel__adapt-card">
+                <div className="aipanel__adapt-title">AI 调整建议</div>
+                <div className="aipanel__adapt-evidence">
+                  最近 {adaptProposal.evidence.window_days} 天：
+                  计划 {fmtAdaptMinutes(adaptProposal.evidence.planned_minutes)}，
+                  实际 {fmtAdaptMinutes(adaptProposal.evidence.actual_minutes)}，
+                  未完成任务 {adaptProposal.evidence.unfinished_task_count}
+                  {adaptProposal.evidence.overdue_task_count > 0
+                    ? `（其中逾期 ${adaptProposal.evidence.overdue_task_count}）`
+                    : ""}
+                </div>
+                {adaptProposal.reason && (
+                  <div className="aipanel__adapt-reason">发现：{adaptProposal.reason}</div>
+                )}
+                <div className="aipanel__adapt-label">建议：</div>
+                <ol className="aipanel__adapt-list">
+                  {adaptProposal.adjustments.map((a, i) => (
+                    <li key={i}>{a.summary}</li>
+                  ))}
+                </ol>
+                {adaptDetail && (
+                  <details open className="aipanel__adapt-detail">
+                    <summary>详情（证据 / 偏差 / 调整项）</summary>
+                    <div className="aipanel__adapt-detail-body">
+                      <div>
+                        窗口：{adaptProposal.evidence.window_days} 天 · 已完成{" "}
+                        {adaptProposal.evidence.completed_task_count} 项 · 完成率{" "}
+                        {(() => {
+                          const done = adaptProposal.evidence.completed_task_count;
+                          const total = done + adaptProposal.evidence.unfinished_task_count;
+                          return total > 0 ? `${Math.round((done / total) * 100)}%` : "—";
+                        })()}
+                        （backlog {adaptProposal.evidence.unfinished_task_count} · 逾期{" "}
+                        {adaptProposal.evidence.overdue_task_count}）
+                      </div>
+                      {adaptProposal.deviations.map((d, i) => (
+                        <div key={i}>
+                          · {d.type}：{d.explanation}
+                        </div>
+                      ))}
+                      {adaptProposal.adjustments.map((a, i) => (
+                        <div key={`k${i}`}>
+                          · [{a.kind}] {a.summary}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+                {adaptResult && <p className="aipanel__adapt-result">{adaptResult}</p>}
+                {adaptProposal.state === "pending" ? (
+                  <div className="btn-row">
+                    <button
+                      className="btn btn--small btn--primary"
+                      disabled={adaptBusy != null}
+                      onClick={() => void onApplyAdaptProposal()}
+                    >
+                      {adaptBusy === "apply" ? "正在应用..." : "应用调整"}
+                    </button>
+                    <button
+                      className="btn btn--small"
+                      disabled={adaptBusy != null}
+                      onClick={() => setAdaptDetail((v) => !v)}
+                    >
+                      查看详情
+                    </button>
+                    <button
+                      className="btn btn--small"
+                      disabled={adaptBusy != null}
+                      onClick={() => void onDismissAdaptProposal()}
+                    >
+                      {adaptBusy === "dismiss" ? "处理中..." : "暂不调整"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="muted" style={{ fontSize: 11 }}>
+                    {adaptProposal.state === "applied"
+                      ? "已应用（可在修改记录中撤销）"
+                      : "已暂不调整"}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* DEV-0053 §9：AI Guard（no_changeset）——正式数据没有发生变化 */}
         {guardMsg != null && !runBusy && (

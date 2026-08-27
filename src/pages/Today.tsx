@@ -12,6 +12,7 @@ import {
   startQuickSession,
   syncNotifications,
 } from "../api";
+import { startupMark } from "../startupTrace";
 import ActiveSessionConflictModal, {
   useActiveSessionConflict,
 } from "../components/ActiveSessionConflictModal";
@@ -96,6 +97,8 @@ function Today() {
         isPlanningReviewDue(activeProfile.id).catch(() => false),
         getPlanningReviewRisk(activeProfile.id).catch(() => "unknown"),
       ]);
+      // DEV-0077.2 Part A §五：T5 = Today page critical data loaded
+      startupMark("t5_today_critical_ready");
       setReport(rep);
       setItems(itemList);
       setGoals(tree ? flattenGoalTree(tree.final_goal) : []);

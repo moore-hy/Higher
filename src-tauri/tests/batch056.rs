@@ -294,9 +294,14 @@ fn test_recent_sessions_tool_sees_quick_without_links() {
 #[test]
 fn test_planner_colloquial_intent_and_advice_guard() {
     use app_lib::ai::planner::planning_write_intent;
-    // §86 口语新增
-    for m in ["排个日程", "给我安排一下未来两周", "帮我排一下学习", "做个两周计划", "把这些安排进去", "排进higher"] {
+    // §86 口语命中（DEV-0061R §12-13 语义收口后仍命中的模式；
+    // 0061R 之前的 broad 裸词已删除——单日/裸安排交给 Action→Agent，不进 Dedicated Planner）
+    for m in ["排个日程", "规划未来两周", "帮我制定学习计划", "做个两周计划", "排进higher", "更新计划"] {
         assert!(planning_write_intent(m), "应命中：{m}");
+    }
+    // 0061R 删除的 broad 裸词：现在恒 false（Action/Agent 处理，不劫持进 Planning）
+    for m in ["给我安排一下未来两周", "帮我排一下学习", "把这些安排进去"] {
+        assert!(!planning_write_intent(m), "0061R 已删除 broad 裸词，不应命中：{m}");
     }
     // §87 Advice 仍不能变写意图
     for m in ["给我点408学习建议", "你觉得我应该怎么复习408", "怎么学好英语有什么思路"] {

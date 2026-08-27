@@ -5,8 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Higher</title>
     <script>
-      // DEV-0050 PHASE-A：浏览器复现专用 mock；真实 Tauri 运行时该脚本自动 no-op
+      // DEV-0050 PHASE-A：浏览器复现专用 mock。
+      // DEV-0065.4 §8.1：真实 Tauri 运行时（window.__TAURI_INTERNALS__ 存在）
+      // 不请求 /mock/inject.js；仅浏览器 dev 环境加载。
       (function () {
+        if (window.__TAURI_INTERNALS__) return;
         var s = document.createElement("script");
         s.src = "/mock/inject.js";
         document.head.appendChild(s);

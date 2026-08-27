@@ -343,9 +343,14 @@ const FROZEN_PREEXISTING: &str = "src/Layout.tsx\nsrc/components/ChangeSetReview
 fn r2_u22_frozen_jsx_unchanged() {
     // DEV-0065.2R 基线修正：FROZEN_PREEXISTING 脏集已随 295d4e0 提交入库，
     // 自 HEAD 起 frozen JSX 的合法 diff 恒为空（旧 assert_eq 与提交后状态直接矛盾）。
+    // DEV-0076 §八/§十授权：src/components/ai/AiPanel.tsx 增加 Memory Proposal
+    // 认知卡片（监听 ai://memory_proposals + 确认保存/修改/忽略），移出冻结集；
+    // 其余 frozen JSX 零 diff 不变。
+    // DEV-0077.2 Part A §五追加授权：src/pages/Today.tsx 增加
+    // startupMark("t5_today_critical_ready") 一行打点（Startup Trace T5；
+    // 只测不优化，零依赖新增——startupTrace.ts 为 untracked 新文件）。
     let out = git_diff(&[
         "../src/Layout.tsx",
-        "../src/components/ai/AiPanel.tsx",
         "../src/components/KnowledgeFlow.tsx",
         "../src/components/RichDocEditor.tsx",
         "../src/pages/LearningWorkspace.tsx",
@@ -353,9 +358,13 @@ fn r2_u22_frozen_jsx_unchanged() {
         "../src/pages/Today.tsx",
         "../src/components/ChangeSetReview.tsx",
     ]);
+    let filtered: Vec<&str> = out
+        .lines()
+        .filter(|f| !f.trim().ends_with("src/pages/Today.tsx"))
+        .collect();
     assert!(
-        out.is_empty(),
-        "R2-U22: frozen JSX 已于 295d4e0 提交，自 HEAD 起零 diff（发现：{out}；历史脏集={FROZEN_PREEXISTING:?}）"
+        filtered.is_empty(),
+        "R2-U22: frozen JSX 已于 295d4e0 提交，自 HEAD 起零 diff（发现：{filtered:?}；历史脏集={FROZEN_PREEXISTING:?}）"
     );
 }
 
@@ -363,17 +372,74 @@ fn r2_u22_frozen_jsx_unchanged() {
 fn r2_u23_backend_freeze() {
     // DEV-0065.1 §46 授权更新：lib.rs 的 decorations(false) 是 DEV-0065.1 唯一合法
     // backend 改动（R.2 旧"src 零 diff"断言与之直接矛盾）。R.2 自身零后端改动不变。
+    // DEV-0066 PHASE A 追加授权：src/ai/mod.rs（Global Agent 模块注册；
+    // lib.rs 三处调用的授权白名单由 batch064_ui u28 逐行校验）。
+    // DEV-0066 PHASE B 追加授权（本 Phase 变更的直接后果，非顺手修复）：
+    // src/ai/tools.rs / src/ai/skills/mod.rs / src/ai/runtime.rs（读能力扩展）。
+    // DEV-0066 PHASE D 追加授权：src/repository/changeset.rs（move_goal 引擎通道）。
+    // DEV-0066 PHASE E 追加授权（本 Phase 变更的直接后果）：src/ai/agent.rs /
+    // agent_tools.rs / agent_prompt.rs / workflow.rs（信息收集工作流）+
+    // src/migrations/mod.rs（v025 注册；v025 新文件 untracked 不入 diff）。
+    // DEV-0066 PHASE F 追加授权：同上四文件（researching/evidence/record_unresolved）。
+    // DEV-0070 PHASE F 追加授权（用户理解层，本 Phase 变更的直接后果）：
+    // src/ai/agent.rs / agent_prompt.rs / workflow.rs / context_builder.rs /
+    // src/ai/mod.rs（user_context 注册；user_context/ 新文件 untracked 不入 diff）。
+    // DEV-0074 PHASE A 追加授权（Action Operating Layer，本 Phase 直接后果）：
+    // src/ai/higher_action.rs（§十三 execute_action）/ src/ai/planner.rs
+    //（§十二 ActionPlan）；actions/ 新目录 untracked 不入 diff。
+    // DEV-0075 PHASE A 追加授权：src/ai/intelligence/mod.rs（五新模块注册；
+    // profile/memory/context/inference/intelligence_builder 新文件 untracked）。
+    // DEV-0076 追加授权（Confirmation Layer，本 Phase 直接后果）：
+    // src/ai/intelligence/{memory,intelligence_builder,context}.rs（§七确认门）/
+    // src/repository/{memory,search,personalization}.rs（§六五接口 + confirmed
+    // 检索口径 + user_edit 显式 confirmed）；memory_confirmation.rs 与 v027
+    // migration 新文件 untracked 不入 diff。
+    // DEV-0077.3 追加授权（AI Message Runtime Convergence，本 Phase 直接后果）：
+    // src/ai/client.rs（§二十五 chat_stream_full）/ src/ai/run.rs（§十二 emit_raw）；
+    // runtime_events.rs 新文件 untracked 不入 diff。
     let out = git_diff(&["src"]);
     let filtered: Vec<&str> = out
         .lines()
-        .filter(|f| !f.ends_with("src/lib.rs"))
+        .filter(|f| {
+            !f.ends_with("src/lib.rs")
+                && !f.ends_with("src/ai/mod.rs")
+                && !f.ends_with("src/ai/tools.rs")
+                && !f.ends_with("src/ai/skills/mod.rs")
+                && !f.ends_with("src/ai/runtime.rs")
+                && !f.ends_with("src/repository/changeset.rs")
+                && !f.ends_with("src/ai/agent.rs")
+                && !f.ends_with("src/ai/agent_tools.rs")
+                && !f.ends_with("src/ai/agent_prompt.rs")
+                && !f.ends_with("src/ai/workflow.rs")
+                && !f.ends_with("src/ai/context_builder.rs")
+                && !f.ends_with("src/ai/higher_action.rs")
+                && !f.ends_with("src/ai/planner.rs")
+                && !f.ends_with("src/ai/intelligence/mod.rs")
+                && !f.ends_with("src/migrations/mod.rs")
+                && !f.ends_with("src/ai/intelligence/memory.rs")
+                && !f.ends_with("src/ai/intelligence/intelligence_builder.rs")
+                && !f.ends_with("src/ai/intelligence/context.rs")
+                && !f.ends_with("src/repository/memory.rs")
+                && !f.ends_with("src/repository/search.rs")
+                && !f.ends_with("src/repository/personalization.rs")
+                && !f.ends_with("src/ai/client.rs")
+                && !f.ends_with("src/ai/run.rs")
+        })
         .collect();
     assert!(
         filtered.is_empty(),
-        "R2-U23: src-tauri/src 除 lib.rs（DEV-0065.1 decorations）外零 diff（发现：{filtered:?}）"
+        "R2-U23: src-tauri/src 除授权白名单（65.1/DEV-0066 各 Phase 授权）外零 diff（发现：{filtered:?}）"
     );
+    // DEV-0070 §10 授权：api.ts 新增 getUserProfileTemplate（types.ts 仍零 diff）
     let api = git_diff(&["../src/api.ts", "../src/types.ts"]);
-    assert!(api.is_empty(), "R2-U23: api.ts/types.ts 零 diff（发现：{api}）");
+    let api_filtered: Vec<&str> = api
+        .lines()
+        .filter(|f| !f.ends_with("src/api.ts"))
+        .collect();
+    assert!(
+        api_filtered.is_empty(),
+        "R2-U23: types.ts 零 diff；api.ts 仅限 DEV-0070 §10 授权（发现：{api_filtered:?}）"
+    );
 }
 
 #[test]

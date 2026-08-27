@@ -2642,9 +2642,10 @@ fn backups_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
-/// DEV-0057 §163-164：真实运行 DB 路径（dev = 项目 .data；prod = app_data_dir）。
+/// DEV-0057 §163-164：真实运行 DB 路径（dev = 项目 .data；prod = AppLocalData/higher.db，DEV-0065.2R §14）。
 /// 修复：vault 快照/备份源路径不再硬编码 CARGO_MANIFEST_DIR（prod 恒 size=0 的 Bug）。
-fn runtime_db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+/// DEV-0066 §13：pub(crate)——ai::commands 共享 Apply 按 AppHandle 取真实路径做快照。
+pub(crate) fn runtime_db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     if cfg!(debug_assertions) {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db")
     } else {
@@ -3555,62 +3556,59 @@ fn apply_ai_change_set(
     only_selected: bool,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::changeset::ChangeSetRepository::new(&conn).apply(id, profile_id, only_selected)?;
-    // DEV-0060.2 §11.4 + DEV-0061R §21-22：Apply 真正成功后更新
-    // **(profile, conversation) 隔离的** Recent Entity Context（Proposal 不算）
-    let conv_id: Option<i64> = conn
-        .query_row(
-            "SELECT conversation_id FROM ai_change_sets WHERE id=?1 AND profile_id=?2",
-            rusqlite::params![id, profile_id],
-            |r| r.get(0),
-        )
-        .ok()
-        .flatten();
-    if let Some(cid) = conv_id {
-        ai::grounding::record_apply(&conn, profile_id, cid, id);
-    }
-    // §6.8：ChangeSet 应用成功 → planning workflow applied（同事务内无 run 时忽略）
-    let run_ref: Option<String> = conn
-        .query_row(
-            "SELECT run_id FROM ai_change_sets WHERE id=?1 AND profile_id=?2",
-            rusqlite::params![id, profile_id],
-            |r| r.get(0),
-        )
-        .ok()
-        .flatten();
-    if let Some(run_id) = run_ref {
-        let conversation_ref: Option<i64> = conn
-            .query_row(
-                "SELECT conversation_id FROM ai_change_sets WHERE id=?1",
-                rusqlite::params![id],
-                |r| r.get(0),
-            )
-            .ok()
-            .flatten();
-        if let Some(cid) = conversation_ref {
-            ai::planner::set_workflow_state(
-                &conn, &run_id, profile_id, cid,
-                ai::planner::WORKFLOW_STATE_APPLIED, None,
-            );
-        }
-    }
-    vault.record_user("changeset_applied", "ai_change_set", Some(id), if only_selected { "selected" } else { "all" });
-    // §171：ChangeSet 应用后自动快照（DEV-0057 §164：真实运行 DB 路径）
-    let db_path = runtime_db_path(&app);
-    let real = if db_path.exists() { Some(db_path.as_path()) } else { None };
-    let _ = vault.snapshot("changeset", real);
-    // DEV-0058 §144-148：Apply 后全系统同步——广播事件（前端据此刷新
-    // Planning/Today/Calendar/Knowledge；同源数据，非复制计划）
-    ai::run::emit(Some(&app), "ai://applied", &format!("cs-{id}"), serde_json::json!({
-        "change_set_id": id, "profile_id": profile_id
-    }));
-    Ok(())
+    // DEV-0066 §13：用户手动 Apply 与 Global Agent 自动 Apply 走同一实现
+    //（apply_change_set_with_side_effects：事务 + grounding + workflow + vault 审计 +
+    // 快照 + ai://applied 广播），ChangeSet = Transaction + Audit + Undo 边界。
+    ai::commands::apply_change_set_with_side_effects(
+        Some(&app), &conn, &vault, profile_id, id, only_selected, "user",
+    )
 }
 
 #[tauri::command]
 fn reject_ai_change_set(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::changeset::ChangeSetRepository::new(&conn).reject(id, profile_id)
+}
+
+// DEV-0077 Phase U1 §十二：Adjustment Proposal 应用 / 暂不调整（薄命令层）。
+// Apply 走既有 ChangeSet 管线（compiler → HigherAction Pack → ONE ChangeSet
+// → Level1 Apply → ReadBack，proposal.rs 内实现）；禁止 Proposal UI 直写业务数据。
+#[tauri::command]
+fn apply_adaptation_proposal(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, db::DbState>,
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+    profile_id: i64,
+    conversation_id: i64,
+    proposal_run_id: String,
+) -> Result<serde_json::Value, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let today = repository::planning::today_utc8();
+    let out = ai::adaptation::proposal::apply_proposal(
+        Some(&app),
+        &conn,
+        &vault,
+        profile_id,
+        conversation_id,
+        &proposal_run_id,
+        &today,
+    )?;
+    Ok(serde_json::json!({
+        "applied_change_set_id": out.applied_change_set_id,
+        "summary": out.summary,
+    }))
+}
+
+#[tauri::command]
+fn dismiss_adaptation_proposal(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    conversation_id: i64,
+    proposal_run_id: String,
+) -> Result<bool, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    ai::adaptation::proposal::dismiss_proposal(&conn, profile_id, conversation_id, &proposal_run_id)?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -3629,73 +3627,144 @@ fn undo_ai_change_set(
 // ---------- Personalization（PHASE G-J） ----------
 
 #[tauri::command]
-fn import_personalization_files(
+async fn import_personalization_files(
     state: tauri::State<'_, db::DbState>,
     adir: tauri::State<'_, AttachmentDir>,
     profile_id: i64,
     paths: Vec<String>,
-) -> Result<Vec<repository::personalization::PersonalizationSource>, String> {
+) -> Result<Vec<ai::intelligence::ImportAnalysisOutcome>, String> {
     use sha2::{Digest, Sha256};
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // ---- 阶段 A（锁内短临界区）：文件解析 + 提取 + 持久化 source ----
+    // F21-01：原资料导入与本轮 AI 分析解耦——AI 失败绝不使上传失败。
     let root = adir.0.join("personalization").join(profile_id.to_string()).join("sources");
-    let mut created = Vec::new();
-    for p in paths {
-        let src = sandbox::resolve_import_source(&p)?;
-        let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("source").to_string();
-        let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
-        let ftype = match ext.as_str() {
-            "txt" => "txt",
-            "md" | "markdown" => "md",
-            "docx" => "docx",
-            "pdf" => "pdf",
-            "xlsx" => "xlsx",
-            "doc" => {
-                return Err(format!("「{}」是旧版 .doc 格式，请转换为 .docx / .pdf / .txt 后重新导入。", name));
-            }
-            _ => return Err(format!("「{}」格式不支持（仅 txt / md / docx / pdf / xlsx）", name)),
-        };
-        // 提取（流式 → 文本）
-        let text = match ftype {
-            "txt" | "md" => {
-                let mut bytes = Vec::new();
-                std::fs::File::open(&src).map_err(|e| e.to_string())?
-                    .read_to_end_mut(&mut bytes).map_err(|e| e.to_string())?;
-                repository::personalization::decode_text(bytes)?
-            }
-            "docx" => repository::personalization::extract_docx(&src)?,
-            "pdf" => repository::personalization::extract_pdf(&src)?,
-            // DEV-0059.1 §9：Personal Source 支持 XLSX（复用 source_ingest，不建第二套 parser）
-            "xlsx" => repository::source_ingest::extract_xlsx_text(&src)?,
-            _ => unreachable!(),
-        };
-        // sha256
-        let mut hasher = Sha256::new();
-        hasher.update(text.as_bytes());
-        let sha = format!("{:x}", hasher.finalize());
-        // 保存原件 + 提取文本
-        let sid_dir = root.join(&sha[..16]);
-        std::fs::create_dir_all(&sid_dir).map_err(|e| e.to_string())?;
-        let orig_target = sid_dir.join(format!("original.{}", ext));
-        std::fs::copy(&src, &orig_target).map_err(|e| format!("保存原文件失败：{e}"))?;
-        let text_target = sid_dir.join("extracted.txt");
-        std::fs::write(&text_target, &text).map_err(|e| format!("保存提取文本失败：{e}"))?;
-        let rel = orig_target
-            .strip_prefix(&adir.0)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
+    let mut created: Vec<ai::intelligence::ImportAnalysisOutcome> = Vec::new();
+    // (source_id, 提取文本, 归档目录) —— 阶段 C 逐个送 AI Analyzer
+    let mut to_analyze: Vec<(i64, String, std::path::PathBuf)> = Vec::new();
+    let primary_caps = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        ai::provider::resolve_active_ai_profiles(&conn)?.primary
+    };
+    {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
         let repo = repository::personalization::PersonalizationRepository::new(&conn);
-        let sid = repo.insert_source(
-            profile_id,
-            &name,
-            ftype,
-            &rel,
-            &sha,
-            &text_target.to_string_lossy(),
-            "extracted",
-        )?;
-        repo.store_chunks(sid, profile_id, &text)?;
-        if let Some(s) = repo.get_source(sid, profile_id)? {
-            created.push(s);
+        for p in paths {
+            let src = sandbox::resolve_import_source(&p)?;
+            let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("source").to_string();
+            let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+            let ftype = match ext.as_str() {
+                "txt" => "txt",
+                "md" | "markdown" => "md",
+                "docx" => "docx",
+                "pdf" => "pdf",
+                "xlsx" => "xlsx",
+                "doc" => {
+                    return Err(format!("「{}」是旧版 .doc 格式，请转换为 .docx / .pdf / .txt 后重新导入。", name));
+                }
+                _ => return Err(format!("「{}」格式不支持（仅 txt / md / docx / pdf / xlsx）", name)),
+            };
+            // 提取（流式 → 文本）
+            let text = match ftype {
+                "txt" | "md" => {
+                    let mut bytes = Vec::new();
+                    std::fs::File::open(&src).map_err(|e| e.to_string())?
+                        .read_to_end_mut(&mut bytes).map_err(|e| e.to_string())?;
+                    repository::personalization::decode_text(bytes)?
+                }
+                "docx" => repository::personalization::extract_docx(&src)?,
+                "pdf" => repository::personalization::extract_pdf(&src)?,
+                // DEV-0059.1 §9：Personal Source 支持 XLSX（复用 source_ingest，不建第二套 parser）
+                "xlsx" => repository::source_ingest::extract_xlsx_text(&src)?,
+                _ => unreachable!(),
+            };
+            // sha256
+            let mut hasher = Sha256::new();
+            hasher.update(text.as_bytes());
+            let sha = format!("{:x}", hasher.finalize());
+            // 保存原件 + 提取文本
+            let sid_dir = root.join(&sha[..16]);
+            std::fs::create_dir_all(&sid_dir).map_err(|e| e.to_string())?;
+            let orig_target = sid_dir.join(format!("original.{}", ext));
+            std::fs::copy(&src, &orig_target).map_err(|e| format!("保存原文件失败：{e}"))?;
+            let text_target = sid_dir.join("extracted.txt");
+            std::fs::write(&text_target, &text).map_err(|e| format!("保存提取文本失败：{e}"))?;
+            let rel = orig_target
+                .strip_prefix(&adir.0)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let sid = repo.insert_source(
+                profile_id,
+                &name,
+                ftype,
+                &rel,
+                &sha,
+                &text_target.to_string_lossy(),
+                "extracted",
+            )?;
+            repo.store_chunks(sid, profile_id, &text)?;
+            to_analyze.push((sid, text, sid_dir));
+        }
+    }
+    // ---- 阶段 B/C：完整档案 Corpus 单次分析（F22-02）----
+    // Step2/3 读取 profile 全部有效 sources（旧资料 + 本次新增）拼 Corpus
+    // → Step4 analyze_strict 只调一次 → Step5 Validator → Step6 只写一次。
+    // Primary 未配置 / 不支持 structured_json → analysis_pending（不上传失败）；
+    // 任一 source 读取失败 / Provider 失败 / Corpus 超限 → analysis_failed
+    // + dirty 标记（旧值不覆盖，禁止残缺/截断分析）。
+    let analyze_capable = primary_caps.capabilities.basic_chat != Some(false)
+        && primary_caps.capabilities.structured_json == Some(true);
+    let state_dirs: Vec<std::path::PathBuf> =
+        to_analyze.iter().map(|(_, _, d)| d.clone()).collect();
+    // Send 纪律：锁内完成 corpus/写库等同步段，await（Provider）在锁外执行
+    let corpus = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        ai::intelligence::build_profile_corpus(&conn, profile_id)
+    };
+    let outcome = match (analyze_capable, corpus) {
+        (true, Ok(corpus)) => {
+            let cfg = {
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                ai::provider::resolve_active_ai_profiles(&conn)?.primary
+            };
+            let responder = ai::agent::ModelResponder::Live(ai::client::AiClient::new(cfg));
+            // Step4/5：单次正式分析 + Validator（锁外 await）
+            let res = ai::intelligence::user_context::analyze_strict(&responder, &corpus).await;
+            // Step6：单次写库 + 全批状态文件（锁内）
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            ai::intelligence::apply_analysis(
+                &conn,
+                profile_id,
+                &res,
+                state_dirs.first().map(|p| p.as_path()),
+            );
+            let st = match &res {
+                Ok(_) => ai::intelligence::ANALYSIS_ANALYZED,
+                Err(_) => ai::intelligence::ANALYSIS_FAILED,
+            };
+            for d in state_dirs.iter().skip(1) {
+                ai::intelligence::apply_analysis_state_only(d, st, res.as_ref().err().map(|e| e.as_str()));
+            }
+            st.to_string()
+        }
+        (true, Err(e)) => {
+            // 任一 source 读取失败：禁止残缺分析，全批 failed，旧值不动
+            for d in &state_dirs {
+                ai::intelligence::apply_analysis_state_only(d, ai::intelligence::ANALYSIS_FAILED, Some(&e));
+            }
+            ai::intelligence::ANALYSIS_FAILED.to_string()
+        }
+        (false, _) => ai::intelligence::mark_analysis_pending(
+            state_dirs.first().map(|p| p.as_path()),
+        ),
+    };
+    for (sid, _text, _dir) in to_analyze {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(s) =
+            repository::personalization::PersonalizationRepository::new(&conn).get_source(sid, profile_id)?
+        {
+            created.push(ai::intelligence::ImportAnalysisOutcome {
+                source: s,
+                analysis_status: outcome.clone(),
+            });
         }
     }
     Ok(created)
@@ -3718,6 +3787,145 @@ fn list_personalization_sources(
 ) -> Result<Vec<repository::personalization::PersonalizationSource>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::personalization::PersonalizationRepository::new(&conn).list_sources(profile_id)
+}
+
+/// DEV-0070 Phase F v2.0 §18/§19：用户档案模板内容（前端「下载用户档案模板」
+/// 按钮 → blob 下载，文件名 Higher_User_Profile_Template.md）。
+#[tauri::command]
+fn get_user_profile_template() -> String {
+    crate::ai::intelligence::user_context::generate_template()
+}
+
+// =============== DEV-0076 · AI 记忆中心命令（§九） ===============
+
+/// §九.2/§九.3：记忆列表（confirmed + pending_confirmation 两区数据源）。
+#[derive(serde::Serialize)]
+struct AiMemoryItem {
+    id: i64,
+    memory_type: String,
+    category: String,
+    memory_key: String,
+    memory_value: String,
+    source_kind: String,
+    source_excerpt: String,
+    importance: i64,
+    confidence: String,
+    status: String,
+    created_at: String,
+}
+
+impl From<repository::memory::MemoryRecord> for AiMemoryItem {
+    fn from(m: repository::memory::MemoryRecord) -> Self {
+        AiMemoryItem {
+            id: m.id,
+            memory_type: m.memory_type,
+            category: m.category,
+            memory_key: m.memory_key,
+            memory_value: m.memory_value,
+            source_kind: m.source_kind,
+            source_excerpt: m.source_excerpt,
+            importance: m.importance,
+            confidence: m.confidence,
+            status: m.status,
+            created_at: m.created_at,
+        }
+    }
+}
+
+#[tauri::command]
+fn list_ai_memories(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<serde_json::Value, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let repo = repository::memory::MemoryRepository::new(&conn);
+    let confirmed: Vec<AiMemoryItem> = repo
+        .list_confirmed(profile_id)?
+        .into_iter()
+        .map(AiMemoryItem::from)
+        .collect();
+    let pending: Vec<AiMemoryItem> = repo
+        .list_pending(profile_id)?
+        .into_iter()
+        .map(AiMemoryItem::from)
+        .collect();
+    Ok(serde_json::json!({ "confirmed": confirmed, "pending": pending }))
+}
+
+/// §五.2：确认记忆（pending → confirmed）。
+#[tauri::command]
+fn confirm_ai_memory(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    memory_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    ai::intelligence::memory_confirmation::confirm_memory(&conn, profile_id, memory_id)
+}
+
+/// §五.3：拒绝记忆（pending → rejected，不进入 AI 长期读取）。
+#[tauri::command]
+fn reject_ai_memory(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    memory_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    ai::intelligence::memory_confirmation::reject_memory(&conn, profile_id, memory_id)
+}
+
+/// §五.4：修改记忆（内容/类型/描述）。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn update_ai_memory(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    memory_id: i64,
+    memory_type: String,
+    category: String,
+    memory_key: String,
+    memory_value: String,
+    source_excerpt: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    ai::intelligence::memory_confirmation::update_memory(
+        &conn, profile_id, memory_id, &memory_type, &category, &memory_key, &memory_value,
+        &source_excerpt,
+    )
+}
+
+/// §九.2：删除记忆。
+#[tauri::command]
+fn delete_ai_memory(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    memory_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::memory::MemoryRepository::new(&conn).delete_memory(memory_id, profile_id)
+}
+
+/// §九.1：我的 AI 画像（读取 + 编辑保存；UserContext 七字段）。
+#[tauri::command]
+fn get_ai_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<ai::intelligence::user_context::UserContext, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(ai::intelligence::profile::load_profile(&conn, profile_id))
+}
+
+/// §九.1：保存 AI 画像编辑（用户亲手编辑 → 走 draft 提案 + 立即 confirm，
+/// 与「用户确认后进 Profile」语义一致）。
+#[tauri::command]
+fn save_ai_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    ctx: ai::intelligence::user_context::UserContext,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    ai::intelligence::profile::propose_profile_update(&conn, profile_id, &ctx)?;
+    ai::intelligence::profile::confirm_profile(&conn, profile_id)
 }
 
 #[tauri::command]
@@ -4598,6 +4806,9 @@ async fn ai_start_run(
     local_date: Option<String>,
     local_datetime: Option<String>,
     timezone_offset_minutes: Option<i64>,
+    // DEV-0077.3 §十四-§十六：前端 invoke 前生成的 Runtime Correlation ID。
+    // Option 保持旧前端兼容；未传时以 run_id 兜底（事件仍可按 run_id 匹配）。
+    client_turn_id: Option<String>,
 ) -> Result<String, String> {
     // mode（§13：conversation 临时 mode 优先于 profile 偏好）+ DEV-0062 §26/§30：
     // Run 开始时一次性 resolve immutable Primary / Control config（此后整个 Run 固定使用）
@@ -4637,35 +4848,30 @@ async fn ai_start_run(
     let app_handle = app.clone();
 
     // 后台执行（tauri async spawn；State 生命周期从 AppHandle 重新获取以满足 'static）
+    // DEV-0066 PHASE A：主入口切换为 Global Agent（run_agent_turn）——
+    // 不再先经 Turn Interpreter 路由（§8.1）；旧 run_chat_turn 保留为 legacy（§34）。
+    // DEV-0077.3 §三十/§三十三/§五十二：消息持久化与终态/错误事件的全部
+    // 收口已由 agent_turn_core + AiRuntimeEmitter 按唯一顺序完成——本层
+    // 只负责 runs.finish，禁止再补发 ai://run-status / ai://error 或重复
+    // 写「[出错]」消息（§九十二 One Message Truth / TC015）。
+    let turn_client_id = client_turn_id.unwrap_or_else(|| run_id.clone());
     tauri::async_runtime::spawn(async move {
         let state = app_handle.state::<db::DbState>();
         let runs = app_handle.state::<ai::run::RunManager>();
         let vault = app_handle.state::<crate::ai::vault::VaultState>();
-        let result = run_chat_turn(
+        let result = ai::agent::run_agent_turn(
             &app_handle, &state, &vault, profile_id, conversation_id, &run_id_clone, &token,
-            current_message_id, &user_message, profiles.primary.clone(), profiles.control.clone(),
+            current_message_id, &user_message, profiles.primary.clone(),
             &page_label, knowledge_path.as_deref(),
             session_title.as_deref(), date.as_deref(), web_enabled, &brave_key,
             local_date.as_deref().map(String::from).unwrap_or_default(),
             local_datetime.as_deref().map(String::from).unwrap_or_default(),
             timezone_offset_minutes.unwrap_or(480),
+            &turn_client_id,
         ).await;
         runs.finish(&run_id_clone);
-        match result {
-            Ok(status) => {
-                ai::run::emit(Some(&app_handle), "ai://run-status", &run_id_clone,
-                    serde_json::json!({ "status": status }));
-            }
-            Err(e) => {
-                // failed 状态 + 保存错误消息
-                {
-                    if let Ok(conn) = state.0.lock() {
-                        let _ = repository::conversation::ConversationRepository::new(&conn)
-                            .add_message(conversation_id, profile_id, "assistant", &format!("[出错] {}", e), Some(&run_id_clone));
-                    }
-                }
-                ai::run::emit(Some(&app_handle), "ai://error", &run_id_clone, serde_json::json!({ "error": e }));
-            }
+        if let Err(e) = result {
+            eprintln!("[AI-RUNTIME] run_failed_converged run_id={run_id_clone} err={e}");
         }
     });
     Ok(run_id)
@@ -5865,8 +6071,8 @@ async fn run_chat_turn(
                         }
                     }
                 }
-                let (validation, ops, _final_id) = {
-                    let v = validation;
+                let (mut validation, ops, _final_id) = {
+                    let mut v = validation;
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                     let fid: Option<i64> = conn
                         .query_row(
@@ -5880,7 +6086,18 @@ async fn run_chat_turn(
                         .list_active(profile_id, None, None)
                         .unwrap_or_default()
                         .is_empty();
-                    (v, ai::planner::compile_to_changeset_ops(fid, has_gt, &draft), fid)
+                    // DEV-0077.4-A.1 F1：Production 唯一编译入口（禁 fallback）；
+                    // Grounding 缺失 → 计入校验错误，走既有「错误回喂重试一次」失败分支
+                    let ops = match ai::planner::compile_production_plan(
+                        &conn, profile_id, fid, has_gt, &draft,
+                    ) {
+                        Ok((o, _)) => o,
+                        Err(e) => {
+                            v.errors.push(e);
+                            Vec::new()
+                        }
+                    };
+                    (v, ops, fid)
                 };
                 if !validation.errors.is_empty() {
                     // §55 验证失败 → 拒绝入库；提示重新生成（一次内联修复机会：把错误回喂重试一轮）
@@ -6156,7 +6373,9 @@ async fn run_chat_turn(
                             created_at: String::new(), updated_at: String::new(), last_used_at: None,
                         };
                         if !rec.memory_value.is_empty() {
-                            let _ = repo.insert(&rec);
+                            // DEV-0076 §七：AI 生成的记忆候选必须 pending_confirmation
+                            //（确认门；v027 CHECK 已无 'active'，旧 insert 会违约）
+                            let _ = repo.create_pending_memory(&rec);
                         }
                     }
                     // §87-88：新长期信息 → dirty
@@ -6254,6 +6473,43 @@ impl CitationIter {
 #[tauri::command]
 fn ai_cancel_run(runs: tauri::State<'_, ai::run::RunManager>, run_id: String) -> Result<bool, String> {
     Ok(runs.cancel(&run_id))
+}
+
+/// DEV-0077.3 §五十六（Run Snapshot）：read-only——前端 Watchdog /
+/// Reconcile 的 DB Truth 通道。只返回 run 状态摘要，不返回大段消息
+///（Messages 仍走 listAiMessages）。
+#[tauri::command]
+fn ai_get_run_snapshot(
+    state: tauri::State<'_, db::DbState>,
+    run_id: String,
+) -> Result<serde_json::Value, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT id, profile_id, conversation_id, status,
+                COALESCE(workflow_state, '') AS workflow_state,
+                COALESCE(updated_at, '') AS updated_at,
+                (SELECT EXISTS(SELECT 1 FROM ai_messages m WHERE m.run_id = ai_runs.id AND m.role='assistant')) AS has_assistant_message
+         FROM ai_runs
+         WHERE id = ?1",
+        rusqlite::params![run_id],
+        |row| {
+            let status: String = row.get(3)?;
+            let wf: String = row.get(4)?;
+            let updated: String = row.get(5)?;
+            let has_msg: i64 = row.get(6)?;
+            Ok(serde_json::json!({
+                "run_id": row.get::<_, String>(0)?,
+                "profile_id": row.get::<_, i64>(1)?,
+                "conversation_id": row.get::<_, i64>(2)?,
+                // DB 用 waiting_user；事件语义统一 needs_user_input（§三十四）
+                "status": if status == "waiting_user" { "needs_user_input".to_string() } else { status },
+                "workflow_state": wf,
+                "updated_at": updated,
+                "has_assistant_message": has_msg == 1,
+            }))
+        },
+    )
+    .map_err(|e| format!("run_not_found: {e}"))
 }
 
 // =============== DEV-0055 · Final Goal Brief（PART 5-6） ===============
@@ -7221,8 +7477,11 @@ fn nonzero(v: i64) -> Option<i64> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // DEV-0077.2 Part A §五：Startup Trace T0——进程/应用装配起点（只测不优化，
+    // 定位瓶颈后才允许动实现；debug log 一行，无重量级 telemetry）。
+    let t0 = std::time::Instant::now();
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             // 创建主窗口
             // 开发模式：webview 数据目录放项目本地 .webview-data/，避免污染系统 AppData
             //           并支持在受限环境（如沙箱）中调试
@@ -7260,8 +7519,15 @@ pub fn run() {
             };
             std::fs::create_dir_all(&db_dir)?;
             let db_path = db_dir.join("higher.db");
+            // T1：窗口创建完成 → DB open 前
+            let t1 = t0.elapsed().as_millis();
             // open 内部会自动执行待处理的 Migration
             let db_state = db::DbState::open(&db_path)?;
+            // T2：DB ready + migration complete（open 内含迁移）
+            let t2 = t0.elapsed().as_millis();
+            println!(
+                "[HigherStartup] t1_window_built_ms={t1} t2_db_migration_ready_ms={t2}"
+            );
 
             // DEV-0057 §71-72：Search Index 版本门——版本缺失/变化才一次性 rebuild（不默认每次全重建）。
             {
@@ -7508,6 +7774,14 @@ pub fn run() {
             undo_ai_change_set,
             import_personalization_files,
             list_personalization_sources,
+            get_user_profile_template,
+            list_ai_memories,
+            confirm_ai_memory,
+            reject_ai_memory,
+            update_ai_memory,
+            delete_ai_memory,
+            get_ai_profile,
+            save_ai_profile,
             delete_personalization_source,
             get_personalization_profile,
             compile_personalization,
@@ -7562,7 +7836,11 @@ pub fn run() {
             vault_export_events,
             ai_start_run,
             ai_cancel_run,
+            ai_get_run_snapshot,
             ai_active_run_count,
+            // DEV-0077 Phase U1：Adjustment Proposal 应用 / 暂不调整
+            apply_adaptation_proposal,
+            dismiss_adaptation_proposal,
             open_external_url,
             // DEV-0053 Daily & Dual-Tree
             get_daily_learning_report,

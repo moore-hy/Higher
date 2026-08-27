@@ -59,14 +59,20 @@ impl<'a> MemoryRepository<'a> {
         Ok(())
     }
 
-    pub fn insert(&self, m: &MemoryRecord) -> Result<i64, String> {
+    // =============== DEV-0076 §六 · Memory 确认闭环接口 ===============
+
+    /// §六：创建待确认记忆（AI 候选 → pending_confirmation；
+    /// §十二安全规则：ai_inference 一律 pending，不得直接 confirmed）。
+    /// §七确认门：pending 期间**不写 FTS**——context_builder L4 / tools 的
+    /// memory 检索走 FTS，未确认候选不得进入 AI 读取；confirm 时才索引。
+    pub fn create_pending_memory(&self, m: &MemoryRecord) -> Result<i64, String> {
         Self::validate(m)?;
         self.conn
             .execute(
                 "INSERT INTO memory_records
                  (profile_id, memory_type, category, memory_key, memory_value, source_kind, source_ref,
                   source_excerpt, importance, confidence, status, valid_from, valid_to, supersedes_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'active',?11,?12,?13)",
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'pending_confirmation',?11,?12,?13)",
                 params![
                     m.profile_id, m.memory_type, m.category, m.memory_key, m.memory_value,
                     m.source_kind, m.source_ref, m.source_excerpt, m.importance, m.confidence,
@@ -75,26 +81,162 @@ impl<'a> MemoryRepository<'a> {
             )
             .map_err(|e| e.to_string())?;
         let id = self.conn.last_insert_rowid();
-        // 同 memory_key 的旧 active 记录 → superseded（§34；历史仍在）
+        Ok(id)
+    }
+
+    /// §六：用户确认（pending_confirmation → confirmed；同 key 旧 confirmed → superseded）。
+    pub fn confirm_memory(&self, id: i64, profile_id: i64) -> Result<(), String> {
+        let m = self.get(id, profile_id)?.ok_or("记忆不存在或不属于当前档案")?;
+        if m.status != "pending_confirmation" {
+            return Err(format!("当前状态 {} 不可确认（仅待确认记忆）", m.status));
+        }
+        let n = self
+            .conn
+            .execute(
+                "UPDATE memory_records SET status='confirmed', updated_at=datetime('now')
+                 WHERE id=?1 AND profile_id=?2 AND status='pending_confirmation'",
+                params![id, profile_id],
+            )
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("确认失败（状态已变化）".to_string());
+        }
         if !m.memory_key.trim().is_empty() {
             self.conn
                 .execute(
-                    "UPDATE memory_records SET status = 'superseded', updated_at = datetime('now')
-                     WHERE profile_id = ?1 AND memory_key = ?2 AND id != ?3 AND status = 'active'",
-                    params![m.profile_id, m.memory_key, id],
+                    "UPDATE memory_records SET status='superseded', updated_at=datetime('now')
+                     WHERE profile_id=?1 AND memory_key=?2 AND id != ?3 AND status='confirmed'",
+                    params![profile_id, m.memory_key, id],
                 )
                 .map_err(|e| e.to_string())?;
+            // 被替换旧版从 AI 检索移除（新 confirmed 已 upsert）
+            let old_ids: Vec<i64> = {
+                let mut stmt = self
+                    .conn
+                    .prepare(
+                        "SELECT id FROM memory_records
+                         WHERE profile_id=?1 AND memory_key=?2 AND id != ?3 AND status='superseded'",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(params![profile_id, m.memory_key, id], |r| r.get(0))
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+            };
+            for old in old_ids {
+                let _ = crate::repository::search::SearchRepository::new(self.conn).remove("memory", old);
+            }
         }
-        // FTS 索引
+        // §七确认门：confirmed 进入 AI 检索（FTS）
         let _ = crate::repository::search::SearchRepository::new(self.conn).upsert(
             "memory",
             id,
-            m.profile_id,
+            profile_id,
             &m.memory_key,
             &format!("{} {}", m.memory_value, m.source_excerpt),
             None,
         );
-        Ok(id)
+        Ok(())
+    }
+
+    /// §六：用户拒绝（pending_confirmation → rejected；不进入 AI 长期读取）。
+    pub fn reject_memory(&self, id: i64, profile_id: i64) -> Result<(), String> {
+        let n = self
+            .conn
+            .execute(
+                "UPDATE memory_records SET status='rejected', updated_at=datetime('now')
+                 WHERE id=?1 AND profile_id=?2 AND status='pending_confirmation'",
+                params![id, profile_id],
+            )
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("拒绝失败（不存在或状态已变化）".to_string());
+        }
+        let _ = crate::repository::search::SearchRepository::new(self.conn).remove("memory", id);
+        Ok(())
+    }
+
+    /// §六：用户修改记忆（内容/类型/描述；仅 confirmed 与 pending_confirmation 可改，
+    /// source_kind 置 user_edit——用户亲手改过即事实）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_memory(
+        &self,
+        id: i64,
+        profile_id: i64,
+        memory_type: &str,
+        category: &str,
+        memory_key: &str,
+        memory_value: &str,
+        source_excerpt: &str,
+    ) -> Result<(), String> {
+        let m = self.get(id, profile_id)?.ok_or("记忆不存在或不属于当前档案")?;
+        if m.status != "confirmed" && m.status != "pending_confirmation" {
+            return Err(format!("当前状态 {} 不可修改", m.status));
+        }
+        self.conn
+            .execute(
+                "UPDATE memory_records
+                 SET memory_type=?3, category=?4, memory_key=?5, memory_value=?6,
+                     source_excerpt=?7, source_kind='user_edit', updated_at=datetime('now')
+                 WHERE id=?1 AND profile_id=?2",
+                params![id, profile_id, memory_type, category, memory_key, memory_value, source_excerpt],
+            )
+            .map_err(|e| e.to_string())?;
+        // §七确认门：仅 confirmed 在 AI 检索中——pending 期间修改不写 FTS，
+        // confirm 时以最终内容入索引；confirmed 修改即时刷新索引。
+        if m.status == "confirmed" {
+            let _ = crate::repository::search::SearchRepository::new(self.conn).upsert(
+                "memory",
+                id,
+                profile_id,
+                memory_key,
+                &format!("{memory_value} {source_excerpt}"),
+                None,
+            );
+        }
+        Ok(())
+    }
+
+    /// §六：删除记忆（物理删除；FTS 同步清理）。
+    pub fn delete_memory(&self, id: i64, profile_id: i64) -> Result<(), String> {
+        let n = self
+            .conn
+            .execute(
+                "DELETE FROM memory_records WHERE id=?1 AND profile_id=?2",
+                params![id, profile_id],
+            )
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("记忆不存在或不属于当前档案".to_string());
+        }
+        let _ = crate::repository::search::SearchRepository::new(self.conn).remove("memory", id);
+        Ok(())
+    }
+
+    /// §九.2：已确认记忆列表（AI 长期读取口径 = confirmed）。
+    pub fn list_confirmed(&self, profile_id: i64) -> Result<Vec<MemoryRecord>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {} FROM memory_records WHERE profile_id = ?1 AND status = 'confirmed' ORDER BY id DESC",
+                COLS
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![profile_id], parse).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    /// §九.3：待确认记忆列表（AI 认知卡片数据源）。
+    pub fn list_pending(&self, profile_id: i64) -> Result<Vec<MemoryRecord>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {} FROM memory_records WHERE profile_id = ?1 AND status = 'pending_confirmation' ORDER BY id DESC",
+                COLS
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![profile_id], parse).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
     pub fn get(&self, id: i64, profile_id: i64) -> Result<Option<MemoryRecord>, String> {
@@ -106,12 +248,16 @@ impl<'a> MemoryRepository<'a> {
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
-    /// 活跃记忆（用户查看/管理）。
+    /// 活跃记忆（用户查看/管理）。DEV-0076 compatibility：接口保留（已有调用方），
+    /// 语义 = 管理口径 confirmed + pending_confirmation（活的记忆），不是 AI 读取
+    /// 口径（AI 读取见 list_confirmed / active_memories）。
     pub fn list_active(&self, profile_id: i64) -> Result<Vec<MemoryRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(&format!(
-                "SELECT {} FROM memory_records WHERE profile_id = ?1 AND status = 'active' ORDER BY id DESC",
+                "SELECT {} FROM memory_records
+                 WHERE profile_id = ?1 AND status IN ('confirmed','pending_confirmation')
+                 ORDER BY id DESC",
                 COLS
             ))
             .map_err(|e| e.to_string())?;
@@ -155,10 +301,13 @@ impl<'a> MemoryRepository<'a> {
     }
 
     /// 自上次 consolidation 后新增的有效记忆数（§90 触发条件）。
+    /// DEV-0076：pending 候选也是新信息 → 计数含 pending_confirmation。
     pub fn count_since(&self, profile_id: i64, since: &str) -> Result<i64, String> {
         self.conn
             .query_row(
-                "SELECT COUNT(*) FROM memory_records WHERE profile_id = ?1 AND created_at > ?2 AND status = 'active'",
+                "SELECT COUNT(*) FROM memory_records
+                 WHERE profile_id = ?1 AND created_at > ?2
+                   AND status IN ('confirmed','pending_confirmation')",
                 params![profile_id, since],
                 |r| r.get(0),
             )

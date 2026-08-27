@@ -14,6 +14,7 @@ import {
   listStudyProfiles,
   setActiveStudyProfile,
 } from "../api";
+import { startupMark } from "../startupTrace";
 
 /**
  * ActiveProfileContext：管理当前活跃学习档案的全局状态。
@@ -60,6 +61,8 @@ export function ActiveProfileProvider({ children }: { children: ReactNode }) {
     try {
       const active = await getActiveStudyProfile();
       if (active) {
+        // DEV-0077.2 Part A §五：T4 = Active Profile loaded
+        startupMark("t4_profile_ready");
         setGate({ phase: "active", profile: active });
         return;
       }

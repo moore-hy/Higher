@@ -25,6 +25,9 @@ pub mod v021_personal_planning_truth;
 pub mod v022_personal_xlsx;
 pub mod v023_recurring_task_semantics;
 pub mod v024_ai_provider_profiles_and_action_continuation;
+pub mod v025_ai_runs_waiting_user_status;
+pub mod v026_user_context_storage;
+pub mod v027_memory_confirmation_lifecycle;
 
 /// 单个 Migration 定义。
 ///
@@ -160,6 +163,21 @@ const MIGRATIONS: &[Migration] = &[
         version: 24,
         name: "ai_provider_profiles_and_action_continuation",
         up: v024_ai_provider_profiles_and_action_continuation::up,
+    },
+    Migration {
+        version: 25,
+        name: "ai_runs_waiting_user_status",
+        up: v025_ai_runs_waiting_user_status::up,
+    },
+    Migration {
+        version: 26,
+        name: "user_context_storage",
+        up: v026_user_context_storage::up,
+    },
+    Migration {
+        version: 27,
+        name: "memory_confirmation_lifecycle",
+        up: v027_memory_confirmation_lifecycle::up,
     },
 ];
 

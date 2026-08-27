@@ -1,14 +1,15 @@
 {
   "name": "higher",
   "private": true,
-  "version": "0.3.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Higher - 本地个人学习系统",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:ai-runtime": "tsc -p tsconfig.ai-runtime-test.json && node --test .ai-runtime-test-build/tests/ai-runtime/runtimeState.test.js"
   },
   "dependencies": {
     "@radix-ui/themes": "^3.3.0",

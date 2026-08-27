@@ -134,37 +134,44 @@ fn test_memory_types_supersede_isolation_retrieval() {
     let pb = mk_profile(&conn);
     let repo = MemoryRepository::new(&conn);
 
+    // DEV-0076：Memory 走确认闭环（旧 insert('active') 已随 v027 移除）——
+    // 入库 = create_pending_memory（AI 侧唯一创建入口）→ confirm（confirmed 生效）
     let mk = |t: &str, k: &str, v: &str, sk: &str, ex: &str, c: &str| app_lib::repository::memory::MemoryRecord {
         id: 0, profile_id: pa, memory_type: t.into(), category: "test".into(),
         memory_key: k.into(), memory_value: v.into(), source_kind: sk.into(),
         source_ref: "conv:1".into(), source_excerpt: ex.into(), importance: 4,
-        confidence: c.into(), status: "active".into(),
+        confidence: c.into(), status: "pending_confirmation".into(),
         valid_from: None, valid_to: None, supersedes_id: None,
         created_at: String::new(), updated_at: String::new(), last_used_at: None,
     };
+    let put = |m: &app_lib::repository::memory::MemoryRecord, repo: &MemoryRepository| {
+        let id = repo.create_pending_memory(m).unwrap();
+        repo.confirm_memory(id, pa).unwrap();
+        id
+    };
 
     // user_fact（带原话）
-    let f1 = repo.insert(&mk("user_fact", "工作日学习时长", "工作日最多学 2 小时", "user_message", "我现在工作日最多学2小时。", "high")).unwrap();
+    let f1 = put(&mk("user_fact", "工作日学习时长", "工作日最多学 2 小时", "user_message", "我现在工作日最多学2小时。", "high"), &repo);
     // user_opinion
-    repo.insert(&mk("user_opinion", "数学基础感受", "感觉数学基础比较差", "user_message", "我感觉自己数学基础比较差。", "medium")).unwrap();
+    put(&mk("user_opinion", "数学基础感受", "感觉数学基础比较差", "user_message", "我感觉自己数学基础比较差。", "medium"), &repo);
     // system_observation 必须来自 higher_db
-    assert!(repo.insert(&mk("system_observation", "stats", "30 天学 21h", "ai_inference", "", "high")).is_err());
-    repo.insert(&mk("system_observation", "stats", "最近 30 天数学学习 21 小时", "higher_db", "", "high")).unwrap();
+    assert!(repo.create_pending_memory(&mk("system_observation", "stats", "30 天学 21h", "ai_inference", "", "high")).is_err());
+    put(&mk("system_observation", "stats", "最近 30 天数学学习 21 小时", "higher_db", "", "high"), &repo);
     // ai_inference 冒充 user_fact → 拒
-    assert!(repo.insert(&mk("user_fact", "fake", "x", "ai_inference", "", "low")).is_err());
+    assert!(repo.create_pending_memory(&mk("user_fact", "fake", "x", "ai_inference", "", "low")).is_err());
     // ai_inference 合法
-    repo.insert(&mk("ai_inference", "极限状态", "极限可能仍存在理解缺口", "ai_inference", "", "medium")).unwrap();
+    put(&mk("ai_inference", "极限状态", "极限可能仍存在理解缺口", "ai_inference", "", "medium"), &repo);
 
-    // supersede（§34）：同 key 新记录 → 旧记录 superseded
-    let f2 = repo.insert(&mk("user_fact", "工作日学习时长", "现在每天只有 1 小时", "user_message", "现在每天只有1小时。", "high")).unwrap();
+    // supersede（§34）：同 key 新记录确认 → 旧 confirmed 记录 superseded
+    let f2 = put(&mk("user_fact", "工作日学习时长", "现在每天只有 1 小时", "user_message", "现在每天只有1小时。", "high"), &repo);
     let old = repo.get(f1, pa).unwrap().unwrap();
     assert_eq!(old.status, "superseded", "旧记录不删，状态 superseded");
     let new = repo.get(f2, pa).unwrap().unwrap();
-    assert_eq!(new.status, "active");
+    assert_eq!(new.status, "confirmed");
 
-    // 检索（相关度；superseded 记录不作为 active 返回）：
+    // 检索（相关度；superseded 记录不作为 confirmed 返回）：
     let hits = repo.search(pa, "工作日 学习 时间", 5).unwrap();
-    assert!(hits.iter().all(|m| m.status == "active"), "检索只返回 active 记录");
+    assert!(hits.iter().all(|m| m.status == "confirmed"), "检索只返回 confirmed 记录");
     assert!(!hits.iter().any(|m| m.id == f1), "superseded 旧记录不再返回");
 
     // isolation
@@ -185,7 +192,19 @@ fn test_fts_all_entities() {
     sr.upsert("knowledge", 4, p, "高等数学", "极限与连续", None).unwrap();
     sr.upsert("document", 5, p, "极限笔记", "等价无穷小替换", None).unwrap();
     sr.upsert("evaluation", 6, p, "极限测试", "10 题对 8", None).unwrap();
-    sr.upsert("memory", 7, p, "偏好", "偏好晚上学习", None).unwrap();
+    // memory：DEV-0076 F.2——search 对 memory 命中按 DB status 二次授权，
+    // 裸 upsert("memory") 不再可见；须走确认闭环产出 confirmed 记忆
+    //（confirm 时写 FTS），「晚上」才能命中。
+    let mem_repo = MemoryRepository::new(&conn);
+    let mid = mem_repo.create_pending_memory(&app_lib::repository::memory::MemoryRecord {
+        id: 0, profile_id: p, memory_type: "user_fact".into(), category: "chat".into(),
+        memory_key: "偏好".into(), memory_value: "偏好晚上学习".into(),
+        source_kind: "user_message".into(), source_ref: String::new(),
+        source_excerpt: "我偏好晚上学习".into(), importance: 3, confidence: "medium".into(),
+        status: "pending_confirmation".into(), valid_from: None, valid_to: None, supersedes_id: None,
+        created_at: String::new(), updated_at: String::new(), last_used_at: None,
+    }).unwrap();
+    mem_repo.confirm_memory(mid, p).unwrap();
     // conversation（add_message 自动索引）
     let cr = ConversationRepository::new(&conn);
     let c = cr.create(p, "readonly", "").unwrap();

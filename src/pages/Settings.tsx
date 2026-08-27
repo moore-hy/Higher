@@ -30,6 +30,16 @@ import {
   getNotificationEnabled,
   getPersonalizationProfile,
   getRequirementTemplate,
+  getUserProfileTemplate,
+  type AiMemoryItem,
+  type AiProfile,
+  confirmAiMemory,
+  deleteAiMemory,
+  getAiProfile,
+  listAiMemories,
+  rejectAiMemory,
+  saveAiProfile,
+  updateAiMemory,
   getWebSearchSettings,
   importPersonalizationFiles,
   listAiProviderProfiles,
@@ -88,7 +98,7 @@ import { downloadTextFile, formatDateTime, todayDate } from "../utils";
 export default function Settings() {
   const { activeProfile, exitProfile, refreshGate, enterProfile } = useActiveProfile();
   const [tab, setTab] = useState<
-    "profile" | "appearance" | "ai" | "notify" | "data" | "personal" | "websearch" | "vault"
+    "profile" | "appearance" | "ai" | "notify" | "data" | "personal" | "websearch" | "vault" | "aimemory"
   >("profile");
 
   const TABS: { key: typeof tab; label: string }[] = [
@@ -96,6 +106,7 @@ export default function Settings() {
     { key: "appearance", label: "外观" },
     { key: "ai", label: "AI 设置" },
     { key: "personal", label: "私人化部署" },
+    { key: "aimemory", label: "AI 记忆" },
     { key: "websearch", label: "联网搜索" },
     { key: "notify", label: "学习提醒" },
     { key: "data", label: "数据管理" },
@@ -139,6 +150,8 @@ export default function Settings() {
         <NotificationSection />
       ) : tab === "personal" ? (
         <PersonalizationSection profileId={activeProfile?.id ?? null} />
+      ) : tab === "aimemory" ? (
+        <AiMemorySection profileId={activeProfile?.id ?? null} />
       ) : tab === "websearch" ? (
         <WebSearchSection />
       ) : tab === "vault" ? (
@@ -1246,6 +1259,334 @@ function AiSection() {
   );
 }
 
+// ---------------- AI 记忆中心（DEV-0076 §九） ----------------
+
+/** §九.1：我的 AI 画像——七字段编辑（文本 + 逗号分隔数组） */
+function AiProfileEditor({ profileId }: { profileId: number }) {
+  const [profile, setProfile] = useState<AiProfile | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setProfile(await getAiProfile(profileId));
+      } catch {
+        setProfile(null);
+      }
+    })();
+  }, [profileId]);
+
+  if (!profile) return null;
+  const set = (patch: Partial<AiProfile>) => setProfile({ ...profile, ...patch });
+  const arrToText = (a: string[]) => a.join("，");
+  const textToArr = (t: string) => t.split(/[，,]/).map((s) => s.trim()).filter(Boolean);
+
+  return (
+    <section className="card">
+      <h2 className="card__title">我的 AI 画像</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        AI 对你的长期理解。修改保存后立即生效（等同你亲自确认）。
+      </p>
+      <label className="field">
+        <span>基本信息（年龄/职业/专业）</span>
+        <input
+          value={profile.basic_information ?? ""}
+          onChange={(e) => set({ basic_information: e.target.value })}
+        />
+      </label>
+      <label className="field">
+        <span>当前状态</span>
+        <input
+          value={profile.current_status ?? ""}
+          onChange={(e) => set({ current_status: e.target.value })}
+        />
+      </label>
+      <label className="field">
+        <span>能力基础（逗号分隔）</span>
+        <input
+          value={arrToText(profile.abilities)}
+          onChange={(e) => set({ abilities: textToArr(e.target.value) })}
+        />
+      </label>
+      <label className="field">
+        <span>时间资源（逗号分隔）</span>
+        <input
+          value={arrToText(profile.resources)}
+          onChange={(e) => set({ resources: textToArr(e.target.value) })}
+        />
+      </label>
+      <label className="field">
+        <span>限制条件（逗号分隔）</span>
+        <input
+          value={arrToText(profile.constraints)}
+          onChange={(e) => set({ constraints: textToArr(e.target.value) })}
+        />
+      </label>
+      <label className="field">
+        <span>偏好（逗号分隔）</span>
+        <input
+          value={arrToText(profile.preferences)}
+          onChange={(e) => set({ preferences: textToArr(e.target.value) })}
+        />
+      </label>
+      <label className="field">
+        <span>长期目标（逗号分隔）</span>
+        <input
+          value={arrToText(profile.long_term_goals)}
+          onChange={(e) => set({ long_term_goals: textToArr(e.target.value) })}
+        />
+      </label>
+      <button
+        className="btn"
+        disabled={saving}
+        onClick={async () => {
+          setSaving(true);
+          setMsg("");
+          try {
+            await saveAiProfile(profileId, profile);
+            setMsg("已保存。");
+          } catch (e) {
+            setMsg(`保存失败：${e}`);
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        保存画像
+      </button>
+      {msg ? <p className="muted">{msg}</p> : null}
+    </section>
+  );
+}
+
+/** §九.2：已确认记忆列表（修改/删除） */
+function ConfirmedMemoryList({ profileId }: { profileId: number }) {
+  const [items, setItems] = useState<AiMemoryItem[]>([]);
+  const [editing, setEditing] = useState<AiMemoryItem | null>(null);
+
+  const reload = () => listAiMemories(profileId).then((r) => setItems(r.confirmed)).catch(() => {});
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
+
+  return (
+    <section className="card">
+      <h2 className="card__title">我的长期记忆（{items.length}）</h2>
+      {items.length === 0 ? (
+        <p className="muted" style={{ marginTop: 0 }}>
+          暂无已确认记忆。对话中确认的 AI 认知会出现在这里。
+        </p>
+      ) : (
+        <ul style={{ paddingLeft: 0, listStyle: "none" }}>
+          {items.map((m) => (
+            <li key={m.id} style={{ marginBottom: 8 }}>
+              <b>{m.memory_key || m.memory_type}</b>：{m.memory_value || m.source_excerpt}
+              <span className="muted">（{m.memory_type}）</span>
+              <button className="btn btn--ghost" style={{ marginLeft: 8 }} onClick={() => setEditing(m)}>
+                修改
+              </button>
+              <button
+                className="btn btn--ghost"
+                style={{ marginLeft: 4 }}
+                onClick={async () => {
+                  if (!window.confirm("删除这条记忆？")) return;
+                  await deleteAiMemory(profileId, m.id).catch(() => {});
+                  reload();
+                }}
+              >
+                删除
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {editing ? (
+        <MemoryEditModal
+          profileId={profileId}
+          item={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            reload();
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+/** §九.3：待确认区（确认/拒绝/编辑） */
+function PendingMemoryList({ profileId }: { profileId: number }) {
+  const [items, setItems] = useState<AiMemoryItem[]>([]);
+  const [editing, setEditing] = useState<AiMemoryItem | null>(null);
+
+  const reload = () => listAiMemories(profileId).then((r) => setItems(r.pending)).catch(() => {});
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
+
+  const act = async (fn: (id: number) => Promise<void>, id: number) => {
+    await fn(id).catch(() => {});
+    reload();
+  };
+
+  return (
+    <section className="card">
+      <h2 className="card__title">待确认信息（{items.length}）</h2>
+      {items.length === 0 ? (
+        <p className="muted" style={{ marginTop: 0 }}>
+          没有等待确认的 AI 认知。
+        </p>
+      ) : (
+        <ul style={{ paddingLeft: 0, listStyle: "none" }}>
+          {items.map((m) => (
+            <li key={m.id} style={{ marginBottom: 8 }}>
+              <div>
+                <b>{m.memory_value || m.memory_key}</b>
+                <span className="muted">
+                  （{m.memory_type === "ai_inference" ? "AI 推断" : "你的陈述"}
+                  {m.source_excerpt ? `：「${m.source_excerpt}」` : ""}）
+                </span>
+              </div>
+              <button className="btn" onClick={() => act((id) => confirmAiMemory(profileId, id), m.id)}>
+                确认保存
+              </button>
+              <button
+                className="btn btn--ghost"
+                style={{ marginLeft: 4 }}
+                onClick={() => setEditing(m)}
+              >
+                修改
+              </button>
+              <button
+                className="btn btn--ghost"
+                style={{ marginLeft: 4 }}
+                onClick={() => act((id) => rejectAiMemory(profileId, id), m.id)}
+              >
+                忽略
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {editing ? (
+        <MemoryEditModal
+          profileId={profileId}
+          item={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            reload();
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+/** 记忆编辑弹窗（§五.4 修改：类型/键/内容/原话） */
+function MemoryEditModal({
+  profileId,
+  item,
+  onClose,
+  onSaved,
+}: {
+  profileId: number;
+  item: AiMemoryItem;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [memoryType, setMemoryType] = useState(item.memory_type);
+  const [key, setKey] = useState(item.memory_key);
+  const [value, setValue] = useState(item.memory_value);
+  const [excerpt, setExcerpt] = useState(item.source_excerpt);
+  const [err, setErr] = useState("");
+
+  return (
+    <div className="modal__overlay">
+      <div className="modal">
+        <div className="modal__title">编辑记忆</div>
+        <label className="field">
+          <span>类型</span>
+          <select value={memoryType} onChange={(e) => setMemoryType(e.target.value)}>
+            {[
+              "user_fact",
+              "user_opinion",
+              "user_preference",
+              "user_constraint",
+              "goal_context",
+              "ai_inference",
+            ].map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>标签（键）</span>
+          <input value={key} onChange={(e) => setKey(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>内容</span>
+          <input value={value} onChange={(e) => setValue(e.target.value)} />
+        </label>
+        <label className="field">
+          <span>来源原话（可追溯依据）</span>
+          <input value={excerpt} onChange={(e) => setExcerpt(e.target.value)} />
+        </label>
+        {err ? <p className="form-error">{err}</p> : null}
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button
+            className="btn"
+            onClick={async () => {
+              try {
+                await updateAiMemory(profileId, item.id, {
+                  memory_type: memoryType,
+                  category: item.category,
+                  memory_key: key,
+                  memory_value: value,
+                  source_excerpt: excerpt,
+                });
+                onSaved();
+              } catch (e) {
+                setErr(String(e));
+              }
+            }}
+          >
+            保存
+          </button>
+          <button className="btn btn--ghost" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** DEV-0076 §九：AI 记忆中心（三区） */
+function AiMemorySection({ profileId }: { profileId: number | null }) {
+  if (profileId == null) {
+    return (
+      <section className="card">
+        <h2 className="card__title">AI 记忆</h2>
+        <p className="muted">请先选择学习档案。</p>
+      </section>
+    );
+  }
+  return (
+    <>
+      <AiProfileEditor profileId={profileId} />
+      <PendingMemoryList profileId={profileId} />
+      <ConfirmedMemoryList profileId={profileId} />
+    </>
+  );
+}
+
 // ---------------- 私人化部署（DEV-0052 §57-91） ----------------
 
 const AUTO_PZ_KEY = "ui.auto_personalization";
@@ -1395,6 +1736,17 @@ function PersonalizationSection({ profileId }: { profileId: number | null }) {
     }
   }
 
+  /** DEV-0070 Phase F v2.0 §18：下载用户档案模板（填写后经「添加资料」上传） */
+  async function downloadProfileTemplate() {
+    try {
+      const tpl = await getUserProfileTemplate();
+      downloadTextFile("Higher_User_Profile_Template.md", tpl, "text/markdown");
+      setMessage("用户档案模板已开始下载；填写个人资料后上传，Higher AI将建立你的个人理解模型。");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function saveEdit() {
     if (profileId == null) return;
     setEditSaving(true);
@@ -1460,6 +1812,21 @@ function PersonalizationSection({ profileId }: { profileId: number | null }) {
         </p>
         {error && <div className="alert alert--error">{error}</div>}
         {message && <div className="alert alert--ok">{message}</div>}
+
+        {/* DEV-0070 Phase F v2.0 §18：Higher 用户档案（下载模板 → 填写 → 上传建立理解模型） */}
+        <div className="pz__main" style={{ marginBottom: 12 }}>
+          <div className="pz__main-info">
+            <span className="pz__status pz__status--none">Higher 用户档案</span>
+            <span className="muted pz__main-time">
+              填写个人资料后上传，Higher AI将建立你的个人理解模型。
+            </span>
+          </div>
+          <div className="btn-row pz__main-actions">
+            <button className="btn btn--small" onClick={() => void downloadProfileTemplate()}>
+              下载用户档案模板
+            </button>
+          </div>
+        </div>
 
         {/* 主卡（§59） */}
         <div className="pz__main">

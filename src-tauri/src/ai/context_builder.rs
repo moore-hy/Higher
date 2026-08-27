@@ -92,6 +92,18 @@ pub fn build(
         chips.push("私人化档案".into());
     }
 
+    // ---- AI User Understanding（DEV-0070 Phase F v2.1：本同步路径只注入
+    //      既有用户理解摘要；goal/missing 为 Primary AI 动态推理，在 agent 轮首
+    //      执行（F21-02），此处不再做本地推断） ----
+    {
+        let uc = super::intelligence::load_user_context(conn, profile_id);
+        let summary = uc.summary();
+        if !summary.is_empty() {
+            layers.push(Layer { name: "AI User Understanding", text: format!("当前用户理解：\n{summary}") });
+            chips.push("用户理解".into());
+        }
+    }
+
     // ---- L3 Higher 事实（FTS → 实体详情摘要） ----
     let l3 = search_and_summarize(conn, profile_id, user_message)?;
     if !l3.is_empty() {
@@ -239,7 +251,8 @@ pub fn detect_context_purpose(
 /// DEV-0060 §8.1：当前目标摘要——**active GoalTarget 为唯一正式来源**。
 /// - 有 active GoalTarget：REACH=主目标、SAFETY=风险参考（考研）；generic 取第一个 active
 /// - 无 active GoalTarget：返回「正式目标：未设置」，**不自动返回旧 goals.final**（legacy 只能是候选）
-fn current_goal_summary(conn: &Connection, profile_id: i64) -> Result<Option<String>, String> {
+/// DEV-0070 F21-02：pub(crate) 供 agent 轮首 intelligence 分析复用（Higher 当前上下文）。
+pub(crate) fn current_goal_summary(conn: &Connection, profile_id: i64) -> Result<Option<String>, String> {
     let targets = crate::repository::goal_target::GoalTargetRepository::new(conn)
         .list_active(profile_id, None, None)
         .unwrap_or_default();

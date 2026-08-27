@@ -60,11 +60,15 @@ impl RunManager {
 
 /// Run 事件发射（AppHandle 可用；lib 测试中传 None 则跳过）。
 pub fn emit(app: Option<&tauri::AppHandle>, event: &str, run_id: &str, payload: serde_json::Value) {
-    use tauri::Emitter;
     if let Some(a) = app {
-        let _ = a.emit(
-            event,
-            serde_json::json!({ "run_id": run_id, "data": payload }),
-        );
+        let _ = emit_raw(a, event, serde_json::json!({ "run_id": run_id, "data": payload }));
     }
+}
+
+/// DEV-0077.3 §十二：裸事件发射（canonical `ai://runtime` payload 原样透出）。
+/// 与旧 emit 同形（`let _ = emit`）——不实例化 `tauri::Error`/Display，
+/// 保持测试二进制链接面与既有 exes 完全一致。
+pub fn emit_raw(app: &tauri::AppHandle, event: &str, payload: serde_json::Value) {
+    use tauri::Emitter;
+    let _ = app.emit(event, payload);
 }

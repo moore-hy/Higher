@@ -193,11 +193,17 @@ impl<'a> ChangeSetRepository<'a> {
                     return Err(format!("[{}] {}：{}", op.action, op.entity_type, e));
                 }
                 Ok(actual_after) => {
-                    // create：回写实际 AFTER（含真实 id）供 Undo 使用 + 登记 ref
+                    // create：回写实际 AFTER（含真实 id）供 Undo 使用 + 登记 ref。
+                    // Phase D Stabilization：回写 = 原 after ∪ 引擎实际值（引擎键优先）——
+                    // 保留业务字段（title/phase_key 等）供 Read-Back Verify 内容级核对。
+                    // R3-01 修正：merge 基准必须用**解析后**的 after（blueprint_ref/
+                    // phase_ref → blueprint_id/phase_id），否则回写缺 phase_id，
+                    // Verify/preflight 的归属核对会静默跳过或误判。
                     if op.action == "create" {
+                        let merged = merge_after(&resolved_op.after_json, &actual_after);
                         let _ = tx.execute(
                             "UPDATE ai_change_operations SET after_json = ?1 WHERE id = ?2",
-                            params![actual_after, op.id],
+                            params![merged, op.id],
                         );
                         if let Some(r) = &op.operation_ref {
                             if let Some(real) = serde_json::from_str::<J>(&actual_after)
@@ -238,6 +244,11 @@ impl<'a> ChangeSetRepository<'a> {
         }
         let ops = self.list_operations(id, profile_id)?;
         let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        // R3-01 Stabilization：Blueprint ChangeSet 完整 preflight——撤销前验证
+        // 当前正式状态仍等于本 ChangeSet 的 AFTER（BP/Phase/Milestone 全字段），
+        // 任一被后续人工或 AI 修改 → 整包 stale 拒绝（此时事务尚未写入，0 mutation），
+        // 杜绝"先删 milestone/phase、最后才发现 Blueprint stale"的部分执行。
+        preflight_blueprint_undo(&tx, profile_id, &ops)?;
         for op in ops.iter().rev() {
             let result = undo_one(&tx, profile_id, op);
             if let Err(e) = result {
@@ -289,11 +300,18 @@ fn snapshot_before(conn: &Connection, profile_id: i64, entity_type: &str, id: i6
             })),
         ).map_err(|_| "学习记录不存在或不属于当前档案".to_string())?,
         "goal" => conn.query_row(
-            "SELECT name, day_kind FROM goals WHERE id=?1 AND profile_id=?2",
+            // Phase D Stabilization：before 快照补 parent/brief/period（goal update 的
+            // 完整 Undo 依据：brief 还原 / move 还原 / name 还原）
+            "SELECT name, day_kind, parent_goal_id, goal_brief_json, period_start, period_end
+             FROM goals WHERE id=?1 AND profile_id=?2",
             params![id, profile_id],
             |r| Ok(serde_json::json!({
                 "name": r.get::<_, String>(0)?,
                 "day_kind": r.get::<_, String>(1)?,
+                "parent_goal_id": r.get::<_, Option<i64>>(2)?,
+                "goal_brief_json": r.get::<_, Option<String>>(3)?,
+                "period_start": r.get::<_, Option<String>>(4)?,
+                "period_end": r.get::<_, Option<String>>(5)?,
             })),
         ).map_err(|_| "目标不存在或不属于当前档案".to_string())?,
         "knowledge" => conn.query_row(
@@ -443,12 +461,20 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
             if let Some(g) = goal {
                 check_rest_day(tx, profile_id, g)?;
             }
+            // DEV-0077.4-A.1 F2 §三四（方案 B）：task update 扩展 archived_at
+            // 软归档通道——与蓝图重投影/TaskRepository::archive 同语义（非破坏、
+            // 历史可见、Undo 可恢复）。缺失 → 保留 before；"now" → datetime('now')。
+            let archived = match opt_s(&after_v, "archived_at") {
+                Some(a) if !a.is_empty() => a,
+                _ => opt_s(&before, "archived_at").unwrap_or_default(),
+            };
             tx.execute(
                 "UPDATE tasks SET title=?1, planned_date=?2, planned_time=?3, goal_id=?4,
                                  learning_item_id=?5, estimated_minutes=?6, task_kind=?7, priority=?8,
+                                 archived_at=CASE WHEN ?9='' THEN NULL WHEN ?9='now' THEN datetime('now') ELSE ?9 END,
                                  updated_at=datetime('now')
-                 WHERE id=?9 AND profile_id=?10",
-                params![title, date, time, goal, item, estimated, kind, pri, id, profile_id],
+                 WHERE id=?10 AND profile_id=?11",
+                params![title, date, time, goal, item, estimated, kind, pri, archived, id, profile_id],
             )
             .map_err(|e| e.to_string())?;
             index_upsert(tx, "task", id, profile_id, &title, &title)?;
@@ -744,6 +770,100 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
                 return Ok(after_v.to_string());
             }
             let id = op.entity_id.ok_or("update 需要 entity_id")?;
+            // DEV-0066 Phase D · move_goal 通道：after.parent_real_id → 变更父节点
+            // （同事务内做与 create 相同的层级校验：year→final / month→year / day→month
+            //  + Phase D Stabilization：period containment（month 落 year、day 属 month））
+            if let Some(new_parent) = opt_i(&after_v, "parent_real_id") {
+                let (level, cur_parent, pprof) = tx
+                    .query_row(
+                        "SELECT goal_level, parent_goal_id, profile_id FROM goals WHERE id=?1",
+                        params![id],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, i64>(2)?)),
+                    )
+                    .map_err(|_| "目标不存在".to_string())?;
+                if pprof != profile_id {
+                    return Err("目标不属于当前档案".to_string());
+                }
+                if new_parent == cur_parent.unwrap_or(0) {
+                    return Err("新父节点与当前父节点相同（无需移动）".to_string());
+                }
+                let (pl, pprof2): (String, i64) = tx
+                    .query_row(
+                        "SELECT goal_level, profile_id FROM goals WHERE id=?1",
+                        params![new_parent],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                    )
+                    .map_err(|_| "新父目标不存在".to_string())?;
+                if pprof2 != profile_id {
+                    return Err("禁止把目标移动到其他档案的目标名下".to_string());
+                }
+                let want = match level.as_str() {
+                    "year" => "final",
+                    "month" => "year",
+                    "day" => "month",
+                    other => return Err(format!("层级 {other} 不支持移动")),
+                };
+                if pl != want {
+                    return Err(format!("{level} 目标的父节点必须是 {want}（当前新父为 {pl}）").to_string());
+                }
+                if new_parent == id {
+                    return Err("禁止把目标移动到自己名下".to_string());
+                }
+                // containment：被移动目标自身 period 必须落在（month：新 year 范围 / day：新 month 范围）
+                let (mps, mpe) = tx
+                    .query_row(
+                        "SELECT period_start, period_end FROM goals WHERE id=?1",
+                        params![id],
+                        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+                    )
+                    .map_err(|_| "被移动目标缺少周期信息".to_string())?;
+                match level.as_str() {
+                    "month" => {
+                        if let Some(m) = &mps {
+                            let (yps, ype) = parent_period(tx, new_parent)?;
+                            match (yps, ype) {
+                                (Some(a), Some(b)) => {
+                                    if m.as_str() < a.as_str() || m.as_str() > b.as_str() {
+                                        return Err("月目标移动后的周期必须落在新父年度目标范围内".to_string());
+                                    }
+                                }
+                                _ => return Err("新父年度目标缺少周期，无法校验包含关系".to_string()),
+                            }
+                        }
+                    }
+                    "day" => {
+                        let d = mps.clone().ok_or("日目标缺少周期，无法校验归属")?;
+                        let (a, b) = parent_period(tx, new_parent)?;
+                        match (a, b) {
+                            (Some(x), Some(y)) => {
+                                if d.as_str() < x.as_str() || d.as_str() > y.as_str() {
+                                    return Err("日目标移动后必须属于其新父月目标（日期不在月份范围内）".to_string());
+                                }
+                            }
+                            _ => return Err("新父月目标缺少周期，无法校验归属".to_string()),
+                        }
+                        let _ = mpe;
+                    }
+                    _ => {}
+                }
+                let name_m = opt_s(&after_v, "name").unwrap_or_default();
+                let n = if name_m.is_empty() {
+                    tx.execute(
+                        "UPDATE goals SET parent_goal_id=?1, updated_at=datetime('now') WHERE id=?2 AND profile_id=?3",
+                        params![new_parent, id, profile_id],
+                    )
+                } else {
+                    tx.execute(
+                        "UPDATE goals SET parent_goal_id=?1, name=?4, updated_at=datetime('now') WHERE id=?2 AND profile_id=?3",
+                        params![new_parent, id, profile_id, name_m],
+                    )
+                }
+                .map_err(|e| e.to_string())?;
+                if n == 0 {
+                    return Err("目标不存在或不属于当前档案".to_string());
+                }
+                return Ok(serde_json::json!({"id": id, "parent_goal_id": new_parent}).to_string());
+            }
             let name = s(&after_v, "name");
             let n = tx
                 .execute(
@@ -821,9 +941,21 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
                     return Err("禁止跨档案创建知识".to_string());
                 }
             }
+            // DEV-0077.4-A.1 §二十九/§五十五：可选 goal 关联（跨 Profile 防护）与描述
+            let goal = opt_i(&after_v, "goal_id").or_else(|| opt_i(&after_v, "goal_real_id"));
+            if let Some(g) = goal {
+                let (gp,): (i64,) = tx
+                    .query_row("SELECT profile_id FROM goals WHERE id=?1", params![g], |r| Ok((r.get(0)?,)))
+                    .map_err(|_| "知识节点关联的 goal 不存在".to_string())?;
+                if gp != profile_id {
+                    return Err("禁止跨档案关联 goal".to_string());
+                }
+            }
+            let description = opt_s(&after_v, "description");
             tx.execute(
-                "INSERT INTO learning_items (profile_id, parent_id, name, content) VALUES (?1,?2,?3,'')",
-                params![profile_id, parent, name],
+                "INSERT INTO learning_items (profile_id, parent_id, goal_id, name, description, content)
+                 VALUES (?1,?2,?3,?4,?5,'')",
+                params![profile_id, parent, goal, name, description],
             )
             .map_err(|e| e.to_string())?;
             let id = tx.last_insert_rowid();
@@ -1059,9 +1191,11 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
                 .map_err(|e| e.to_string())?;
             let wants_active = opt_s(&after_v, "status").map(|st| st == "active").unwrap_or(false);
             if wants_active {
-                // 同事务内激活：supersede + active + 安全投影（不可嵌套新事务）
+                // 同事务内激活：supersede + active；投影仅在非 skip_projection 时执行
+                // （R2-01：skip 时完全不进入 project_tasks_in_tx——含归档在内的全部副作用关闭）
                 let today = super::planning::today_utc8();
-                let _ = activate_blueprint_in_tx(tx, profile_id, bp.id, &today, 14)
+                let skip_projection = after_v.get("skip_projection").and_then(|x| x.as_bool()).unwrap_or(false);
+                let _ = activate_blueprint_in_tx(tx, profile_id, bp.id, &today, 14, skip_projection)
                     .map_err(|e| e.to_string())?;
             }
             let out = serde_json::json!({ "id": bp.id }).to_string();
@@ -1109,13 +1243,36 @@ fn apply_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperati
     }
 }
 
+/// Phase D Stabilization：create 回写合并——原 after 对象 + 引擎实际 AFTER 键
+/// （引擎键优先，如 id）。两者任一非对象时以引擎值为准（旧行为）。
+fn merge_after(original: &J, actual: &str) -> String {
+    let actual_v: J = match serde_json::from_str(actual) {
+        Ok(v) => v,
+        Err(_) => return actual.to_string(),
+    };
+    match (original.as_object(), actual_v.as_object()) {
+        (Some(orig), Some(act)) => {
+            let mut m = orig.clone();
+            for (k, v) in act {
+                m.insert(k.clone(), v.clone());
+            }
+            serde_json::to_string(&J::Object(m)).unwrap_or_else(|_| actual.to_string())
+        }
+        _ => actual.to_string(),
+    }
+}
+
 /// §25.1：在 ChangeSet 外层事务内直接激活 Blueprint（不嵌套新事务）。
+/// R2-01 Stabilization：skip_projection=true 时**完全不调用** project_tasks_in_tx
+/// （该函数会先归档旧蓝图 pending 任务——horizon=0 仍有副作用）；
+/// AI 路径只做 supersede+activate，任务生成留 Phase G。
 fn activate_blueprint_in_tx(
     tx: &rusqlite::Transaction<'_>,
     profile_id: i64,
     id: i64,
     today: &str,
     horizon_days: i64,
+    skip_projection: bool,
 ) -> Result<(), String> {
     let row: Option<(String, String)> = tx
         .query_row(
@@ -1143,8 +1300,195 @@ fn activate_blueprint_in_tx(
         params![id],
     )
     .map_err(|e| e.to_string())?;
+    if skip_projection {
+        // R2-01：AI 路径零任务副作用（不归档旧投影、不生成新任务）
+        return Ok(());
+    }
     let _ = super::planning::project_tasks_in_tx(tx, profile_id, id, &scenario, structured.as_str(), today, horizon_days)
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// R3-01 Stabilization · Blueprint ChangeSet 完整 preflight stale 验证。
+/// Higher 允许 active Blueprint / Phase / Milestone 被后续人工或 AI 修改，
+/// 因此 Undo 整包前必须验证当前正式状态仍等于该 ChangeSet 的 AFTER：
+/// - Blueprint：title / content_md / structured_json / review_interval_days / status
+/// - Phase：phase_key / title / start_date / end_date / objective_md / blueprint 归属
+/// - Milestone：milestone_key / title / phase_id / start_date / end_date /
+///   date_precision / date_status / blueprint 归属
+/// 任一字段不符 → stale 拒绝（调用点位于任何写入之前，0 mutation）。
+fn preflight_blueprint_undo(
+    tx: &rusqlite::Transaction<'_>,
+    profile_id: i64,
+    ops: &[ChangeOperation],
+) -> Result<(), String> {
+    // 仅 Blueprint ChangeSet 适用（一个 ChangeSet 至多一个 blueprint create）
+    let Some(bp_op) = ops
+        .iter()
+        .find(|o| o.entity_type == "planning_blueprint" && o.action == "create")
+    else {
+        return Ok(());
+    };
+    let bp_id = bp_op
+        .after_json
+        .get("id")
+        .and_then(|x| x.as_i64())
+        .ok_or("蓝图 op 缺少 id，无法 preflight")?;
+    // after 字段读取：缺失/空白 → 缺省值（与引擎写入路径一致）
+    let g = |v: &J, k: &str, d: &str| -> String {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(d)
+            .to_string()
+    };
+    // ---- Blueprint：title / content_md / structured_json / review_interval_days / status ----
+    let row = tx
+        .query_row(
+            "SELECT title, COALESCE(content_md,''), COALESCE(structured_json,''),
+                    COALESCE(review_interval_days,14), status
+             FROM planning_blueprints WHERE id=?1 AND profile_id=?2",
+            params![bp_id, profile_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .map_err(|_| "蓝图不存在或已删除，拒绝撤销（stale）".to_string())?;
+    let (cur_title, cur_md, cur_sj, cur_ri, cur_status) = row;
+    let want_title = g(&bp_op.after_json, "title", "");
+    if cur_title.trim() != want_title {
+        return Err(format!(
+            "蓝图 title 已被后续修改（现值「{cur_title}」≠ 本修改集「{want_title}」），拒绝撤销（stale）"
+        ));
+    }
+    if cur_md.trim() != g(&bp_op.after_json, "content_md", "") {
+        return Err("蓝图 content_md 已被后续修改，拒绝撤销（stale）".to_string());
+    }
+    if cur_sj.trim() != g(&bp_op.after_json, "structured_json", "") {
+        return Err("蓝图 structured_json 已被后续修改，拒绝撤销（stale）".to_string());
+    }
+    let want_ri = bp_op
+        .after_json
+        .get("review_interval_days")
+        .and_then(|x| x.as_i64())
+        .unwrap_or(14);
+    if cur_ri != want_ri {
+        return Err("蓝图 review_interval_days 已被后续修改，拒绝撤销（stale）".to_string());
+    }
+    let want_status = g(&bp_op.after_json, "status", "active");
+    if cur_status != want_status {
+        return Err(format!(
+            "蓝图 status 已被后续修改（现值 {cur_status}，本修改集后为 {want_status}），拒绝撤销（stale）"
+        ));
+    }
+    // ---- Phase：phase_key / title / start_date / end_date / objective_md / blueprint 归属 ----
+    for op in ops.iter().filter(|o| o.entity_type == "planning_phase" && o.action == "create") {
+        let pid = op
+            .after_json
+            .get("id")
+            .and_then(|x| x.as_i64())
+            .ok_or("phase op 缺少 id，无法 preflight")?;
+        let row = tx
+            .query_row(
+                "SELECT phase_key, title, COALESCE(start_date,''), COALESCE(end_date,''),
+                        COALESCE(objective_md,''), blueprint_id
+                 FROM planning_phases WHERE id=?1",
+                params![pid],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, Option<i64>>(5)?,
+                    ))
+                },
+            )
+            .map_err(|_| format!("阶段（id={pid}）不存在或已删除，拒绝撤销（stale）"))?;
+        let (k, t, sd, ed, obj, owner) = row;
+        let a = &op.after_json;
+        if k.trim() != g(a, "phase_key", "") {
+            return Err(format!("阶段「{k}」的 phase_key 已被后续修改，拒绝撤销（stale）"));
+        }
+        if t.trim() != g(a, "title", "") {
+            return Err(format!("阶段「{k}」的 title 已被后续修改，拒绝撤销（stale）"));
+        }
+        if sd != g(a, "start_date", "") || ed != g(a, "end_date", "") {
+            return Err(format!("阶段「{k}」的日期已被后续修改，拒绝撤销（stale）"));
+        }
+        if obj.trim() != g(a, "objective_md", "") {
+            return Err(format!("阶段「{k}」的 objective_md 已被后续修改，拒绝撤销（stale）"));
+        }
+        if owner != Some(bp_id) {
+            return Err(format!("阶段「{k}」已不归属本蓝图，拒绝撤销（stale）"));
+        }
+    }
+    // ---- Milestone：milestone_key / title / phase_id / start_date / end_date /
+    //      date_precision / date_status / blueprint 归属 ----
+    for op in ops
+        .iter()
+        .filter(|o| o.entity_type == "planning_milestone" && o.action == "create")
+    {
+        let mid = op
+            .after_json
+            .get("id")
+            .and_then(|x| x.as_i64())
+            .ok_or("milestone op 缺少 id，无法 preflight")?;
+        let row = tx
+            .query_row(
+                "SELECT milestone_key, title, phase_id, COALESCE(start_date,''), COALESCE(end_date,''),
+                        COALESCE(date_precision,''), COALESCE(date_status,''), blueprint_id
+                 FROM planning_milestones WHERE id=?1",
+                params![mid],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, Option<i64>>(7)?,
+                    ))
+                },
+            )
+            .map_err(|_| format!("里程碑（id={mid}）不存在或已删除，拒绝撤销（stale）"))?;
+        let (k, t, pid, sd, ed, dp, ds, owner) = row;
+        let a = &op.after_json;
+        if k.trim() != g(a, "milestone_key", "") {
+            return Err(format!("里程碑「{k}」的 milestone_key 已被后续修改，拒绝撤销（stale）"));
+        }
+        if t.trim() != g(a, "title", "") {
+            return Err(format!("里程碑「{k}」的 title 已被后续修改，拒绝撤销（stale）"));
+        }
+        // phase 归属：after.phase_id 已在 apply 期由 phase_ref 解析回写
+        let want_pid = a.get("phase_id").and_then(|x| x.as_i64());
+        if pid != want_pid {
+            return Err(format!("里程碑「{k}」的 phase 归属已被后续修改，拒绝撤销（stale）"));
+        }
+        if sd != g(a, "start_date", "") || ed != g(a, "end_date", "") {
+            return Err(format!("里程碑「{k}」的日期已被后续修改，拒绝撤销（stale）"));
+        }
+        // 引擎缺省：date_precision=unknown / date_status=estimated（与写入路径一致）
+        if dp != g(a, "date_precision", "unknown") {
+            return Err(format!("里程碑「{k}」的 date_precision 已被后续修改，拒绝撤销（stale）"));
+        }
+        if ds != g(a, "date_status", "estimated") {
+            return Err(format!("里程碑「{k}」的 date_status 已被后续修改，拒绝撤销（stale）"));
+        }
+        if owner != Some(bp_id) {
+            return Err(format!("里程碑「{k}」已不归属本蓝图，拒绝撤销（stale）"));
+        }
+    }
     Ok(())
 }
 
@@ -1174,7 +1518,35 @@ fn undo_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperatio
                 return Ok(());
             }
         }
+        // phase/milestone 无 profile_id 列（FK 归属 blueprint）→ 按 id 删除
+        if op.entity_type == "planning_phase" || op.entity_type == "planning_milestone" {
+            let n = tx
+                .execute(
+                    &format!("DELETE FROM {} WHERE id=?1", table_of(&op.entity_type)),
+                    params![id],
+                )
+                .map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Err("数据已被后续修改（实体不存在），拒绝直接撤销".to_string());
+            }
+            return Ok(());
+        }
         let table = table_of(&op.entity_type);
+        // Phase D Stabilization · Blueprint create Undo：先做 stale 验证（本蓝图
+        // 仍是当前 active 才允许撤销；已被后续版本取代 → 拒绝），再删除并还原上一版本。
+        // R2-05 修正：验证必须在 DELETE 之前（否则查不到刚被自己删除的行）。
+        if op.entity_type == "planning_blueprint" {
+            let cur_status: String = tx
+                .query_row(
+                    "SELECT status FROM planning_blueprints WHERE id=?1 AND profile_id=?2",
+                    params![id, profile_id],
+                    |r| r.get(0),
+                )
+                .map_err(|_| "蓝图不存在，无法撤销".to_string())?;
+            if cur_status != "active" {
+                return Err("蓝图已被后续版本取代，拒绝撤销（stale）".to_string());
+            }
+        }
         let n = tx
             .execute(
                 &format!("DELETE FROM {} WHERE id=?1 AND profile_id=?2", table),
@@ -1184,7 +1556,94 @@ fn undo_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperatio
         if n == 0 {
             return Err("数据已被后续修改（实体不存在），拒绝直接撤销".to_string());
         }
+        if op.entity_type == "planning_blueprint" {
+            let _ = tx.execute(
+                "UPDATE planning_blueprints SET status='active', updated_at=datetime('now')
+                 WHERE id=(SELECT MAX(id) FROM planning_blueprints
+                           WHERE profile_id=?1 AND status='superseded')",
+                params![profile_id],
+            );
+        }
         let _ = index_remove(tx, &op.entity_type, id);
+        return Ok(());
+    }
+    // Phase D Stabilization：无 before 快照的合法撤销路径提前处理——
+    // ① goal brief 首写（无 entity_id）：由同包前序 create-final 的占位还原覆盖
+    if op.entity_type == "goal" && op.action == "update" && op.entity_id.is_none() {
+        return Ok(());
+    }
+    // ② GoalTarget activate：行回 draft + 被降级的最高 id historical 还原 active
+    // R2-05：Undo 前验证当前 active 仍是本 op 激活的那一行（经同包 create op 的
+    // 回写 id 定位）；后续已有新版本 → stale 拒绝，不覆盖他人更新。
+    if op.entity_type == "goal_target" && op.action == "status_change" {
+        if op.after_json.get("status").and_then(|x| x.as_str()) != Some("active") {
+            return Err("仅实现 activate 撤销（dismiss/其他状态无 before 快照）".to_string());
+        }
+        // scenario/role 优先取 after（AI 编译器注入）；缺失则按 id 反查
+        let (scenario, role): (String, String) = match (
+            op.after_json.get("scenario_type").and_then(|x| x.as_str()),
+            op.after_json.get("role").and_then(|x| x.as_str()),
+        ) {
+            (Some(s), Some(r)) if !s.is_empty() && !r.is_empty() => (s.to_string(), r.to_string()),
+            _ => {
+                let tid = op
+                    .after_json
+                    .get("id")
+                    .and_then(|x| x.as_i64())
+                    .or(op.entity_id)
+                    .unwrap_or(0);
+                tx.query_row(
+                    "SELECT scenario_type, role FROM goal_targets WHERE id=?1 AND profile_id=?2",
+                    params![tid, profile_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .map_err(|e| e.to_string())?
+            }
+        };
+        // stale 验证：本 op 激活的行（同包 create 的回写 id）必须仍是当前 active
+        let want_id: Option<i64> = op
+            .after_json
+            .get("ref")
+            .and_then(|x| x.as_str())
+            .and_then(|r| {
+                tx.query_row(
+                    "SELECT after_json FROM ai_change_operations
+                     WHERE change_set_id=?1 AND entity_type='goal_target' AND action='create'
+                       AND operation_ref=?2",
+                    params![op.change_set_id, r],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+                .and_then(|s| serde_json::from_str::<J>(&s).ok())
+                .and_then(|v| v.get("id").and_then(|x| x.as_i64()))
+            });
+        if let Some(want) = want_id {
+            let cur_active: i64 = tx
+                .query_row(
+                    "SELECT id FROM goal_targets WHERE profile_id=?1 AND scenario_type=?2 AND role=?3 AND status='active'",
+                    params![profile_id, scenario, role],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if cur_active != want {
+                return Err(format!(
+                    "GoalTarget（{role}）的 active 已被后续版本更新，拒绝撤销（stale）"
+                ));
+            }
+        }
+        tx.execute(
+            "UPDATE goal_targets SET status='draft', updated_at=datetime('now')
+             WHERE profile_id=?1 AND scenario_type=?2 AND role=?3 AND status='active'",
+            params![profile_id, scenario, role],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE goal_targets SET status='active', updated_at=datetime('now')
+             WHERE id=(SELECT MAX(id) FROM goal_targets
+                       WHERE profile_id=?1 AND scenario_type=?2 AND role=?3 AND status='historical')",
+            params![profile_id, scenario, role],
+        )
+        .map_err(|e| e.to_string())?;
         return Ok(());
     }
     let before = op.before_json.clone().ok_or("该操作缺少 before 快照，无法撤销")?;
@@ -1224,6 +1683,16 @@ fn undo_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperatio
                 .map_err(|e| e.to_string())?;
             if n == 0 {
                 return Err("数据已被后续修改（实体不存在），拒绝直接撤销".to_string());
+            }
+            // Phase D Stabilization · Blueprint create Undo：激活时被 superseded 的
+            // 同档案最高 id 旧版本还原 active（版本链还原；无旧版本则保持无 active）
+            if op.entity_type == "planning_blueprint" {
+                let _ = tx.execute(
+                    "UPDATE planning_blueprints SET status='active', updated_at=datetime('now')
+                     WHERE id=(SELECT MAX(id) FROM planning_blueprints
+                               WHERE profile_id=?1 AND status='superseded')",
+                    params![profile_id],
+                );
             }
             let _ = index_remove(tx, &op.entity_type, id);
             Ok(())
@@ -1281,6 +1750,72 @@ fn undo_one(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &ChangeOperatio
                 params![md, profile_id],
             )
             .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        // Phase D Stabilization · goal update Undo（brief / move / name 分别按 before 还原）
+        // R2-05：Undo 前验证当前正式状态仍等于本 op 的 AFTER（stale → 拒绝）
+        ("goal", "update") => {
+            // 无 entity_id（brief 首写路径）：由同包前序 create-final 的占位还原覆盖
+            let id = match op.entity_id {
+                Some(id) => id,
+                None => return Ok(()),
+            };
+            let cur: (String, Option<String>, Option<i64>) = tx
+                .query_row(
+                    "SELECT name, goal_brief_json, parent_goal_id FROM goals WHERE id=?1 AND profile_id=?2",
+                    params![id, profile_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .map_err(|_| "目标不存在或不属于当前档案，无法撤销".to_string())?;
+            // brief：当前 DB brief 必须等于本 op 写入的 goal_brief
+            if let Some(want) = after_v.get("goal_brief") {
+                let cur_brief: J = cur
+                    .1
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or(J::Null);
+                if cur_brief != *want {
+                    return Err("目标 Brief 已被后续修改，拒绝撤销（stale）".to_string());
+                }
+            }
+            // move：当前 parent 必须等于本 op 写入的 parent
+            if let Some(np) = after_v.get("parent_real_id").and_then(|x| x.as_i64()) {
+                if cur.2 != Some(np) {
+                    return Err("目标父节点已被后续修改，拒绝撤销（stale）".to_string());
+                }
+            }
+            // name：当前名称必须等于本 op 写入的名称
+            if let Some(want_name) = after_v.get("name").and_then(|x| x.as_str()) {
+                if cur.0 != want_name {
+                    return Err("目标名称已被后续修改，拒绝撤销（stale）".to_string());
+                }
+            }
+            let b = before.as_object().ok_or("goal update before 快照缺失")?;
+            if let Some(n) = b.get("name").and_then(|x| x.as_str()) {
+                tx.execute(
+                    "UPDATE goals SET name=?1, updated_at=datetime('now') WHERE id=?2 AND profile_id=?3",
+                    params![n, id, profile_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            // brief：before 有值 → 还原；before 无（旧值为 NULL）而本次写入过 → 清 NULL
+            if after_v.get("goal_brief").is_some() {
+                let old_brief = b.get("goal_brief_json").and_then(|x| x.as_str());
+                tx.execute(
+                    "UPDATE goals SET goal_brief_json=?1, updated_at=datetime('now') WHERE id=?2 AND profile_id=?3",
+                    params![old_brief, id, profile_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            // move：还原原父节点
+            if after_v.get("parent_real_id").is_some() {
+                let old_parent = b.get("parent_goal_id").and_then(|x| x.as_i64());
+                tx.execute(
+                    "UPDATE goals SET parent_goal_id=?1, updated_at=datetime('now') WHERE id=?2 AND profile_id=?3",
+                    params![old_parent, id, profile_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
             Ok(())
         }
         (t, a) => Err(format!("撤销不支持 {}/{}（未实现）", t, a)),
@@ -1350,11 +1885,14 @@ fn restore_from_before(tx: &rusqlite::Transaction<'_>, profile_id: i64, op: &Cha
             let time = opt_s(before, "planned_time");
             let goal = opt_i(before, "goal_id");
             let status = s(before, "status");
+            // DEV-0077.4-A.1 F2：Undo 恢复 archived_at（软归档可撤销）
+            let archived = opt_s(before, "archived_at").unwrap_or_default();
             let n = tx
                 .execute(
-                    "UPDATE tasks SET title=?1, planned_date=?2, planned_time=?3, goal_id=?4, status=?5
-                     WHERE id=?6 AND profile_id=?7",
-                    params![title, date, time, goal, status, id, profile_id],
+                    "UPDATE tasks SET title=?1, planned_date=?2, planned_time=?3, goal_id=?4, status=?5,
+                                     archived_at=CASE WHEN ?6='' THEN NULL ELSE ?6 END
+                     WHERE id=?7 AND profile_id=?8",
+                    params![title, date, time, goal, status, archived, id, profile_id],
                 )
                 .map_err(|e| e.to_string())?;
             if n == 0 {
@@ -1567,8 +2105,9 @@ fn parent_period(tx: &rusqlite::Transaction<'_>, parent_id: i64) -> Result<(Opti
 
 fn fetch_task(tx: &rusqlite::Transaction<'_>, profile_id: i64, id: i64) -> Result<J, String> {
     // DEV-0060.1 PART I（T29）：apply 期 before 事实源必须含 V2 全字段
+    // DEV-0077.4-A.1 F2：+archived_at（软归档 Undo 恢复依据）
     tx.query_row(
-        "SELECT title, planned_date, planned_time, goal_id, status, learning_item_id, estimated_minutes, task_kind, priority
+        "SELECT title, planned_date, planned_time, goal_id, status, learning_item_id, estimated_minutes, task_kind, priority, archived_at
          FROM tasks WHERE id=?1 AND profile_id=?2",
         params![id, profile_id],
         |r| {
@@ -1582,6 +2121,7 @@ fn fetch_task(tx: &rusqlite::Transaction<'_>, profile_id: i64, id: i64) -> Resul
                 "estimated_minutes": r.get::<_, Option<i64>>(6)?,
                 "task_kind": r.get::<_, String>(7)?,
                 "priority": r.get::<_, String>(8)?,
+                "archived_at": r.get::<_, Option<String>>(9)?,
             }))
         },
     )

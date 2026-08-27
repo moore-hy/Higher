@@ -109,26 +109,26 @@ User = 最终决定者
 
 | 项目 | 当前状态 |
 |---|---|
-| 应用版本 | `0.3.0`，正在准备正式 v1.0 Release Freeze |
+| 应用版本 | `1.0.0` |
+| Release 状态 | `release/1.0.0` freeze candidate；最终 tag 待 Human Runtime |
 | 桌面框架 | Tauri 2 |
 | 前端 | React + TypeScript + Vite |
 | 后端 | Rust |
 | 数据库 | SQLite |
 | Schema | `v024`，24 个顺序 Migration |
-| 平台主线 | Windows Desktop |
-| Bundle | NSIS |
+| 平台主线 | Windows Desktop（x64） |
+| Bundle | NSIS（轻量安装包） |
 | Product Name | `Higher` |
 | Identifier | `com.higher.desktop` |
 | Main Binary | `Higher.exe` |
-| 当前 WebView2 安装策略 | `offlineInstaller` |
+| 当前 WebView2 安装策略 | `downloadBootstrapper`（不再内嵌离线 WebView2 载荷） |
 | 数据策略 | Local First |
 | AI | Primary AI + optional Control AI |
 | AI Adapter | DeepSeek / OpenAI Compatible |
 | AI 正式写入 | 必须经 ChangeSet + 用户批准 |
 | 云账号 / 云同步 | 当前没有 |
 
-> 当前 `0.3.0` 是源码里的真实版本，不应提前把 README 写成已经发布的 `1.0.0`。  
-> 完成 Release Freeze 后再统一升级版本号。
+> 版本：1.0.0；Release 状态：`release/1.0.0` freeze candidate，最终 tag 待 Human Runtime。
 
 ---
 
@@ -2463,7 +2463,9 @@ public/mock/inject.js
 window.__TAURI_INTERNALS__
 ```
 
-后 no-op。
+后不再请求加载（index.html 侧 guard）。
+
+官方发布构建（`HIGHER_RELEASE_BUILD=1`）通过 `vite.config.ts` 的 `publicDir = false` 整体排除 `public/`，因此浏览器 mock 永远不进入正式安装包。
 
 因此：
 
@@ -2570,7 +2572,10 @@ identifier = "com.higher.desktop"
 targets = ["nsis"]
 installMode = "currentUser"
 languages = ["SimpChinese"]
+displayLanguageSelector = false
 startMenuFolder = "Higher"
+installerIcon = "icons/icon.ico"
+uninstallerIcon = "icons/icon.ico"
 
 bundle.useLocalToolsDir = true
 ```
@@ -2578,14 +2583,20 @@ bundle.useLocalToolsDir = true
 当前 WebView2：
 
 ```text
-webviewInstallMode = offlineInstaller
+webviewInstallMode = downloadBootstrapper
 ```
 
-因此当前安装包会自带较完整的 WebView2 安装能力。
+这是 v1.0.0 轻量化发布决策：
+
+```text
+已安装 WebView2        → Higher 正常安装
+未安装 WebView2        → Setup 联网从 Microsoft 下载 bootstrapper
+无 WebView2 且无网络  → 轻量安装包不保证可安装
+```
+
+安装包不再内嵌约 127 MB 的离线 WebView2 载荷。
 
 说明：`useLocalToolsDir = true` 属于构建工具链 / 本地工具缓存配置（NSIS 等打包工具缓存在构建机本地 `src-tauri\target\.tauri\`），不是用户侧产品功能，也不改变安装包行为。
-
-> v1.0 Release Freeze 可能继续优化发行体积；在源码配置真正修改并验证之前，README 只描述当前真实状态。
 
 ---
 
@@ -2660,6 +2671,8 @@ SHA256 文件用于完整性校验。
 
 ## 26.1 GitHub Repository
 
+GitHub Repository = 开发 / 源码仓库。
+
 开发仓库应该保存：
 
 ```text
@@ -2684,13 +2697,22 @@ README.md
 
 ---
 
-## 26.2 Installer
+## 26.2 Installer / GitHub Release
+
+GitHub Release = 面向普通用户的安装包发布页，与源码仓库是两种东西。
+
+v1.0.0 面向 GitHub Release 的正式资产：
+
+```text
+Higher_1.0.0_Setup.exe
+Higher_1.0.0_SHA256.txt
+```
 
 用户安装包只需要：
 
 > **运行 Higher 必需的编译结果与 Runtime Resource。**
 
-不应该把整个开发仓库塞进去。
+不应该把整个开发仓库塞进去。不应引导用户下载源码树 / target / dist / node_modules / 开发 DB。
 
 Installer 不应该包含：
 

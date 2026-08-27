@@ -298,6 +298,181 @@ impl AiClient {
         }
         Ok((full, usage))
     }
+
+    /// DEV-0077.3 §二十五（True Streaming 最小扩展）：SSE 流式 + tools 支持。
+    /// 与 chat_stream 的差异：
+    /// - 请求携带 tools（Tool Loop 轮的流式）；
+    /// - 解析 `choices[].delta.tool_calls`（按 index 聚合 id/name/arguments 增量）；
+    /// - 读取 finish_reason；
+    /// - 返回完整 [`Completion`]（content + tool_calls + finish_reason + usage）。
+    /// reasoning_content 仍然**不解析**（§二十六：禁止 emit/保存 reasoning）。
+    pub async fn chat_stream_full<F>(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<serde_json::Value>,
+        max_tokens: Option<i64>,
+        temp: f64,
+        mut on_delta: F,
+        token: tokio_util::sync::CancellationToken,
+    ) -> Result<Completion, String>
+    where
+        F: FnMut(&str),
+    {
+        if self.config.api_key.trim().is_empty() {
+            return Err("尚未配置 API Key。请先在「设置 → AI」中填写。".to_string());
+        }
+        let url = self.config.endpoint();
+        let model = self.config.effective_model();
+        let mut body = serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temp,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+        });
+        if let Some(t) = &tools {
+            body["tools"] = t.clone();
+        }
+        let mut resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(human_network_error)?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(human_http_error(status.as_u16(), &text));
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        let mut full = String::new();
+        let mut usage = Usage::default();
+        let mut finish_reason: Option<String> = None;
+        // tool_calls 按 index 聚合（SSE 增量：id/name 首帧，arguments 逐帧拼接）
+        let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+        loop {
+            if token.is_cancelled() {
+                break;
+            }
+            match resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    buf.extend_from_slice(&chunk);
+                    loop {
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        let Some(pos) = s.find("\n\n") else { break };
+                        let frame = s[..pos].to_string();
+                        buf = s[pos + 2..].as_bytes().to_vec();
+                        for line in frame.lines() {
+                            if let Some(data) = line.strip_prefix("data:") {
+                                let d = data.trim();
+                                if d == "[DONE]" {
+                                    return Ok(Self::stream_completion(full, tool_calls, finish_reason, usage));
+                                }
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(d) {
+                                    if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
+                                        usage.prompt_tokens = u.get("prompt_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                        usage.completion_tokens = u.get("completion_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                        usage.total_tokens = u.get("total_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                    }
+                                    // content delta（§二十六：仅 content；reasoning_content 不解析）
+                                    let delta = v
+                                        .pointer("/choices/0/delta/content")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("");
+                                    if !delta.is_empty() {
+                                        full.push_str(delta);
+                                        on_delta(delta);
+                                    }
+                                    // tool_calls 增量聚合
+                                    if let Some(arr) = v.pointer("/choices/0/delta/tool_calls").and_then(|x| x.as_array()) {
+                                        for frag in arr {
+                                            let idx = frag.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                                            while tool_calls.len() <= idx {
+                                                tool_calls.push(serde_json::json!({
+                                                    "id": "", "type": "function",
+                                                    "function": { "name": "", "arguments": "" },
+                                                }));
+                                            }
+                                            let tc = &mut tool_calls[idx];
+                                            if let Some(id) = frag.get("id").and_then(|x| x.as_str()) {
+                                                if !id.is_empty() {
+                                                    tc["id"] = serde_json::json!(id);
+                                                }
+                                            }
+                                            if let Some(ty) = frag.get("type").and_then(|x| x.as_str()) {
+                                                if !ty.is_empty() {
+                                                    tc["type"] = serde_json::json!(ty);
+                                                }
+                                            }
+                                            if let Some(name) = frag.pointer("/function/name").and_then(|x| x.as_str()) {
+                                                if !name.is_empty() {
+                                                    tc["function"]["name"] = serde_json::json!(name);
+                                                }
+                                            }
+                                            if let Some(args) = frag.pointer("/function/arguments").and_then(|x| x.as_str()) {
+                                                let cur = tc["function"]["arguments"].as_str().unwrap_or("").to_string();
+                                                tc["function"]["arguments"] = serde_json::json!(format!("{cur}{args}"));
+                                            }
+                                        }
+                                    }
+                                    if let Some(fr) = v.pointer("/choices/0/finish_reason").and_then(|x| x.as_str()) {
+                                        finish_reason = Some(fr.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    if full.is_empty() && tool_calls.is_empty() {
+                        return Err(human_network_error(e));
+                    }
+                    break; // 已有部分输出：保留已生成内容
+                }
+            }
+        }
+        Ok(Self::stream_completion(full, tool_calls, finish_reason, usage))
+    }
+
+    fn stream_completion(
+        content: String,
+        tool_calls: Vec<serde_json::Value>,
+        finish_reason: Option<String>,
+        usage: Usage,
+    ) -> Completion {
+        // 过滤空 tool_calls（占位未填充）
+        let tool_calls = tool_calls
+            .into_iter()
+            .filter(|tc| {
+                tc.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(|n| !n.trim().is_empty())
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        Completion {
+            content: Some(content),
+            reasoning_content: None, // §二十六：流式路径不产生 reasoning
+            finish_reason: finish_reason.or_else(|| {
+                if tool_calls.is_empty() {
+                    None
+                } else {
+                    Some("tool_calls".to_string())
+                }
+            }),
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Array(tool_calls))
+            },
+            usage,
+        }
+    }
 }
 
 fn human_network_error(e: reqwest::Error) -> String {
