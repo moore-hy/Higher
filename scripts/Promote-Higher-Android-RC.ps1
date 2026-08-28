@@ -61,7 +61,9 @@ function Get-SourceFingerprintPS {
 Write-Host "[Promote] DEV-MOBILE-005 RC → Stable Promotion$(if ($DryRun) { '（DRY RUN：不落 Stable）' })" -ForegroundColor Cyan
 if ($RepoRoot -notmatch 'Higher-Android$') { Fail "当前目录不是 Higher-Android：$RepoRoot" }
 $branch = git -C $RepoRoot rev-parse --abbrev-ref HEAD
-if ($branch -ne 'android/dev') { Fail "当前分支 = $branch（必须 android/dev）" }
+# DEV-INTEGRATE-001：main=双平台 canonical mainline；Promotion 允许 main/android/dev/integrate/*
+$branchAllowed = ($branch -eq 'main') -or ($branch -eq 'android/dev') -or ($branch -like 'integrate/*')
+if (-not $branchAllowed) { Fail "当前分支 = $branch（仅允许 main / android/dev / integrate/*）" }
 
 # ---------- 1 定位 RC ----------
 $conf = Get-Content (Join-Path $SrcTauri 'tauri.conf.json') -Raw | ConvertFrom-Json

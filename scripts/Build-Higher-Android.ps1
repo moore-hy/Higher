@@ -128,9 +128,10 @@ try {
     # ---------- 1-3 守卫 ----------
     Step 1 "验证施工目录 = Higher-Android（$Configuration）"
     if ($RepoRoot -notmatch 'Higher-Android$') { Fail "当前目录不是 Higher-Android：$RepoRoot" }
-    Step 2 "验证分支 = android/dev"
+    Step 2 "验证分支 = main / android/dev / integrate/*（DEV-INTEGRATE-001：main=双平台 canonical mainline，可直接构建 Android RC）"
     $branch = git -C $RepoRoot rev-parse --abbrev-ref HEAD
-    if ($branch -ne 'android/dev') { Fail "当前分支 = $branch（必须 android/dev）" }
+    $branchAllowed = ($branch -eq 'main') -or ($branch -eq 'android/dev') -or ($branch -like 'integrate/*')
+    if (-not $branchAllowed) { Fail "当前分支 = $branch（仅允许 main / android/dev / integrate/*）" }
     Step 3 "确认不在 Higher-Windows 工作树"
     if ($RepoRoot -match 'Higher-Windows') { Fail "禁止在 Higher-Windows 施工" }
 

@@ -3,8 +3,11 @@
 use std::path::Path;
 
 fn web(rel: &str) -> String {
+    // DEV-INTEGRATE-001：Windows core.autocrlf 下 checkout 会把工作树写成 CRLF，
+    // 多行字面量断言需对 LF 归一（index 内容恒为 LF，语义不变）
     std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../src").join(rel))
         .unwrap_or_default()
+        .replace("\r\n", "\n")
 }
 fn css() -> String {
     web("styles.css")

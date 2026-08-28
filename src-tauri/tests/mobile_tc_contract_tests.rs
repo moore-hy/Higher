@@ -16,7 +16,8 @@ use std::path::Path;
 
 fn read_repo(rel: &str) -> String {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-    std::fs::read_to_string(p).unwrap_or_default()
+    // DEV-INTEGRATE-001：Windows core.autocrlf 下工作树为 CRLF，多行字面量断言需 LF 归一
+    std::fs::read_to_string(p).unwrap_or_default().replace("\r\n", "\n")
 }
 
 /// 前端源码（仓库根 ../src/）。
