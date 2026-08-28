@@ -106,7 +106,13 @@ function fmtAdaptMinutes(min: number): string {
  * - Runtime 完全冻结：aiStartRun / Conversation / Streaming / Model Selector /
  *   Provider / Pending Action 零改动；Enter 发送、Shift+Enter 换行保持
  */
-export default function AiPanel() {
+export default function AiPanel({
+  presentation = "desktop",
+}: {
+  /** DEV-MOBILE-001 §74-77：desktop（默认，零行为变化）| mobile（Android 全屏，无 collapsed rail） */
+  presentation?: "desktop" | "mobile";
+} = {}) {
+  const isMobile = presentation === "mobile";
   const {
     pageContext,
     messages,
@@ -883,7 +889,8 @@ export default function AiPanel() {
   );
 
   // DEV-0065.1 §7/§30：无 Closed 态——Panel 恒驻，仅 Expanded / Collapsed 两态
-  if (collapsed) {
+  // DEV-MOBILE-001 §77：mobile 无 collapsed rail（全屏或隐藏由 MobileLayout 控制）
+  if (collapsed && !isMobile) {
     // §34：整条 46px rail = 单个全尺寸按钮（点击/Enter/Space 原生语义展开；无嵌套按钮）
     return (
       <aside className="aipanel aipanel--rail" aria-label="Higher AI（已收起）">
@@ -902,7 +909,13 @@ export default function AiPanel() {
   }
 
   return (
-    <aside className="aipanel">
+    <aside className={`aipanel${isMobile ? " aipanel--mobile" : ""}`}>
+      {/* DEV-MOBILE-002 F1-B：AI 为一级页面——无“‹ 返回”主退出
+          （BottomNav 即导航；History 等二级层自带关闭）。
+          保留 subtitle：当前上下文（F1-C 来源页上下文）。 */}
+      {isMobile && pageContext && (
+        <div className="aipanel__mobile-subtitle">{pageContext.pageLabel}</div>
+      )}
       {/* Header：Higher AI（DEV-0061R §33：单一模式；修改经审查后写入）
           DEV-0065.1 §37：三动作 = 历史 / 新对话 / 收起为侧栏（无关闭） */}
       <div className="aipanel__header">
@@ -932,13 +945,16 @@ export default function AiPanel() {
           >
             ＋
           </button>
-          <button
-            className="aipanel__icon-btn"
-            title="收起为侧栏"
-            onClick={() => setMode(true)}
-          >
-            ⇥
-          </button>
+          {/* DEV-MOBILE-001 §77：mobile 无“收起为侧栏”（返回键/底部导航负责离开 /ai） */}
+          {!isMobile && (
+            <button
+              className="aipanel__icon-btn"
+              title="收起为侧栏"
+              onClick={() => setMode(true)}
+            >
+              ⇥
+            </button>
+          )}
         </div>
       </div>
 
@@ -1492,7 +1508,8 @@ export default function AiPanel() {
               submit();
             }
           }}
-          placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
+          /* DEV-MOBILE-002 §37：Android 无桌面键盘提示 */
+          placeholder={isMobile ? "问点什么…" : "问点什么…（Enter 发送，Shift+Enter 换行）"}
           disabled={busy}
         />
         <div className="aipanel__sendrow">

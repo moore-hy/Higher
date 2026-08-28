@@ -10449,3 +10449,291 @@ button.datapage__bar-main:disabled {
 
 /* 注：AI Panel 收起态入口由 .aipanel--rail / .aipanel__rail-hit 承担
    （DEV-0065.1 两态：无 Closed/FAB；语义等同 DEV-0055 §149 的收起浮钮）。 */
+
+/* ============================================================
+   DEV-MOBILE-001 §70-73 / §106-108 · Android Mobile Shell
+   （全部以 .platform-android 作用域；桌面/浏览器 dev 不受影响）
+   ============================================================ */
+
+/* §70：100dvh 承担视口；无桌面 titlebar 偏移 */
+.platform-android .app-shell__content {
+  height: 100dvh;
+  margin-top: 0;
+}
+
+/* ---- MobileLayout 骨架（§67） ---- */
+.mobile-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.mobile-topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  /* DEV-MOBILE-002 F1-D：safe-area-top 由 .mobile-layout 根统一承担（防 double） */
+  height: 50px;
+  padding: 0 14px;
+  background: var(--h-sidebar);
+  border-bottom: 1px solid var(--h-border);
+  position: relative;
+  z-index: 300;
+}
+
+/* §十一：克制 TopBar —— Higher · 当前页（左） + 档案名（右）；无装饰色块 */
+.mobile-topbar__lead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mobile-topbar__app {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--h-text);
+  letter-spacing: 0.2px;
+}
+
+.mobile-topbar__divider {
+  color: var(--h-text-muted);
+  font-size: 13px;
+}
+
+.mobile-topbar__title {
+  font-size: 13px;
+  color: var(--h-text-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* §72：触控目标 ≥44px */
+.mobile-topbar__profile {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 10px;
+  background: transparent;
+  border: 1px solid var(--h-border);
+  border-radius: 10px;
+  color: var(--h-text-secondary);
+  font-size: 13px;
+  max-width: 40vw;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mobile-topbar__error {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: calc(100% + 4px);
+  z-index: 301;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--error, #f85149);
+  background: var(--h-surface-1-solid);
+  border: 1px solid var(--error, #f85149);
+  border-radius: 8px;
+}
+
+.mobile-menu__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 320;
+}
+
+.mobile-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 10px;
+  z-index: 321;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  background: var(--h-surface-1-solid);
+  border: 1px solid var(--h-border-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+
+.mobile-menu__item {
+  background: transparent;
+  border: none;
+  color: var(--h-text);
+  font-size: 14px;
+  text-align: left;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.mobile-menu__item--danger {
+  color: var(--error, #f85149);
+}
+
+/* 主内容区（页面自身滚动） */
+.mobile-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 12px 16px;
+}
+
+/* §71：BottomNav（DEV-MOBILE-002 F1-E：手势条空间移 mobile.css max(safe-bottom,8px) 统一承担） */
+.mobile-bottomnav {
+  flex-shrink: 0;
+  display: flex;
+  background: var(--h-sidebar);
+  border-top: 1px solid var(--h-border);
+}
+
+.mobile-bottomnav__item {
+  flex: 1;
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  text-decoration: none;
+  color: var(--h-text-muted);
+  padding: 4px 0 2px;
+}
+
+.mobile-bottomnav__item--active {
+  color: var(--h-accent);
+}
+
+.mobile-bottomnav__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.mobile-bottomnav__label {
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* ---- Mobile AI Host（DEV-MOBILE-001 旧 fixed Overlay；DEV-MOBILE-002 F1-A 移除，
+   AI 改为 main 内常驻 .ai-slot，见 mobile/mobile.css） ---- */
+
+.mobile-ai-page {
+  display: none;
+}
+
+/* §77：mobile 全屏 AiPanel（覆盖桌面 340px 侧栏形态） */
+.platform-android .aipanel--mobile {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  height: 100%;
+  border-left: none;
+  background: var(--h-sidebar);
+}
+
+/* §82：软键盘处理见 mobile.css（F1-G：Composer 在 BottomNav 之上，flex 布局保证） */
+
+/* ---- 「我的」MobileSettings（F1 §十七：档案头部 + section 列表 → 进入） ---- */
+.msettings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.msettings__back {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0 14px;
+  background: transparent;
+  border: 1px solid var(--h-border);
+  border-radius: 10px;
+  color: var(--h-accent);
+  font-size: 14px;
+}
+
+.msettings__profile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--h-border);
+  border-radius: 16px;
+  background: var(--h-sidebar);
+}
+
+.msettings__profile-name {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.msettings__profile-link {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--h-text-secondary);
+  font-size: 13px;
+}
+
+.msettings__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--h-border);
+  border-radius: 16px;
+  background: var(--h-sidebar);
+  overflow: hidden;
+}
+
+.msettings__list li + li {
+  border-top: 1px solid var(--h-border);
+}
+
+.msettings__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  text-align: left;
+}
+
+.msettings__item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.msettings__item-label {
+  font-size: 15px;
+  color: var(--h-text);
+}
+
+.msettings__item-hint {
+  font-size: 12px;
+  color: var(--h-text-muted);
+}
+
+.msettings__item-arrow {
+  flex-shrink: 0;
+  color: var(--h-text-muted);
+  font-size: 18px;
+}

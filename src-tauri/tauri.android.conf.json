@@ -1,0 +1,19 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "identifier": "com.higher.android",
+  "app": {
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPLOCALDATA/attachments/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}

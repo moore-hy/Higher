@@ -1,0 +1,611 @@
+/* ============================================================
+   DEV-MOBILE-002 · Android Mobile Design System
+   由 main.tsx 引入；全部规则以 .platform-android 作用域（或仅存在于
+   Mobile route 组件自身 class），Windows 零影响（§4/§19）。
+   ============================================================ */
+
+/* ---- §5 Mobile Design Tokens ---- */
+.platform-android {
+  --m-space-1: 4px;
+  --m-space-2: 8px;
+  --m-space-3: 12px;
+  --m-space-4: 16px;
+  --m-space-5: 20px;
+  --m-space-6: 24px;
+  --m-space-8: 32px;
+
+  --m-radius-sm: 10px;
+  --m-radius-md: 14px;
+  --m-radius-lg: 18px;
+
+  --m-touch: 44px;
+  --m-page-pad: 16px;
+
+  --m-text-caption: 12px;
+  --m-text-body: 14px;
+  --m-text-body-lg: 15px;
+  --m-text-title: 20px;
+  --m-text-hero: 28px;
+}
+
+/* ---- §6 全局排版硬规则 ---- */
+.platform-android button,
+.platform-android .btn {
+  min-height: var(--m-touch, 44px);
+}
+
+.platform-android .btn {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.platform-android input,
+.platform-android textarea,
+.platform-android select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.platform-android img,
+.platform-android video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* §51/§52：Main 独立纵滚，禁页面横滚 */
+.platform-android .mobile-main {
+  min-width: 0;
+  overflow-x: clip;
+}
+
+/* §63：flex/grid 子项不撑爆 */
+.platform-android .mobile-main :is(button, .btn, .chip, [class*="__item"]) {
+  min-width: 0;
+}
+
+/* ---- §47 Modal / Dialog Android 统一 ---- */
+.platform-android .modal-overlay {
+  align-items: flex-end; /* 短确认底部贴合（Sheet 心智） */
+  padding: 0;
+}
+
+.platform-android .modal-overlay .modal {
+  width: calc(100vw - 24px);
+  max-width: none;
+  max-height: min(88dvh, 760px);
+  overflow-y: auto;
+  border-radius: var(--m-radius-lg, 18px) var(--m-radius-lg, 18px)
+    var(--m-radius-sm, 10px) var(--m-radius-sm, 10px);
+  margin-bottom: 12px;
+  overscroll-behavior: contain;
+}
+
+/* 长表单/编辑类 modal：居中卡片（覆盖底部贴合） */
+.platform-android .modal-overlay .modal:has(textarea),
+.platform-android .modal-overlay .modal--form {
+  align-self: center;
+  margin-bottom: 0;
+}
+
+/* ============================================================
+   §7 共享 Mobile Presentation 组件（.mp- 前缀）
+   ============================================================ */
+
+/* MobilePageHeader：标题 + 可选 subtitle + 右侧最多一个 Action */
+.mp-pageheader {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3, 12px);
+  padding: var(--m-space-2, 8px) 0 var(--m-space-3, 12px);
+}
+
+.mp-pageheader__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mp-pageheader__title {
+  font-size: var(--m-text-title, 20px);
+  font-weight: 600;
+  color: var(--h-text);
+  line-height: 1.3;
+}
+
+.mp-pageheader__subtitle {
+  font-size: var(--m-text-caption, 12px);
+  color: var(--h-text-secondary);
+  line-height: 1.5;
+}
+
+.mp-pageheader__action {
+  flex-shrink: 0;
+}
+
+/* MobileSegmentedControl：整行 Tab（计划/日历/目标 等） */
+.mp-seg {
+  display: flex;
+  width: 100%;
+  padding: 3px;
+  background: var(--h-surface-1-solid);
+  border: 1px solid var(--h-border);
+  border-radius: var(--m-radius-md, 14px);
+  gap: 3px;
+}
+
+.mp-seg__item {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--h-text-secondary);
+  font-size: var(--m-text-body, 14px);
+  white-space: nowrap;
+}
+
+.mp-seg__item--active {
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--h-accent-border);
+}
+
+/* MobileBottomSheet / ActionSheet */
+.mp-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.mp-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 501;
+  max-height: min(86dvh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--h-surface-1-solid);
+  border-radius: var(--m-radius-lg, 18px) var(--m-radius-lg, 18px) 0 0;
+  border-top: 1px solid var(--h-border-strong);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.mp-sheet__grab {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--h-border-strong);
+  margin: 8px auto 0;
+  flex-shrink: 0;
+}
+
+.mp-sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--m-space-2, 8px);
+  padding: var(--m-space-3, 12px) var(--m-space-4, 16px) var(--m-space-2, 8px);
+  flex-shrink: 0;
+}
+
+.mp-sheet__title {
+  font-size: var(--m-text-body-lg, 15px);
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.mp-sheet__close {
+  min-width: 44px;
+  min-height: 44px;
+  margin: -8px -8px -8px 0;
+  background: transparent;
+  border: none;
+  color: var(--h-text-secondary);
+  font-size: 20px;
+}
+
+.mp-sheet__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--m-space-4, 16px) var(--m-space-4, 16px);
+}
+
+/* MobileActionSheet 行 */
+.mp-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-3, 12px);
+  min-height: 52px;
+  padding: 8px 4px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--h-border);
+  color: var(--h-text);
+  font-size: var(--m-text-body-lg, 15px);
+  text-align: left;
+}
+
+.mp-action:last-child {
+  border-bottom: none;
+}
+
+.mp-action--danger {
+  color: var(--error, #f85149);
+}
+
+/* MobileIconButton（‹ / ⋯ / +）：≥44x44 */
+.mp-iconbtn {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  color: var(--h-text);
+  flex-shrink: 0;
+}
+
+.mp-iconbtn--ghost {
+  border: 1px solid var(--h-border);
+}
+
+/* MobileEmptyState */
+.mp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--m-space-1, 4px);
+  padding: var(--m-space-5, 20px) var(--m-space-2, 8px);
+}
+
+.mp-empty__title {
+  font-size: var(--m-text-body-lg, 15px);
+  color: var(--h-text);
+}
+
+.mp-empty__sub {
+  font-size: var(--m-text-caption, 12px);
+  color: var(--h-text-muted);
+}
+
+/* ============================================================
+   §10 TopBar / §11 BottomNav 收口
+   ============================================================ */
+.platform-android .mobile-topbar__profile {
+  max-width: 38vw; /* §10 Profile ≤38% 宽 */
+}
+
+/* ============================================================
+   §13-15 · Today Android
+   ============================================================ */
+
+/* 顶部日期 + 状态行 + 两动作（primary=新建任务，secondary=快速学习） */
+.mtoday-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2, 8px);
+  padding: var(--m-space-2, 8px) 0 var(--m-space-4, 16px);
+}
+
+.mtoday-hero__date {
+  font-size: var(--m-text-title, 20px);
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.mtoday-hero__status {
+  font-size: var(--m-text-caption, 12px);
+  color: var(--h-text-secondary);
+}
+
+.mtoday-hero__actions {
+  display: flex;
+  gap: var(--m-space-2, 8px);
+}
+
+.mtoday-hero__actions > * {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Card 统一 */
+.platform-android .mobile-main .card,
+.platform-android .mobile-main [class*="section-card"] {
+  border-radius: var(--m-radius-md, 14px);
+}
+
+/* 隐藏 Today 桌面 header 的三按钮行与 Card header 重复按钮（Android 分支渲染替代） */
+.platform-android .today-head__btns--desktop {
+  display: none;
+}
+
+/* ============================================================
+   §21-24 · Planning Android（MobilePlanningView 专属 .mpplan-）
+   ============================================================ */
+.mpplan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-3, 12px);
+  padding-bottom: var(--m-space-4, 16px);
+}
+
+.mpplan__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2, 8px);
+}
+
+/* §21 月历 Header：[←] 2026年8月 [→] 今天 + */
+.mpplan-cal-head {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-1, 4px);
+}
+
+.mpplan-cal-head__title {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: var(--m-text-body-lg, 15px);
+  font-weight: 600;
+  color: var(--h-text);
+  white-space: nowrap;
+}
+
+/* §22 Mobile Calendar Cell：只留 日期 + 状态点/计数 */
+.platform-android .pcal__cell {
+  min-height: 48px;
+  padding: 4px 2px;
+}
+
+.platform-android .pcal__cell :is(.pcal__tasks, .pcal__acts, [class*="__task-title"],
+  [class*="__milestone"], [class*="__dur"]) {
+  display: none; /* cell 内长文本压缩为状态标识（§22 禁完整标题） */
+}
+
+.platform-android .pcal__cell-dot,
+.mpplan-cal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--h-accent);
+  margin: 2px auto 0;
+}
+
+/* 日历容器横向自滚（不带动页面） */
+.platform-android .pcal {
+  min-width: 0;
+}
+
+/* 目标 Tab：纵向层级 */
+.mpplan-goals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--m-space-2, 8px);
+}
+
+/* ============================================================
+   §25-31 · Knowledge Android 显式契约（不依赖 <900px media query）
+   ============================================================ */
+.platform-android .knowledge {
+  display: block;
+  min-width: 0;
+}
+
+.platform-android .knowledge__main {
+  width: 100%;
+  min-width: 0;
+}
+
+.platform-android .knowledge__tree {
+  display: none; /* §27：默认隐藏，仅 Drawer 形态可见 */
+}
+
+.platform-android .knowledge__tree--drawer {
+  display: flex;
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: min(88vw, 360px);
+  z-index: 480;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-shadow: 10px 0 28px rgba(0, 0, 0, 0.5);
+}
+
+.platform-android .knowledge__tree-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 479;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* §29 ViewBar：目录 + [工作区|知识图] 同行可换行，完整横排文字 */
+.platform-android .knowledge__viewbar {
+  flex-wrap: wrap;
+  gap: var(--m-space-2, 8px);
+}
+
+/* §30 Editor：title 全宽；toolbar 自身横滚 */
+.platform-android .knowledge__title {
+  width: 100%;
+}
+
+.platform-android :is(.hdoc__toolbar, [class*="__toolbar"]) {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.platform-android :is(.md pre, .hdoc__codeblock, pre) {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* ============================================================
+   F1 D/E · Safe Area 根统一（唯一承担点，页面禁重复 env()）
+   结构：状态栏 → safe-top(padding) → 页面 → BottomNav → max(safe-bottom,8px)
+   ============================================================ */
+.mobile-layout {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: 0; /* 底部由 BottomNav 的 max(safe-bottom,8px) 承担 */
+}
+
+/* E：手势条空间与 BottomNav 本体分离（白色手势条不压导航标签） */
+.mobile-bottomnav {
+  padding-bottom: max(env(safe-area-inset-bottom), 8px);
+}
+
+/* ============================================================
+   F1 A/G · AI 一级页面（main 内常驻 slot，非 fixed Overlay）
+   ============================================================ */
+.ai-slot {
+  display: none; /* 非 /ai：隐藏但保持 mounted（Runtime/事件不丢） */
+}
+
+.ai-slot--visible {
+  display: flex;
+  flex: 1;
+  min-height: 0; /* G：消息区 flex:1 自滚链 */
+}
+
+/* AI 激活态：main 停页滚，交由消息区内部滚动；Composer 在 BottomNav 之上 */
+.mobile-main--ai {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-main--ai > *:not(.ai-slot--visible) {
+  display: none; /* /ai 的占位路由元素不占位 */
+}
+
+/* aipanel mobile 在 slot 内自适应高度（不再 fixed/100vh 覆盖式）
+   F2：必须显式覆盖 styles.css @media(max-width:1100px) 的桌面响应式
+   .aipanel{position:absolute;top/right/bottom:0;z-index:200;box-shadow}
+   —— 手机宽度（≤1100px）同样命中该规则；漏覆盖导致 AI 变 viewport 全屏
+   浮层，盖住 BottomNav（z auto < 200）并把内容顶入状态栏。
+   .ai-slot/.mobile-main/.mobile-layout 均 static → containing block=viewport。 */
+.platform-android .aipanel--mobile {
+  position: static; /* 回到 .ai-slot--visible 的 flex 文档流（F2-TC003） */
+  inset: auto; /* 清 top/right/bottom（不再锚定 viewport） */
+  z-index: auto; /* 取消 200，与 TopBar/BottomNav 同层文档流 */
+  box-shadow: none; /* 去掉浮层投影（不再是一块"独立全屏页"） */
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  height: 100%;
+  border-left: none;
+  background: var(--h-sidebar);
+}
+
+/* G：Composer 不再自行加 safe-bottom（BottomNav 已承担），保持紧凑 */
+.platform-android .aipanel--mobile .aipanel__inputbar {
+  padding-bottom: 10px;
+}
+
+/* §37 Composer：textarea 自适应；模型选择不占主行 */
+.platform-android .aipanel--mobile .aipanel__inputbar {
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.platform-android .aipanel--mobile .aipanel__input {
+  min-height: 44px;
+  max-height: 132px; /* 1~5 行 */
+}
+
+.platform-android .aipanel--mobile .aipanel__composer-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2, 8px);
+  min-height: 44px;
+}
+
+/* §36 消息气泡 */
+.platform-android .aipanel--mobile .aipanel__msg--user .aipanel__msg-content {
+  max-width: 84%;
+}
+
+.platform-android .aipanel--mobile .md .md__tablewrap {
+  max-width: 100%;
+}
+
+/* §35 History：全高 Drawer */
+.platform-android .aipanel--mobile .aipanel__history {
+  position: fixed;
+  inset: 0;
+  z-index: 450;
+  background: var(--h-bg-solid);
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+}
+
+/* ============================================================
+   §39-42 · Settings / 我的
+   ============================================================ */
+.platform-android .msettings__list {
+  border-radius: var(--m-radius-md, 14px);
+}
+
+.msettings__sectionhead {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: var(--m-space-2, 8px);
+  padding: var(--m-space-2, 8px) 0;
+}
+
+.msettings__sectionhead-title {
+  font-size: var(--m-text-title, 20px);
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+/* Settings 表单：label 上 / control 下（复用 modal__field 已纵向） */
+.platform-android .modal__input,
+.platform-android input,
+.platform-android select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ============================================================
+   §43-46 · Learning Workspace 手机专注态
+   ============================================================ */
+.platform-android .learn-head,
+.platform-android [class*="learn__head"] {
+  flex-wrap: wrap;
+  gap: var(--m-space-2, 8px);
+}
+
+.platform-android .learn-actions-sticky {
+  position: sticky;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  z-index: 20;
+  min-height: 48px;
+}
+
+.platform-android :is(.rde, .richdoc, [class*="editor"]) {
+  max-width: 100%;
+  min-width: 0;
+}

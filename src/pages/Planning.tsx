@@ -12,6 +12,9 @@ import {
   startTaskSession,
 } from "../api";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
+// DEV-MOBILE-002 §17：Android 独立 Mobile View（controller 单一，双 View 同源）
+import { IS_ANDROID } from "../platform/runtimePlatform";
+import MobilePlanningView from "../mobile/pages/MobilePlanningView";
 import ActiveSessionConflictModal, {
   useActiveSessionConflict,
 } from "../components/ActiveSessionConflictModal";
@@ -231,6 +234,217 @@ function Planning() {
 
   // ===== 渲染 =====
 
+  // DEV-MOBILE-002 §17：Presentation ViewModel 节点（同一 state/handler 原样搬移；
+  // Desktop 与 Android Mobile View 消费同一批节点，禁止第二套数据逻辑）
+  const errorNode = error ? <div className="alert alert--error">{error}</div> : null;
+
+  const truthSummaryNode = activeProfile ? (
+    <PlanningTruthSummary
+      profileId={activeProfile.id}
+      profileType={activeProfile.profile_type}
+      onChanged={refresh}
+    />
+  ) : null;
+
+  const finalGoalNode = activeProfile ? <FinalGoalCard profileId={activeProfile.id} /> : null;
+
+  const firstNode = activeProfile ? (
+    <div className="planning__first">
+      <GoalTreePanel
+        profileId={activeProfile.id}
+        onRefresh={refresh}
+        onCreateTaskForGoal={(goalId) => openCreateTask(goalId)}
+        goalPathOf={goalPathOf}
+      />
+      <NextStep
+        activeSession={activeSession}
+        todayTasks={todayTasks}
+        futureTasks={futureTasks}
+        todayDayGoal={todayDayGoal}
+        allGoals={goals}
+        onStart={(t) => void handleStartTask(t)}
+        onOpenTask={(t) => openEditTask(t)}
+        onQuickStudy={() => void handleQuickStudy()}
+        onCreateTask={(goalId) => openCreateTask(goalId)}
+      />
+    </div>
+  ) : null;
+
+  const calendarNode = activeProfile ? (
+    <PlanningCalendar
+      profileId={activeProfile.id}
+      items={allItems}
+      goals={goals}
+      selectedDate={selectedDate}
+      onSelectDate={selectDate}
+    />
+  ) : null;
+
+  const legacyNode =
+    legacy != null && legacy.stages + legacy.plans > 0 ? (
+      <p className="muted planning__legacy">
+        检测到旧版规划数据（阶段 {legacy.stages} · 计划 {legacy.plans}），数据已保留。
+      </p>
+    ) : null;
+
+  const conflictModalNode = (
+    <ActiveSessionConflictModal
+      conflict={startConflict}
+      onClose={closeStart}
+      onResolved={() => void refresh()}
+    />
+  );
+
+  const taskModalNode =
+    (taskCreate || taskEdit) && activeProfile ? (
+      <TaskModal
+        mode={taskCreate ? "create" : "edit"}
+        task={taskEdit}
+        profileId={activeProfile.id}
+        items={allItems}
+        goals={goals}
+        defaultGoalId={taskCreate?.goalId ?? null}
+        onClose={() => {
+          setTaskCreate(null);
+          setTaskEdit(null);
+        }}
+        onSaved={async () => {
+          setTaskCreate(null);
+          setTaskEdit(null);
+          await refresh();
+        }}
+      />
+    ) : null;
+
+  // Android：Mobile IA（§16-24，计划/日历/目标 + ⋯ Sheet），desktop JSX 原样保留
+  if (IS_ANDROID) {
+    return (
+      <MobilePlanningView
+        errorNode={errorNode}
+        truthSummary={truthSummaryNode}
+        finalGoal={finalGoalNode}
+        goalTree={
+          activeProfile ? (
+            <GoalTreePanel
+              profileId={activeProfile.id}
+              onRefresh={refresh}
+              onCreateTaskForGoal={(goalId) => openCreateTask(goalId)}
+              goalPathOf={goalPathOf}
+            />
+          ) : null
+        }
+        nextStep={
+          activeProfile ? (
+            <NextStep
+              activeSession={activeSession}
+              todayTasks={todayTasks}
+              futureTasks={futureTasks}
+              todayDayGoal={todayDayGoal}
+              allGoals={goals}
+              onStart={(t) => void handleStartTask(t)}
+              onOpenTask={(t) => openEditTask(t)}
+              onQuickStudy={() => void handleQuickStudy()}
+              onCreateTask={(goalId) => openCreateTask(goalId)}
+            />
+          ) : null
+        }
+        calendar={calendarNode}
+        dayReport={
+          activeProfile && selectedDate ? (
+            <section className="card dlr">
+              <div className="dlr__head">
+                <h2 className="card__title">{friendlyDate(selectedDate)}</h2>
+                <button className="btn btn--small" onClick={() => selectDate(null)}>
+                  收起
+                </button>
+              </div>
+              {reportLoading && !rep ? (
+                <p className="muted">加载日报…</p>
+              ) : !rep ? (
+                <p className="muted">暂无数据。</p>
+              ) : (
+                <>
+                  <div className="dlr__sec-title">
+                    学习状态指标
+                    {rep.learning_status && (
+                      <span className="dlr__status" title="客观状态标签，不作人格评价">
+                        {rep.learning_status}
+                      </span>
+                    )}
+                  </div>
+                  <div className="dlr__metrics">
+                    <div className="dlr__metric">
+                      <span className="dlr__metric-label">计划学习</span>
+                      <span className="dlr__metric-value">{minutesShort(rep.planned_minutes)}</span>
+                      {rep.unestimated_task_count > 0 && (
+                        <span className="dlr__metric-sub">
+                          {rep.unestimated_task_count}项任务未填写预计时长
+                        </span>
+                      )}
+                    </div>
+                    <div className="dlr__metric">
+                      <span className="dlr__metric-label">实际学习</span>
+                      <span className="dlr__metric-value">{minutesShort(rep.actual_minutes)}</span>
+                    </div>
+                    <div className="dlr__metric">
+                      <span className="dlr__metric-label">任务完成</span>
+                      <span className="dlr__metric-value">
+                        {rep.task_completed}/{rep.task_total}
+                      </span>
+                      <span className="dlr__metric-sub">
+                        {completionPct == null ? "暂无计划任务" : `${completionPct}%`}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="dlr__summary">
+                    {dayGoalPct != null && `日目标 ${rep.day_goal ?? ""} · 进度 ${dayGoalPct}%`}
+                    {dayGoalPct != null && " · "}学习活动 {rep.activities.length} 次
+                  </p>
+                  {rep.needs_review_count > 0 && (
+                    <p className="dlr__review-note">
+                      {rep.needs_review_count}条学习记录时间待确认，本页统计暂未计入。
+                    </p>
+                  )}
+                  <div className="dlr__sec-title">今日任务</div>
+                  <DailyTasksSection
+                    profileId={activeProfile.id}
+                    tasks={rep.tasks}
+                    items={allItems}
+                    goals={goals}
+                    defaultDate={selectedDate}
+                    onChanged={handleReportChanged}
+                    emptyNote="这一天还没有任务。"
+                  />
+                  <div className="dlr__sec-title">今日活动</div>
+                  <DailyActivitiesSection
+                    profileId={activeProfile.id}
+                    activities={rep.activities}
+                    items={allItems}
+                    goals={goals}
+                    onChanged={handleReportChanged}
+                    emptyNote="这一天还没有学习记录。"
+                  />
+                </>
+              )}
+            </section>
+          ) : null
+        }
+        selectedDate={selectedDate}
+        onClearDate={() => selectDate(null)}
+        onOpenToday={() => selectDate(todayDate())}
+        onCreateTask={() => openCreateTask()}
+        globalModals={
+          <>
+            {conflictModalNode}
+            {taskModalNode}
+          </>
+        }
+        legacyNote={legacyNode}
+        loading={loading}
+      />
+    );
+  }
+
   return (
     <div className="page page--wide">
       <header className="page__header planning__header">
@@ -256,42 +470,14 @@ function Planning() {
         </div>
       </header>
 
-      {error && <div className="alert alert--error">{error}</div>}
+      {errorNode}
 
       {/* ===== DEV-0059 §27-28：正式目标与规划（顶部） ===== */}
-      {activeProfile && (
-        <PlanningTruthSummary
-          profileId={activeProfile.id}
-          profileType={activeProfile.profile_type}
-          onChanged={refresh}
-        />
-      )}
+      {truthSummaryNode}
 
       {/* ===== 第一屏：Final Goal Card（§139-141）+ 左目标树 + 右下一步 ===== */}
-      {activeProfile && (
-        <FinalGoalCard profileId={activeProfile.id} />
-      )}
-      {activeProfile && (
-        <div className="planning__first">
-          <GoalTreePanel
-            profileId={activeProfile.id}
-            onRefresh={refresh}
-            onCreateTaskForGoal={(goalId) => openCreateTask(goalId)}
-            goalPathOf={goalPathOf}
-          />
-          <NextStep
-            activeSession={activeSession}
-            todayTasks={todayTasks}
-            futureTasks={futureTasks}
-            todayDayGoal={todayDayGoal}
-            allGoals={goals}
-            onStart={(t) => void handleStartTask(t)}
-            onOpenTask={(t) => openEditTask(t)}
-            onQuickStudy={() => void handleQuickStudy()}
-            onCreateTask={(goalId) => openCreateTask(goalId)}
-          />
-        </div>
-      )}
+      {finalGoalNode}
+      {firstNode}
 
       {/* ===== 第二部分：学习日历（点击日期 → 正下方日报，不跳页 §62）。
            DEV-0064 §18：Week View = 同一批 Task/Session/Recurring 的另一种前端展示 ===== */}
@@ -406,41 +592,15 @@ function Planning() {
       )}
 
       {/* ===== legacy 旧版规划数据提示（§29） ===== */}
-      {legacy != null && legacy.stages + legacy.plans > 0 && (
-        <p className="muted planning__legacy">
-          检测到旧版规划数据（阶段 {legacy.stages} · 计划 {legacy.plans}），数据已保留。
-        </p>
-      )}
+      {legacyNode}
 
       {loading && <p className="muted">加载中…</p>}
 
       {/* Start Guard 冲突弹窗（PHASE F） */}
-      <ActiveSessionConflictModal
-        conflict={startConflict}
-        onClose={closeStart}
-        onResolved={() => void refresh()}
-      />
+      {conflictModalNode}
 
       {/* ===== 任务 Modal（新建可预填目标 / 编辑） ===== */}
-      {(taskCreate || taskEdit) && activeProfile && (
-        <TaskModal
-          mode={taskCreate ? "create" : "edit"}
-          task={taskEdit}
-          profileId={activeProfile.id}
-          items={allItems}
-          goals={goals}
-          defaultGoalId={taskCreate?.goalId ?? null}
-          onClose={() => {
-            setTaskCreate(null);
-            setTaskEdit(null);
-          }}
-          onSaved={async () => {
-            setTaskCreate(null);
-            setTaskEdit(null);
-            await refresh();
-          }}
-        />
-      )}
+      {taskModalNode}
     </div>
   );
 }

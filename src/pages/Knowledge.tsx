@@ -53,6 +53,8 @@ import { durationShort, studyClockHHMM } from "../components/DailyActivitiesSect
 import type { JSONContent } from "@tiptap/react";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
+// DEV-MOBILE-002 §27：Android Drawer 收口（选中自动关闭）
+import { IS_ANDROID } from "../platform/runtimePlatform";
 import type {
   Evaluation,
   Feedback,
@@ -409,6 +411,9 @@ function Knowledge() {
       setRenamingDocId(null);
       setTimeFixFor(null);
       setMenuForId(null);
+      // DEV-MOBILE-002 §27：Android 选择节点（含搜索结果选中，均经 selectNode）
+      // 后自动关闭目录 Drawer；桌面窄窗行为不变
+      if (IS_ANDROID) setTreeDrawerOpen(false);
       if (expandAncestors) {
         const byId = new Map(items.map((i) => [i.id, i]));
         setExpanded((prev) => {

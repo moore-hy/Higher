@@ -10,8 +10,27 @@ src-tauri/target/
 # DEV-0077.3 前端 runtime 测试编译产物（npm run test:ai-runtime）
 .ai-runtime-test-build/
 
+# DEV-MOBILE-002/F2 前端 mobile 测试编译产物（npm run test:mobile）
+.mobile-test-build/
+
+# DEV-MOBILE-004-F1 取证/构建临时文件（Clean-Higher-Android-Workspace 安全清理范围）
+.higher/tmp/
+
 # 发布产物（DEV-0065.2R §21：安装包不进 git）
 release/
+
+# DEV-MOBILE-006 §十二：Android gen/ 生成物（工程源 gradle/buildSrc src/Manifest/res 除外，
+# 绝不忽略 src-tauri/gen/android 的 .gradle.kts/settings.gradle/gradle wrapper/AndroidManifest/res/java）
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/buildSrc/build/
+src-tauri/gen/android/buildSrc/.gradle/
+src-tauri/gen/android/buildSrc/.kotlin/
+src-tauri/gen/android/app/build/
+# Cargo Android 交叉编译复制产物（Build Step12；可再生，不入库）
+src-tauri/gen/android/app/src/main/jniLibs/**/*.so
+# dist → gen assets 镜像（Build Step13 清空重镜像；DEV-MOBILE-006 已证明 100% generated）
+src-tauri/gen/android/app/src/main/assets/
 
 # 日志
 *.log
@@ -32,6 +51,14 @@ src-tauri/.data/
 
 # WebView runtime cache（Tauri debug data dir）
 src-tauri/.webview-data/
+
+# DEV-MOBILE-001 Android 本地工具链（沙箱内构建用便携 JDK21 + Gradle 缓存重定向）
+.toolchain/
+.gradle-home/
+
+# DEV-MOBILE-003：签名密钥绝不入库（真实 keystore 位于 ~/.higher-secrets）
+*.jks
+*.keystore
 
 # Local secrets
 .env

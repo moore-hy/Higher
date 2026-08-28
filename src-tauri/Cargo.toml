@@ -14,6 +14,13 @@ rust-version = "1.77.2"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# DEV-MOBILE-001 F1 P0：Android 生产 .so 必须启用 tauri/custom-protocol
+#（embedded assets；否则 runtime 走 build.devUrl=http://localhost:1420）。
+# tauri CLI 构建时自动启用；Build-Higher-Android.ps1 直调 cargo 显式 --features。
+# 仅声明不改变 Windows 默认构建行为。
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 

@@ -95,11 +95,24 @@ import { downloadTextFile, formatDateTime, todayDate } from "../utils";
  *
  * 权限说明固定展示：AI 只在主动使用时运行；建议不会自动写入知识库。
  */
-export default function Settings() {
+type SettingsTab =
+  | "profile" | "appearance" | "ai" | "notify" | "data" | "personal" | "websearch" | "vault" | "aimemory";
+
+/**
+ * DEV-MOBILE-001 F1 §十七：可选 initialTab——Android「我的」列表点入对应 section。
+ * 不传（Windows / 既有调用）：默认 "profile"，行为与历史完全一致。
+ * DEV-MOBILE-002 §40-41：presentation="mobile-section" 隐藏桌面 page__header 与
+ * 9-tab Strip（返回由 MobileSettings 提供）；默认 desktop 完全不变。
+ */
+export default function Settings({
+  initialTab,
+  presentation = "desktop",
+}: {
+  initialTab?: SettingsTab;
+  presentation?: "desktop" | "mobile-section";
+} = {}) {
   const { activeProfile, exitProfile, refreshGate, enterProfile } = useActiveProfile();
-  const [tab, setTab] = useState<
-    "profile" | "appearance" | "ai" | "notify" | "data" | "personal" | "websearch" | "vault" | "aimemory"
-  >("profile");
+  const [tab, setTab] = useState<SettingsTab>(initialTab ?? "profile");
 
   const TABS: { key: typeof tab; label: string }[] = [
     { key: "profile", label: "学习档案" },
@@ -115,23 +128,29 @@ export default function Settings() {
 
   return (
     <div className="page">
-      <header className="page__header">
-        <h1 className="page__title">设置</h1>
-      </header>
+      {/* §41：mobile-section 隐藏桌面标题（MobileSettings 提供 ‹ 返回 + section 名） */}
+      {presentation === "desktop" && (
+        <header className="page__header">
+          <h1 className="page__title">设置</h1>
+        </header>
+      )}
 
-      <div className="review-window" style={{ marginBottom: 16 }}>
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            className={
-              "review-window__item" + (tab === t.key ? " review-window__item--active" : "")
-            }
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {/* §41：mobile-section 隐藏桌面 9-tab Strip */}
+      {presentation === "desktop" && (
+        <div className="review-window" style={{ marginBottom: 16 }}>
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              className={
+                "review-window__item" + (tab === t.key ? " review-window__item--active" : "")
+              }
+              onClick={() => setTab(t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {tab === "profile" ? (
         <ProfileSection profile={activeProfile} onSwitch={async () => {

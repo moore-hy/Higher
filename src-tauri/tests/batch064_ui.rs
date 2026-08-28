@@ -695,6 +695,21 @@ fn u28_no_src_tauri_src_diff() {
         // validation.errors 走既有失败分支，0 新直写）。
         "let ops = match ai::planner::compile_production_plan(",
         "&conn, profile_id, fid, has_gt, &draft,",
+        // DEV-MOBILE-001 追加授权（Android 平台适配层，§32-49）：
+        // lib.rs 新增 = mod platform + setup 窗口/DB/attachments/vault/通知
+        // 五处收敛至 platform::*；Windows 路径逻辑原样迁移
+        // src/platform/{storage,window,notification}.rs（untracked 新文件不入 diff）。
+        "DEV-MOBILE-001",
+        "pub mod platform;",
+        "use tauri::Manager;",
+        "platform::storage::runtime_db_path(app)",
+        "let dir = platform::storage::backups_root(app)?;",
+        "platform::window::build_main_window(app)?;",
+        "let db_dir = platform::storage::runtime_data_root(app.handle())?;",
+        "let att_root = platform::storage::attachments_root(app.handle())?;",
+        "let vault_dir = platform::storage::vault_root(app.handle())?;",
+        "platform::notification::start(app.handle());",
+        "runtime_db_path(&app)",
     ];
     for l in &added {
         // 注释行（含换行续段）与纯标点收尾行（"）"/"))" 等）结构放行；其余代码行严格关键词校验

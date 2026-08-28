@@ -2,6 +2,7 @@ pub mod ai;
 pub mod db;
 pub mod migrations;
 pub mod notifications;
+pub mod platform;
 pub mod repository;
 pub mod sandbox;
 
@@ -14,7 +15,7 @@ use repository::{
     task::TaskRepository,
 };
 use rusqlite::Connection;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::Manager;
 
 /// 附件根目录（app data / attachments；Dev 与 Prod 均使用系统 app data 路径）。
 struct AttachmentDir(std::path::PathBuf);
@@ -2624,20 +2625,10 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 // =============== Profile Data Cleanup（DEV-0030） ===============
 
-/// 备份目录（dev = 项目 .higher/backups；prod = AppLocalData/backups，DEV-0065.2R §15）。
+/// 备份目录（Windows：dev = 项目 .higher/backups；prod = AppLocalData/backups，DEV-0065.2R §15；
+/// Android：AppLocalData/backups，DEV-MOBILE-001 §33）。
 fn backups_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = if cfg!(debug_assertions) {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join(".higher")
-            .join("backups")
-    } else {
-        use tauri::Manager;
-        app.path()
-            .app_local_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("backups")
-    };
+    let dir = platform::storage::backups_root(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建备份目录失败：{}", e))?;
     Ok(dir)
 }
@@ -2645,18 +2636,9 @@ fn backups_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
 /// DEV-0057 §163-164：真实运行 DB 路径（dev = 项目 .data；prod = AppLocalData/higher.db，DEV-0065.2R §14）。
 /// 修复：vault 快照/备份源路径不再硬编码 CARGO_MANIFEST_DIR（prod 恒 size=0 的 Bug）。
 /// DEV-0066 §13：pub(crate)——ai::commands 共享 Apply 按 AppHandle 取真实路径做快照。
+/// DEV-MOBILE-001 §33：平台路径逻辑收敛至 platform::storage（Android = App Sandbox）。
 pub(crate) fn runtime_db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
-    if cfg!(debug_assertions) {
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db")
-    } else {
-        use tauri::Manager;
-        app.path()
-            .app_local_data_dir()
-            .map(|d| d.join("higher.db"))
-            .unwrap_or_else(|_| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data").join("higher.db")
-            })
-    }
+    platform::storage::runtime_db_path(app)
 }
 
 /// 备份数据库 → higher-YYYYMMDD-HHmmss.db；保留最近 10 个（只操作 Higher 自己的 backups 目录）。
@@ -7187,9 +7169,11 @@ fn execute_profile_cleanup(
     let scope = repository::cleanup::CleanupScope::from_str(&scope)
         .ok_or("未知的清理范围")?;
     // 1) 备份（失败 → 禁止删除）
+    // DEV-MOBILE-001 §38：改经 AppHandle 真实运行路径（Android = App Sandbox）；
+    // Windows 与原 db::DbState::database_path() 同指（dev = .data，prod = AppLocalData）。
     let db_path = {
         let _conn = state.0.lock().map_err(|e| e.to_string())?;
-        db::DbState::database_path()
+        runtime_db_path(&app)
     };
     let _backup = backup_database(&app, &db_path)?;
 
@@ -7479,50 +7463,33 @@ fn nonzero(v: i64) -> Option<i64> {
 pub fn run() {
     // DEV-0077.2 Part A §五：Startup Trace T0——进程/应用装配起点（只测不优化，
     // 定位瓶颈后才允许动实现；debug log 一行，无重量级 telemetry）。
+    // DEV-MOBILE-001 F1 §九：Android 冷启动定位日志（仅 mobile，Windows stdout 零变化）。
+    #[cfg(mobile)]
+    println!("[ANDROID-BOOT] PROCESS_START");
     let t0 = std::time::Instant::now();
     tauri::Builder::default()
         .setup(move |app| {
-            // 创建主窗口
-            // 开发模式：webview 数据目录放项目本地 .webview-data/，避免污染系统 AppData
-            //           并支持在受限环境（如沙箱）中调试
-            // 发布模式：使用系统默认数据目录（app_data_dir）
-            let mut builder = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::App("index.html".into()),
-            )
-            .title("Higher")
-            .inner_size(1024.0, 720.0)
-            .resizable(true)
-            // DEV-0065.1 §13：移除 Windows 原生标题栏（白条根因）；
-            // 前端 .titlebar（34px 自绘）接管 拖拽/双击最大化/最小化/关闭。
-            // 禁止 transparent/fullscreen 等（§14）——壁纸是 WebView 背景，非 OS 透明。
-            .decorations(false);
+            // 创建主窗口（DEV-MOBILE-001 §40-42：平台差异收敛至 platform::window）
+            // DEV-MOBILE-001 F1 §七：Windows 顺序不变（窗口先行）；
+            // Android 在 setup 末尾 Runtime Ready 后才创建 WebView（见下方 cfg(mobile) 块）。
+            #[cfg(desktop)]
+            platform::window::build_main_window(app)?;
 
-            #[cfg(debug_assertions)]
-            {
-                let webview_data_dir =
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".webview-data");
-                std::fs::create_dir_all(&webview_data_dir)?;
-                builder = builder.data_directory(webview_data_dir);
-            }
-
-            builder.build()?;
+            #[cfg(mobile)]
+            println!("[ANDROID-BOOT] DB_OPEN_START");
 
             // 初始化本地 SQLite 数据库
-            // 开发模式：放在 src-tauri/.data/，便于重置与在受限环境中调试
-            // 发布模式：放在 %LOCALAPPDATA%\com.higher.desktop\（AppLocalData，DEV-0065.2R §9）
-            let db_dir = if cfg!(debug_assertions) {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".data")
-            } else {
-                app.path().app_local_data_dir()?
-            };
+            // Windows：dev = src-tauri/.data（零回归）；prod = AppLocalData（DEV-0065.2R §9）
+            // Android：dev/prod 一律 AppLocalData App Sandbox（DEV-MOBILE-001 §36）
+            let db_dir = platform::storage::runtime_data_root(app.handle())?;
             std::fs::create_dir_all(&db_dir)?;
             let db_path = db_dir.join("higher.db");
             // T1：窗口创建完成 → DB open 前
             let t1 = t0.elapsed().as_millis();
             // open 内部会自动执行待处理的 Migration
             let db_state = db::DbState::open(&db_path)?;
+            #[cfg(mobile)]
+            println!("[ANDROID-BOOT] DB_READY");
             // T2：DB ready + migration complete（open 内含迁移）
             let t2 = t0.elapsed().as_millis();
             println!(
@@ -7545,36 +7512,35 @@ pub fn run() {
             }
 
             app.manage(db_state);
+            #[cfg(mobile)]
+            println!("[ANDROID-BOOT] STATE_MANAGED");
 
-            // 附件根目录
-            // 开发模式：与 DB 一致放 src-tauri/.data/attachments（项目自管路径，沙箱安全；
-            //           与 DEV-0009 起 DB/WebView 的 dev 约定保持一致）
-            // 发布模式：%LOCALAPPDATA%\com.higher.desktop\attachments（与 DB 同根，DEV-0065.2R §15）
-            let att_root = if cfg!(debug_assertions) {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join(".data")
-                    .join("attachments")
-            } else {
-                app.path().app_local_data_dir()?.join("attachments")
-            };
+            // 附件根目录（Windows：dev = src-tauri/.data/attachments 零回归；
+            // prod = %LOCALAPPDATA%\com.higher.desktop\attachments，DEV-0065.2R §15；
+            // Android：App Sandbox attachments/，DEV-MOBILE-001 §36）
+            let att_root = platform::storage::attachments_root(app.handle())?;
             std::fs::create_dir_all(&att_root)?;
             app.manage(AttachmentDir(att_root));
 
             // DEV-0052：AI Run Manager（Active Run Registry）+ Vault
             app.manage(ai::run::RunManager::new());
-            let vault_dir = if cfg!(debug_assertions) {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join(".data")
-                    .join("vault")
-            } else {
-                app.path().app_local_data_dir()?.join("vault")
-            };
+            let vault_dir = platform::storage::vault_root(app.handle())?;
             std::fs::create_dir_all(&vault_dir)?;
             app.manage(ai::vault::VaultState::new(vault_dir));
 
             // 学习提醒（DEV-0042）：启动调度线程 + 按 DB 重建全部 profile 的排定通知
-            notifications::start_scheduler(app.handle().clone());
-            notifications::resync(app.handle());
+            // （DEV-MOBILE-001 §44-49：平台差异收敛至 platform::notification）
+            platform::notification::start(app.handle());
+
+            // DEV-MOBILE-001 F1 §七：Android 启动顺序——
+            // 初始化目录 → DB/Migration → manage(DbState) → AttachmentDir →
+            // RunManager → Vault → Runtime Ready 之后才创建 WebView
+            // （前端首帧即有完整后端状态，避免冷启动白屏/加载中卡死）。
+            #[cfg(mobile)]
+            {
+                platform::window::build_main_window(app)?;
+                println!("[ANDROID-BOOT] WEBVIEW_CREATED");
+            }
 
             Ok(())
         })

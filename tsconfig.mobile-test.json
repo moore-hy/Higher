@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "outDir": ".mobile-test-build",
+    "rootDir": "."
+  },
+  "include": [
+    "src/mobile/mobileBack.ts",
+    "src/mobile/mobileNavigation.ts",
+    "src/mobile/pages/mobilePlanningState.ts",
+    "tests/mobile/**/*.ts"
+  ]
+}

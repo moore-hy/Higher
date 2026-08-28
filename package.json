@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:ai-runtime": "tsc -p tsconfig.ai-runtime-test.json && node --test .ai-runtime-test-build/tests/ai-runtime/runtimeState.test.js"
+    "test:ai-runtime": "tsc -p tsconfig.ai-runtime-test.json && node --test .ai-runtime-test-build/tests/ai-runtime/runtimeState.test.js",
+    "test:mobile": "tsc -p tsconfig.mobile-test.json && node --test .mobile-test-build/tests/mobile/*.test.js",
+    "test:mobile-f2": "node --test --experimental-test-module-mocks --import tsx tests/mobile/f2AiRootTabLayout.test.tsx"
   },
   "dependencies": {
     "@radix-ui/themes": "^3.3.0",
@@ -31,9 +33,12 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
+    "@types/jsdom": "^30.0.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
+    "jsdom": "^30.0.1",
+    "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vite": "^8.2.1"
   }

@@ -199,12 +199,13 @@ fn r07_webview2_download_bootstrapper() {
 fn r08_dynamic_main_window_unchanged() {
     let conf = json_of(&read_manifest("tauri.conf.json"));
     assert_eq!(conf["app"]["windows"], serde_json::json!([]), "R08: app.windows = []（不新增第二窗口）");
-    let lib = read_manifest("src/lib.rs");
+    // DEV-MOBILE-001 §40-42：主窗口创建迁移至 src/platform/window.rs（Windows 语义不变）
+    let win = read_manifest("src/platform/window.rs");
     assert!(
-        lib.contains("WebviewWindowBuilder::new"),
+        win.contains("WebviewWindowBuilder::new"),
         "R08: main 仍由 Rust WebviewWindowBuilder 动态创建"
     );
-    assert!(lib.contains(".decorations(false)"), "R08: 自定义标题栏契约保留（65.1）");
+    assert!(win.contains(".decorations(false)"), "R08: 自定义标题栏契约保留（65.1）");
 }
 
 // ==================== R09-R11 · AppLocalData 生产数据根 ====================
@@ -216,27 +217,36 @@ fn r09_app_local_data_dir_production_usage() {
         !lib.contains(".app_data_dir("),
         "R09: lib.rs 禁止 app_data_dir()（§9 Roaming 不是 Higher 生产数据根）"
     );
+    // DEV-MOBILE-001 §33-39：五处 prod 路径逻辑原样迁移 src/platform/storage.rs
+    //（untracked 新文件），lib.rs 仅经 platform::storage 委托。
+    let storage = read_manifest("src/platform/storage.rs");
+    assert_eq!(
+        storage.matches(".app_local_data_dir()").count(),
+        6,
+        "R09: storage.rs prod/android 分支（data_root×2 / runtime_db×2 / backups×2）全部 app_local_data_dir()"
+    );
     assert_eq!(
         lib.matches(".app_local_data_dir()").count(),
-        5,
-        "R09: db / attachments / vault / backups / runtime_db 五处 prod 分支全部 app_local_data_dir()"
+        0,
+        "R09: lib.rs 不再直接拼平台路径（统一收敛 platform::storage）"
     );
 }
 
 #[test]
 fn r10_db_path_consistency() {
     let lib = read_manifest("src/lib.rs");
+    let storage = read_manifest("src/platform/storage.rs");
     assert!(
-        lib.contains("app.path().app_local_data_dir()?"),
-        "R10: setup db_dir prod 分支 = app_local_data_dir()?"
+        storage.contains("fn runtime_db_path"),
+        "R10: 运行 DB 路径入口 = platform::storage::runtime_db_path"
+    );
+    assert!(
+        storage.contains(".map(|d| d.join(\"higher.db\"))"),
+        "R10: runtime_db_path prod 分支同根 higher.db"
     );
     assert!(
         lib.contains("let db_path = db_dir.join(\"higher.db\");"),
         "R10: DB 文件名 = higher.db"
-    );
-    assert!(
-        lib.contains(".map(|d| d.join(\"higher.db\"))"),
-        "R10: runtime_db_path prod 分支同根 higher.db"
     );
     let db = read_manifest("src/db.rs");
     assert!(
@@ -247,17 +257,18 @@ fn r10_db_path_consistency() {
 
 #[test]
 fn r11_attachments_vault_backups_same_root() {
-    let lib = read_manifest("src/lib.rs");
+    // DEV-MOBILE-001 §33：同根契约迁移 src/platform/storage.rs（与 runtime_data_root 同源派生）
+    let storage = read_manifest("src/platform/storage.rs");
     assert!(
-        lib.contains("app_local_data_dir()?.join(\"attachments\")"),
+        storage.contains("d.join(\"attachments\")"),
         "R11: attachments 与 DB 同根（§15）"
     );
     assert!(
-        lib.contains("app_local_data_dir()?.join(\"vault\")"),
+        storage.contains("d.join(\"vault\")"),
         "R11: vault 与 DB 同根（§15）"
     );
     assert!(
-        lib.contains(".join(\"backups\")"),
+        storage.contains(".join(\"backups\")"),
         "R11: backups 与 DB 同根（§15）"
     );
     let scope = json_of(&read_manifest("tauri.conf.json"))["app"]["security"]["assetProtocol"]["scope"].clone();

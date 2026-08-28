@@ -21,6 +21,8 @@ import DailyActivitiesSection from "../components/DailyActivitiesSection";
 import { PLAN_REQUEST_MESSAGE } from "../components/FinalGoalCard";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
+// DEV-MOBILE-002 §13：Android 顶部按钮收口（AI安排 降级为底部次级入口）
+import { IS_ANDROID } from "../platform/runtimePlatform";
 import type {
   DailyReport,
   Goal,
@@ -212,17 +214,21 @@ function Today() {
           <button className="btn btn--primary" onClick={() => setShowCreate(true)}>
             + 新建任务
           </button>
-          <button
-            className="btn btn--ghost"
-            onClick={() => {
-              // DEV-0058 §51-53：三入口统一 Planner（Planning「AI 生成计划」/对话写意图同一管线）
-              // DEV-0065.1：AI 恒驻，pending-send 事件自动展开 rail
-              void sendChat(PLAN_REQUEST_MESSAGE);
-            }}
-            title="根据最终目标安排未来14天计划（助手模式下生成可应用计划）"
-          >
-            ✨ AI安排
-          </button>
+          {/* DEV-MOBILE-002 §13：Android 不与快速学习/新建任务并列第三颗
+              （AI能力经页面底部 AI 复盘 次级入口 / AI Tab 使用） */}
+          {!IS_ANDROID && (
+            <button
+              className="btn btn--ghost"
+              onClick={() => {
+                // DEV-0058 §51-53：三入口统一 Planner（Planning「AI 生成计划」/对话写意图同一管线）
+                // DEV-0065.1：AI 恒驻，pending-send 事件自动展开 rail
+                void sendChat(PLAN_REQUEST_MESSAGE);
+              }}
+              title="根据最终目标安排未来14天计划（助手模式下生成可应用计划）"
+            >
+              ✨ AI安排
+            </button>
+          )}
         </div>
       </header>
 
@@ -259,9 +265,21 @@ function Today() {
       <section className="card today__section">
         <div className="today__section-head">
           <h2 className="card__title">今日任务</h2>
-          <button className="btn btn--small" onClick={() => setShowCreate(true)}>
-            + 新建任务
-          </button>
+          {/* DEV-MOBILE-002 §15：顶部已有“新建任务”primary——Android 只留小 + icon，不重复文字按钮 */}
+          {IS_ANDROID ? (
+            <button
+              className="btn btn--small mp-iconbtn mp-iconbtn--ghost"
+              title="新建任务"
+              aria-label="新建任务"
+              onClick={() => setShowCreate(true)}
+            >
+              ＋
+            </button>
+          ) : (
+            <button className="btn btn--small" onClick={() => setShowCreate(true)}>
+              + 新建任务
+            </button>
+          )}
         </div>
         {loading && !report ? (
           <p className="muted">加载中…</p>

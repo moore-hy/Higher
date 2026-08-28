@@ -42,17 +42,19 @@ fn t01_dynamic_window_remains() {
         conf.contains("\"windows\": []"),
         "T01: tauri.conf app.windows = []（不新增第二 main 窗口）"
     );
-    let lib = read_src("src/lib.rs");
+    // DEV-MOBILE-001 §40-42：主窗口创建迁移至 src/platform/window.rs（语义不变）
+    let win = read_src("src/platform/window.rs");
     assert!(
-        lib.contains("WebviewWindowBuilder::new"),
+        win.contains("WebviewWindowBuilder::new"),
         "T01: main 仍由 Rust WebviewWindowBuilder 动态创建"
     );
 }
 
 #[test]
 fn t02_decorations_off() {
-    let lib = read_src("src/lib.rs");
-    let chain = lib.split("WebviewWindowBuilder::new").nth(1).unwrap_or_default();
+    // DEV-MOBILE-001 §40-42：builder 链迁移至 src/platform/window.rs（Windows 语义不变）
+    let win = read_src("src/platform/window.rs");
+    let chain = win.split("WebviewWindowBuilder::new").nth(1).unwrap_or_default();
     let chain = chain.split("builder.build()").next().unwrap_or_default();
     assert!(
         chain.contains(".decorations(false)"),
@@ -62,8 +64,9 @@ fn t02_decorations_off() {
 
 #[test]
 fn t03_no_transparent_os_window() {
-    let lib = read_src("src/lib.rs");
-    let chain = lib.split("WebviewWindowBuilder::new").nth(1).unwrap_or_default();
+    // DEV-MOBILE-001 §40-42：builder 链迁移至 src/platform/window.rs（Windows 语义不变）
+    let win = read_src("src/platform/window.rs");
+    let chain = win.split("WebviewWindowBuilder::new").nth(1).unwrap_or_default();
     let chain = chain.split("builder.build()").next().unwrap_or_default();
     for forbidden in [".transparent(true)", ".fullscreen(true)", ".always_on_top(true)"] {
         assert!(
