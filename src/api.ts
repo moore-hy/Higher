@@ -2067,3 +2067,170 @@ export const getPlanVsActual = (profileId: number, start: string, end: string) =
     start,
     end,
   });
+
+// =============== DEV-SYNC-001 / DEV-SYNC-002 · 设备同步（LAN 双向收敛） ===============
+
+/** 已配对设备（serde 原样 snake_case） */
+export interface SyncPeerStatus {
+  peer_device_id: string;
+  peer_name: string | null;
+  peer_platform: string | null;
+  paired_at: string;
+  last_sync_at: string | null;
+}
+
+/** Windows 同步服务器状态 */
+export interface SyncServerStatus {
+  running: boolean;
+  /** 真实局域网 IPv4；无法确定时为 null（不返回假地址） */
+  ip: string | null;
+  port: number;
+  /** DEV-SYNC-003：存在未过期 QR 配对会话 */
+  pairing_active: boolean;
+  pairing_ttl_secs: number;
+  peers: SyncPeerStatus[];
+  /** 针对最慢 peer 尚未确认的本机变化数（§六：非全量历史） */
+  pending_outbox: number;
+  pending_conflicts: number;
+  device_name: string;
+}
+
+/** per-entity 应用计数（新增/更新/删除） */
+export interface SyncEntityDelta {
+  inserted: number;
+  updated: number;
+  deleted: number;
+}
+
+/** 同步应用明细（serde 原样 snake_case） */
+export interface SyncApplyOutcome {
+  inserted: number;
+  updated: number;
+  deleted: number;
+  conflicts: number;
+  deferred: number;
+  max_change_id: number;
+  profiles_changed: SyncEntityDelta;
+  goals_changed: SyncEntityDelta;
+  learning_items_changed: SyncEntityDelta;
+  tasks_changed: SyncEntityDelta;
+}
+
+/** 配对导入的档案（§五：UI 提供「切换到该档案」） */
+export interface SyncImportedProfile {
+  local_id: number;
+  name: string;
+  sync_id: string;
+}
+
+/** Android 配对结果（Bootstrap 全量导入统计 + 档案清单） */
+export interface SyncPairOutcome {
+  server_device_id: string;
+  server_name: string;
+  server_platform: string;
+  bootstrap_entities: number;
+  outcome: SyncApplyOutcome;
+  imported_profiles: SyncImportedProfile[];
+}
+
+/** 「立即同步」结果（§十二：直觉化，不暴露 push/pull 术语） */
+export interface SyncSummary {
+  pushed: number;
+  sent_applied: number;
+  pulled: number;
+  applied: number;
+  conflicts: number;
+  deferred: number;
+  sent_detail: SyncApplyOutcome;
+  received_detail: SyncApplyOutcome;
+  pending_after: number;
+}
+
+/** Android 客户端状态 */
+export interface SyncClientStatus {
+  paired: boolean;
+  /** DEV-SYNC-003 §九：解除配对需要 */
+  peer_device_id: string | null;
+  peer_name: string | null;
+  peer_platform: string | null;
+  peer_addr: string | null;
+  paired_at: string | null;
+  last_sync_at: string | null;
+  pending_outbox: number;
+  pending_conflicts: number;
+}
+
+/** 同步工作台 peer 卡片（§十） */
+export interface SyncPeerCard {
+  peer_device_id: string;
+  peer_name: string | null;
+  peer_platform: string | null;
+  peer_addr: string | null;
+  last_sync_at: string | null;
+  pending_send: number;
+}
+
+/** 同步工作台状态（Windows /sync 与 Android 详情页共用） */
+export interface SyncWorkspaceStatus {
+  listening: boolean;
+  listen_port: number;
+  peers: SyncPeerCard[];
+  pending_conflicts: number;
+  device_name: string;
+}
+
+/** sync://completed 事件 payload（§九） */
+export interface SyncCompletedEvent {
+  peer_device_id: string;
+  profiles_changed: number;
+  goals_changed: number;
+  learning_items_changed: number;
+  tasks_changed: number;
+  conflicts: number;
+  timestamp: string;
+}
+
+/** DEV-SYNC-003 §十四：扫码配对结果 = 配对（Bootstrap）+ 自动首次双向同步 */
+export interface SyncQrPairResult {
+  server_device_id: string;
+  server_name: string;
+  server_platform: string;
+  pair: SyncPairOutcome;
+  sync: SyncSummary | null;
+}
+
+/** 启动本机同步监听（Windows=配对入口；Android 详情页亦启动以支持对端反向连接） */
+export const syncServerStart = () => invoke<SyncServerStatus>("sync_server_start");
+
+/** 停止本机同步监听 */
+export const syncServerStop = () => invoke<SyncServerStatus>("sync_server_stop");
+
+/** 服务器状态轮询 */
+export const syncServerStatus = () => invoke<SyncServerStatus>("sync_server_status");
+
+/** DEV-SYNC-003 §十：生成配对二维码 payload（自动确保监听启动；刷新 = 新 token） */
+export const syncQrSessionStart = () => invoke<string>("sync_qr_session_start");
+
+/** DEV-SYNC-003 §六：扫码配对（候选 IP 自动连接 + 一次性 token + 首次双向同步） */
+export const syncPairViaQr = (payload: string) => invoke<SyncQrPairResult>("sync_pair_via_qr", { payload });
+
+/** DEV-SYNC-003 §九：解除配对（删除 trust/token，业务数据保留） */
+export const syncUnpair = (peerDeviceId: string) =>
+  invoke<void>("sync_unpair", { peerDeviceId });
+
+/** §十：同步工作台状态（/sync 页） */
+export const syncWorkspaceStatus = () => invoke<SyncWorkspaceStatus>("sync_workspace_status");
+
+/** 输入对端 IP + 配对码连接（Bootstrap 全量导入 + 返回档案清单） */
+export const syncPairWithServer = (ip: string, port: number, code: string) =>
+  invoke<SyncPairOutcome>("sync_pair_with_server", { ip, port, code });
+
+/** 「立即同步」双向增量交换（两端平等，任意一端点击均完成 Push+Pull） */
+export const syncClientSyncNow = () => invoke<SyncSummary>("sync_client_sync_now");
+
+/** 配对摘要状态 */
+export const syncClientStatus = () => invoke<SyncClientStatus>("sync_client_status");
+
+/** §十三：冲突批量处理（"local"=保留本机版 / "remote"=保留对端版） */
+export const syncConflictsResolve = (resolution: "local" | "remote") =>
+  invoke<number>("sync_conflicts_resolve", { resolution });

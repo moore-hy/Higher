@@ -124,13 +124,14 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
     // ---- 执行 v025（正规 run_migrations 路径：只差 v025 及后续）----
     // DEV-0070 Phase F v2.0：迁移链已到 v026，此处 v024 库升级会连跑 v025+v026
     // DEV-0076 §四：迁移链已到 v027（连跑 v025→v026→v027）
+    // DEV-SYNC-001：迁移链已到 v028（local_sync_foundation）
     conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     let ver: u32 = conn
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(ver, 27, "升级后 schema = v027（v025→v027 连跑，v025 语义仍被完整验证）");
+    assert_eq!(ver, 29, "升级后 schema = v029（v025→v029 连跑，v025 语义仍被完整验证）");
 
     // ---- ① 数据完整：全字段值逐一比对（run-old-1）----
     let row = conn

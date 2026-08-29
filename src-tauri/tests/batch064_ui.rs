@@ -436,20 +436,41 @@ fn u27_no_dependency_changes() {
         names.sort();
         names
     }
-    assert_eq!(
+    // DEV-SYNC-003 追加授权（Higher QR Pairing，§十二 二维码库）：
+    // npm = qrcode（Windows 侧 QR 生成）+ @tauri-apps/plugin-barcode-scanner
+    //（Android 相机扫码，官方 Tauri 插件）+ @types/qrcode（dev）；
+    // Cargo = tauri-plugin-barcode-scanner（mobile-only crate，桌面 cfg 包装注入）；
+    // ipconfig 位于 [target.'cfg(windows)'.dependencies] 段，不进入本断言的解析范围。
+    // 冻结语义收窄为：新增 ⊆ 上述授权集合，移除恒为空。
+    fn assert_dep_delta(current: Vec<String>, head: Vec<String>, allowed: &[&str], label: &str) {
+        let extra: Vec<String> = current
+            .iter()
+            .filter(|d| !head.contains(d) && !allowed.contains(&d.as_str()))
+            .cloned()
+            .collect();
+        assert!(extra.is_empty(), "U27: {label} 依赖新增超出 DEV-SYNC-003 授权（{extra:?}）");
+        let removed: Vec<String> = head.iter().filter(|d| !current.contains(d)).cloned().collect();
+        assert!(removed.is_empty(), "U27: {label} 依赖不得移除（{removed:?}）");
+    }
+    const QR_NPM: [&str; 3] = ["qrcode", "@types/qrcode", "@tauri-apps/plugin-barcode-scanner"];
+    const QR_CARGO: [&str; 1] = ["tauri-plugin-barcode-scanner"];
+    assert_dep_delta(
         npm_deps(&read_p("..\\package.json")),
         npm_deps(&show("package.json")),
-        "U27: npm 依赖名集合不得变化"
+        &QR_NPM,
+        "package.json",
     );
-    assert_eq!(
+    assert_dep_delta(
         npm_deps(&read_p("..\\package-lock.json")),
         npm_deps(&show("package-lock.json")),
-        "U27: package-lock 依赖树不得变化"
+        &QR_NPM,
+        "package-lock.json",
     );
-    assert_eq!(
+    assert_dep_delta(
         cargo_deps(&read_p("Cargo.toml")),
         cargo_deps(&show("src-tauri/Cargo.toml")),
-        "U27: Cargo 依赖名集合不得变化"
+        &QR_CARGO,
+        "Cargo.toml",
     );
 }
 
@@ -710,6 +731,78 @@ fn u28_no_src_tauri_src_diff() {
         "let vault_dir = platform::storage::vault_root(app.handle())?;",
         "platform::notification::start(app.handle());",
         "runtime_db_path(&app)",
+        // DEV-SYNC-001 追加授权（Local-First LAN Sync MVP，本任务直接后果）：
+        // lib.rs 新增 = mod sync + 六个 sync_* 薄命令（server start/stop/status +
+        // client pair/sync_now/status）+ setup manage(SyncServerHandle) +
+        // invoke_handler 注册；业务实现全在 src/sync/*（untracked 新文件不入 diff）。
+        "pub mod sync;",
+        "server",
+        "fn sync_server_start(", "fn sync_server_stop(", "fn sync_server_status(",
+        "fn sync_pair_with_server(", "fn sync_client_sync_now(", "fn sync_client_status(",
+        "server: tauri::State<'_, sync::server::SyncServerHandle>,",
+        "Result<sync::server::ServerStatus, String> {",
+        "Result<sync::client::PairOutcome, String> {",
+        "Result<sync::client::SyncSummary, String> {",
+        "Result<sync::client::ClientStatus, String> {",
+        ".start(std::sync::Arc::new(sync::server::DbStateProvider(app)))",
+        "server.stop();",
+        "Ok(sync::server::server_status(&server, &conn))",
+        "ip: String,", "port: u16,", "code: String,",
+        "sync::client::pair_with_server(&conn, &ip, port, &code)",
+        "sync::client::sync_now(&conn)",
+        "app.manage(sync::server::SyncServerHandle::new());",
+        "sync_server_start,", "sync_server_stop,", "sync_server_status,",
+        "sync_pair_with_server,", "sync_client_sync_now,", "sync_client_status,",
+        // DEV-SYNC-002 追加授权（True Bidirectional Sync，本任务直接后果）：
+        // lib.rs 新增 = sync_workspace_status / sync_conflicts_resolve 两命令 +
+        // pair/sync_now 的 listen addr 上报与 sync://completed 事件广播 + 注册。
+        "fn sync_workspace_status(",
+        "Result<sync::server::WorkspaceStatus, String> {",
+        "Ok(sync::server::workspace_status(&server, &conn))",
+        "sync_workspace_status,",
+        "fn sync_conflicts_resolve(",
+        "resolution: String,",
+        ") -> Result<u32, String> {",
+        "sync::client::resolve_conflicts(&conn, &resolution)",
+        "sync_conflicts_resolve,",
+        "let listen = sync::client::local_listen_addr(&conn, server.current_port());",
+        "let outcome = sync::client::pair_with_server(&conn, &ip, port, &code, listen.as_deref())?;",
+        "if outcome.outcome.any_change() {",
+        "use tauri::Emitter;",
+        "let _ = app.emit(",
+        "\"sync://completed\",",
+        "sync::server::completed_payload(&outcome.server_device_id, &outcome.outcome),",
+        "Ok(outcome)",
+        "let summary = sync::client::sync_now(&conn, listen.as_deref())?;",
+        "if summary.applied > 0 || summary.conflicts > 0 {",
+        "let peer_id = sync::identity::first_peer(&conn)",
+        ".ok()",
+        ".flatten()",
+        "map(|p| p.peer_device_id)",
+        ".unwrap_or_default();",
+        "sync::server::completed_payload(&peer_id, &summary.received_detail),",
+        "Ok(summary)",
+        "Ok(server_status_result)",
+        // DEV-SYNC-003 追加授权（Higher QR Pairing，本任务直接后果）：
+        // lib.rs 新增 = sync_qr_session_start / sync_pair_via_qr / sync_unpair
+        // 三薄命令（QR payload 生成 / 扫码配对+首次双向同步 / 解除配对）+ 注册；
+        // mobile-only barcode-scanner 插件经 #[cfg(mobile)] 包装注入（桌面 no-op）。
+        "fn sync_qr_session_start(",
+        ") -> Result<String, String> {",
+        "fn sync_pair_via_qr(",
+        "payload: String,",
+        ") -> Result<sync::client::QrPairResult, String> {",
+        "sync::client::pair_via_qr(&conn, &payload, listen.as_deref())?;",
+        "if let Some(s) = &result.sync {",
+        "if s.applied > 0 {",
+        "Ok(result)",
+        "sync::client::unpair(&conn, &peer_device_id)",
+        "#[cfg(mobile)]", "#[cfg(not(mobile))]",
+        "fn mobile_barcode_scanner_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {",
+        "tauri_plugin_barcode_scanner::init()",
+        "tauri::plugin::Builder::new(\"barcode-scanner\").build()",
+        ".plugin(mobile_barcode_scanner_plugin())",
+        "sync_qr_session_start,", "sync_pair_via_qr,", "sync_unpair,",
     ];
     for l in &added {
         // 注释行（含换行续段）与纯标点收尾行（"）"/"))" 等）结构放行；其余代码行严格关键词校验

@@ -82,6 +82,30 @@ import type {
   VaultSnapshot,
 } from "../types";
 import { downloadTextFile, formatDateTime, todayDate } from "../utils";
+import { useNavigate } from "react-router-dom";
+import { IS_ANDROID } from "../platform/runtimePlatform";
+import {
+  syncClientStatus,
+  syncClientSyncNow,
+  syncPairViaQr,
+  syncServerStart,
+  syncServerStatus,
+  syncServerStop,
+  syncUnpair,
+  type SyncClientStatus,
+  type SyncPairOutcome,
+  type SyncQrPairResult,
+  type SyncServerStatus,
+  type SyncSummary,
+} from "../api";
+import {
+  cancel as cancelBarcodeScan,
+  checkPermissions,
+  Format,
+  openAppSettings,
+  requestPermissions,
+  scan,
+} from "@tauri-apps/plugin-barcode-scanner";
 
 /**
  * 设置中心（DEV-0016 + DEV-0030 数据管理 + DEV-0042 学习提醒）。
@@ -123,6 +147,7 @@ export default function Settings({
     { key: "websearch", label: "联网搜索" },
     { key: "notify", label: "学习提醒" },
     { key: "data", label: "数据管理" },
+    { key: "devicesync", label: "设备同步" },
     { key: "vault", label: "审计与备份" },
   ];
 
@@ -173,6 +198,8 @@ export default function Settings({
         <AiMemorySection profileId={activeProfile?.id ?? null} />
       ) : tab === "websearch" ? (
         <WebSearchSection />
+      ) : tab === "devicesync" ? (
+        <DeviceSyncSection />
       ) : tab === "vault" ? (
         <VaultSection />
       ) : (
@@ -2536,6 +2563,620 @@ function AppearanceSection() {
           恢复推荐效果只调整三值为 70 / 70 / 45（保留壁纸与氛围）；恢复默认会删除壁纸并回到默认深色。
         </p>
       </div>
+    </section>
+  );
+}
+
+// ---------------- 设备同步（DEV-SYNC-001 Local-First LAN Sync MVP） ----------------
+
+/** 相对时间展示（最后同步） */
+function syncTimeLabel(iso: string | null): string {
+  if (!iso) return "从未";
+  return formatDateTime(iso);
+}
+
+/**
+ * 设备同步（DEV-SYNC-003 · QR Pairing）：
+ * Windows = 服务器（启动 / 停止 / 已配对设备；配对入口 = /sync 二维码，§十）；
+ * Android = 客户端（扫描电脑二维码 → 自动连接 + 配对 + 自动首次双向同步，§十一）。
+ * 仅同步 study_profiles / goals / learning_items / tasks；仅建议在可信局域网中使用。
+ */
+function DeviceSyncSection() {
+  return IS_ANDROID ? <DeviceSyncClient /> : <DeviceSyncServer />;
+}
+
+/** Windows：同步服务器（启停 / 已配对设备；配对二维码入口在 /sync 工作台，§十） */
+function DeviceSyncServer() {
+  const navigate = useNavigate();
+  const [status, setStatus] = useState<SyncServerStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  /** DEV-SYNC-001-F1 §4：try/catch/finally —— IPC 失败必须退出 loading 并显示真实错误 */
+  async function refresh() {
+    try {
+      setStatus(await syncServerStatus());
+      setError("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  async function start() {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const s = await syncServerStart();
+      setStatus(s);
+      setMessage("同步服务器已启动，等待手机连接……");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stop() {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      setStatus(await syncServerStop());
+      setMessage("同步服务器已停止。");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Windows 侧「立即同步」：服务器被动等待手机发起 → 展示待同步状态 */
+  async function syncNow() {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const s = await syncServerStatus();
+      setStatus(s);
+      if (s.pending_outbox > 0) {
+        setMessage(`有 ${s.pending_outbox} 条变更待同步：请在手机的「设备同步」中点击「立即同步」发起连接。`);
+      } else {
+        setMessage("本地暂无待同步变更。双向同步由手机端「立即同步」发起。");
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // DEV-SYNC-001-F1 §4：IPC 失败 → 退出 loading 并显示「初始化失败 + 真实错误 + 重试」，
+  // 禁止吞错导致永久「加载中…」
+  if (!status && error) {
+    return (
+      <section className="card">
+        <h2 className="card__title">设备同步</h2>
+        <div className="alert alert--error">
+          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>设备同步初始化失败</p>
+          <p style={{ margin: 0, fontSize: 12, wordBreak: "break-all" }}>{error}</p>
+        </div>
+        <div className="btn-row">
+          <button
+            className="btn btn--primary"
+            disabled={busy}
+            onClick={() => {
+              setError("");
+              setLoading(true);
+              void refresh();
+            }}
+          >
+            重试
+          </button>
+        </div>
+        <p className="muted" style={{ fontSize: 11, margin: "12px 0 0" }}>
+          当前仅建议在可信局域网中使用。重试仍失败时，请重启 Higher（npm run tauri dev）后再试。
+        </p>
+      </section>
+    );
+  }
+
+  if (loading || !status) return <section className="card"><p className="muted">加载中…</p></section>;
+
+  return (
+    <section className="card">
+      <h2 className="card__title">设备同步</h2>
+      {error && <div className="alert alert--error">{error}</div>}
+      {message && <div className="alert alert--ok">{message}</div>}
+
+      {!status.running ? (
+        <>
+          <p className="muted" style={{ margin: "0 0 12px" }}>
+            同步服务尚未启动。在同一可信 Wi-Fi 下，点击「启动同步」把电脑上的学习档案
+            （Profile / 目标树 / 学习项 / 任务）同步到手机。服务器默认关闭，只有你主动启动时才会接受连接。
+          </p>
+          <div className="btn-row">
+            <button className="btn btn--primary" disabled={busy} onClick={() => void start()}>
+              {busy ? "启动中…" : "启动同步"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          {/* DEV-SYNC-003 §十：IP / 端口 / 配对码退出主界面；
+              配对入口 = /sync「添加手机」二维码（候选 IP 自动尝试，无需手工输入） */}
+          <div className="sync-panel">
+            <div className="sync-panel__title">
+              {status.device_name || "Higher Windows"}
+              <span className="sync-panel__dot" aria-hidden="true" />
+              同步服务运行中
+            </div>
+            <div className="sync-panel__row"><span>端口</span><b>{status.port}</b></div>
+            <div className="sync-panel__row">
+              <span>已配对设备</span>
+              <b>{status.peers.length > 0 ? `${status.peers.length} 台` : "尚未配对"}</b>
+            </div>
+          </div>
+          {status.peers.length === 0 && (
+            <p className="muted" style={{ margin: "8px 0 12px" }}>
+              等待手机连接……在「同步」页点击「添加手机」生成二维码，手机 Higher 扫码即可自动配对——
+              无需输入 IP、端口或配对码。
+            </p>
+          )}
+        </>
+      )}
+
+      {status.peers.length > 0 && (
+        <div className="sync-peers">
+          <div className="sync-peers__title">我的设备</div>
+          {status.peers.map((p) => (
+            <div key={p.peer_device_id} className="sync-peers__item">
+              <span>{p.peer_name || "Higher 设备"}（{p.peer_platform || "unknown"}）</span>
+              <span className="muted">最后同步：{syncTimeLabel(p.last_sync_at)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {status.pending_conflicts > 0 && (
+        <div className="alert alert--error">有 {status.pending_conflicts} 条同步冲突，暂未覆盖。</div>
+      )}
+      {status.pending_outbox > 0 && (
+        <p className="muted" style={{ margin: "8px 0" }}>待同步变更：{status.pending_outbox} 条</p>
+      )}
+
+      {status.running && (
+        <div className="btn-row">
+          <button className="btn btn--primary" disabled={busy} onClick={() => void syncNow()}>
+            {busy ? "检查中…" : "立即同步"}
+          </button>
+          <button className="btn" disabled={busy} onClick={() => void stop()}>
+            停止同步
+          </button>
+        </div>
+      )}
+
+      {/* DEV-SYNC-002 §十一 + DEV-SYNC-003 §十：日常同步 / 配对二维码都在同步工作台 */}
+      <div className="btn-row" style={{ marginTop: status.running ? 0 : 4 }}>
+        <button className="btn" onClick={() => navigate("/sync")}>
+          {status.running && status.peers.length === 0 ? "添加手机（二维码配对）" : "打开同步"}
+        </button>
+      </div>
+
+      <p className="muted" style={{ fontSize: 11, margin: "12px 0 0" }}>
+        首版仅同步学习档案 / 目标 / 学习项 / 任务，不同步 API Key、密码、附件与知识正文。
+        当前仅建议在可信局域网中使用。
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Android（移动端）：同步客户端（DEV-SYNC-003 §十一 · 扫码配对）。
+ * [扫描电脑二维码] → 相机权限（拒绝可恢复）→ 扫码 → 候选 IP 自动连接 →
+ * 一次性 token 配对 → 自动首次双向同步（§十四）；失败分类提示 + [重新扫描]（§十三）。
+ *
+ * DEV-SYNC-003-F2 §九/§十/§十一：
+ * - windowed:true（HTML UI 保留：WebView 透明区见相机）+ 扫描框覆盖层 + [取消]；
+ * - 30s 无识别自动 cancel() 恢复页面（禁止永久 pending）；
+ * - 组件卸载强制 cancel()（Android Back / 路由离开时拆除相机，禁止卡 scanner）。
+ */
+const QR_SCAN_TIMEOUT_MS = 30_000;
+
+function DeviceSyncClient() {
+  const { enterProfile } = useActiveProfile();
+  const [status, setStatus] = useState<SyncClientStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [imported, setImported] = useState<SyncPairOutcome["imported_profiles"] | null>(null);
+  const [lastSummary, setLastSummary] = useState<SyncSummary | null>(null);
+  // §十一/§十三：扫码配对过程态（正在连接）与失败态（可恢复）
+  const [connecting, setConnecting] = useState(false);
+  const [scanError, setScanError] = useState("");
+  const [permDenied, setPermDenied] = useState(false);
+  const [confirmUnpair, setConfirmUnpair] = useState(false);
+  // DEV-SYNC-003-F2：扫码进行中（覆盖层）与超时恢复态
+  const [scanning, setScanning] = useState(false);
+  const [scanTimeout, setScanTimeout] = useState(false);
+
+  async function refresh() {
+    try {
+      setStatus(await syncClientStatus());
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  // §七：已配对时启动本机 listener（电脑可主动反向「立即同步」）；离开页面停止。
+  // F2 §十一：卸载时强制拆除扫码相机（Android Back / 路由离开不残留 scanner）。
+  useEffect(() => {
+    void (async () => {
+      try {
+        const s = await syncClientStatus();
+        setStatus(s);
+        if (s.paired) {
+          await syncServerStart().catch(() => {});
+        }
+      } catch (e) {
+        setError(String(e));
+      }
+    })();
+    return () => {
+      cancelBarcodeScan().catch(() => {});
+      syncServerStop().catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // F2.1 §三：扫码期间建立真正透明模式 —— html/body 加 higher-qr-scanning，
+  // CSS 仅在该态把 WebView 各层背景置透明（Camera PreviewView 在 WebView 后方可见）。
+  // 覆盖全部出口：scanning 置 false（成功/取消/超时/异常 finally）或组件卸载时本 cleanup 必然移除。
+  useEffect(() => {
+    if (!scanning) return;
+    document.documentElement.classList.add("higher-qr-scanning");
+    document.body.classList.add("higher-qr-scanning");
+    return () => {
+      document.documentElement.classList.remove("higher-qr-scanning");
+      document.body.classList.remove("higher-qr-scanning");
+    };
+  }, [scanning]);
+
+  /** §六：扫码内容为 base64（UTF-8 JSON）；解码失败或本身即 JSON 时按原文使用 */
+  function decodeScanContent(raw: string): string {
+    const t = raw.trim();
+    if (t.startsWith("{")) return t;
+    try {
+      const bin = atob(t);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new TextDecoder().decode(bytes);
+    } catch {
+      return t;
+    }
+  }
+
+  // F2.1：手动结束扫码等待的句柄（插件 cancel() 的 reject 实测未可靠传回 JS，
+  // 取消/卸载时由本地 race 立即收尾，UI 不卡透明态）
+  const scanAbortRef = useRef<((reason: string) => void) | null>(null);
+
+  /** §十一：取消扫码（本地 race 立即恢复 + 插件 cancel 拆相机） */
+  async function cancelScan() {
+    try {
+      scanAbortRef.current?.("cancelled");
+    } catch {
+      /* 已收尾 */
+    }
+    scanAbortRef.current = null;
+    await cancelBarcodeScan().catch(() => {});
+  }
+
+  /** §十一：扫码配对全流程（权限 → 相机扫码 → 自动连接 → 配对 + 首次双向同步） */
+  async function startPairScan() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setScanError("");
+    setScanTimeout(false);
+    setPermDenied(false);
+    setLastSummary(null);
+    setImported(null);
+    try {
+      // 相机权限：先查后申请；仍拒绝 → 权限说明 + [去开启]（§十一，QR-TC011）
+      let perm = await checkPermissions().catch(() => "prompt");
+      if (perm !== "granted") {
+        perm = await requestPermissions().catch(() => "denied");
+      }
+      if (perm !== "granted") {
+        setPermDenied(true);
+        return;
+      }
+      // F2 §九：windowed:true —— HTML UI 保留（扫描框覆盖层 + [取消]），WebView 透明区见相机
+      setScanning(true);
+      // F2 §十：30s 无识别自动取消（禁止永久 pending）；F2.1：本地可中断句柄（取消/卸载立即收尾）
+      const scanWait = new Promise<never>((_, reject) => {
+        scanAbortRef.current = (reason: string) => {
+          scanAbortRef.current = null;
+          reject(new Error(reason));
+        };
+        window.setTimeout(
+          () => {
+            scanAbortRef.current = null;
+            reject(new Error("HIGHER_SCAN_TIMEOUT"));
+          },
+          QR_SCAN_TIMEOUT_MS
+        );
+      });
+      const scanned = await Promise.race([
+        scan({ formats: [Format.QRCode], windowed: true }),
+        scanWait,
+      ]);
+      // 真机验收 hook（QR-F2-TC01：scan resolve 的原始 content）
+      (window as unknown as { __higherQrDebug?: { content: string; ts: number } }).__higherQrDebug = {
+        content: scanned.content,
+        ts: Date.now(),
+      };
+      const payload = decodeScanContent(scanned.content);
+      // 扫码成功 → 自动进入「正在连接 Higher Windows…」（§十一）
+      setConnecting(true);
+      const r = await syncPairViaQr(payload);
+      // §十四：配对成功 + 自动首次双向同步结果（直觉化统计）
+      const names = r.pair.imported_profiles.map((p) => `「${p.name}」`).join("、");
+      setMessage(
+        `配对成功，已连接 ${r.server_name || "Higher Windows"}。` +
+          (r.sync
+            ? `首次同步完成：电脑 → 手机 ${r.sync.pushed} 条 / 手机 → 电脑 ${r.sync.pulled} 条` +
+              (r.sync.conflicts > 0 ? ` / 冲突 ${r.sync.conflicts} 条` : "") +
+              "。"
+            : "") +
+          (names ? `已从电脑导入学习档案：${names}。` : "")
+      );
+      setImported(r.pair.imported_profiles);
+      await syncServerStart().catch(() => {}); // 配对完成即监听，电脑可反向连接
+      await refresh();
+    } catch (e) {
+      const msg = String(e);
+      // 用户主动取消扫码：静默返回（页面保持可再次扫码，§十三）
+      if (/cancel/i.test(msg)) return;
+      if (msg.includes("HIGHER_SCAN_TIMEOUT")) {
+        // §十：超时 → 自动 cancel 相机 → 恢复页面 + 指引 + [重新扫描]
+        await cancelScan();
+        setScanTimeout(true);
+        return;
+      }
+      setScanError(msg);
+    } finally {
+      scanAbortRef.current = null;
+      setScanning(false);
+      setBusy(false);
+      setConnecting(false);
+    }
+  }
+
+  /** §九：解除配对（只删 trust/token，业务数据保留；重新扫码即可再连） */
+  async function unpairPeer() {
+    if (!status?.peer_device_id) return;
+    setBusy(true);
+    setError("");
+    try {
+      await syncUnpair(status.peer_device_id);
+      setConfirmUnpair(false);
+      setMessage("已解除配对。重新扫码即可重新建立连接，学习数据保持不变。");
+      setImported(null);
+      setLastSummary(null);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncNow() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const s = await syncClientSyncNow();
+      setLastSummary(s);
+      setMessage(
+        s.pushed === 0 && s.pulled === 0
+          ? "同步完成：两台设备数据已是最新。"
+          : "同步完成。"
+      );
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!status) return <section className="card"><p className="muted">加载中…</p></section>;
+  const lastSync = syncTimeLabel(status.last_sync_at);
+
+  return (
+    <section className="card">
+      <h2 className="card__title">Higher 设备同步</h2>
+      {error && <div className="alert alert--error">{error}</div>}
+      {message && <div className="alert alert--ok">{message}</div>}
+
+      {!status.paired ? (
+        <>
+          {/* §十一：未配对 = 单一扫码入口，小字提示同 Wi-Fi；无 IP/端口/配对码输入 */}
+          <p className="muted" style={{ margin: "0 0 12px" }}>
+            确保手机与电脑连接同一 Wi-Fi。
+          </p>
+          <div className="btn-row">
+            <button className="btn btn--primary" disabled={busy} onClick={() => void startPairScan()}>
+              {busy ? (connecting ? "正在连接 Higher Windows…" : "正在打开相机…") : "扫描电脑二维码"}
+            </button>
+          </div>
+
+          {/* §十一：首次拒绝相机权限 → 权限说明 + [去开启]（QR-TC011 不崩溃、可恢复） */}
+          {permDenied && (
+            <div className="alert alert--error" style={{ marginTop: 12 }}>
+              <p style={{ margin: "0 0 8px", fontWeight: 600 }}>需要相机权限才能扫描二维码</p>
+              <p style={{ margin: "0 0 8px", fontSize: 12 }}>
+                扫码配对需要使用相机识别电脑 Higher 显示的二维码，相机不会用于其它用途。
+                可在系统设置（应用 → Higher → 权限 → 相机）中手动开启。
+              </p>
+              <div className="btn-row">
+                <button className="btn" onClick={() => void openAppSettings()}>
+                  去开启
+                </button>
+                <button className="btn" disabled={busy} onClick={() => void startPairScan()}>
+                  重新扫描
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* §十三：扫码/连接失败 → 分类提示 + 恢复路径（页面永不卡死） */}
+          {scanError && (
+            <div className="alert alert--error" style={{ marginTop: 12 }}>
+              <p style={{ margin: "0 0 8px", fontWeight: 600 }}>无法连接 Higher Windows</p>
+              <p style={{ margin: 0, fontSize: 12, whiteSpace: "pre-line", wordBreak: "break-all" }}>
+                {scanError}
+              </p>
+              <div className="btn-row" style={{ marginTop: 8 }}>
+                <button className="btn btn--primary" disabled={busy} onClick={() => void startPairScan()}>
+                  重新扫描
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* F2 §十：30s 超时自动取消 → 指引 + [重新扫描]（禁止永久 pending） */}
+          {scanTimeout && (
+            <div className="alert alert--error" style={{ marginTop: 12 }}>
+              <p style={{ margin: "0 0 8px", fontWeight: 600 }}>暂未识别到二维码</p>
+              <p style={{ margin: "0 0 8px", fontSize: 12 }}>
+                请保持二维码完整、清晰，并确认摄像头已经对焦。
+              </p>
+              <div className="btn-row">
+                <button className="btn btn--primary" disabled={busy} onClick={() => void startPairScan()}>
+                  重新扫描
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="sync-panel">
+            <div className="sync-panel__title">
+              {status.peer_name || "Higher Windows"}
+              <span className="sync-panel__dot" aria-hidden="true" />
+              {status.peer_addr ? "已连接" : "等待对端"}
+            </div>
+            <div className="sync-panel__row"><span>地址</span><b>{status.peer_addr || "—"}</b></div>
+            <div className="sync-panel__row"><span>最后同步</span><b>{lastSync}</b></div>
+            <div className="sync-panel__row"><span>待发送</span><b>{status.pending_outbox} 条</b></div>
+          </div>
+          {status.pending_conflicts > 0 && (
+            <div className="alert alert--error">有 {status.pending_conflicts} 条同步冲突，暂未覆盖。</div>
+          )}
+          {lastSummary && (
+            <div className="sync-result">
+              <div className="sync-result__title">
+                {lastSummary.pushed === 0 && lastSummary.pulled === 0
+                  ? "已同步 · 两台设备数据已是最新"
+                  : "同步完成"}
+              </div>
+              {lastSummary.pushed > 0 && (
+                <div className="sync-result__row">
+                  <span>发送到电脑</span>
+                  <span>
+                    新增 {lastSummary.sent_detail.inserted} · 更新 {lastSummary.sent_detail.updated} · 删除{" "}
+                    {lastSummary.sent_detail.deleted}
+                  </span>
+                </div>
+              )}
+              {lastSummary.pulled > 0 && (
+                <div className="sync-result__row">
+                  <span>从电脑接收</span>
+                  <span>
+                    新增 {lastSummary.received_detail.inserted} · 更新 {lastSummary.received_detail.updated} ·
+                    删除 {lastSummary.received_detail.deleted}
+                  </span>
+                </div>
+              )}
+              {lastSummary.conflicts > 0 && (
+                <div className="sync-result__row">
+                  <span>冲突</span>
+                  <span>{lastSummary.conflicts} 条（未覆盖）</span>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="btn-row">
+            <button className="btn btn--primary" disabled={busy} onClick={() => void syncNow()}>
+              {busy ? "同步中…" : "立即同步"}
+            </button>
+            {/* §九：解除配对（两步确认；只删 trust/token，业务数据保留） */}
+            {confirmUnpair ? (
+              <>
+                <button className="btn btn--danger" disabled={busy} onClick={() => void unpairPeer()}>
+                  确认解除配对
+                </button>
+                <button className="btn" disabled={busy} onClick={() => setConfirmUnpair(false)}>
+                  取消
+                </button>
+              </>
+            ) : (
+              <button className="btn" disabled={busy} onClick={() => setConfirmUnpair(true)}>
+                解除配对
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* §五：配对导入档案 → 明确去向 + 一键切换（active_profile_id 保持本机状态） */}
+      {imported && imported.length > 0 && (
+        <div className="sync-imported">
+          <div className="sync-imported__title">已从电脑导入的学习档案</div>
+          {imported.map((p) => (
+            <div key={p.sync_id} className="sync-imported__row">
+              <span>{p.name}</span>
+              <button className="btn" onClick={() => void enterProfile(p.local_id)}>
+                切换到该档案
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="muted" style={{ fontSize: 11, margin: "12px 0 0" }}>
+        两台设备为平等的 Higher 终端：任意一端点击「立即同步」都会双向交换
+        学习档案 / 目标 / 学习项 / 任务；不同步 API Key、密码、附件与知识正文。
+        当前仅建议在可信局域网中使用。
+      </p>
+
+      {/* F2 §九：windowed:true 扫码覆盖层 —— WebView 透明区见相机，HTML 提供
+          标题 / 扫描框 / 提示 / [取消]（用户可退出，禁止卡 scanner） */}
+      {scanning && (
+        <div className="qr-scan-overlay">
+          <div className="qr-scan-title">扫描二维码</div>
+          <div className="qr-scan-frame">
+            <span className="qr-scan-hint">请将二维码放入框内</span>
+          </div>
+          <button className="btn qr-scan-cancel" onClick={() => void cancelScan()}>
+            取消
+          </button>
+        </div>
+      )}
     </section>
   );
 }

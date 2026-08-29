@@ -16,6 +16,7 @@ import Planning from "./pages/Planning";
 import ProfileSelector from "./pages/ProfileSelector";
 import ProfileWelcome from "./pages/ProfileWelcome";
 import Settings from "./pages/Settings";
+import Sync from "./pages/Sync"; // DEV-SYNC-002 §十：/sync 同步工作台（缺此 import → ProfileGate ReferenceError 白屏）
 import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
 import { todayDate } from "./utils";
@@ -95,6 +96,8 @@ function ProfileGate() {
               <Route path="/knowledge" element={<KnowledgePage />} />
               {/* DEV-0055：学习数据一级页面（lazy §125） */}
               <Route path="/data" element={<DataPage />} />
+              {/* DEV-SYNC-002 §十：Windows 同步工作台一级入口（Android 走「我的 → 设备同步」） */}
+              {!IS_ANDROID && <Route path="/sync" element={<Sync />} />}
               {/* DEV-0301：整体进度并入学习规划，兼容重定向 */}
               <Route path="/progress" element={<Navigate to="/planning" replace />} />
               {/* DEV-MOBILE-001 §68：Android AI 一级导航（内容=恒驻 MobileAiHost 全屏） */}

@@ -69,7 +69,8 @@ fn test_migration_v008_applied_and_idempotent() {
     // v025（ai_runs.status 增加 waiting_user，DEV-0066 Phase E）已追加
     // v026（personalization_profiles.user_context_json，DEV-0070 Phase F v2.0）已追加
     // v027（memory_confirmation_lifecycle，DEV-0076 §四）已追加
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
+    // v028（local_sync_foundation，DEV-SYNC-001）已追加
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
 
     let columns: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(adjustments)").unwrap();
@@ -92,7 +93,8 @@ fn test_migration_v008_applied_and_idempotent() {
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
     // DEV-0076 §四：v027 追加后 27 条
-    assert_eq!(count, 27);
+    // DEV-SYNC-001：v028 追加后 28 条
+    assert_eq!(count, 29);
 }
 
 #[test]

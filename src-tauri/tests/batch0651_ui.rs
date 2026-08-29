@@ -369,15 +369,33 @@ fn t20_no_new_dependencies() {
         names.sort();
         names
     }
-    assert_eq!(
+    // DEV-SYNC-003 追加授权（Higher QR Pairing，§十二 二维码库；与 U27/R2-U24 同步）：
+    // npm 新增 = qrcode + @tauri-apps/plugin-barcode-scanner + @types/qrcode(dev)；
+    // Cargo 新增 = tauri-plugin-barcode-scanner（mobile-only crate）。
+    // 冻结语义：新增 ⊆ 授权集合，移除恒为空。
+    fn assert_dep_delta(current: Vec<String>, head: Vec<String>, allowed: &[&str], label: &str) {
+        let extra: Vec<String> = current
+            .iter()
+            .filter(|d| !head.contains(d) && !allowed.contains(&d.as_str()))
+            .cloned()
+            .collect();
+        assert!(extra.is_empty(), "T20: {label} 依赖新增超出 DEV-SYNC-003 授权（{extra:?}）");
+        let removed: Vec<String> = head.iter().filter(|d| !current.contains(d)).cloned().collect();
+        assert!(removed.is_empty(), "T20: {label} 依赖不得移除（{removed:?}）");
+    }
+    const QR_NPM: [&str; 3] = ["qrcode", "@types/qrcode", "@tauri-apps/plugin-barcode-scanner"];
+    const QR_CARGO: [&str; 1] = ["tauri-plugin-barcode-scanner"];
+    assert_dep_delta(
         npm_deps(&read_src("../package.json")),
         npm_deps(&show("package.json")),
-        "T20: npm 依赖名集合不得变化"
+        &QR_NPM,
+        "package.json",
     );
-    assert_eq!(
+    assert_dep_delta(
         cargo_deps(&read_src("Cargo.toml")),
         cargo_deps(&show("src-tauri/Cargo.toml")),
-        "T20: Cargo 依赖名集合不得变化"
+        &QR_CARGO,
+        "Cargo.toml",
     );
     let conf: serde_json::Value =
         serde_json::from_str(&read_src("tauri.conf.json")).expect("tauri.conf.json 解析失败");

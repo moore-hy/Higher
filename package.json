@@ -11,11 +11,13 @@
     "tauri": "tauri",
     "test:ai-runtime": "tsc -p tsconfig.ai-runtime-test.json && node --test .ai-runtime-test-build/tests/ai-runtime/runtimeState.test.js",
     "test:mobile": "tsc -p tsconfig.mobile-test.json && node --test .mobile-test-build/tests/mobile/*.test.js",
+    "test:sync": "tsc -p tsconfig.sync-test.json && node --test .sync-test-build/tests/sync/*.test.js",
     "test:mobile-f2": "node --test --experimental-test-module-mocks --import tsx tests/mobile/f2AiRootTabLayout.test.tsx"
   },
   "dependencies": {
     "@radix-ui/themes": "^3.3.0",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-barcode-scanner": "^2.4.5",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tiptap/pm": "^3.30.1",
@@ -24,6 +26,7 @@
     "@xyflow/react": "^12.11.3",
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",
+    "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
@@ -34,6 +37,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
     "@types/jsdom": "^30.0.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",

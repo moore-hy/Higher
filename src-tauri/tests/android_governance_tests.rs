@@ -54,6 +54,12 @@ fn gov_mobile_source_purity() {
             "run_agent_turn",
             "ai_start_run",
         ] {
+            // DEV-SYNC-002 §十二 追加授权（本任务直接后果）：MobileSettings.tsx
+            // 「我的」列表的设备同步状态摘要需要 syncClientStatus 只读查询
+            //（经 src/api 统一封装，非第二套业务；其余 banned 项照常生效）。
+            if path.ends_with("MobileSettings.tsx") && (banned == "from \"../api\"" || banned == "from '../api'") {
+                continue;
+            }
             assert!(
                 !src.contains(banned),
                 "governance：{path} 禁止包含 {banned}（§79：Mobile 不建第二套业务/Shell）"

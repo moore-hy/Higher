@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { listen } from "@tauri-apps/api/event";
 import type { StudyProfile } from "../types";
 import {
   clearActiveStudyProfile,
@@ -15,6 +16,11 @@ import {
   setActiveStudyProfile,
 } from "../api";
 import { startupMark } from "../startupTrace";
+import { isTauriRuntime } from "../utils/tauriEnv";
+import {
+  createSyncRefreshDispatcher,
+  type SyncCompletedPayload,
+} from "../sync/syncRefresh";
 
 /**
  * ActiveProfileContext：管理当前活跃学习档案的全局状态。
@@ -193,6 +199,37 @@ export function ActiveProfileProvider({ children }: { children: ReactNode }) {
   const triggerRefresh = useCallback(() => {
     setRefreshKey((k) => k + 1);
   }, []);
+
+  /**
+   * DEV-SYNC-002 §九：全局监听 sync://completed（两端共享，Provider 顶层注册）。
+   * 任意实体变化 → triggerRefresh（Today / Planning / Goals / Tasks 等消费
+   * refreshKey 的页面自动重读）；profiles 变化额外 refreshGate（active 档案
+   * 可能被远端更新）。分发逻辑见 src/sync/syncRefresh.ts（SYNC2-UI-TC01）。
+   */
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    const un = listen<SyncCompletedPayload>("sync://completed", (e) => {
+      const fired = createSyncRefreshDispatcher({
+        profiles: () => {
+          void refreshGate();
+          triggerRefresh();
+        },
+        goals: triggerRefresh,
+        learningItems: triggerRefresh,
+        tasks: triggerRefresh,
+      })(e.payload);
+      if (fired > 0) {
+        console.log("[sync] sync://completed → 已刷新相关页面", e.payload);
+      }
+    });
+    return () => {
+      disposed = true;
+      void un.then((f) => f());
+    };
+    // disposed 仅供 un 晚到时自清理参考（与 AiPanel 同款模式）
+    void disposed;
+  }, [refreshGate, triggerRefresh]);
 
   const activeProfile = gate.phase === "active" ? gate.profile : null;
 

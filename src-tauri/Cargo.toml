@@ -40,6 +40,8 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 # AI HTTP client (OpenAI-compatible REST; json + rustls TLS only, no heavy SDK)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tauri-plugin-notification = "2.3.3"
+# DEV-SYNC-003 · QR Pairing：Android 相机扫码（官方插件；desktop 侧生成在前端 qrcode npm）
+tauri-plugin-barcode-scanner = "2"
 # DEV-0052 Personal Intelligence
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
@@ -56,3 +58,7 @@ miniz_oxide = { version = "0.8", default-features = false, features = ["std", "w
 tauri-plugin-opener = "2"
 # DEV-0059 §31.3：导出文件 base64 编码传输（已在依赖树中，显式声明以便直接引用）
 base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+# DEV-SYNC-003 §五：枚举本机 IPv4 候选（QR candidate_ips；仅 Windows 侧需要）
+ipconfig = "0.3"

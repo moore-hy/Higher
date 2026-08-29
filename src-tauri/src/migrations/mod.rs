@@ -28,6 +28,8 @@ pub mod v024_ai_provider_profiles_and_action_continuation;
 pub mod v025_ai_runs_waiting_user_status;
 pub mod v026_user_context_storage;
 pub mod v027_memory_confirmation_lifecycle;
+pub mod v028_local_sync_foundation;
+pub mod v029_local_sync_backfill_outbox;
 
 /// 单个 Migration 定义。
 ///
@@ -178,6 +180,16 @@ const MIGRATIONS: &[Migration] = &[
         version: 27,
         name: "memory_confirmation_lifecycle",
         up: v027_memory_confirmation_lifecycle::up,
+    },
+    Migration {
+        version: 28,
+        name: "local_sync_foundation",
+        up: v028_local_sync_foundation::up,
+    },
+    Migration {
+        version: 29,
+        name: "local_sync_backfill_outbox",
+        up: v029_local_sync_backfill_outbox::up,
     },
 ];
 

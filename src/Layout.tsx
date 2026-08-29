@@ -22,6 +22,8 @@ const NAV_ITEMS = [
   { to: "/planning", label: "规划", end: false, icon: "🧭", group: "学习" },
   { to: "/knowledge", label: "知识", end: false, icon: "🗂", group: "学习" },
   { to: "/data", label: "数据", end: false, icon: "📊", group: "洞察" },
+  // DEV-SYNC-002 §十：同步一级入口（/sync 工作台；配对管理仍在 设置 → 设备同步）
+  { to: "/sync", label: "同步", end: false, icon: "🔄", group: "洞察" },
 ];
 
 function Layout() {

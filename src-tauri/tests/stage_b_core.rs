@@ -780,7 +780,7 @@ fn test_migration_upgrade_from_v002_to_v003_preserves_data() {
                 .filter_map(|v| v.ok())
                 .collect()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27], "v001~v006 应全部已执行");
+        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29], "v001~v006 应全部已执行");
 
         // 旧数据仍在
         let goal_repo = GoalRepository::new(&conn);

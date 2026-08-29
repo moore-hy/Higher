@@ -126,14 +126,15 @@ foreach ($k in 'TAURI_ENV_PLATFORM','HIGHER_TARGET_PLATFORM','HIGHER_RELEASE_BUI
 
 try {
     # ---------- 1-3 守卫 ----------
-    Step 1 "验证施工目录 = Higher-Android（$Configuration）"
-    if ($RepoRoot -notmatch 'Higher-Android$') { Fail "当前目录不是 Higher-Android：$RepoRoot" }
+    # DEV-SYNC-001：main 已是双平台 canonical mainline（DEV-INTEGRATE-001），
+    # 允许直接从 Higher-Windows（canonical 工作区）构建 Android Debug APK。
+    Step 1 "验证施工目录 = Higher-Android / Higher-Windows（$Configuration）"
+    if ($RepoRoot -notmatch 'Higher-(Android|Windows)$') { Fail "当前目录不是 Higher-Android / Higher-Windows：$RepoRoot" }
     Step 2 "验证分支 = main / android/dev / integrate/*（DEV-INTEGRATE-001：main=双平台 canonical mainline，可直接构建 Android RC）"
     $branch = git -C $RepoRoot rev-parse --abbrev-ref HEAD
     $branchAllowed = ($branch -eq 'main') -or ($branch -eq 'android/dev') -or ($branch -like 'integrate/*')
     if (-not $branchAllowed) { Fail "当前分支 = $branch（仅允许 main / android/dev / integrate/*）" }
-    Step 3 "确认不在 Higher-Windows 工作树"
-    if ($RepoRoot -match 'Higher-Windows') { Fail "禁止在 Higher-Windows 施工" }
+    Step 3 "确认在 Higher 双平台 canonical 仓库施工（DEV-SYNC-001：Higher-Windows = main canonical）"
 
     # ---------- 版本（唯一真相 = tauri.conf.json）----------
     $conf = Get-Content (Join-Path $SrcTauri 'tauri.conf.json') -Raw | ConvertFrom-Json
@@ -177,8 +178,24 @@ try {
     $env:NDK_HOME = $NdkDir
     $env:ANDROID_NDK_HOME = $NdkDir
 
-    Step 7 "JDK21（Gradle 8.14.3 兼容）：$Jdk21"
-    if (-not (Test-Path "$Jdk21\bin\java.exe")) { Fail "JDK21 缺失（.toolchain\jdk-21.0.12.1+1）" }
+    Step 7 "JDK（Gradle 8.14.3 / AGP 8.11 需要 JDK 17+）：$Jdk21"
+    if (-not (Test-Path "$Jdk21\bin\java.exe")) {
+        # DEV-SYNC-001：canonical Higher-Windows 无捆绑 .toolchain JDK →
+        # 回退系统 JAVA_HOME / PATH java（Gradle 8.14.3 + AGP 8.11 兼容 JDK 17+）
+        $sysJdk = $null
+        if ($env:JAVA_HOME -and (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
+            $sysJdk = $env:JAVA_HOME
+        } else {
+            $javaCmd = Get-Command java -ErrorAction SilentlyContinue
+            if ($javaCmd -and $javaCmd.Source) { $sysJdk = Split-Path (Split-Path $javaCmd.Source -Parent) -Parent }
+        }
+        if ($sysJdk -and (Test-Path "$sysJdk\bin\java.exe")) {
+            $Jdk21 = $sysJdk
+            Write-Host "        使用系统 JDK：$Jdk21"
+        } else {
+            Fail "JDK 缺失：$Jdk21（且系统 JAVA_HOME / PATH java 均不可用）"
+        }
+    }
     $env:JAVA_HOME = $Jdk21
 
     Step 8 "NDK 交叉编译器 env（cargo aarch64）"
@@ -200,8 +217,16 @@ try {
 
     Step 9 "Android frontend build（vite + platform=android + release-hygiene）"
     Push-Location $RepoRoot
-    node scripts\build-android-frontend.mjs
-    if ($LASTEXITCODE -ne 0) { Pop-Location; Fail "build-android-frontend.mjs 失败" }
+    # DEV-SYNC-003：vite 8.2.x 会向 stderr 输出 configLoader 警告（非失败）；
+    # PS 5.1 下 stderr 重定向产生的 ErrorRecord 会触发 EAP=Stop 中断——
+    # 调用期间临时降为 Continue，合并捕获后按退出码判定，输出原样透传。
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $feOut = & node scripts\build-android-frontend.mjs 2>&1
+    $feCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    $feOut | ForEach-Object { Write-Host "        $_" }
+    if ($feCode -ne 0) { Pop-Location; Fail "build-android-frontend.mjs 失败（exit=$feCode）" }
     Pop-Location
 
     Step 10 "校验 build platform（meta gate）"
@@ -248,6 +273,79 @@ try {
         Fail "ANDROID_DESKTOP_SHELL_LEAK：编译目标非 android（$platVar ≠ android）"
     }
     Write-Host "        compile target = android OK（$platVar=`"android`"）"
+
+    # ---------- 10.8 Tauri Android 插件接线同步（DEV-SYNC-003-F1 ROOT CAUSE 修复） ----------
+    # tauri.settings.gradle / app/tauri.build.gradle.kts 是 Tauri CLI 自动生成的
+    # mobile-plugin 接线（cargo 依赖图 → Gradle include + implementation(project(:...))）。
+    # 本自定义管线不经过 tauri CLI → 新增带 Android 代码的 tauri-plugin-* 后这两个文件
+    # 保持过期（DEV-SYNC-003 的 barcode-scanner 即此：Rust 已注册、WryActivity 反射加载
+    # app.tauri.barcodescanner.BarcodeScannerPlugin，但 DEX 无类 → ClassNotFoundException
+    # → SIGABRT 闪退）。此处按 CLI 同一规则重新生成，使 Gradle 图与 Rust 插件集一致。
+    Step 10.8 "Tauri Android 插件接线同步（cargo 图 → tauri.settings.gradle / tauri.build.gradle.kts）"
+    Push-Location $SrcTauri
+    $treeOut = cargo tree --workspace --prefix none --format "{p}" 2>$null
+    $treeCode = $LASTEXITCODE
+    Pop-Location
+    if ($treeCode -ne 0 -or -not $treeOut) { Fail "cargo tree 失败，无法推导 Tauri 插件集" }
+    $regRoot = Join-Path $env:USERPROFILE '.cargo\registry\src'
+    $mods = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    foreach ($line in $treeOut) {
+        if ("$line" -notmatch '^(tauri|tauri-plugin-[a-z0-9-]+)\s+v([0-9][^\s]*)') { continue }
+        $name = $Matches[1]; $ver = $Matches[2]
+        $key = "$name@$ver"
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        $pkgDir = Get-ChildItem $regRoot -Directory |
+            ForEach-Object { Join-Path $_.FullName "$name-$ver" } |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $pkgDir) { continue }
+        if ($name -eq 'tauri') {
+            $androidDir = Join-Path $pkgDir 'mobile\android'
+            $modName = ':tauri-android'
+        } else {
+            $androidDir = Join-Path $pkgDir 'android'
+            $modName = ":$name"
+        }
+        if (-not (Test-Path $androidDir)) { continue } # 纯桌面插件（无 android 代码）不入 Gradle 图
+        $mods.Add("$modName|$androidDir")
+    }
+    $coreMod = @($mods | Where-Object { $_ -like ':tauri-android|*' })
+    if ($coreMod.Count -eq 0) { Fail "TAURI_PLUGIN_WIRING：未找到 tauri-android 模块（tauri crate mobile/android 缺失）" }
+    # 排序与 CLI 生成序一致：tauri-android 第一，插件按名排序；LF 行尾、UTF-8 无 BOM
+    $ordered = $coreMod + @($mods | Where-Object { $_ -notlike ':tauri-android|*' } | Sort-Object)
+    $nl = "`n"
+    $sbS = New-Object System.Text.StringBuilder
+    [void]$sbS.Append("// THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY." + $nl)
+    foreach ($m in $ordered) {
+        $p = $m -split '\|', 2
+        [void]$sbS.Append("include '$($p[0])'" + $nl)
+        [void]$sbS.Append("project('$($p[0])').projectDir = new File(`"$($p[1].Replace('\', '\\'))`")" + $nl)
+    }
+    $sbD = New-Object System.Text.StringBuilder
+    [void]$sbD.Append("// THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY." + $nl)
+    [void]$sbD.Append("val implementation by configurations" + $nl)
+    [void]$sbD.Append("dependencies {" + $nl)
+    # tauri 2.11.x CLI 模板固定行（与既有生成文件保持一致）
+    [void]$sbD.Append("  implementation(`"androidx.lifecycle:lifecycle-process:2.10.0`")" + $nl)
+    foreach ($m in $ordered) {
+        $p = $m -split '\|', 2
+        [void]$sbD.Append("  implementation(project(`"$($p[0])`"))" + $nl)
+    }
+    [void]$sbD.Append("}" + $nl)
+    $wiringFiles = @(
+        @((Join-Path $GenAndroid 'tauri.settings.gradle'), $sbS.ToString()),
+        @((Join-Path $AppDir 'tauri.build.gradle.kts'), $sbD.ToString())
+    )
+    foreach ($pair in $wiringFiles) {
+        $f = $pair[0]; $want = $pair[1]
+        $have = if (Test-Path $f) { ([IO.File]::ReadAllText($f) -replace "`r", '') } else { $null }
+        if ($have -cne $want) {
+            [IO.File]::WriteAllText($f, $want, (New-Object System.Text.UTF8Encoding($false)))
+            Write-Host "        WIRING REFRESHED：$(Split-Path $f -Leaf)（Tauri 插件集变化，已按 CLI 规则重新生成）" -ForegroundColor Yellow
+        }
+    }
+    Write-Host ("        Gradle 插件模块：" + (($ordered | ForEach-Object { ($_ -split '\|', 2)[0] }) -join ' '))
 
     # ---------- 11 cargo（DEV-MOBILE-005：矩阵 = DistributionProfile 决定）----------
     $cargoProfile = if ($IsRelease) { 'release' } else { 'debug' }
@@ -413,6 +511,75 @@ try {
             if ($abiLine -match $bad) { Fail "Debug 回归包不得包含 $bad：$abiLine" }
         }
     }
+
+    # ---------- 16.2 Native Plugin DEX Gate（DEV-SYNC-003-F1 §七） ----------
+    # BUILD SUCCESSFUL ≠ 可启动：Rust 注册的 mobile 插件若未进 Gradle 图，
+    # DEX 缺类 → WryActivity ClassNotFound → SIGABRT。已注册的原生插件类
+    # 必须能在 APK DEX 中找到，否则本构建 FAIL（禁止再产出启动必崩的包）。
+    Step 16.2 "BARCODE_NATIVE_CLASS_GATE：DEX 必含已注册原生插件类"
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($apk.FullName)
+    try {
+        $dexBlob = New-Object System.Text.StringBuilder
+        foreach ($e in @($zip.Entries | Where-Object { $_.Name -match '^classes\d*\.dex$' })) {
+            $es = $e.Open()
+            $ms = New-Object IO.MemoryStream
+            $es.CopyTo($ms)
+            $es.Dispose()
+            [void]$dexBlob.Append([Text.Encoding]::GetEncoding('ISO-8859-1').GetString($ms.ToArray()))
+            $ms.Dispose()
+        }
+        $dexText = $dexBlob.ToString()
+        if (-not $dexText) { Fail "BARCODE_NATIVE_CLASS_GATE：APK 内未找到 classes*.dex" }
+        # 已注册 mobile 原生插件类清单（新增插件在此追加 descriptor）
+        $dexGates = @(
+            @{ Desc = 'Lapp/tauri/barcodescanner/BarcodeScannerPlugin;'; Label = 'barcode-scanner（DEV-SYNC-003 QR 扫码）' }
+        )
+        foreach ($g in $dexGates) {
+            if ($dexText.IndexOf($g.Desc) -lt 0) {
+                Fail "BARCODE_NATIVE_CLASS_GATE：DEX 缺 $($g.Label) 类 $($g.Desc)——Step 10.8 插件接线未生效或插件模块未被 Gradle 打包"
+            }
+        }
+        Write-Host "        BARCODE_NATIVE_CLASS_GATE PASS：$($dexGates.Count) 个原生插件类均在 DEX"
+    } finally { $zip.Dispose() }
+
+    # ---------- 16.3 MLKIT_BUNDLED_GATE（DEV-SYNC-003-F2 §八） ----------
+    # QR 识别 OFFLINE FIRST。ML Kit 官方结构实证：bundled com.google.mlkit:barcode-scanning
+    # = 模型（.tflite/jni）+ thick 实现；API 门面由其 compile 传递 play-services-mlkit-
+    # barcode-scanning:18.3.1 提供（三件套类仅存在于该 AAR——「graph 无 gms 坐标」不可实现）。
+    # Gate 硬指标（退回 GMS 动态模型即 FAIL）：
+    #   (1) runtimeClasspath 含 com.google.mlkit:barcode-scanning:17.3.0（bundled）；
+    #   (2) thin API 层 resolved 为 18.3.1（bundled 传递提升；若仍为插件旧 18.1.0 = 注入失效）；
+    #   (3) APK 内实际打包 barcode 模型文件（.tflite，离线可用实证）。
+    Step 16.3 "MLKIT_BUNDLED_GATE：bundled ML Kit（模型随 APK，禁 GMS 动态模式）"
+    $mlkitConf = if ($IsRelease) { 'universalReleaseRuntimeClasspath' } else { 'arm64DebugRuntimeClasspath' }
+    Push-Location $GenAndroid
+    $prevEap2 = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $depOut = & .\gradlew.bat ":app:dependencies" "--configuration" $mlkitConf -q 2>&1
+    $depCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap2
+    Pop-Location
+    if ($depCode -ne 0) { Fail "MLKIT_BUNDLED_GATE：gradle dependencies 失败（exit=$depCode）" }
+    $depText = ($depOut | Where-Object { "$_" -match '\S' }) -join "`n"
+    if ($depText -notmatch 'com\.google\.mlkit:barcode-scanning:17\.3\.0') {
+        Fail "MLKIT_BUNDLED_GATE：runtimeClasspath（$mlkitConf）未见 com.google.mlkit:barcode-scanning:17.3.0（bundled 注入失效？）"
+    }
+    if ($depText -match 'play-services-mlkit-barcode-scanning:18\.1\.0(?!\s*->\s*18)') {
+        Fail "MLKIT_BUNDLED_GATE：thin API 层停留在插件旧版 18.1.0（未随 bundled 提升至 18.3.1）——注入未生效"
+    }
+    $thinVer = if ($depText -match 'play-services-mlkit-barcode-scanning:(\d+\.\d+\.\d+)') { $Matches[1] } else { 'NONE' }
+    Write-Host "        dependency graph（$mlkitConf）：mlkit:barcode-scanning:17.3.0 PASS · thin API 层 $thinVer"
+    # (3) APK 内 bundled 模型实证
+    $zip2 = [IO.Compression.ZipFile]::OpenRead($apk.FullName)
+    try {
+        $modelEntries = @($zip2.Entries | Where-Object { $_.FullName -match 'barcode' -and $_.FullName -match '\.tflite$' })
+        if ($modelEntries.Count -eq 0) {
+            Fail "MLKIT_BUNDLED_GATE：APK 内未找到 bundled barcode 模型（*.tflite）——识别模型未随包提供（GMS 动态模式回归）"
+        }
+        Write-Host ("        APK bundled model PASS：" + (($modelEntries | Select-Object -First 3 | ForEach-Object { $_.FullName }) -join ' | '))
+    } finally { $zip2.Dispose() }
+
 
     if ($IsRelease) {
         # ---------- 16.5 APK Frontend Truth Gate（F1 §八/§九） ----------

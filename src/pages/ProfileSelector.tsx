@@ -1,15 +1,23 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useActiveProfile, canSwitchProfile } from "../contexts/ActiveProfileContext";
 import { listStudyProfiles } from "../api";
 import type { StudyProfile } from "../types";
 import { PROFILE_TYPE_LABELS } from "../types";
 import type { ProfileType } from "../types";
+import { isTauriRuntime } from "../utils/tauriEnv";
+import {
+  createSyncRefreshDispatcher,
+  type SyncCompletedPayload,
+} from "../sync/syncRefresh";
 
 /**
  * 档案选择页面。
  *
  * 显示所有学习档案列表，用户可以进入任意档案或创建新档案。
  * 切换前检查是否有进行中的 Session。
+ * DEV-SYNC-002 §九（SYNC2-UI-TC02）：profiles_changed > 0 时重读档案列表，
+ * 同步新导入的档案无需退出页面即可出现。
  */
 export default function ProfileSelector() {
   const { enterProfile } = useActiveProfile();
@@ -20,6 +28,13 @@ export default function ProfileSelector() {
 
   useEffect(() => {
     loadProfiles();
+    // §九：远端同步导入/更新档案 → 立即重读列表
+    if (!isTauriRuntime()) return;
+    const dispatch = createSyncRefreshDispatcher({ profiles: () => void loadProfiles() });
+    const un = listen<SyncCompletedPayload>("sync://completed", (e) => dispatch(e.payload));
+    return () => {
+      void un.then((f) => f());
+    };
   }, []);
 
   async function loadProfiles() {

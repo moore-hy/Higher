@@ -10737,3 +10737,321 @@ button.datapage__bar-main:disabled {
   color: var(--h-text-muted);
   font-size: 18px;
 }
+
+/* ============================================================
+   DEV-SYNC-001 · 设备同步（Settings → 设备同步；.sync-*）
+   ============================================================ */
+
+/* 连接信息面板（Windows：IP / 端口 / 配对码；Android：电脑地址 / 最后同步） */
+.sync-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.sync-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 4px;
+}
+
+.sync-panel__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+
+.sync-panel__row b {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 配对码放大等宽（对照输入） */
+.sync-panel__code {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 18px;
+  letter-spacing: 3px;
+  color: var(--accent);
+}
+
+/* 已配对设备列表 */
+.sync-peers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.sync-peers__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.sync-peers__item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+/* ============================================================
+   DEV-SYNC-002 · 同步工作台补充（.sync-result / .sync-imported / 状态点）
+   ============================================================ */
+
+/* 在线状态点（已连接=绿 / 等待=灰） */
+.sync-panel__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 6px 0 10px;
+  border-radius: 999px;
+  background: var(--ok, #3fb950);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  vertical-align: 1px;
+}
+
+/* 同步结果面板（电脑→手机 / 手机→电脑 新增·更新·删除） */
+.sync-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(63, 185, 80, 0.35);
+  border-radius: 10px;
+  background: rgba(63, 185, 80, 0.06);
+}
+
+.sync-result__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ok, #3fb950);
+}
+
+.sync-result__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+
+.sync-result__row > span:first-child {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+/* 配对导入档案清单（§五：去向 + 一键切换） */
+.sync-imported {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.sync-imported__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.sync-imported__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+/* ============================================================
+   DEV-SYNC-003 · QR Pairing（/sync 添加手机二维码 + 扫码错误恢复）
+   ============================================================ */
+
+.qr-pair {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+
+.qr-pair__imgwrap {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  flex: 0 0 auto;
+}
+
+.qr-pair__img {
+  display: block;
+  width: 232px;
+  height: 232px;
+  image-rendering: pixelated;
+}
+
+.qr-pair__side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 220px;
+  flex: 1 1 260px;
+}
+
+.qr-pair__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.qr-pair__steps {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: var(--fg-muted);
+}
+
+.qr-pair__ttl {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+.qr-pair__ttl--expired {
+  color: var(--danger, #d04545);
+  font-weight: 600;
+}
+
+.qr-pair__advanced {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.qr-pair__advanced summary {
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 6px;
+}
+
+.qr-pair__advanced .sync-panel__row {
+  margin: 2px 0;
+}
+
+/* ============================================================
+   DEV-SYNC-003-F2 · 扫码覆盖层（windowed:true，WebView 透明区见相机）
+   ============================================================ */
+
+.qr-scan-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  pointer-events: none; /* 相机预览区可穿透；交互元素单独恢复 */
+}
+
+.qr-scan-title {
+  pointer-events: auto;
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+}
+
+/* 镂空扫描框：本体透明（见相机），box-shadow 巨量扩散形成四周暗化遮罩 */
+.qr-scan-frame {
+  pointer-events: auto;
+  position: relative;
+  width: min(64vw, 300px);
+  height: min(64vw, 300px);
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 14px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.52);
+}
+
+.qr-scan-hint {
+  position: absolute;
+  left: 50%;
+  bottom: -34px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 13px;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+.qr-scan-cancel {
+  pointer-events: auto;
+  min-width: 120px;
+}
+
+/* ============================================================
+   DEV-SYNC-003-F2.1 · 扫码期间 WebView 真透明（仅 higher-qr-scanning 态）
+   插件 windowed:true 把 PreviewView 放在 WebView 后方并置 WebView 背景透明，
+   但 HTML 层 body（#0b0d12）与 .card（#121620）不透明把相机画面完全遮住
+   （真机截图实证：扫描框中心均匀纯色 = body 背景色）。扫码期间整链透明，
+   洞外由 .qr-scan-frame 的 box-shadow 遮罩负责变暗；退出扫码即恢复主题。
+   ============================================================ */
+
+html.higher-qr-scanning,
+html.higher-qr-scanning body,
+body.higher-qr-scanning,
+body.higher-qr-scanning #root {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* 容器链（F2.1 §二 computed style 审计的 DOM 实际结构） */
+html.higher-qr-scanning body .app-shell__content,
+html.higher-qr-scanning body .mobile-layout,
+html.higher-qr-scanning body .mobile-main,
+html.higher-qr-scanning body .msettings,
+html.higher-qr-scanning body .page,
+html.higher-qr-scanning body .card {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* 防回归断言：overlay 不得整屏着色；扫描框内部必须透明（洞内直通 PreviewView） */
+html.higher-qr-scanning body .qr-scan-overlay {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+html.higher-qr-scanning body .qr-scan-frame,
+.qr-scan-frame {
+  background: transparent !important;
+  background-color: transparent !important;
+}
