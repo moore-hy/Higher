@@ -1429,3 +1429,169 @@ pub fn get_progress_metrics(
         .map_err(|e| e.to_string())
 }
 
+
+// =============== Evaluation ===============
+// Section 6 increment 6: moved verbatim from lib.rs; only `fn` -> `pub fn` changed.
+// =============== Evaluation ===============
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn create_evaluation(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    goal_id: Option<i64>,
+    learning_item_id: Option<i64>,
+    title: String,
+    evaluation_type: String,
+    source: Option<String>,
+    occurred_at: Option<String>,
+    total_items: Option<i64>,
+    correct_items: Option<i64>,
+    incorrect_items: Option<i64>,
+    score: Option<f64>,
+    max_score: Option<f64>,
+    outcome: Option<String>,
+    note: Option<String>,
+    // DEV-0059.1 §5：Evidence V1（可选）
+    session_id: Option<i64>,
+    source_kind: Option<String>,
+    source_ref: Option<String>,
+    trust_state: Option<String>,
+) -> Result<repository::evaluation::Evaluation, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let ev = EvaluationRepository::new(&conn)
+        .create_with_evidence(
+            profile_id,
+            goal_id,
+            learning_item_id,
+            &title,
+            &evaluation_type,
+            source.as_deref(),
+            occurred_at.as_deref(),
+            total_items,
+            correct_items,
+            incorrect_items,
+            score,
+            max_score,
+            outcome.as_deref(),
+            note.as_deref(),
+            session_id,
+            source_kind.as_deref(),
+            source_ref.as_deref(),
+            trust_state.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+    repository::search::sync_evaluation(&conn, profile_id, ev.id); // DEV-0057 §66
+    Ok(ev)
+}
+
+#[tauri::command]
+pub fn get_evaluation(
+    state: tauri::State<'_, db::DbState>,
+    id: i64,
+) -> Result<Option<repository::evaluation::Evaluation>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    EvaluationRepository::new(&conn)
+        .get(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_recent_evaluations(
+    state: tauri::State<'_, db::DbState>,
+    limit: Option<i64>,
+) -> Result<Vec<repository::evaluation::Evaluation>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    EvaluationRepository::new(&conn)
+        .list_recent(limit.unwrap_or(100))
+        .map_err(|e| e.to_string())
+}
+
+/// 最近 N 条 Evaluation（Profile Scope）。
+#[tauri::command]
+pub fn list_recent_evaluations_by_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<repository::evaluation::Evaluation>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    EvaluationRepository::new(&conn)
+        .list_recent_by_profile(profile_id, limit.unwrap_or(100))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_evaluations_by_goal(
+    state: tauri::State<'_, db::DbState>,
+    goal_id: i64,
+) -> Result<Vec<repository::evaluation::Evaluation>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    EvaluationRepository::new(&conn)
+        .list_by_goal(goal_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_evaluations_by_learning_item(
+    state: tauri::State<'_, db::DbState>,
+    learning_item_id: i64,
+) -> Result<Vec<repository::evaluation::Evaluation>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    EvaluationRepository::new(&conn)
+        .list_by_learning_item(learning_item_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn update_evaluation(
+    state: tauri::State<'_, db::DbState>,
+    id: i64,
+    title: String,
+    evaluation_type: String,
+    source: Option<String>,
+    occurred_at: String,
+    total_items: Option<i64>,
+    correct_items: Option<i64>,
+    incorrect_items: Option<i64>,
+    score: Option<f64>,
+    max_score: Option<f64>,
+    outcome: String,
+    note: Option<String>,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    EvaluationRepository::new(&conn)
+        .update(
+            id,
+            &title,
+            &evaluation_type,
+            source.as_deref(),
+            &occurred_at,
+            total_items,
+            correct_items,
+            incorrect_items,
+            score,
+            max_score,
+            &outcome,
+            note.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+    let pid: Option<i64> = conn
+        .query_row("SELECT profile_id FROM evaluations WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .ok();
+    if let Some(pid) = pid {
+        repository::search::sync_evaluation(&conn, pid, id); // DEV-0057 §66
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_evaluation(state: tauri::State<'_, db::DbState>, id: i64) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    EvaluationRepository::new(&conn)
+        .delete(id)
+        .map_err(|e| e.to_string())?;
+    repository::search::remove_evaluation(&conn, id); // DEV-0057 §66
+    Ok(())
+}
+
