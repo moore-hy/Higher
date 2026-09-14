@@ -128,7 +128,10 @@ fn mk_blueprint(conn: &Connection, p: i64, daily_minutes: i64) -> i64 {
     conn.execute(
         "INSERT INTO planning_blueprints (profile_id, structured_json)
          VALUES (?1, ?2)",
-        params![p, format!("{{\"daily_available_minutes\":{daily_minutes}}}")],
+        params![
+            p,
+            format!("{{\"daily_available_minutes\":{daily_minutes}}}")
+        ],
     )
     .unwrap();
     conn.last_insert_rowid()
@@ -198,7 +201,10 @@ fn lle_tc003_pace_ratio() {
     let u = unit(&ev, item);
     assert_eq!(u.pace.sample_count, 1);
     f_eq(u.pace.median_ratio, 1.5);
-    assert_eq!(u.pace.calibrated_ratio, 1.0, "TC003: 1 样本 <3 不信任 → 1.0");
+    assert_eq!(
+        u.pace.calibrated_ratio, 1.0,
+        "TC003: 1 样本 <3 不信任 → 1.0"
+    );
     assert_eq!(u.pace.confidence, PaceConfidence::Low);
     assert_eq!(ev.global_pace.sample_count, 1);
 }
@@ -251,7 +257,10 @@ fn lle_tc005_outlier_protected() {
     assert_eq!(u.pace.sample_count, 4);
     assert_eq!(u.pace.outlier_count, 1, "TC005: 10x 样本标记 outlier");
     // 真实 actual 保留（600 分钟仍在事实里）
-    assert_eq!(u.actual_minutes, 780, "TC005: 真实 actual 全保留 = 60+60+60+600");
+    assert_eq!(
+        u.actual_minutes, 780,
+        "TC005: 真实 actual 全保留 = 60+60+60+600"
+    );
     assert_eq!(u.pace.actual_minutes_total, 780);
     // 校准不被拉到 10x：median 只用非 outlier → 1.0（总量比会是 780/210≈3.71）
     f_eq(u.pace.median_ratio, 1.0);
@@ -293,7 +302,10 @@ fn lle_tc007_session_snapshot_priority_and_conflict() {
     let ev = build(&conn, p);
     let u10 = unit(&ev, item10);
     let u12 = unit(&ev, item12);
-    assert_eq!(u10.actual_minutes, 45, "TC007: Session effort 归 snapshot Unit 10");
+    assert_eq!(
+        u10.actual_minutes, 45,
+        "TC007: Session effort 归 snapshot Unit 10"
+    );
     assert_eq!(u10.session_count, 1);
     assert_eq!(u12.actual_minutes, 0, "TC007: 不静默改归 Task 链");
     assert_eq!(
@@ -310,9 +322,33 @@ fn lle_tc008_evaluation_aggregation() {
     let conn = setup();
     let p = mk_profile(&conn, "P");
     let item = mk_item(&conn, p, None, "英语阅读");
-    mk_eval(&conn, p, item, "passed", Some(80.0), Some(100.0), "2026-08-01 09:00:00");
-    mk_eval(&conn, p, item, "failed", Some(30.0), Some(100.0), "2026-08-10 09:00:00");
-    mk_eval(&conn, p, item, "partial", Some(60.0), Some(100.0), "2026-08-20 09:00:00");
+    mk_eval(
+        &conn,
+        p,
+        item,
+        "passed",
+        Some(80.0),
+        Some(100.0),
+        "2026-08-01 09:00:00",
+    );
+    mk_eval(
+        &conn,
+        p,
+        item,
+        "failed",
+        Some(30.0),
+        Some(100.0),
+        "2026-08-10 09:00:00",
+    );
+    mk_eval(
+        &conn,
+        p,
+        item,
+        "partial",
+        Some(60.0),
+        Some(100.0),
+        "2026-08-20 09:00:00",
+    );
 
     let ev = build(&conn, p);
     let e = &unit(&ev, item).evaluation;
@@ -321,7 +357,11 @@ fn lle_tc008_evaluation_aggregation() {
     assert_eq!(e.failed_count, 1);
     assert_eq!(e.partial_count, 1);
     assert_eq!(e.rated_count, 3);
-    assert_eq!(e.latest_outcome.as_deref(), Some("partial"), "TC008: latest 按 occurred_at");
+    assert_eq!(
+        e.latest_outcome.as_deref(),
+        Some("partial"),
+        "TC008: latest 按 occurred_at"
+    );
     assert_eq!(e.latest_at.as_deref(), Some("2026-08-20 09:00:00"));
     f_eq(e.recent_score_ratio, 0.6);
     assert_eq!(ev.data_summary.evaluation_count, 3);
@@ -335,9 +375,30 @@ fn lle_tc009_feedback_aggregation() {
     let p = mk_profile(&conn, "P");
     let item = mk_item(&conn, p, None, "政治");
     let goal = mk_goal(&conn, p, "G");
-    mk_feedback(&conn, goal, Some(item), "weakness", "概念混淆", "2026-08-10 09:00:00");
-    mk_feedback(&conn, goal, Some(item), "weakness", "计算粗心", "2026-08-15 09:00:00");
-    mk_feedback(&conn, goal, Some(item), "blocker", "章节卡住", "2026-08-20 09:00:00");
+    mk_feedback(
+        &conn,
+        goal,
+        Some(item),
+        "weakness",
+        "概念混淆",
+        "2026-08-10 09:00:00",
+    );
+    mk_feedback(
+        &conn,
+        goal,
+        Some(item),
+        "weakness",
+        "计算粗心",
+        "2026-08-15 09:00:00",
+    );
+    mk_feedback(
+        &conn,
+        goal,
+        Some(item),
+        "blocker",
+        "章节卡住",
+        "2026-08-20 09:00:00",
+    );
 
     let ev = build(&conn, p);
     let f = &unit(&ev, item).feedback;
@@ -358,14 +419,25 @@ fn lle_tc010_stated_vs_observed_capacity() {
     let p = mk_profile(&conn, "P");
     mk_item(&conn, p, None, "任意");
     mk_blueprint(&conn, p, 660); // stated = 11h/day
-    // 最近 7 天内 4 个学习日 × 210min = 840min（14h）
+                                 // 最近 7 天内 4 个学习日 × 210min = 840min（14h）
     for (i, day) in [25, 24, 23, 21].iter().enumerate() {
-        mk_session(&conn, p, None, None, 210, &format!("2026-08-{day:02} 0{i}:00:00"));
+        mk_session(
+            &conn,
+            p,
+            None,
+            None,
+            210,
+            &format!("2026-08-{day:02} 0{i}:00:00"),
+        );
     }
 
     let ev = build(&conn, p);
     let c = &ev.capacity;
-    assert_eq!(c.stated_daily_minutes, Some(660), "TC010: stated = Blueprint 660");
+    assert_eq!(
+        c.stated_daily_minutes,
+        Some(660),
+        "TC010: stated = Blueprint 660"
+    );
     assert_eq!(
         c.observed_daily_minutes_7d,
         Some(120),
@@ -375,7 +447,7 @@ fn lle_tc010_stated_vs_observed_capacity() {
     assert_eq!(c.observed_daily_minutes_30d, Some(28)); // 840/30
     assert_eq!(c.active_study_days_30d, 4);
     assert_eq!(c.active_day_average_minutes_30d, Some(210)); // 840/4
-    // 严格分列：observed 绝不被 stated 覆盖
+                                                             // 严格分列：observed 绝不被 stated 覆盖
     assert_ne!(c.stated_daily_minutes, c.observed_daily_minutes_7d);
     assert_eq!(ev.data_summary.observed_study_minutes_30d, 840);
 }
@@ -419,7 +491,10 @@ fn lle_tc012_completed_without_session() {
 
     let ev = build(&conn, p);
     let u = unit(&ev, item);
-    assert_eq!(u.pace.sample_count, 0, "TC012: 无 actual → 无 calibration sample");
+    assert_eq!(
+        u.pace.sample_count, 0,
+        "TC012: 无 actual → 无 calibration sample"
+    );
     assert_eq!(u.pace.calibrated_ratio, 1.0, "TC012: 绝不产生 ratio=0");
     assert_eq!(ev.data_summary.completed_without_session_count, 1);
     assert_eq!(u.planned_minutes, 60, "TC012: planned 事实保留");
@@ -440,7 +515,10 @@ fn lle_tc013_session_without_estimate() {
     let u = unit(&ev, item);
     assert_eq!(u.actual_minutes, 120, "TC013: actual evidence 存在");
     assert_eq!(u.session_count, 1);
-    assert_eq!(u.pace.sample_count, 0, "TC013: 无 estimate → 无 pace sample");
+    assert_eq!(
+        u.pace.sample_count, 0,
+        "TC013: 无 estimate → 无 pace sample"
+    );
     assert_eq!(ev.data_summary.session_without_estimate_count, 1);
 }
 
@@ -455,19 +533,50 @@ fn lle_tc014_quality_high_and_insufficient() {
     // Unit A：5 pace samples + 2 evaluations + sessions → High
     for i in 0..5 {
         let t = mk_task(&conn, p, Some(ia), &format!("T{i}"), "completed", Some(30));
-        mk_session(&conn, p, Some(t), Some(ia), 30, &format!("2026-08-1{i} 09:00:00"));
+        mk_session(
+            &conn,
+            p,
+            Some(t),
+            Some(ia),
+            30,
+            &format!("2026-08-1{i} 09:00:00"),
+        );
     }
-    mk_eval(&conn, p, ia, "passed", Some(90.0), Some(100.0), "2026-08-20 09:00:00");
-    mk_eval(&conn, p, ia, "partial", Some(70.0), Some(100.0), "2026-08-21 09:00:00");
+    mk_eval(
+        &conn,
+        p,
+        ia,
+        "passed",
+        Some(90.0),
+        Some(100.0),
+        "2026-08-20 09:00:00",
+    );
+    mk_eval(
+        &conn,
+        p,
+        ia,
+        "partial",
+        Some(70.0),
+        Some(100.0),
+        "2026-08-21 09:00:00",
+    );
     // Unit B：0 观测数据 → Insufficient
 
     let ev = build(&conn, p);
     let ua = unit(&ev, ia);
     let ub = unit(&ev, ib);
-    assert_eq!(ua.evidence_quality.quality, EvidenceQuality::High, "TC014: A=High");
+    assert_eq!(
+        ua.evidence_quality.quality,
+        EvidenceQuality::High,
+        "TC014: A=High"
+    );
     assert_eq!(ua.pace.sample_count, 5);
     assert_eq!(ua.evaluation.count, 2);
-    assert_eq!(ub.evidence_quality.quality, EvidenceQuality::Insufficient, "TC014: B=Insufficient");
+    assert_eq!(
+        ub.evidence_quality.quality,
+        EvidenceQuality::Insufficient,
+        "TC014: B=Insufficient"
+    );
     assert!(
         ub.evidence_quality
             .reasons
@@ -488,9 +597,24 @@ fn lle_tc015_read_only_row_counts() {
     let item = mk_item(&conn, p, None, "网络");
     let t = mk_task(&conn, p, Some(item), "T", "completed", Some(60));
     mk_session(&conn, p, Some(t), Some(item), 90, "2026-08-26 09:00:00");
-    mk_eval(&conn, p, item, "passed", Some(80.0), Some(100.0), "2026-08-20 09:00:00");
+    mk_eval(
+        &conn,
+        p,
+        item,
+        "passed",
+        Some(80.0),
+        Some(100.0),
+        "2026-08-20 09:00:00",
+    );
     let goal = mk_goal(&conn, p, "G");
-    mk_feedback(&conn, goal, Some(item), "weakness", "W", "2026-08-20 09:00:00");
+    mk_feedback(
+        &conn,
+        goal,
+        Some(item),
+        "weakness",
+        "W",
+        "2026-08-20 09:00:00",
+    );
     mk_blueprint(&conn, p, 300);
     conn.execute(
         "INSERT INTO mastery_assessments (profile_id, period_type, period_start, period_end,
@@ -527,12 +651,20 @@ fn lle_tc015_read_only_row_counts() {
                     (SELECT status FROM feedbacks LIMIT 1),
                     (SELECT structured_json FROM planning_blueprints LIMIT 1)",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .unwrap();
 
-    let ev = build_learning_load_evidence(&conn, p, TODAY)
-        .expect("TC015: build 必须成功");
+    let ev = build_learning_load_evidence(&conn, p, TODAY).expect("TC015: build 必须成功");
     // build 确实读到了数据（不是空跑）
     assert_eq!(unit(&ev, item).planned_minutes, 60);
     assert_eq!(unit(&ev, item).actual_minutes, 90);
@@ -551,7 +683,16 @@ fn lle_tc015_read_only_row_counts() {
                     (SELECT status FROM feedbacks LIMIT 1),
                     (SELECT structured_json FROM planning_blueprints LIMIT 1)",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(before_state, after_state, "TC015: 关键字段值 0 mutation");
@@ -595,7 +736,10 @@ fn governance_learning_load_read_only_source() {
         }
         checked += 1;
     }
-    assert!(checked >= 5, "governance: 至少检查 5 个源文件（实际 {checked}）");
+    assert!(
+        checked >= 5,
+        "governance: 至少检查 5 个源文件（实际 {checked}）"
+    );
 }
 
 // ==================== §九十二 · 性能门（500/2000/1500/500/500，<500ms） ====================
@@ -622,10 +766,24 @@ fn performance_gate_dataset_scale() {
     for t in 0..tasks {
         let item = item_ids[(t % items) as usize];
         if t % 2 == 0 {
-            let id = mk_task(&conn, p, Some(item), &format!("T{t}"), "completed", Some(30 + t % 60));
+            let id = mk_task(
+                &conn,
+                p,
+                Some(item),
+                &format!("T{t}"),
+                "completed",
+                Some(30 + t % 60),
+            );
             completed_task_ids.push(id);
         } else {
-            mk_task(&conn, p, Some(item), &format!("T{t}"), "pending", Some(30 + t % 60));
+            mk_task(
+                &conn,
+                p,
+                Some(item),
+                &format!("T{t}"),
+                "pending",
+                Some(30 + t % 60),
+            );
         }
     }
     // 1500 sessions：分布到 completed tasks（近 30 天内，双数 task 两个 Session 验证求和路径）
@@ -663,7 +821,11 @@ fn performance_gate_dataset_scale() {
             &conn,
             goal,
             Some(item),
-            if f % 2 == 0 { "weakness" } else { "observation" },
+            if f % 2 == 0 {
+                "weakness"
+            } else {
+                "observation"
+            },
             &format!("F{f}"),
             &format!("2026-08-{:02} 09:00:00", 1 + f % 27),
         );
@@ -681,14 +843,14 @@ fn performance_gate_dataset_scale() {
     assert_eq!(QUERY_COUNT, 8, "§四十一：固定 8 条批量 SELECT");
     assert_eq!(ev.data_summary.learning_item_count, items as usize);
     assert_eq!(ev.units.len(), items as usize);
-    assert!(ev.data_summary.pace_sample_count >= 700, "规模数据下样本充足");
+    assert!(
+        ev.data_summary.pace_sample_count >= 700,
+        "规模数据下样本充足"
+    );
     assert_eq!(ev.data_summary.evaluation_count, evals);
     assert_eq!(ev.data_summary.feedback_count, feedbacks);
     assert_eq!(ev.data_summary.linked_session_count, sessions);
-    assert!(
-        duration_ms < 500,
-        "§九十二性能门：{duration_ms}ms >= 500ms"
-    );
+    assert!(duration_ms < 500, "§九十二性能门：{duration_ms}ms >= 500ms");
 }
 
 // ==================== §八十 · Real Data Diagnostic（真实库只读，手动触发） ====================
@@ -708,18 +870,13 @@ fn real_data_diagnostic_readonly() {
         println!("REAL-DATA: {db:?} 不存在 → INSUFFICIENT DATA（无真实库）");
         return;
     }
-    let conn = Connection::open_with_flags(
-        &db,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .expect("以只读模式打开真实库");
+    let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("以只读模式打开真实库");
     let profiles: Vec<(i64, String)> = {
         let mut stmt = conn
             .prepare("SELECT id, name FROM study_profiles ORDER BY id")
             .unwrap();
-        let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         rows.collect::<Result<_, _>>().unwrap()
     };
     println!("REAL-DATA: {} profiles", profiles.len());

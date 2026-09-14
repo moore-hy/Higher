@@ -19,14 +19,14 @@ pub mod analyzer;
 pub mod compiler;
 pub mod decision;
 pub mod evidence;
-pub mod proposal;
 pub mod prompt;
+pub mod proposal;
 #[cfg(test)]
 mod tests;
 
 use crate::ai::client::Usage;
 
-use decision::{AdaptationDecision, AdaptationDecisionType, AdaptationEntry, allows_auto_apply};
+use decision::{allows_auto_apply, AdaptationDecision, AdaptationDecisionType, AdaptationEntry};
 
 /// agent.rs 轮首路由（§二十四入口收敛）：文本检测（零模型调用）。
 pub use decision::detect_adaptation_intent;
@@ -45,7 +45,10 @@ fn question_text(reason: &str, questions: &[String]) -> String {
         t.push_str(reason.trim());
         t.push_str("\n\n");
     }
-    t.push_str(&format!("为了判断是需要调整计划，还是只是临时情况，还需要确认 {} 项信息：\n", questions.len()));
+    t.push_str(&format!(
+        "为了判断是需要调整计划，还是只是临时情况，还需要确认 {} 项信息：\n",
+        questions.len()
+    ));
     for (i, q) in questions.iter().enumerate() {
         t.push_str(&format!("{}. {q}\n", i + 1));
     }
@@ -65,10 +68,9 @@ fn hangup_waiting_user(
 ) {
     let mut payload = crate::ai::workflow::AgentWorkflowPayload::default();
     payload.original_request = format!("DEV-0077 adaptation：{}", dec.summary);
-    payload.collected_user_information.insert(
-        "_adaptation_context".to_string(),
-        dec.summary.clone(),
-    );
+    payload
+        .collected_user_information
+        .insert("_adaptation_context".to_string(), dec.summary.clone());
     payload.collected_user_information.insert(
         "_adaptation_entry".to_string(),
         match entry {
@@ -80,7 +82,10 @@ fn hangup_waiting_user(
         .questions
         .iter()
         .map(|q| crate::ai::workflow::AgentQuestion {
-            key: format!("adaptation_q{}", dec.questions.iter().position(|x| x == q).unwrap_or(0)),
+            key: format!(
+                "adaptation_q{}",
+                dec.questions.iter().position(|x| x == q).unwrap_or(0)
+            ),
             question: q.clone(),
             why_needed: String::new(),
         })
@@ -151,7 +156,9 @@ pub async fn adaptation_turn(
     };
 
     // ---- ② 锁外：模型结构化分析 ----
-    let dec = analyzer::analyze_adaptation(responder, &evidence, user_message, &collected, &pi_summary).await?;
+    let dec =
+        analyzer::analyze_adaptation(responder, &evidence, user_message, &collected, &pi_summary)
+            .await?;
 
     // ---- ③ 决策分支（锁内短临界区） ----
     let mut usage = Usage::default();
@@ -166,7 +173,11 @@ pub async fn adaptation_turn(
             if !dec.reason.trim().is_empty() {
                 t.push_str(&format!("\n\n依据：{}", dec.reason.trim()));
             }
-            AdaptationReport { final_text: t, status: "completed", applied_change_set: None }
+            AdaptationReport {
+                final_text: t,
+                status: "completed",
+                applied_change_set: None,
+            }
         }
         AdaptationDecisionType::NeedUserInput => {
             let questions = if dec.questions.is_empty() {
@@ -179,8 +190,21 @@ pub async fn adaptation_turn(
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
                 hangup_waiting_user(&conn, run_id, profile_id, conversation_id, &dec, entry);
                 let m = crate::repository::conversation::ConversationRepository::new(&conn)
-                    .add_message(conversation_id, profile_id, "assistant", &q_text, Some(run_id))?;
-                finish_adaptation_run(&conn, run_id, profile_id, conversation_id, "waiting_user", "");
+                    .add_message(
+                        conversation_id,
+                        profile_id,
+                        "assistant",
+                        &q_text,
+                        Some(run_id),
+                    )?;
+                finish_adaptation_run(
+                    &conn,
+                    run_id,
+                    profile_id,
+                    conversation_id,
+                    "waiting_user",
+                    "",
+                );
                 // §三十四 needs_user_input ordering：问题 Message DB commit →
                 // message_committed → terminal needs_user_input（legacy 补发同通道）
                 emitter.compat_delta(&q_text);
@@ -196,21 +220,37 @@ pub async fn adaptation_turn(
                 // Phase U1 §六：结构化 Adjustment Proposal——persist（现有 workflow
                 // payload，非业务修改）+ emit ai://adaptation_proposal；final_text
                 // 仅保留简短说明（前端不解析 final_text，§七）。
-                let proposal = proposal::build_proposal(run_id, profile_id, conversation_id, &dec, &evidence);
+                let proposal =
+                    proposal::build_proposal(run_id, profile_id, conversation_id, &dec, &evidence);
                 {
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                     // persist 失败不阻断收口（proposal 事件已可送达；详见 §五十六降级）
-                    let _ = proposal::write_proposal(&conn, run_id, profile_id, conversation_id, &proposal);
+                    let _ = proposal::write_proposal(
+                        &conn,
+                        run_id,
+                        profile_id,
+                        conversation_id,
+                        &proposal,
+                    );
                 }
                 // §五十四：side-effect 事件统一走 Emitter（业务模块禁直发）
-                emitter.emit_side_effect("ai://adaptation_proposal", proposal::event_payload(&proposal));
+                emitter.emit_side_effect(
+                    "ai://adaptation_proposal",
+                    proposal::event_payload(&proposal),
+                );
                 let mut t = proactive_proposal_text(&dec);
                 t.push_str("\n\n（已生成上方「AI 调整建议」卡片，可直接选择应用或暂不调整；本次未修改任何数据。）");
-                AdaptationReport { final_text: t, status: "completed", applied_change_set: None }
+                AdaptationReport {
+                    final_text: t,
+                    status: "completed",
+                    applied_change_set: None,
+                }
             } else {
                 // §二十二 A：用户明确要求 → Level 1 auto Apply（仍经 ChangeSet/Audit/Undo/ReadBack）
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                apply_explicit_adjustment(app, &conn, vault, args, &envelope, emitter, &dec, &today)?
+                apply_explicit_adjustment(
+                    app, &conn, vault, args, &envelope, emitter, &dec, &today,
+                )?
             }
         }
     };
@@ -218,9 +258,21 @@ pub async fn adaptation_turn(
     // ---- ④ 收口：assistant 消息 + ai_runs 终态（§五十一 同一 finalize contract）----
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let m = crate::repository::conversation::ConversationRepository::new(&conn)
-            .add_message(conversation_id, profile_id, "assistant", &report.final_text, Some(run_id))?;
-        finish_adaptation_run(&conn, run_id, profile_id, conversation_id, report.status, "");
+        let m = crate::repository::conversation::ConversationRepository::new(&conn).add_message(
+            conversation_id,
+            profile_id,
+            "assistant",
+            &report.final_text,
+            Some(run_id),
+        )?;
+        finish_adaptation_run(
+            &conn,
+            run_id,
+            profile_id,
+            conversation_id,
+            report.status,
+            "",
+        );
         // §三十三 ordering：Message DB commit → message_committed → terminal
         //（事件层状态统一 needs_user_input 语义，§三十四）
         emitter.compat_delta(&report.final_text);
@@ -250,16 +302,17 @@ fn apply_explicit_adjustment(
     // §五十一：编译 → planning；执行 → executing
     emitter.emit_stage(crate::ai::runtime_events::stage::PLANNING);
     // §五十六：编译失败 → 本次 Adaptation failed（0 mutation），人话汇报而非 Err 上抛
-    let compiled = match compiler::compile_intents(conn, args.profile_id, today, &dec.adjustment_intents) {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(AdaptationReport {
-                final_text: format!("本次调整未生效（正式数据无变化）：{e}"),
-                status: "failed",
-                applied_change_set: None,
-            });
-        }
-    };
+    let compiled =
+        match compiler::compile_intents(conn, args.profile_id, today, &dec.adjustment_intents) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(AdaptationReport {
+                    final_text: format!("本次调整未生效（正式数据无变化）：{e}"),
+                    status: "failed",
+                    applied_change_set: None,
+                });
+            }
+        };
     if compiled.actions.is_empty() {
         // 全部是建议类（SuggestGoalTreeAdjustment 等）→ 0 mutation 文本汇报
         return Ok(AdaptationReport {
@@ -288,7 +341,11 @@ fn apply_explicit_adjustment(
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
-    let verified = result.json.get("verified").and_then(|x| x.as_bool()).unwrap_or(false);
+    let verified = result
+        .json
+        .get("verified")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
     // §三十二：ReadBack 未通过 → run failed，不得声称完成
     let ok = status == "applied" && verified;
     let mut t = String::new();
@@ -300,7 +357,9 @@ fn apply_explicit_adjustment(
         }
         let ops = result.json.get("ops").and_then(|x| x.as_i64()).unwrap_or(0);
         if let Some(cs) = result.applied_change_set {
-            t.push_str(&format!("\n（共 {ops} 项操作；修改集 #{cs}，可在修改记录中撤销本次调整）\n"));
+            t.push_str(&format!(
+                "\n（共 {ops} 项操作；修改集 #{cs}，可在修改记录中撤销本次调整）\n"
+            ));
         }
         t.push_str("\n未修改：最终目标、历史学习记录（历史事实不可变）。");
         if !compiled.goal_tree_suggestions.is_empty() {
@@ -332,7 +391,11 @@ fn apply_explicit_adjustment(
 fn proactive_proposal_text(dec: &AdaptationDecision) -> String {
     let mut t = String::new();
     t.push_str("复盘结论：");
-    t.push_str(if dec.summary.trim().is_empty() { "发现计划与实际执行存在偏差。" } else { dec.summary.trim() });
+    t.push_str(if dec.summary.trim().is_empty() {
+        "发现计划与实际执行存在偏差。"
+    } else {
+        dec.summary.trim()
+    });
     t.push_str("\n\n依据：");
     if dec.evidence_refs.is_empty() {
         t.push_str(&dec.reason.trim().to_string());
@@ -352,7 +415,11 @@ fn proactive_proposal_text(dec: &AdaptationDecision) -> String {
     if !executable.is_empty() {
         t.push_str("\n\n建议（未做任何修改，需要你确认后才会执行）：");
         for i in executable {
-            t.push_str(&format!("\n- [{}] {}", i.kind, i.reason.as_deref().unwrap_or("")));
+            t.push_str(&format!(
+                "\n- [{}] {}",
+                i.kind,
+                i.reason.as_deref().unwrap_or("")
+            ));
         }
         t.push_str("\n\n如果同意，直接回复「帮我调整并写进去」，我会基于最新数据完成调整。");
     }
@@ -364,7 +431,13 @@ fn proactive_proposal_text(dec: &AdaptationDecision) -> String {
     if !suggestions.is_empty() {
         t.push_str("\n\n目标树层面的建议（仅供参考，不会自动执行）：");
         for s in suggestions {
-            t.push_str(&format!("\n- {}", s.suggestion.as_deref().or(s.reason.as_deref()).unwrap_or("")));
+            t.push_str(&format!(
+                "\n- {}",
+                s.suggestion
+                    .as_deref()
+                    .or(s.reason.as_deref())
+                    .unwrap_or("")
+            ));
         }
     }
     t

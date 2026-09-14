@@ -102,10 +102,15 @@ impl<'a> PlanningRepository<'a> {
             )
             .map_err(|e| e.to_string())?;
         let id = self.conn.last_insert_rowid();
-        self.get_blueprint(id, profile_id)?.ok_or("创建失败".to_string())
+        self.get_blueprint(id, profile_id)?
+            .ok_or("创建失败".to_string())
     }
 
-    pub fn get_blueprint(&self, id: i64, profile_id: i64) -> Result<Option<PlanningBlueprint>, String> {
+    pub fn get_blueprint(
+        &self,
+        id: i64,
+        profile_id: i64,
+    ) -> Result<Option<PlanningBlueprint>, String> {
         let mut stmt = self
             .conn
             .prepare("SELECT id, profile_id, scenario_type, version, status, title, content_md, structured_json,
@@ -113,7 +118,9 @@ impl<'a> PlanningRepository<'a> {
                              last_review_at, next_review_at, supersedes_id, created_at, updated_at, activated_at
                       FROM planning_blueprints WHERE id=?1 AND profile_id=?2")
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query_map(params![id, profile_id], parse_bp).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![id, profile_id], parse_bp)
+            .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
@@ -125,8 +132,11 @@ impl<'a> PlanningRepository<'a> {
                              last_review_at, next_review_at, supersedes_id, created_at, updated_at, activated_at
                       FROM planning_blueprints WHERE profile_id=?1 ORDER BY id DESC")
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![profile_id], parse_bp).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![profile_id], parse_bp)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 当前 active Blueprint（每 profile 最多 1，v021 partial unique 兜底）。
@@ -138,7 +148,9 @@ impl<'a> PlanningRepository<'a> {
                              last_review_at, next_review_at, supersedes_id, created_at, updated_at, activated_at
                       FROM planning_blueprints WHERE profile_id=?1 AND status='active' ORDER BY version DESC LIMIT 1")
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query_map(params![profile_id], parse_bp).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![profile_id], parse_bp)
+            .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
@@ -152,13 +164,23 @@ impl<'a> PlanningRepository<'a> {
         today: &str,
         horizon_days: i64,
     ) -> Result<PlanningBlueprint, String> {
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         let draft: Option<(i64, String, String, String)> = tx
             .query_row(
                 "SELECT id, structured_json, title, scenario_type FROM planning_blueprints
                  WHERE id=?1 AND profile_id=?2 AND status='draft'",
                 params![id, profile_id],
-                |r| Ok((r.get(0)?, r.get(1).unwrap_or_default(), r.get(2)?, r.get(3)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1).unwrap_or_default(),
+                        r.get(2)?,
+                        r.get(3)?,
+                    ))
+                },
             )
             .ok();
         let Some((bid, structured, _title, scenario)) = draft else {
@@ -181,13 +203,19 @@ impl<'a> PlanningRepository<'a> {
         .map_err(|e| e.to_string())?;
         // §22 Safe Rolling Projection（只投影 horizon 内安全任务；不可替换受保护任务）
         let projected = project_tasks_in_tx(
-            &tx, profile_id, bid, &scenario, structured.as_str(),
-            today, horizon_days,
+            &tx,
+            profile_id,
+            bid,
+            &scenario,
+            structured.as_str(),
+            today,
+            horizon_days,
         )?;
         // 供日志使用
         let _ = projected;
         tx.commit().map_err(|e| e.to_string())?;
-        self.get_blueprint(bid, profile_id)?.ok_or("激活失败".to_string())
+        self.get_blueprint(bid, profile_id)?
+            .ok_or("激活失败".to_string())
     }
 
     // ---- Phase ----
@@ -218,8 +246,11 @@ impl<'a> PlanningRepository<'a> {
             .prepare("SELECT id, blueprint_id, phase_key, title, start_date, end_date, objective_md, sort_order, status, data_json
                       FROM planning_phases WHERE blueprint_id=?1 ORDER BY sort_order, id")
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![blueprint_id], parse_phase).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![blueprint_id], parse_phase)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     // ---- Milestone ----
@@ -253,8 +284,11 @@ impl<'a> PlanningRepository<'a> {
             .prepare("SELECT id, blueprint_id, phase_id, milestone_key, title, start_date, end_date, date_precision, date_status, status, provenance_json, created_at, updated_at
                       FROM planning_milestones WHERE blueprint_id=?1 ORDER BY COALESCE(start_date,'9999'), id")
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![blueprint_id], parse_ms).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![blueprint_id], parse_ms)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     // =============== DEV-0059.1 §10/§11：Manual Planning + Review Cadence ===============
@@ -281,7 +315,8 @@ impl<'a> PlanningRepository<'a> {
         if n == 0 {
             return Err("蓝图不存在或不属于当前档案".to_string());
         }
-        self.get_blueprint(id, profile_id)?.ok_or("蓝图不存在".to_string())
+        self.get_blueprint(id, profile_id)?
+            .ok_or("蓝图不存在".to_string())
     }
 
     /// §11：Review Cadence——只改 review_enabled / review_interval_days / next_review_at。
@@ -323,7 +358,8 @@ impl<'a> PlanningRepository<'a> {
         if n == 0 {
             return Err("蓝图不存在或不属于当前档案".to_string());
         }
-        self.get_blueprint(id, profile_id)?.ok_or("蓝图不存在".to_string())
+        self.get_blueprint(id, profile_id)?
+            .ok_or("蓝图不存在".to_string())
     }
 
     /// §10：Phase 更新（仅手工维护用；不校验任务投影）。
@@ -450,19 +486,37 @@ pub fn project_tasks_in_tx(
     // 2) 从 structured_json 读取 future_tasks
     let mut projected = 0usize;
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(structured_json) {
-        let tasks = v.get("future_tasks").and_then(|t| t.as_array()).cloned().unwrap_or_default();
+        let tasks = v
+            .get("future_tasks")
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default();
         // 只投影 horizon 窗口内（today .. today+horizon_days-1）
         for (i, item) in tasks.iter().enumerate() {
-            let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
-            let date = item.get("planned_date").and_then(|d| d.as_str()).unwrap_or("").trim().to_string();
+            let title = item
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let date = item
+                .get("planned_date")
+                .and_then(|d| d.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if title.is_empty() || date.is_empty() || date.as_str() < today {
                 continue;
             }
             if date > horizon_end(today, horizon_days) {
                 continue;
             }
-            let estimated = item.get("estimated_minutes").and_then(|m| m.as_i64()).unwrap_or(30);
-            let learning_item_id: Option<i64> = item.get("learning_item_id").and_then(|v| v.as_i64());
+            let estimated = item
+                .get("estimated_minutes")
+                .and_then(|m| m.as_i64())
+                .unwrap_or(30);
+            let learning_item_id: Option<i64> =
+                item.get("learning_item_id").and_then(|v| v.as_i64());
             let phase_id: Option<i64> = item.get("planning_phase_id").and_then(|v| v.as_i64());
             // 幂等：projection_key = "{bp_id}:{idx}"；同蓝图同 key 重复投影不产生第二条
             let projection_key = format!("{blueprint_id}:{i}");

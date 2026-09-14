@@ -26,12 +26,12 @@ pub struct StudyProfile {
 /// 档案日历某一天的统计数据（由真实学习数据自动聚合，不要求用户手动打卡）。
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ProfileCalendarDay {
-    pub date: String,             // YYYY-MM-DD
-    pub study_seconds: i64,       // 当天学习总时长（秒）
-    pub session_count: i64,       // 当天 Session 数量
-    pub task_count: i64,          // 当天计划 Task 数量
-    pub completed_task_count: i64,// 当天完成 Task 数量
-    pub evaluation_count: i64,    // 当天 Evaluation 数量
+    pub date: String,              // YYYY-MM-DD
+    pub study_seconds: i64,        // 当天学习总时长（秒）
+    pub session_count: i64,        // 当天 Session 数量
+    pub task_count: i64,           // 当天计划 Task 数量
+    pub completed_task_count: i64, // 当天完成 Task 数量
+    pub evaluation_count: i64,     // 当天 Evaluation 数量
 }
 
 pub struct StudyProfileRepository<'a> {
@@ -111,7 +111,15 @@ impl<'a> StudyProfileRepository<'a> {
                  target_date = ?4, current_situation = ?5, notes = ?6,
                  updated_at = datetime('now')
              WHERE id = ?7",
-            params![name, profile_type, target_description, target_date, current_situation, notes, id],
+            params![
+                name,
+                profile_type,
+                target_description,
+                target_date,
+                current_situation,
+                notes,
+                id
+            ],
         )?;
         Ok(())
     }
@@ -127,7 +135,8 @@ impl<'a> StudyProfileRepository<'a> {
         )?;
         if exists == 0 {
             return Err(rusqlite::Error::InvalidParameterName(format!(
-                "profile_id {} 不存在", profile_id
+                "profile_id {} 不存在",
+                profile_id
             )));
         }
 

@@ -14,7 +14,9 @@ use std::collections::VecDeque;
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{ChatMessage, Completion, Usage};
 use app_lib::ai::intelligence::{self, memory_confirmation};
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
 use app_lib::repository::conversation::ConversationRepository;
@@ -30,8 +32,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0076_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0076_{name}_{}", std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn mk_profile(conn: &Connection) -> i64 {
@@ -92,7 +98,10 @@ fn run_turn_capture(
     user_message: &str,
     intel_scripted: Vec<Completion>,
     main_scripted: Vec<Completion>,
-) -> (Result<&'static str, String>, std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>) {
+) -> (
+    Result<&'static str, String>,
+    std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>,
+) {
     let token = tokio_util::sync::CancellationToken::new();
     let cfg = runtime_cfg(profile_id);
     let cap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -138,8 +147,7 @@ fn captured_system(cap: &std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>
         .join("\n---\n")
 }
 
-const GOAL_JSON: &str =
-    r#"{"goal":"准备2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#;
+const GOAL_JSON: &str = r#"{"goal":"准备2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#;
 
 /// TC001 场景：用户「我要准备2028考研」→ 收口提取产出一条 explicit 目标记忆。
 fn exam_extraction() -> serde_json::Value {
@@ -168,7 +176,13 @@ fn tc001_ai_generates_pending_memory_proposal() {
     };
 
     let (out, _cap) = run_turn_capture(
-        &state, &vault, "mc-tc001-run", profile_id, conv, msg, "我要准备2028考研",
+        &state,
+        &vault,
+        "mc-tc001-run",
+        profile_id,
+        conv,
+        msg,
+        "我要准备2028考研",
         vec![
             text_completion(GOAL_JSON),
             text_completion(&exam_extraction().to_string()),
@@ -186,7 +200,10 @@ fn tc001_ai_generates_pending_memory_proposal() {
     assert_eq!(m.status, "pending_confirmation");
     assert_eq!(m.memory_value, "正在准备2028考研");
     assert_eq!(m.source_kind, "user_message");
-    assert!(m.source_excerpt.contains("我要准备2028考研"), "用户原话必须保留（§原则3）");
+    assert!(
+        m.source_excerpt.contains("我要准备2028考研"),
+        "用户原话必须保留（§原则3）"
+    );
 
     // §七确认门：未确认 → AI 长期读取两个口径均不可见
     assert!(
@@ -213,7 +230,10 @@ fn tc001_ai_generates_pending_memory_proposal() {
 #[test]
 fn tc002_confirm_memory_enters_confirmed() {
     let (state, _vault) = setup("tc002");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     // 候选（AI 链路唯一创建入口）
@@ -229,19 +249,32 @@ fn tc002_confirm_memory_enters_confirmed() {
     };
     let id = memory_confirmation::create_memory_proposal(&conn, profile_id, &item).unwrap();
     let repo = MemoryRepository::new(&conn);
-    assert_eq!(repo.get(id, profile_id).unwrap().unwrap().status, "pending_confirmation");
+    assert_eq!(
+        repo.get(id, profile_id).unwrap().unwrap().status,
+        "pending_confirmation"
+    );
 
     // 用户确认
     memory_confirmation::confirm_memory(&conn, profile_id, id).unwrap();
     let m = repo.get(id, profile_id).unwrap().unwrap();
     assert_eq!(m.status, "confirmed");
-    assert_eq!(repo.list_pending(profile_id).unwrap().len(), 0, "确认后离开待确认区");
+    assert_eq!(
+        repo.list_pending(profile_id).unwrap().len(),
+        0,
+        "确认后离开待确认区"
+    );
 
     // confirmed → AI 长期读取可见（两口径）
     let actives = intelligence::memory::active_memories(&conn, profile_id, 10);
-    assert!(actives.iter().any(|x| x.id == id), "confirmed 进入 active_memories");
+    assert!(
+        actives.iter().any(|x| x.id == id),
+        "confirmed 进入 active_memories"
+    );
     let hits = repo.search(profile_id, "2028考研", 10).unwrap();
-    assert!(hits.iter().any(|x| x.id == id), "confirmed 写入 FTS，可被检索");
+    assert!(
+        hits.iter().any(|x| x.id == id),
+        "confirmed 写入 FTS，可被检索"
+    );
 
     // 重复确认被拒（状态机：仅 pending 可确认）
     assert!(memory_confirmation::confirm_memory(&conn, profile_id, id).is_err());
@@ -254,7 +287,10 @@ fn tc002_confirm_memory_enters_confirmed() {
 #[test]
 fn tc003_reject_memory_never_enters_ai_reading() {
     let (state, _vault) = setup("tc003");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     let item = intelligence::memory::ExtractedMemory {
@@ -270,11 +306,17 @@ fn tc003_reject_memory_never_enters_ai_reading() {
     let id = memory_confirmation::create_memory_proposal(&conn, profile_id, &item).unwrap();
     // derived → 类型强制 ai_inference（不得冒充用户事实）
     let repo = MemoryRepository::new(&conn);
-    assert_eq!(repo.get(id, profile_id).unwrap().unwrap().memory_type, "ai_inference");
+    assert_eq!(
+        repo.get(id, profile_id).unwrap().unwrap().memory_type,
+        "ai_inference"
+    );
 
     // 用户拒绝
     memory_confirmation::reject_memory(&conn, profile_id, id).unwrap();
-    assert_eq!(repo.get(id, profile_id).unwrap().unwrap().status, "rejected");
+    assert_eq!(
+        repo.get(id, profile_id).unwrap().unwrap().status,
+        "rejected"
+    );
 
     // 不进入 AI 长期读取（两口径）
     assert!(
@@ -296,7 +338,10 @@ fn tc003_reject_memory_never_enters_ai_reading() {
 #[test]
 fn tc004_update_memory_persists_user_edit() {
     let (state, _vault) = setup("tc004");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     let item = intelligence::memory::ExtractedMemory {
@@ -313,8 +358,13 @@ fn tc004_update_memory_persists_user_edit() {
 
     // 用户修改（改类型/描述/内容）
     memory_confirmation::update_memory(
-        &conn, profile_id, id,
-        "user_fact", "学习目标", "考研计划", "正在准备2028年的全国硕士研究生考试",
+        &conn,
+        profile_id,
+        id,
+        "user_fact",
+        "学习目标",
+        "考研计划",
+        "正在准备2028年的全国硕士研究生考试",
         "我要准备2028考研",
     )
     .unwrap();
@@ -323,17 +373,27 @@ fn tc004_update_memory_persists_user_edit() {
     let m = repo.get(id, profile_id).unwrap().unwrap();
     assert_eq!(m.memory_type, "user_fact", "类型已更新");
     assert_eq!(m.category, "学习目标", "描述已更新");
-    assert_eq!(m.memory_value, "正在准备2028年的全国硕士研究生考试", "内容已更新");
+    assert_eq!(
+        m.memory_value, "正在准备2028年的全国硕士研究生考试",
+        "内容已更新"
+    );
     assert_eq!(m.source_kind, "user_edit", "用户亲手改过即事实");
     assert_eq!(m.status, "pending_confirmation", "修改保持待确认身份");
 
     // pending 修改期间不写 FTS（确认门不因编辑泄漏）
-    assert!(repo.search(profile_id, "全国硕士研究生考试", 10).unwrap().is_empty());
+    assert!(repo
+        .search(profile_id, "全国硕士研究生考试", 10)
+        .unwrap()
+        .is_empty());
 
     // 修改后确认 → 以最终内容进入长期读取
     memory_confirmation::confirm_memory(&conn, profile_id, id).unwrap();
     let hits = repo.search(profile_id, "全国硕士研究生考试", 10).unwrap();
-    assert!(hits.iter().any(|x| x.memory_value.contains("全国硕士研究生考试")), "确认后以修改内容入 FTS");
+    assert!(
+        hits.iter()
+            .any(|x| x.memory_value.contains("全国硕士研究生考试")),
+        "确认后以修改内容入 FTS"
+    );
 }
 
 // =============== TC005 · AI 读取确认后的 Memory ===============
@@ -359,7 +419,13 @@ fn tc005_next_turn_ai_reads_confirmed_memory() {
         new_message(&conn, profile_id, conv, "我要准备2028考研")
     };
     let (out1, _cap1) = run_turn_capture(
-        &state, &vault, "mc-tc005-r1", profile_id, conv, msg1, "我要准备2028考研",
+        &state,
+        &vault,
+        "mc-tc005-r1",
+        profile_id,
+        conv,
+        msg1,
+        "我要准备2028考研",
         vec![
             text_completion(GOAL_JSON),
             text_completion(&exam_extraction().to_string()),
@@ -383,12 +449,22 @@ fn tc005_next_turn_ai_reads_confirmed_memory() {
         new_message(&conn, profile_id, conv, "帮我安排这周的复习")
     };
     let (out2, cap2) = run_turn_capture(
-        &state, &vault, "mc-tc005-r2", profile_id, conv, msg2, "帮我安排这周的复习",
+        &state,
+        &vault,
+        "mc-tc005-r2",
+        profile_id,
+        conv,
+        msg2,
+        "帮我安排这周的复习",
         vec![
-            text_completion(r#"{"goal":"安排复习计划","goal_type":"education","planning_required":false,"required_information":[]}"#),
+            text_completion(
+                r#"{"goal":"安排复习计划","goal_type":"education","planning_required":false,"required_information":[]}"#,
+            ),
             text_completion(r#"{"memories":[]}"#), // 本轮无新记忆
         ],
-        vec![text_completion("结合你的考研目标，本周安排数学与英语复习。")],
+        vec![text_completion(
+            "结合你的考研目标，本周安排数学与英语复习。",
+        )],
     );
     assert_eq!(out2.unwrap(), "completed");
 

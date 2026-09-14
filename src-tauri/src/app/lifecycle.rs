@@ -36,9 +36,7 @@ pub fn setup(
     println!("[ANDROID-BOOT] DB_READY");
     // T2：DB ready + migration complete（open 内含迁移）
     let t2 = t0.elapsed().as_millis();
-    println!(
-        "[HigherStartup] t1_window_built_ms={t1} t2_db_migration_ready_ms={t2}"
-    );
+    println!("[HigherStartup] t1_window_built_ms={t1} t2_db_migration_ready_ms={t2}");
 
     // DEV-0057 §71-72：Search Index 版本门——版本缺失/变化才一次性 rebuild（不默认每次全重建）。
     {

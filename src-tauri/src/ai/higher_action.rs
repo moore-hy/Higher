@@ -45,7 +45,11 @@ pub enum HigherAction {
 /// 解析一个 action value（§11 示例：平铺 type 字段）。
 /// Task 域 type 直透 SemanticAction；已知其余域记录原值；未知 type → Level 3 拒绝。
 pub fn parse_higher_action(v: &J) -> Result<HigherAction, String> {
-    let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let t = v
+        .get("type")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     if t.is_empty() {
         return Err("action 缺少 type 字段".to_string());
     }
@@ -219,7 +223,15 @@ pub fn execute_higher_action_pack(
 
     // ---- ② Level 2 分支：bulk_delete_tasks → pending ChangeSet（绝不自动执行）----
     if let Some(bd) = bulk_delete {
-        return compile_bulk_delete(conn, profile_id, conversation_id, run_id, env, pack_title, bd);
+        return compile_bulk_delete(
+            conn,
+            profile_id,
+            conversation_id,
+            run_id,
+            env,
+            pack_title,
+            bd,
+        );
     }
 
     // ---- ③ Level 1 编译：Task 域（Resolver/Grounding）+ Phase D 域（Compiler）----
@@ -244,7 +256,12 @@ pub fn execute_higher_action_pack(
             }
         };
         match outcome {
-            super::action::ActionOutcome::ProposalReady { ops, title, summary, .. } => {
+            super::action::ActionOutcome::ProposalReady {
+                ops,
+                title,
+                summary,
+                ..
+            } => {
                 if let Err(e) = super::action::validate_ops(env, a, &ops) {
                     return HigherActionResult {
                         json: json!({ "status": "invalid_action", "message": e, "formal_mutations": 0 }),
@@ -261,7 +278,10 @@ pub fn execute_higher_action_pack(
                 all_ops.extend(ops);
                 let _ = title;
             }
-            super::action::ActionOutcome::Clarification { message, candidates } => {
+            super::action::ActionOutcome::Clarification {
+                message,
+                candidates,
+            } => {
                 let cand: Vec<J> = candidates
                     .iter()
                     .map(|c| json!({ "candidate_id": c.candidate_id, "title": c.title, "date": c.date, "status": c.status }))
@@ -424,7 +444,10 @@ struct CompiledPhaseD {
 }
 
 fn noop(note: &str) -> CompiledPhaseD {
-    CompiledPhaseD { ops: Vec::new(), note: note.to_string() }
+    CompiledPhaseD {
+        ops: Vec::new(),
+        note: note.to_string(),
+    }
 }
 
 fn compile_phase_d(
@@ -450,32 +473,73 @@ fn compile_phase_d(
 
 // ---- GoalTarget（REACH/SAFETY upsert；D01/D02）----
 
-fn compile_goal_target(conn: &Connection, profile_id: i64, v: &J) -> Result<CompiledPhaseD, PackAbort> {
-    let role = v.get("role").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+fn compile_goal_target(
+    conn: &Connection,
+    profile_id: i64,
+    v: &J,
+) -> Result<CompiledPhaseD, PackAbort> {
+    let role = v
+        .get("role")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if role != "reach" && role != "safety" && role != "generic" {
-        return Err(PackAbort::Invalid { message: format!("goal_target 的 role 非法（{role}）：仅支持 reach / safety / generic") });
+        return Err(PackAbort::Invalid {
+            message: format!("goal_target 的 role 非法（{role}）：仅支持 reach / safety / generic"),
+        });
     }
-    let title = v.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if title.is_empty() {
-        return Err(PackAbort::Insufficient { message: "set_goal_target 缺少 title（目标院校/专业不明，无法设置正式 GoalTarget）".into() });
+        return Err(PackAbort::Insufficient {
+            message: "set_goal_target 缺少 title（目标院校/专业不明，无法设置正式 GoalTarget）"
+                .into(),
+        });
     }
-    let scenario = v.get("scenario_type").and_then(|x| x.as_str()).unwrap_or("generic").trim().to_string();
-    let target_date = v.get("target_date").and_then(|x| x.as_str()).map(String::from);
+    let scenario = v
+        .get("scenario_type")
+        .and_then(|x| x.as_str())
+        .unwrap_or("generic")
+        .trim()
+        .to_string();
+    let target_date = v
+        .get("target_date")
+        .and_then(|x| x.as_str())
+        .map(String::from);
     // data_json：显式字段优先；postgraduate 需 institution_name + program_name
     let mut data = v.get("data").cloned().unwrap_or(json!({}));
     if !data.is_object() {
         data = json!({});
     }
     if scenario == "postgraduate" {
-        let inst = data.get("institution_name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-        let prog = data.get("program_name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let inst = data
+            .get("institution_name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let prog = data
+            .get("program_name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let (mut i2, mut p2) = (inst.clone(), prog.clone());
         // title 按分隔符拆出院校/专业（同一事实来源，不算编造）
         if i2.is_empty() || p2.is_empty() {
             let parts: Vec<&str> = title.split(['·', '·', '-', '—']).map(str::trim).collect();
             if parts.len() >= 2 {
-                if i2.is_empty() { i2 = parts[0].to_string(); }
-                if p2.is_empty() { p2 = parts[1..].join("·"); }
+                if i2.is_empty() {
+                    i2 = parts[0].to_string();
+                }
+                if p2.is_empty() {
+                    p2 = parts[1..].join("·");
+                }
             } else if i2.is_empty() {
                 i2 = title.clone();
             }
@@ -497,12 +561,18 @@ fn compile_goal_target(conn: &Connection, profile_id: i64, v: &J) -> Result<Comp
         let cur_data: serde_json::Value = serde_json::from_str(&cur.data_json).unwrap_or(json!({}));
         let cur_date = cur.target_date.clone().unwrap_or_default();
         let new_date = target_date.clone().unwrap_or_default();
-        let same_content = cur.title.trim() == title
-            && cur_date == new_date
-            && cur_data == data;
+        let same_content = cur.title.trim() == title && cur_date == new_date && cur_data == data;
         if same_content {
-            let label = if role == "reach" { "REACH" } else if role == "safety" { "SAFETY" } else { "GoalTarget" };
-            return Ok(noop(&format!("{label} 已是「{title}」且信息一致，保持不变（幂等）")));
+            let label = if role == "reach" {
+                "REACH"
+            } else if role == "safety" {
+                "SAFETY"
+            } else {
+                "GoalTarget"
+            };
+            return Ok(noop(&format!(
+                "{label} 已是「{title}」且信息一致，保持不变（幂等）"
+            )));
         }
         // 内容不同 → 新版本（create draft + activate：activate_in_tx 自动把旧 active 置 historical）
     }
@@ -549,7 +619,13 @@ fn compile_goal_target(conn: &Connection, profile_id: i64, v: &J) -> Result<Comp
             operation_ref: None,
         },
     ];
-    let label = if role == "reach" { "REACH" } else if role == "safety" { "SAFETY" } else { "GoalTarget" };
+    let label = if role == "reach" {
+        "REACH"
+    } else if role == "safety" {
+        "SAFETY"
+    } else {
+        "GoalTarget"
+    };
     Ok(CompiledPhaseD {
         ops,
         note: format!("{label} = {title}"),
@@ -573,13 +649,25 @@ fn compile_final_goal_brief(
     ctx: &mut CompileCtx,
     v: &J,
 ) -> Result<CompiledPhaseD, PackAbort> {
-    let outcome = v.get("outcome").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let outcome = v
+        .get("outcome")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if outcome.is_empty() {
         return Err(PackAbort::Insufficient {
-            message: "set_final_goal_brief 缺少 outcome（最终目标的成果定义不明，不能猜测成用户事实）".into(),
+            message:
+                "set_final_goal_brief 缺少 outcome（最终目标的成果定义不明，不能猜测成用户事实）"
+                    .into(),
         });
     }
-    let title = v.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let mut brief = json!({ "outcome": outcome });
     if !title.is_empty() {
         brief["title"] = json!(title);
@@ -602,9 +690,16 @@ fn compile_final_goal_brief(
                 )
                 .unwrap_or_default();
             if let Ok(cur) = serde_json::from_str::<J>(&existing) {
-                let same = ["title", "outcome", "deadline", "success_criteria", "scope", "constraints"]
-                    .iter()
-                    .all(|k| cur.get(*k).unwrap_or(&J::Null) == brief.get(*k).unwrap_or(&J::Null));
+                let same = [
+                    "title",
+                    "outcome",
+                    "deadline",
+                    "success_criteria",
+                    "scope",
+                    "constraints",
+                ]
+                .iter()
+                .all(|k| cur.get(*k).unwrap_or(&J::Null) == brief.get(*k).unwrap_or(&J::Null));
                 if same {
                     return Ok(noop("Final Goal Brief 已一致（幂等）"));
                 }
@@ -623,10 +718,15 @@ fn compile_final_goal_brief(
         }
         None => {
             // 无根 → 创建 final 根 + 写 brief（两个 op，一个 Pack 一个事务）
-            let name = if title.is_empty() { outcome.chars().take(30).collect() } else { title.clone() };
+            let name = if title.is_empty() {
+                outcome.chars().take(30).collect()
+            } else {
+                title.clone()
+            };
             let fref = ctx.next_ref("FINAL");
             ctx.final_ref = Some(fref.clone());
-            ctx.created_goals.push(("final".into(), name.clone(), fref.clone()));
+            ctx.created_goals
+                .push(("final".into(), name.clone(), fref.clone()));
             let ops = vec![
                 ProposedOp {
                     entity_type: "goal".into(),
@@ -645,7 +745,10 @@ fn compile_final_goal_brief(
                     operation_ref: None,
                 },
             ];
-            Ok(CompiledPhaseD { ops, note: "Final Goal 根已创建并写入 Brief".into() })
+            Ok(CompiledPhaseD {
+                ops,
+                note: "Final Goal 根已创建并写入 Brief".into(),
+            })
         }
     }
 }
@@ -672,7 +775,10 @@ fn find_goal_by_name(
     match ids.len() {
         0 => Ok(None),
         1 => Ok(Some(ids[0])),
-        _ => Err(format!("找到 {level} 层级同名目标 {} 个（{name}），存在歧义", ids.len())),
+        _ => Err(format!(
+            "找到 {level} 层级同名目标 {} 个（{name}），存在歧义",
+            ids.len()
+        )),
     }
 }
 
@@ -693,7 +799,9 @@ fn resolve_goal_parent(
         v.get("parent_title").and_then(|x| x.as_str()),
     ) {
         if !GOAL_LEVELS.contains(&pl) {
-            return Err(format!("parent_level 非法（{pl}）：正式层级为 final/year/month/day"));
+            return Err(format!(
+                "parent_level 非法（{pl}）：正式层级为 final/year/month/day"
+            ));
         }
         return match find_goal_by_name(conn, profile_id, pl, pn)? {
             Some(id) => Ok(ParentRef::Real(id)),
@@ -729,7 +837,9 @@ fn resolve_goal_parent(
             _ => Err("存在多个最终目标根，无法确定父节点（请用 parent_title 指明）".into()),
         };
     }
-    Err(format!("create_goal 层级为 {level} 时必须指明父节点（parent_ref 或 parent_level+parent_title）"))
+    Err(format!(
+        "create_goal 层级为 {level} 时必须指明父节点（parent_ref 或 parent_level+parent_title）"
+    ))
 }
 
 enum ParentRef {
@@ -743,25 +853,40 @@ fn compile_create_goal(
     ctx: &mut CompileCtx,
     v: &J,
 ) -> Result<CompiledPhaseD, PackAbort> {
-    let level = v.get("level").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let level = v
+        .get("level")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if !GOAL_LEVELS.contains(&level.as_str()) {
         return Err(PackAbort::Invalid {
             message: format!("create_goal 层级非法（{level}）：正式 Goal Tree 严格为 final → year → month → day，不允许 week"),
         });
     }
-    let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if name.is_empty() {
-        return Err(PackAbort::Insufficient { message: "create_goal 缺少 name".into() });
+        return Err(PackAbort::Insufficient {
+            message: "create_goal 缺少 name".into(),
+        });
     }
     let period = v.get("period").and_then(|x| x.as_str()).map(String::from);
     // final：唯一根（已存在 → no-op/更新名）
     if level == "final" {
         return match find_final_root(conn, profile_id) {
-            Some(_) => Ok(noop(&format!("最终目标根已存在（{name}），如需调整内容请用 set_final_goal_brief / update_goal"))),
+            Some(_) => Ok(noop(&format!(
+                "最终目标根已存在（{name}），如需调整内容请用 set_final_goal_brief / update_goal"
+            ))),
             None => {
                 let fref = ctx.next_ref("FINAL");
                 ctx.final_ref = Some(fref.clone());
-                ctx.created_goals.push(("final".into(), name.clone(), fref.clone()));
+                ctx.created_goals
+                    .push(("final".into(), name.clone(), fref.clone()));
                 Ok(CompiledPhaseD {
                     ops: vec![ProposedOp {
                         entity_type: "goal".into(),
@@ -785,7 +910,9 @@ fn compile_create_goal(
                 "month" => "period=\"YYYY-MM\"",
                 _ => "period=\"YYYY-MM-DD\"",
             };
-            return Err(PackAbort::Insufficient { message: format!("create_goal（{level}）缺少 period（{hint}）") });
+            return Err(PackAbort::Insufficient {
+                message: format!("create_goal（{level}）缺少 period（{hint}）"),
+            });
         }
     };
     let parent = resolve_goal_parent(conn, profile_id, ctx, v, &level)?;
@@ -795,7 +922,9 @@ fn compile_create_goal(
     let existing = find_child_by_period(conn, profile_id, &parent, &level, &norm.0);
     if let Some((gid, gname)) = existing {
         if gname.trim() == name {
-            return Ok(noop(&format!("{level} 目标「{name}」（{period}）已存在，保持不变（幂等）")));
+            return Ok(noop(&format!(
+                "{level} 目标「{name}」（{period}）已存在，保持不变（幂等）"
+            )));
         }
         return Ok(CompiledPhaseD {
             ops: vec![ProposedOp {
@@ -810,7 +939,8 @@ fn compile_create_goal(
         });
     }
     let gref = ctx.next_ref("G");
-    ctx.created_goals.push((level.clone(), name.clone(), gref.clone()));
+    ctx.created_goals
+        .push((level.clone(), name.clone(), gref.clone()));
     let mut after = json!({
         "goal_level": level,
         "name": name,
@@ -818,8 +948,12 @@ fn compile_create_goal(
         "day_kind": v.get("day_kind").and_then(|x| x.as_str()).unwrap_or("study"),
     });
     match parent {
-        ParentRef::PackRef(r) => { after["parent_ref"] = json!(r); }
-        ParentRef::Real(id) => { after["parent_goal_id"] = json!(id); }
+        ParentRef::PackRef(r) => {
+            after["parent_ref"] = json!(r);
+        }
+        ParentRef::Real(id) => {
+            after["parent_goal_id"] = json!(id);
+        }
     }
     Ok(CompiledPhaseD {
         ops: vec![ProposedOp {
@@ -876,7 +1010,11 @@ fn days_in_month_of(y: i64, m: i64) -> i64 {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
         _ => {
-            if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 { 29 } else { 28 }
+            if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 {
+                29
+            } else {
+                28
+            }
         }
     }
 }
@@ -902,19 +1040,46 @@ fn find_child_by_period(
     }
 }
 
-fn compile_update_goal(conn: &Connection, profile_id: i64, v: &J) -> Result<CompiledPhaseD, PackAbort> {
-    let level = v.get("level").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-    let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+fn compile_update_goal(
+    conn: &Connection,
+    profile_id: i64,
+    v: &J,
+) -> Result<CompiledPhaseD, PackAbort> {
+    let level = v
+        .get("level")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if level.is_empty() || name.is_empty() {
-        return Err(PackAbort::Insufficient { message: "update_goal 需要 level + name（定位现有目标）".into() });
+        return Err(PackAbort::Insufficient {
+            message: "update_goal 需要 level + name（定位现有目标）".into(),
+        });
     }
-    let new_name = v.get("new_name").and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty());
-    let day_kind = v.get("day_kind").and_then(|x| x.as_str()).filter(|s| !s.is_empty());
+    let new_name = v
+        .get("new_name")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let day_kind = v
+        .get("day_kind")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty());
     if new_name.is_none() && day_kind.is_none() {
-        return Err(PackAbort::Invalid { message: "update_goal 需要 new_name 或 day_kind 至少一项".into() });
+        return Err(PackAbort::Invalid {
+            message: "update_goal 需要 new_name 或 day_kind 至少一项".into(),
+        });
     }
-    let gid = find_goal_by_name(conn, profile_id, &level, &name)?
-        .ok_or_else(|| PackAbort::Invalid { message: format!("找不到 {level} 目标「{name}」") })?;
+    let gid =
+        find_goal_by_name(conn, profile_id, &level, &name)?.ok_or_else(|| PackAbort::Invalid {
+            message: format!("找不到 {level} 目标「{name}」"),
+        })?;
     // Stabilization：name 变更才生成 update op（day_kind-only 不得产生空 update）
     let mut ops: Vec<ProposedOp> = Vec::new();
     if let Some(n) = new_name {
@@ -938,26 +1103,60 @@ fn compile_update_goal(conn: &Connection, profile_id: i64, v: &J) -> Result<Comp
             operation_ref: None,
         });
     }
-    Ok(CompiledPhaseD { ops, note: format!("{level} Goal「{name}」已更新") })
+    Ok(CompiledPhaseD {
+        ops,
+        note: format!("{level} Goal「{name}」已更新"),
+    })
 }
 
-fn compile_move_goal(conn: &Connection, profile_id: i64, v: &J) -> Result<CompiledPhaseD, PackAbort> {
-    let level = v.get("level").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-    let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-    let np_level = v.get("new_parent_level").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-    let np_title = v.get("new_parent_title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+fn compile_move_goal(
+    conn: &Connection,
+    profile_id: i64,
+    v: &J,
+) -> Result<CompiledPhaseD, PackAbort> {
+    let level = v
+        .get("level")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let np_level = v
+        .get("new_parent_level")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let np_title = v
+        .get("new_parent_title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if level.is_empty() || name.is_empty() || np_level.is_empty() || np_title.is_empty() {
         return Err(PackAbort::Insufficient {
             message: "move_goal 需要 level + name（定位目标）与 new_parent_level + new_parent_title（新父节点）".into(),
         });
     }
     if level == "final" {
-        return Err(PackAbort::Invalid { message: "最终目标根不可移动".into() });
+        return Err(PackAbort::Invalid {
+            message: "最终目标根不可移动".into(),
+        });
     }
-    let gid = find_goal_by_name(conn, profile_id, &level, &name)?
-        .ok_or_else(|| PackAbort::Invalid { message: format!("找不到 {level} 目标「{name}」") })?;
-    let np = find_goal_by_name(conn, profile_id, &np_level, &np_title)?
-        .ok_or_else(|| PackAbort::Invalid { message: format!("找不到新父目标（{np_level}「{np_title}」）") })?;
+    let gid =
+        find_goal_by_name(conn, profile_id, &level, &name)?.ok_or_else(|| PackAbort::Invalid {
+            message: format!("找不到 {level} 目标「{name}」"),
+        })?;
+    let np = find_goal_by_name(conn, profile_id, &np_level, &np_title)?.ok_or_else(|| {
+        PackAbort::Invalid {
+            message: format!("找不到新父目标（{np_level}「{np_title}」）"),
+        }
+    })?;
     Ok(CompiledPhaseD {
         ops: vec![ProposedOp {
             entity_type: "goal".into(),
@@ -973,21 +1172,51 @@ fn compile_move_goal(conn: &Connection, profile_id: i64, v: &J) -> Result<Compil
 
 // ---- Planning Blueprint + Phase + Milestone（D06）----
 
-fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Result<CompiledPhaseD, PackAbort> {
-    let title = v.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+fn compile_planning_blueprint(
+    conn: &Connection,
+    profile_id: i64,
+    v: &J,
+) -> Result<CompiledPhaseD, PackAbort> {
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if title.is_empty() {
-        return Err(PackAbort::Insufficient { message: "set_planning_blueprint 缺少 title".into() });
+        return Err(PackAbort::Insufficient {
+            message: "set_planning_blueprint 缺少 title".into(),
+        });
     }
-    let scenario = v.get("scenario_type").and_then(|x| x.as_str()).unwrap_or("generic").trim().to_string();
+    let scenario = v
+        .get("scenario_type")
+        .and_then(|x| x.as_str())
+        .unwrap_or("generic")
+        .trim()
+        .to_string();
     let phases: Vec<(String, String)> = v
         .get("phases")
         .and_then(|x| x.as_array())
         .map(|a| {
             a.iter()
                 .filter_map(|p| {
-                    let k = p.get("phase_key").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-                    let t = p.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-                    if k.is_empty() || t.is_empty() { None } else { Some((k, t)) }
+                    let k = p
+                        .get("phase_key")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let t = p
+                        .get("title")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if k.is_empty() || t.is_empty() {
+                        None
+                    } else {
+                        Some((k, t))
+                    }
                 })
                 .collect()
         })
@@ -998,23 +1227,40 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
         for (i, (k, _)) in phases.iter().enumerate() {
             if !seen.insert(k.clone()) {
                 return Err(PackAbort::Invalid {
-                    message: format!("phases[{i}] 的 phase_key「{k}」重复（同一蓝图内 phase_key 必须唯一）"),
+                    message: format!(
+                        "phases[{i}] 的 phase_key「{k}」重复（同一蓝图内 phase_key 必须唯一）"
+                    ),
                 });
             }
         }
-        let ms_list: Vec<&J> = v.get("milestones").and_then(|x| x.as_array()).map(|a| a.iter().collect()).unwrap_or_default();
+        let ms_list: Vec<&J> = v
+            .get("milestones")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().collect())
+            .unwrap_or_default();
         let mut seen_ms = std::collections::HashSet::new();
         for (i, m) in ms_list.iter().enumerate() {
-            let mk = m.get("milestone_key").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            let mk = m
+                .get("milestone_key")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if !mk.is_empty() && !seen_ms.insert(mk.clone()) {
                 return Err(PackAbort::Invalid {
                     message: format!("milestones[{i}] 的 milestone_key「{mk}」重复（同一蓝图内 milestone_key 必须唯一）"),
                 });
             }
-            if let Some(pk) = m.get("phase_key").and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty()) {
+            if let Some(pk) = m
+                .get("phase_key")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
                 if !phases.iter().any(|(k, _)| k == pk.trim()) {
                     return Err(PackAbort::Invalid {
-                        message: format!("milestones[{i}] 的 phase_key「{pk}」不在本蓝图 phases 中"),
+                        message: format!(
+                            "milestones[{i}] 的 phase_key「{pk}」不在本蓝图 phases 中"
+                        ),
                     });
                 }
             }
@@ -1024,7 +1270,11 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
     if let Some(ri) = v.get("review_interval_days") {
         match ri.as_i64() {
             Some(d) if d >= 1 => {}
-            _ => return Err(PackAbort::Invalid { message: "review_interval_days 必须 >= 1（天）".into() }),
+            _ => {
+                return Err(PackAbort::Invalid {
+                    message: "review_interval_days 必须 >= 1（天）".into(),
+                })
+            }
         }
     }
     {
@@ -1036,21 +1286,47 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
             let p: Vec<i64> = s.split('-').filter_map(|x| x.parse().ok()).collect();
             p.len() == 3 && p[2] >= 1 && p[2] <= days_in_month_of(p[0], p[1])
         };
-        for (i, p) in v.get("phases").and_then(|x| x.as_array()).map(|a| a.iter()).unwrap_or_default().enumerate() {
-            let sd = p.get("start_date").and_then(|x| x.as_str()).unwrap_or("").trim();
-            let ed = p.get("end_date").and_then(|x| x.as_str()).unwrap_or("").trim();
+        for (i, p) in v
+            .get("phases")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter())
+            .unwrap_or_default()
+            .enumerate()
+        {
+            let sd = p
+                .get("start_date")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim();
+            let ed = p
+                .get("end_date")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim();
             if !sd.is_empty() && !valid_ymd(sd) {
-                return Err(PackAbort::Invalid { message: format!("phases[{i}].start_date 非法（{sd}，期望 YYYY-MM-DD）") });
+                return Err(PackAbort::Invalid {
+                    message: format!("phases[{i}].start_date 非法（{sd}，期望 YYYY-MM-DD）"),
+                });
             }
             if !ed.is_empty() && !valid_ymd(ed) {
-                return Err(PackAbort::Invalid { message: format!("phases[{i}].end_date 非法（{ed}，期望 YYYY-MM-DD）") });
+                return Err(PackAbort::Invalid {
+                    message: format!("phases[{i}].end_date 非法（{ed}，期望 YYYY-MM-DD）"),
+                });
             }
             if !sd.is_empty() && !ed.is_empty() && sd > ed {
-                return Err(PackAbort::Invalid { message: format!("phases[{i}] start_date（{sd}）不得晚于 end_date（{ed}）") });
+                return Err(PackAbort::Invalid {
+                    message: format!("phases[{i}] start_date（{sd}）不得晚于 end_date（{ed}）"),
+                });
             }
         }
         const DATE_PRECISION: [&str; 4] = ["day", "range", "month", "unknown"];
-        const DATE_STATUS: [&str; 5] = ["estimated", "official", "user_confirmed", "outdated", "needs_review"];
+        const DATE_STATUS: [&str; 5] = [
+            "estimated",
+            "official",
+            "user_confirmed",
+            "outdated",
+            "needs_review",
+        ];
         // R3-03：恢复旧 Planner 的 month precision 原产品语义——
         // date_precision == "month" → 日期允许且要求 YYYY-MM（月精度信息
         // 不得伪造为具体某一天）；其他精度继续按 YYYY-MM-DD 真日历校验。
@@ -1061,16 +1337,33 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
                 && p[0].bytes().all(|b| b.is_ascii_digit())
                 && p[1].len() == 2
                 && p[1].bytes().all(|b| b.is_ascii_digit())
-                && p[1].parse::<i64>().map(|m| (1..=12).contains(&m)).unwrap_or(false)
+                && p[1]
+                    .parse::<i64>()
+                    .map(|m| (1..=12).contains(&m))
+                    .unwrap_or(false)
         };
-        for (i, m) in v.get("milestones").and_then(|x| x.as_array()).map(|a| a.iter()).unwrap_or_default().enumerate() {
+        for (i, m) in v
+            .get("milestones")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter())
+            .unwrap_or_default()
+            .enumerate()
+        {
             // 枚举校验先行（日期格式依赖 precision 取值）
-            if let Some(dp) = m.get("date_precision").and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty()) {
+            if let Some(dp) = m
+                .get("date_precision")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
                 if !DATE_PRECISION.contains(&dp.trim()) {
                     return Err(PackAbort::Invalid { message: format!("milestones[{i}].date_precision 非法（{dp}，允许 day/range/month/unknown）") });
                 }
             }
-            if let Some(ds) = m.get("date_status").and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty()) {
+            if let Some(ds) = m
+                .get("date_status")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
                 if !DATE_STATUS.contains(&ds.trim()) {
                     return Err(PackAbort::Invalid { message: format!("milestones[{i}].date_status 非法（{ds}，允许 estimated/official/user_confirmed/outdated/needs_review）") });
                 }
@@ -1080,20 +1373,47 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
                 .and_then(|x| x.as_str())
                 .map(|s| s.trim() == "month")
                 .unwrap_or(false);
-            let fmt = if month_precision { "YYYY-MM" } else { "YYYY-MM-DD" };
+            let fmt = if month_precision {
+                "YYYY-MM"
+            } else {
+                "YYYY-MM-DD"
+            };
             for f in ["start_date", "end_date"] {
                 let d = m.get(f).and_then(|x| x.as_str()).unwrap_or("").trim();
                 if !d.is_empty() {
-                    let ok = if month_precision { valid_ym(d) } else { valid_ymd(d) };
+                    let ok = if month_precision {
+                        valid_ym(d)
+                    } else {
+                        valid_ymd(d)
+                    };
                     if !ok {
-                        return Err(PackAbort::Invalid { message: format!("milestones[{i}].{f} 非法（{d}，date_precision={} 时期望 {fmt}）", if month_precision { "month" } else { "day/range/unknown" }) });
+                        return Err(PackAbort::Invalid {
+                            message: format!(
+                                "milestones[{i}].{f} 非法（{d}，date_precision={} 时期望 {fmt}）",
+                                if month_precision {
+                                    "month"
+                                } else {
+                                    "day/range/unknown"
+                                }
+                            ),
+                        });
                     }
                 }
             }
-            let sd = m.get("start_date").and_then(|x| x.as_str()).unwrap_or("").trim();
-            let ed = m.get("end_date").and_then(|x| x.as_str()).unwrap_or("").trim();
+            let sd = m
+                .get("start_date")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim();
+            let ed = m
+                .get("end_date")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim();
             if !sd.is_empty() && !ed.is_empty() && sd > ed {
-                return Err(PackAbort::Invalid { message: format!("milestones[{i}] start_date（{sd}）不得晚于 end_date（{ed}）") });
+                return Err(PackAbort::Invalid {
+                    message: format!("milestones[{i}] start_date（{sd}）不得晚于 end_date（{ed}）"),
+                });
             }
         }
     }
@@ -1107,15 +1427,27 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
         let same_title = bp.title.trim() == title;
         let same_scenario = bp.scenario_type.trim() == scenario;
         let cur_md = bp.content_md.clone();
-        let new_md = v.get("content_md").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let new_md = v
+            .get("content_md")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let same_content = cur_md.trim() == new_md;
         let cur_review = bp.review_interval_days;
-        let new_review = v.get("review_interval_days").and_then(|x| x.as_i64()).unwrap_or(14);
+        let new_review = v
+            .get("review_interval_days")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(14);
         // R2-04：structured_json 规范化比较（serde_json::Value 相等性 = 键序无关；
         // 任一真实数据变化必须产生新版本）
         let norm = |s: &str| -> J { serde_json::from_str(s).unwrap_or(json!(null)) };
         let cur_sj = norm(bp.structured_json.as_deref().unwrap_or(""));
-        let new_sj = v.get("structured_json").cloned().filter(|x| !x.is_null()).unwrap_or(json!(null));
+        let new_sj = v
+            .get("structured_json")
+            .cloned()
+            .filter(|x| !x.is_null())
+            .unwrap_or(json!(null));
         let same_structured = cur_sj == new_sj;
         let existing_phases = crate::repository::planning::PlanningRepository::new(conn)
             .list_phases(bp.id)
@@ -1130,20 +1462,30 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
         };
         let same_phases = existing_phases.len() == phases.len()
             && existing_phases.iter().all(|ep| {
-                phase_of(ep.phase_key.trim()).map(|np| {
-                    let g = |val: &serde_json::Value, k: &str, d: &str| {
-                        val.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()).unwrap_or(d).to_string()
-                    };
-                    g(np, "title", "") == ep.title.trim()
-                        && g(np, "start_date", "") == ep.start_date.clone().unwrap_or_default()
-                        && g(np, "end_date", "") == ep.end_date.clone().unwrap_or_default()
-                        && g(np, "objective_md", "") == ep.objective_md.clone()
-                }).unwrap_or(false)
+                phase_of(ep.phase_key.trim())
+                    .map(|np| {
+                        let g = |val: &serde_json::Value, k: &str, d: &str| {
+                            val.get(k)
+                                .and_then(|x| x.as_str())
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or(d)
+                                .to_string()
+                        };
+                        g(np, "title", "") == ep.title.trim()
+                            && g(np, "start_date", "") == ep.start_date.clone().unwrap_or_default()
+                            && g(np, "end_date", "") == ep.end_date.clone().unwrap_or_default()
+                            && g(np, "objective_md", "") == ep.objective_md.clone()
+                    })
+                    .unwrap_or(false)
             });
         // milestone 结构比较（key/title/phase_key/dates；现有行带 phase_id → 反查 key）
         let key_of_phase_id = |pid: Option<i64>| -> String {
             pid.and_then(|x| {
-                existing_phases.iter().find(|ep| ep.id == x).map(|ep| ep.phase_key.trim().to_string())
+                existing_phases
+                    .iter()
+                    .find(|ep| ep.id == x)
+                    .map(|ep| ep.phase_key.trim().to_string())
             })
             .unwrap_or_default()
         };
@@ -1172,11 +1514,16 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
             .map_err(|e| e.to_string())
             .unwrap_or_default();
         let ms_of = |want_key: &str| -> Option<&serde_json::Value> {
-            v.get("milestones").and_then(|x| x.as_array()).and_then(|a| {
-                a.iter().find(|m| {
-                    m.get("milestone_key").and_then(|k| k.as_str()).map(str::trim) == Some(want_key)
+            v.get("milestones")
+                .and_then(|x| x.as_array())
+                .and_then(|a| {
+                    a.iter().find(|m| {
+                        m.get("milestone_key")
+                            .and_then(|k| k.as_str())
+                            .map(str::trim)
+                            == Some(want_key)
+                    })
                 })
-            })
         };
         let new_ms_count = v
             .get("milestones")
@@ -1185,21 +1532,37 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
             .unwrap_or(0);
         let same_milestones = existing_ms.len() == new_ms_count
             && existing_ms.iter().all(|(mk, mt, pid, ms, me, mp, mst)| {
-                ms_of(mk.trim()).map(|nm| {
-                    let g = |val: &serde_json::Value, k: &str, d: &str| {
-                        val.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()).unwrap_or(d).to_string()
-                    };
-                    // 缺省对齐引擎写入路径：date_precision=unknown / date_status=estimated
-                    g(nm, "title", "") == mt.trim()
-                        && g(nm, "phase_key", "") == key_of_phase_id(*pid)
-                        && g(nm, "start_date", "") == *ms
-                        && g(nm, "end_date", "") == *me
-                        && g(nm, "date_precision", "unknown") == *mp
-                        && g(nm, "date_status", "estimated") == *mst
-                }).unwrap_or(false)
+                ms_of(mk.trim())
+                    .map(|nm| {
+                        let g = |val: &serde_json::Value, k: &str, d: &str| {
+                            val.get(k)
+                                .and_then(|x| x.as_str())
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or(d)
+                                .to_string()
+                        };
+                        // 缺省对齐引擎写入路径：date_precision=unknown / date_status=estimated
+                        g(nm, "title", "") == mt.trim()
+                            && g(nm, "phase_key", "") == key_of_phase_id(*pid)
+                            && g(nm, "start_date", "") == *ms
+                            && g(nm, "end_date", "") == *me
+                            && g(nm, "date_precision", "unknown") == *mp
+                            && g(nm, "date_status", "estimated") == *mst
+                    })
+                    .unwrap_or(false)
             });
-        if same_title && same_scenario && same_content && same_structured && cur_review == new_review && same_phases && same_milestones {
-            return Ok(noop(&format!("active 蓝图「{title}」业务结构完全一致（幂等，未创建重复版本）")));
+        if same_title
+            && same_scenario
+            && same_content
+            && same_structured
+            && cur_review == new_review
+            && same_phases
+            && same_milestones
+        {
+            return Ok(noop(&format!(
+                "active 蓝图「{title}」业务结构完全一致（幂等，未创建重复版本）"
+            )));
         }
     }
     let mut ops: Vec<ProposedOp> = Vec::new();
@@ -1212,7 +1575,11 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
         // Stabilization：Agent 蓝图激活不隐式投影任务（任务生成留 Phase G）
         "skip_projection": true,
     });
-    if let Some(md) = v.get("content_md").and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty()) {
+    if let Some(md) = v
+        .get("content_md")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.trim().is_empty())
+    {
         bp_after["content_md"] = json!(md);
     }
     if let Some(sj) = v.get("structured_json") {
@@ -1236,7 +1603,8 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
         operation_ref: Some(bp_ref.clone()),
     });
     // phases（operation_ref = PH_{phase_key}；milestone 用 phase_key 关联）
-    let mut phase_refs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut phase_refs: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for (i, p) in v
         .get("phases")
         .and_then(|x| x.as_array())
@@ -1244,10 +1612,22 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
         .unwrap_or_default()
         .enumerate()
     {
-        let key = p.get("phase_key").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-        let ptitle = p.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let key = p
+            .get("phase_key")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let ptitle = p
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if key.is_empty() || ptitle.is_empty() {
-            return Err(PackAbort::Invalid { message: format!("phases[{i}] 需要 phase_key 与 title") });
+            return Err(PackAbort::Invalid {
+                message: format!("phases[{i}] 需要 phase_key 与 title"),
+            });
         }
         let pref = format!("PH_{key}");
         phase_refs.insert(key.clone(), pref.clone());
@@ -1258,7 +1638,11 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
             "sort_order": (i + 1) as i64,
         });
         for f in ["start_date", "end_date", "objective_md"] {
-            if let Some(x) = p.get(f).and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty()) {
+            if let Some(x) = p
+                .get(f)
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
                 pafter[f] = json!(x);
             }
         }
@@ -1279,27 +1663,57 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
         .unwrap_or_default()
         .enumerate()
     {
-        let mtitle = m.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let mtitle = m
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if mtitle.is_empty() {
-            return Err(PackAbort::Invalid { message: format!("milestones[{i}] 需要 title") });
+            return Err(PackAbort::Invalid {
+                message: format!("milestones[{i}] 需要 title"),
+            });
         }
-        let mkey = m.get("milestone_key").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let mkey = m
+            .get("milestone_key")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if mkey.is_empty() {
-            return Err(PackAbort::Invalid { message: format!("milestones[{i}] 需要 milestone_key（幂等键）") });
+            return Err(PackAbort::Invalid {
+                message: format!("milestones[{i}] 需要 milestone_key（幂等键）"),
+            });
         }
         let mut mafter = json!({
             "blueprint_ref": bp_ref,
             "milestone_key": mkey,
             "title": mtitle,
         });
-        if let Some(pk) = m.get("phase_key").and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty()) {
+        if let Some(pk) = m
+            .get("phase_key")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
             match phase_refs.get(pk) {
-                Some(pref) => { mafter["phase_ref"] = json!(pref); }
-                None => return Err(PackAbort::Invalid { message: format!("milestones[{i}] 的 phase_key「{pk}」不在本蓝图 phases 中") }),
+                Some(pref) => {
+                    mafter["phase_ref"] = json!(pref);
+                }
+                None => {
+                    return Err(PackAbort::Invalid {
+                        message: format!(
+                            "milestones[{i}] 的 phase_key「{pk}」不在本蓝图 phases 中"
+                        ),
+                    })
+                }
             }
         }
         for f in ["start_date", "end_date", "date_precision", "date_status"] {
-            if let Some(x) = m.get(f).and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty()) {
+            if let Some(x) = m
+                .get(f)
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
                 mafter[f] = json!(x);
             }
         }
@@ -1355,7 +1769,8 @@ fn compile_bulk_delete(
             }
         }
     };
-    let (tasks, total) = match super::grounding::retrieve_bulk_tasks(conn, profile_id, &filter, env) {
+    let (tasks, total) = match super::grounding::retrieve_bulk_tasks(conn, profile_id, &filter, env)
+    {
         Ok(x) => x,
         Err(e) => {
             return HigherActionResult {
@@ -1497,8 +1912,11 @@ pub fn verify_written_ops(
                     // DEV-0077.4-A.1 §三十八：Grounding ReadBack——
                     // learning 任务必须 learning_item_id != NULL 且 item 存在于本 Profile；
                     // meta 任务必须 NULL（合法无关联 ≠ 应关联但丢失）。
-                    let mode = after.get("grounding_mode").and_then(|x| x.as_str()).unwrap_or("");
-                    let (item, ): (Option<i64>,) = conn
+                    let mode = after
+                        .get("grounding_mode")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("");
+                    let (item,): (Option<i64>,) = conn
                         .query_row(
                             "SELECT learning_item_id FROM tasks WHERE profile_id=?1 AND id=?2",
                             params![profile_id, id],
@@ -1522,7 +1940,9 @@ pub fn verify_written_ops(
                                 ));
                             }
                             // 期望绑定（复用路径显式 id）一致性
-                            if let Some(expect) = after.get("learning_item_id").and_then(|x| x.as_i64()) {
+                            if let Some(expect) =
+                                after.get("learning_item_id").and_then(|x| x.as_i64())
+                            {
                                 if expect != item {
                                     return Err(format!(
                                         "task grounding readback 失败：期望 learning_item_id={expect}，实际 {item}"
@@ -1532,7 +1952,10 @@ pub fn verify_written_ops(
                         }
                         "meta" => {
                             if item.is_some() {
-                                return Err("task grounding readback 失败：meta 任务携带 learning_item_id".to_string());
+                                return Err(
+                                    "task grounding readback 失败：meta 任务携带 learning_item_id"
+                                        .to_string(),
+                                );
                             }
                         }
                         _ => {}
@@ -1540,7 +1963,10 @@ pub fn verify_written_ops(
                     return Ok(true);
                 }
                 let title = after.get("title").and_then(|x| x.as_str()).unwrap_or("");
-                let date = after.get("planned_date").and_then(|x| x.as_str()).unwrap_or("");
+                let date = after
+                    .get("planned_date")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
                 let n: i64 = conn
                     .query_row(
                         "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title=?2 AND planned_date=?3",
@@ -1571,21 +1997,19 @@ pub fn verify_written_ops(
                     .map_err(|e| e.to_string())?;
                 Ok(n > 0)
             }
-            ("goal", "create") => {
-                match real_id {
-                    Some(id) => {
-                        let n: i64 = conn
+            ("goal", "create") => match real_id {
+                Some(id) => {
+                    let n: i64 = conn
                             .query_row(
                                 "SELECT COUNT(*) FROM goals WHERE profile_id=?1 AND id=?2 AND status!='archived'",
                                 params![profile_id, id],
                                 |r| r.get(0),
                             )
                             .map_err(|e| e.to_string())?;
-                        Ok(n > 0)
-                    }
-                    None => Ok(false),
+                    Ok(n > 0)
                 }
-            }
+                None => Ok(false),
+            },
             ("goal", "update") => {
                 if let Some(brief) = after.get("goal_brief") {
                     // Stabilization：逐字段核对 DB 中 final 根的实际 brief（非仅存在性）
@@ -1597,21 +2021,30 @@ pub fn verify_written_ops(
                         )
                         .map_err(|e| e.to_string())?;
                     let cur: J = serde_json::from_str(&db).unwrap_or(json!({}));
-                    let ok = ["title", "outcome", "deadline", "success_criteria", "scope", "constraints"]
-                        .iter()
-                        .all(|k| {
-                            let want = brief.get(*k);
-                            match want {
-                                Some(w) => cur.get(*k) == Some(w),
-                                None => true, // 未提供的字段不强校验
-                            }
-                        });
+                    let ok = [
+                        "title",
+                        "outcome",
+                        "deadline",
+                        "success_criteria",
+                        "scope",
+                        "constraints",
+                    ]
+                    .iter()
+                    .all(|k| {
+                        let want = brief.get(*k);
+                        match want {
+                            Some(w) => cur.get(*k) == Some(w),
+                            None => true, // 未提供的字段不强校验
+                        }
+                    });
                     return Ok(ok);
                 }
                 // Stabilization：move 验证实际 parent 已变更；name 更新验证实际名称
-                if let Some(np) = after.get("parent_real_id").and_then(|x| x.as_i64()).or_else(|| {
-                    after.get("parent_goal_id").and_then(|x| x.as_i64())
-                }) {
+                if let Some(np) = after
+                    .get("parent_real_id")
+                    .and_then(|x| x.as_i64())
+                    .or_else(|| after.get("parent_goal_id").and_then(|x| x.as_i64()))
+                {
                     let id = op.entity_id.unwrap_or(0);
                     let cur: Option<i64> = conn
                         .query_row(
@@ -1635,25 +2068,26 @@ pub fn verify_written_ops(
                 }
                 Ok(true)
             }
-            ("goal_target", "create") => {
-                match real_id {
-                    Some(id) => {
-                        let n: i64 = conn
-                            .query_row(
-                                "SELECT COUNT(*) FROM goal_targets WHERE profile_id=?1 AND id=?2",
-                                params![profile_id, id],
-                                |r| r.get(0),
-                            )
-                            .map_err(|e| e.to_string())?;
-                        Ok(n > 0)
-                    }
-                    None => Ok(false),
+            ("goal_target", "create") => match real_id {
+                Some(id) => {
+                    let n: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM goal_targets WHERE profile_id=?1 AND id=?2",
+                            params![profile_id, id],
+                            |r| r.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    Ok(n > 0)
                 }
-            }
+                None => Ok(false),
+            },
             ("goal_target", "status_change") => {
                 // Stabilization：核对实际 active 内容（title/target_date/data，来自编译期 verify 载荷）
                 let role = after.get("role").and_then(|x| x.as_str()).unwrap_or("");
-                let scenario = after.get("scenario_type").and_then(|x| x.as_str()).unwrap_or("");
+                let scenario = after
+                    .get("scenario_type")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
                 if let Some(id) = real_id {
                     let row = conn
                         .query_row(
@@ -1672,7 +2106,9 @@ pub fn verify_written_ops(
                                     return Ok(false);
                                 }
                             }
-                            if let Some(wd) = after.get("verify_target_date").and_then(|x| x.as_str()) {
+                            if let Some(wd) =
+                                after.get("verify_target_date").and_then(|x| x.as_str())
+                            {
                                 if d.trim() != wd.trim() {
                                     return Ok(false);
                                 }
@@ -1699,21 +2135,19 @@ pub fn verify_written_ops(
                     .map_err(|e| e.to_string())?;
                 Ok(n > 0)
             }
-            ("planning_blueprint", "create") => {
-                match real_id {
-                    Some(id) => {
-                        let n: i64 = conn
+            ("planning_blueprint", "create") => match real_id {
+                Some(id) => {
+                    let n: i64 = conn
                             .query_row(
                                 "SELECT COUNT(*) FROM planning_blueprints WHERE profile_id=?1 AND id=?2 AND status='active'",
                                 params![profile_id, id],
                                 |r| r.get(0),
                             )
                             .map_err(|e| e.to_string())?;
-                        Ok(n > 0)
-                    }
-                    None => Ok(false),
+                    Ok(n > 0)
                 }
-            }
+                None => Ok(false),
+            },
             ("planning_phase", "create") => {
                 // Stabilization：核对实际行内容（key/title/dates/order），非仅存在性
                 match real_id {
@@ -1730,13 +2164,27 @@ pub fn verify_written_ops(
                             )
                             .map_err(|e| e.to_string());
                         match row {
-                            Ok((k, t, sd, ed, obj)) => Ok(
-                                k == after.get("phase_key").and_then(|x| x.as_str()).unwrap_or("")
-                                    && t == after.get("title").and_then(|x| x.as_str()).unwrap_or("")
-                                    && sd == after.get("start_date").and_then(|x| x.as_str()).unwrap_or("")
-                                    && ed == after.get("end_date").and_then(|x| x.as_str()).unwrap_or("")
-                                    && obj == after.get("objective_md").and_then(|x| x.as_str()).unwrap_or(""),
-                            ),
+                            Ok((k, t, sd, ed, obj)) => Ok(k
+                                == after
+                                    .get("phase_key")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("")
+                                && t == after.get("title").and_then(|x| x.as_str()).unwrap_or("")
+                                && sd
+                                    == after
+                                        .get("start_date")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")
+                                && ed
+                                    == after
+                                        .get("end_date")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")
+                                && obj
+                                    == after
+                                        .get("objective_md")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")),
                             Err(e) => Err(e),
                         }
                     }
@@ -1764,18 +2212,43 @@ pub fn verify_written_ops(
                             .map_err(|e| e.to_string());
                         match row {
                             Ok((k, t, sd, ed, pid, dp, ds)) => {
-                                let mut ok = k == after.get("milestone_key").and_then(|x| x.as_str()).unwrap_or("")
-                                    && t == after.get("title").and_then(|x| x.as_str()).unwrap_or("")
-                                    && sd == after.get("start_date").and_then(|x| x.as_str()).unwrap_or("")
-                                    && ed == after.get("end_date").and_then(|x| x.as_str()).unwrap_or("");
+                                let mut ok = k
+                                    == after
+                                        .get("milestone_key")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")
+                                    && t == after
+                                        .get("title")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")
+                                    && sd
+                                        == after
+                                            .get("start_date")
+                                            .and_then(|x| x.as_str())
+                                            .unwrap_or("")
+                                    && ed
+                                        == after
+                                            .get("end_date")
+                                            .and_then(|x| x.as_str())
+                                            .unwrap_or("");
                                 // phase 归属：phase_ref 已解析为 phase_id（after 保留解析结果）
-                                if let Some(want_pid) = after.get("phase_id").and_then(|x| x.as_i64()) {
+                                if let Some(want_pid) =
+                                    after.get("phase_id").and_then(|x| x.as_i64())
+                                {
                                     ok = ok && pid == Some(want_pid);
                                 }
                                 // 缺省对齐引擎写入路径：date_precision=unknown / date_status=estimated
                                 ok = ok
-                                    && dp == after.get("date_precision").and_then(|x| x.as_str()).unwrap_or("unknown")
-                                    && ds == after.get("date_status").and_then(|x| x.as_str()).unwrap_or("estimated");
+                                    && dp
+                                        == after
+                                            .get("date_precision")
+                                            .and_then(|x| x.as_str())
+                                            .unwrap_or("unknown")
+                                    && ds
+                                        == after
+                                            .get("date_status")
+                                            .and_then(|x| x.as_str())
+                                            .unwrap_or("estimated");
                                 Ok(ok)
                             }
                             Err(e) => Err(e),
@@ -1792,10 +2265,16 @@ pub fn verify_written_ops(
         match check(op) {
             Ok(true) => {}
             Ok(false) => {
-                return (false, json!({ "entity": op.entity_type, "action": op.action, "found": false }));
+                return (
+                    false,
+                    json!({ "entity": op.entity_type, "action": op.action, "found": false }),
+                );
             }
             Err(e) => {
-                return (false, json!({ "entity": op.entity_type, "action": op.action, "error": e }));
+                return (
+                    false,
+                    json!({ "entity": op.entity_type, "action": op.action, "error": e }),
+                );
             }
         }
     }
@@ -1840,7 +2319,9 @@ pub fn execute_action(
         }
         HigherActionType::AdjustSchedule => {
             // §七 enum 成员；§八~§十一 未授权 executor 契约——明确拒绝
-            return Err("AdjustSchedule 执行器尚未在本阶段开放（DEV-0074 Phase A 未授权契约）".to_string());
+            return Err(
+                "AdjustSchedule 执行器尚未在本阶段开放（DEV-0074 Phase A 未授权契约）".to_string(),
+            );
         }
     }
     Ok(json!({

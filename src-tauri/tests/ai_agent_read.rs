@@ -52,7 +52,15 @@ fn mk_profile(conn: &Connection) -> i64 {
 fn mk_confirmed_personalization(conn: &Connection, p: i64, big_text: &str) -> i64 {
     let repo = PersonalizationRepository::new(conn);
     let sid = repo
-        .insert_source(p, "我的资料.md", "md", "personal/my.md", "sha-x", "extracted/my.txt", "imported")
+        .insert_source(
+            p,
+            "我的资料.md",
+            "md",
+            "personal/my.md",
+            "sha-x",
+            "extracted/my.txt",
+            "imported",
+        )
         .unwrap();
     repo.store_chunks(sid, p, big_text).unwrap();
     let facts: Vec<serde_json::Value> = json!([
@@ -63,7 +71,8 @@ fn mk_confirmed_personalization(conn: &Connection, p: i64, big_text: &str) -> i6
     .as_array()
     .unwrap()
     .clone();
-    let structured = app_lib::repository::personalization::build_personal_structured(&facts, &[] as &[String]);
+    let structured =
+        app_lib::repository::personalization::build_personal_structured(&facts, &[] as &[String]);
     repo.save_draft_with_sources(p, "# 私人档案\n- 在职备考", Some(&structured), &[sid])
         .unwrap();
     repo.confirm(p).unwrap();
@@ -95,21 +104,51 @@ fn b01_read_personalization_confirmed_full_and_section_split() {
     let v = read(&conn, p, "read_personalization", &json!({}));
     assert_eq!(v["status"], "confirmed", "必须读到正式版本");
     assert_eq!(v["confirmed"], true);
-    assert!(v["version"].as_i64().unwrap() >= 1, "version 必须存在：{}", v["version"]);
-    assert!(v["md_content"].as_str().unwrap().contains("私人档案"), "md 全文必须返回");
+    assert!(
+        v["version"].as_i64().unwrap() >= 1,
+        "version 必须存在：{}",
+        v["version"]
+    );
+    assert!(
+        v["md_content"].as_str().unwrap().contains("私人档案"),
+        "md 全文必须返回"
+    );
     assert!(v["structured_json"].is_string(), "structured_json 必须返回");
     assert_eq!(v["source_count"], 1, "source 数量必须返回");
     // 区分已有信息 / 缺失信息（fixture 只填了 basic_info/time_conditions）
-    let filled: Vec<&str> = v["filled_sections"].as_array().unwrap()
-        .iter().filter_map(|x| x.as_str()).collect();
-    let missing: Vec<&str> = v["missing_sections"].as_array().unwrap()
-        .iter().filter_map(|x| x.as_str()).collect();
-    assert!(filled.contains(&"basic_info"), "已有：基本情况。filled={filled:?}");
-    assert!(filled.contains(&"time_conditions"), "已有：时间条件。filled={filled:?}");
-    assert!(missing.contains(&"capabilities"), "缺失：能力背景。missing={missing:?}");
-    assert!(missing.contains(&"weaknesses"), "缺失：短板。missing={missing:?}");
+    let filled: Vec<&str> = v["filled_sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x.as_str())
+        .collect();
+    let missing: Vec<&str> = v["missing_sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x.as_str())
+        .collect();
+    assert!(
+        filled.contains(&"basic_info"),
+        "已有：基本情况。filled={filled:?}"
+    );
+    assert!(
+        filled.contains(&"time_conditions"),
+        "已有：时间条件。filled={filled:?}"
+    );
+    assert!(
+        missing.contains(&"capabilities"),
+        "缺失：能力背景。missing={missing:?}"
+    );
+    assert!(
+        missing.contains(&"weaknesses"),
+        "缺失：短板。missing={missing:?}"
+    );
     // unresolved：目标观察进 unresolved（build_personal_structured 语义）
-    assert!(v["unresolved_count"].as_i64().unwrap() >= 1, "目标观察应计入 unresolved");
+    assert!(
+        v["unresolved_count"].as_i64().unwrap() >= 1,
+        "目标观察应计入 unresolved"
+    );
     // draft 场景不再返回空 md（§10.2 修复的直接锁定）
     let p2 = mk_profile(&conn);
     let repo = PersonalizationRepository::new(&conn);
@@ -117,7 +156,10 @@ fn b01_read_personalization_confirmed_full_and_section_split() {
     let v2 = read(&conn, p2, "read_personalization", &json!({}));
     assert_eq!(v2["status"], "draft");
     assert_eq!(v2["confirmed"], false);
-    assert!(v2["md_content"].as_str().unwrap().contains("草稿档案"), "draft 必须返回全文，不再是空 md");
+    assert!(
+        v2["md_content"].as_str().unwrap().contains("草稿档案"),
+        "draft 必须返回全文，不再是空 md"
+    );
 }
 
 // =============== B02 · REACH/SAFETY 是否为空（§10.1 + 用户验收） ===============
@@ -132,42 +174,98 @@ fn b02_overview_reach_safety_presence_and_gaps() {
     // 空库：REACH/SAFETY 均为空，gaps 明确指出
     {
         let conn = state.0.lock().unwrap();
-        let v = read(&conn, p, "get_higher_overview", &json!({ "date": LOCAL_DATE }));
-        assert!(v["goal_targets"]["reach"].is_null(), "空库 REACH 必须为 null");
-        assert!(v["goal_targets"]["safety"].is_null(), "空库 SAFETY 必须为 null");
+        let v = read(
+            &conn,
+            p,
+            "get_higher_overview",
+            &json!({ "date": LOCAL_DATE }),
+        );
+        assert!(
+            v["goal_targets"]["reach"].is_null(),
+            "空库 REACH 必须为 null"
+        );
+        assert!(
+            v["goal_targets"]["safety"].is_null(),
+            "空库 SAFETY 必须为 null"
+        );
         assert_eq!(v["goal_targets"]["count"], 0);
         let gaps = v["gaps"].as_array().unwrap();
-        assert!(gaps.iter().any(|g| g.as_str().unwrap().contains("REACH")), "gaps 应指出 REACH 缺失：{gaps:?}");
-        assert!(gaps.iter().any(|g| g.as_str().unwrap().contains("SAFETY")), "gaps 应指出 SAFETY 缺失：{gaps:?}");
+        assert!(
+            gaps.iter().any(|g| g.as_str().unwrap().contains("REACH")),
+            "gaps 应指出 REACH 缺失：{gaps:?}"
+        );
+        assert!(
+            gaps.iter().any(|g| g.as_str().unwrap().contains("SAFETY")),
+            "gaps 应指出 SAFETY 缺失：{gaps:?}"
+        );
         // 私人档案未创建 → gap
-        assert!(gaps.iter().any(|g| g.as_str().unwrap().contains("私人档案")), "gaps 应指出私人档案缺失：{gaps:?}");
+        assert!(
+            gaps.iter()
+                .any(|g| g.as_str().unwrap().contains("私人档案")),
+            "gaps 应指出私人档案缺失：{gaps:?}"
+        );
     }
     // 建 REACH（无 SAFETY）→ reach 可读、SAFETY 仍空
     {
         let conn = state.0.lock().unwrap();
         GoalTargetRepository::new(&conn)
-            .create(p, "postgraduate", "reach", "华中科技大学", Some("2027-12-25"),
-                r#"{"institution_name":"华中科技大学","program_name":"计算机技术"}"#, "{}", "active")
+            .create(
+                p,
+                "postgraduate",
+                "reach",
+                "华中科技大学",
+                Some("2027-12-25"),
+                r#"{"institution_name":"华中科技大学","program_name":"计算机技术"}"#,
+                "{}",
+                "active",
+            )
             .unwrap();
-        let v = read(&conn, p, "get_higher_overview", &json!({ "date": LOCAL_DATE }));
+        let v = read(
+            &conn,
+            p,
+            "get_higher_overview",
+            &json!({ "date": LOCAL_DATE }),
+        );
         assert_eq!(v["goal_targets"]["reach"]["title"], "华中科技大学");
         assert!(v["goal_targets"]["safety"].is_null(), "SAFETY 仍为空");
         let gaps = v["gaps"].as_array().unwrap();
-        assert!(!gaps.iter().any(|g| g.as_str().unwrap().contains("REACH 目标缺失")));
-        assert!(gaps.iter().any(|g| g.as_str().unwrap().contains("SAFETY")), "SAFETY 缺失仍应指出：{gaps:?}");
+        assert!(!gaps
+            .iter()
+            .any(|g| g.as_str().unwrap().contains("REACH 目标缺失")));
+        assert!(
+            gaps.iter().any(|g| g.as_str().unwrap().contains("SAFETY")),
+            "SAFETY 缺失仍应指出：{gaps:?}"
+        );
     }
     // 补 SAFETY → 两者均非空，相关 gap 消失
     {
         let conn = state.0.lock().unwrap();
         GoalTargetRepository::new(&conn)
-            .create(p, "postgraduate", "safety", "西安电子科技大学", None,
-                r#"{"institution_name":"西安电子科技大学","program_name":"软件工程"}"#, "{}", "active")
+            .create(
+                p,
+                "postgraduate",
+                "safety",
+                "西安电子科技大学",
+                None,
+                r#"{"institution_name":"西安电子科技大学","program_name":"软件工程"}"#,
+                "{}",
+                "active",
+            )
             .unwrap();
-        let v = read(&conn, p, "get_higher_overview", &json!({ "date": LOCAL_DATE }));
+        let v = read(
+            &conn,
+            p,
+            "get_higher_overview",
+            &json!({ "date": LOCAL_DATE }),
+        );
         assert_eq!(v["goal_targets"]["safety"]["title"], "西安电子科技大学");
         let gaps = v["gaps"].as_array().unwrap();
-        assert!(!gaps.iter().any(|g| g.as_str().unwrap().contains("SAFETY 目标缺失")));
-        assert!(!gaps.iter().any(|g| g.as_str().unwrap().contains("REACH 目标缺失")));
+        assert!(!gaps
+            .iter()
+            .any(|g| g.as_str().unwrap().contains("SAFETY 目标缺失")));
+        assert!(!gaps
+            .iter()
+            .any(|g| g.as_str().unwrap().contains("REACH 目标缺失")));
     }
 }
 
@@ -217,13 +315,21 @@ fn b03_overview_goal_tree_blueprint_tasks_knowledge() {
         let t2 = TaskRepository::new(&conn)
             .create_for_profile(p, None, "英语单词", Some(LOCAL_DATE), None, None, None)
             .unwrap();
-        conn.execute("UPDATE tasks SET status='completed' WHERE id=?1", params![t2.id]).unwrap();
+        conn.execute(
+            "UPDATE tasks SET status='completed' WHERE id=?1",
+            params![t2.id],
+        )
+        .unwrap();
         TaskRepository::new(&conn)
             .create_for_profile(p, None, "政治强化", Some("2026-08-25"), None, None, None)
             .unwrap();
         // 知识：2 个掌握 / 1 个未掌握
         let gid = final_id;
-        for (name, m) in [("高数", "mastered"), ("线代", "mastered"), ("概率", "learning")] {
+        for (name, m) in [
+            ("高数", "mastered"),
+            ("线代", "mastered"),
+            ("概率", "learning"),
+        ] {
             conn.execute(
                 "INSERT INTO learning_items (profile_id, goal_id, parent_id, name, content, mastery_status)
                  VALUES (?1, ?2, NULL, ?3, '', ?4)",
@@ -234,7 +340,12 @@ fn b03_overview_goal_tree_blueprint_tasks_knowledge() {
         p
     };
     let conn = state.0.lock().unwrap();
-    let v = read(&conn, p, "get_higher_overview", &json!({ "date": LOCAL_DATE }));
+    let v = read(
+        &conn,
+        p,
+        "get_higher_overview",
+        &json!({ "date": LOCAL_DATE }),
+    );
     // 最终目标
     assert_eq!(v["final_goal"]["name"], "2027 考研上岸", "最终目标可读");
     // 目标树摘要
@@ -245,13 +356,26 @@ fn b03_overview_goal_tree_blueprint_tasks_knowledge() {
     assert_eq!(v["blueprint"]["title"], "2027 考研总蓝图");
     assert_eq!(v["blueprint"]["phase_count"], 2);
     assert_eq!(v["blueprint"]["active_phase"]["title"], "基础阶段");
-    assert!(v["blueprint"].get("content_md").is_none(), "overview 不得返回蓝图全文");
+    assert!(
+        v["blueprint"].get("content_md").is_none(),
+        "overview 不得返回蓝图全文"
+    );
     // 近期任务摘要
     assert_eq!(v["recent_tasks"]["today_pending"], 1);
     assert_eq!(v["recent_tasks"]["today_completed"], 1);
-    assert_eq!(v["recent_tasks"]["next_7d_pending"], 1, "2026-08-25 在 7 天窗口内");
-    assert!(v["recent_tasks"]["today_pending_titles"].as_array().unwrap().iter()
-        .any(|t| t == "高数复习"), "今日待办标题：{}", v["recent_tasks"]["today_pending_titles"]);
+    assert_eq!(
+        v["recent_tasks"]["next_7d_pending"], 1,
+        "2026-08-25 在 7 天窗口内"
+    );
+    assert!(
+        v["recent_tasks"]["today_pending_titles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t == "高数复习"),
+        "今日待办标题：{}",
+        v["recent_tasks"]["today_pending_titles"]
+    );
     // 知识摘要
     assert_eq!(v["knowledge"]["items"], 3);
     assert_eq!(v["knowledge"]["by_mastery"]["mastered"], 2);
@@ -286,30 +410,66 @@ fn b04_personalization_source_list_and_pagination() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["file_name"], "我的资料.md");
     assert_eq!(arr[0]["status"], "imported");
-    assert_eq!(arr[0]["chars"], total_expected, "字符数 = chunks 汇总：{}", arr[0]["chars"]);
+    assert_eq!(
+        arr[0]["chars"], total_expected,
+        "字符数 = chunks 汇总：{}",
+        arr[0]["chars"]
+    );
     let sid = arr[0]["id"].as_i64().unwrap();
     // read 第一页（100 字符）
-    let page1 = read(&conn, p, "read_personalization_source",
-        &json!({ "source_id": sid, "start_char": 0, "max_chars": 100 }));
+    let page1 = read(
+        &conn,
+        p,
+        "read_personalization_source",
+        &json!({ "source_id": sid, "start_char": 0, "max_chars": 100 }),
+    );
     assert_eq!(page1["total_chars"], total_expected);
     assert_eq!(page1["start_char"], 0);
-    assert_eq!(page1["text"].as_str().unwrap().chars().count(), 100, "本页恰好 100 字符");
+    assert_eq!(
+        page1["text"].as_str().unwrap().chars().count(),
+        100,
+        "本页恰好 100 字符"
+    );
     assert_eq!(page1["next_start_char"], 100);
     assert_eq!(page1["has_more"], true, "未读完必须 has_more=true");
     // 续读第二页 → 拼接还原原文
     let next = page1["next_start_char"].as_i64().unwrap();
-    let page2 = read(&conn, p, "read_personalization_source",
-        &json!({ "source_id": sid, "start_char": next, "max_chars": 10000 }));
-    let joined: String = format!("{}{}", page1["text"].as_str().unwrap(), page2["text"].as_str().unwrap());
-    assert_eq!(joined.chars().count() as i64, total_expected, "分页拼接必须无损");
+    let page2 = read(
+        &conn,
+        p,
+        "read_personalization_source",
+        &json!({ "source_id": sid, "start_char": next, "max_chars": 10000 }),
+    );
+    let joined: String = format!(
+        "{}{}",
+        page1["text"].as_str().unwrap(),
+        page2["text"].as_str().unwrap()
+    );
+    assert_eq!(
+        joined.chars().count() as i64,
+        total_expected,
+        "分页拼接必须无损"
+    );
     assert_eq!(page2["has_more"], false, "读完必须 has_more=false");
     // 越界 start_char 钳制到 total
-    let over = read(&conn, p, "read_personalization_source",
-        &json!({ "source_id": sid, "start_char": 99999, "max_chars": 50 }));
-    assert_eq!(over["start_char"], total_expected, "start_char 必须钳制到 total_chars");
+    let over = read(
+        &conn,
+        p,
+        "read_personalization_source",
+        &json!({ "source_id": sid, "start_char": 99999, "max_chars": 50 }),
+    );
+    assert_eq!(
+        over["start_char"], total_expected,
+        "start_char 必须钳制到 total_chars"
+    );
     // 跨 Profile 隔离
     let p2 = mk_profile(&conn);
-    let err = execute_read_tool(&conn, p2, "read_personalization_source", &json!({ "source_id": sid }));
+    let err = execute_read_tool(
+        &conn,
+        p2,
+        "read_personalization_source",
+        &json!({ "source_id": sid }),
+    );
     assert!(err.is_err(), "跨档案读取必须被拒绝");
 }
 
@@ -323,8 +483,16 @@ fn b05_all_read_tools_zero_mutation() {
         let p = mk_profile(&conn);
         mk_confirmed_personalization(&conn, p, "资料内容");
         GoalTargetRepository::new(&conn)
-            .create(p, "postgraduate", "reach", "华中科技大学", None,
-                r#"{"institution_name":"华中科技大学","program_name":"计算机技术"}"#, "{}", "active")
+            .create(
+                p,
+                "postgraduate",
+                "reach",
+                "华中科技大学",
+                None,
+                r#"{"institution_name":"华中科技大学","program_name":"计算机技术"}"#,
+                "{}",
+                "active",
+            )
             .unwrap();
         TaskRepository::new(&conn)
             .create_for_profile(p, None, "T", Some(LOCAL_DATE), None, None, None)
@@ -333,22 +501,36 @@ fn b05_all_read_tools_zero_mutation() {
     };
     let conn = state.0.lock().unwrap();
     let tables = [
-        "tasks", "goals", "goal_targets", "learning_items", "study_sessions",
-        "ai_change_sets", "personalization_profiles", "personalization_sources",
-        "personalization_source_chunks", "planning_blueprints", "memory_records",
+        "tasks",
+        "goals",
+        "goal_targets",
+        "learning_items",
+        "study_sessions",
+        "ai_change_sets",
+        "personalization_profiles",
+        "personalization_sources",
+        "personalization_source_chunks",
+        "planning_blueprints",
+        "memory_records",
     ];
     let before: Vec<i64> = tables.iter().map(|t| count(&conn, t)).collect();
     for (tool, args) in [
         ("get_higher_overview", json!({ "date": LOCAL_DATE })),
         ("read_personalization", json!({})),
         ("list_personalization_sources", json!({})),
-        ("read_personalization_source", json!({ "source_id": 1, "max_chars": 50 })),
+        (
+            "read_personalization_source",
+            json!({ "source_id": 1, "max_chars": 50 }),
+        ),
     ] {
         let out = execute_read_tool(&conn, p, tool, &args);
         assert!(out.is_ok(), "{tool} 不应失败：{:?}", out.err());
     }
     let after: Vec<i64> = tables.iter().map(|t| count(&conn, t)).collect();
-    assert_eq!(before, after, "Phase B 全部读工具必须 0 mutation：{tables:?} {before:?} → {after:?}");
+    assert_eq!(
+        before, after,
+        "Phase B 全部读工具必须 0 mutation：{tables:?} {before:?} → {after:?}"
+    );
 }
 
 // =============== B06 · Global Agent 端到端（overview 驱动真实作答） ===============
@@ -362,13 +544,23 @@ fn b06_agent_answers_from_overview_end_to_end() {
         let conn = state.0.lock().unwrap();
         let p = mk_profile(&conn);
         GoalTargetRepository::new(&conn)
-            .create(p, "postgraduate", "reach", "华中科技大学", None,
-                r#"{"institution_name":"华中科技大学","program_name":"计算机技术"}"#, "{}", "active")
+            .create(
+                p,
+                "postgraduate",
+                "reach",
+                "华中科技大学",
+                None,
+                r#"{"institution_name":"华中科技大学","program_name":"计算机技术"}"#,
+                "{}",
+                "active",
+            )
             .unwrap();
         TaskRepository::new(&conn)
             .create_for_profile(p, None, "高数冲刺", Some(LOCAL_DATE), None, None, None)
             .unwrap();
-        let conv = ConversationRepository::new(&conn).create(p, "assistant", "PB").unwrap();
+        let conv = ConversationRepository::new(&conn)
+            .create(p, "assistant", "PB")
+            .unwrap();
         let msg = ConversationRepository::new(&conn)
             .add_message(conv.id, p, "user", "帮我看看我现在的整体情况", None)
             .unwrap();
@@ -384,18 +576,32 @@ fn b06_agent_answers_from_overview_end_to_end() {
         model: "m".into(),
         thinking_mode: ThinkingMode::Off,
         capabilities: AiCapabilities {
-            basic_chat: Some(true), structured_json: Some(true), json_strategy: JsonStrategy::Native,
-            tool_calls: Some(true), streaming: Some(true), temperature_zero: Some(true),
+            basic_chat: Some(true),
+            structured_json: Some(true),
+            json_strategy: JsonStrategy::Native,
+            tool_calls: Some(true),
+            streaming: Some(true),
+            temperature_zero: Some(true),
         },
         compatibility_status: "full".into(),
         json_mode_override: None,
     };
     let args = AgentTurnArgs {
-        profile_id: p, conversation_id: c, run_id: "dev0066b-run", token: &token,
-        current_message_id: m, user_message: "帮我看看我现在的整体情况",
-        primary: &cfg, page_label: "Today", knowledge_path: None, session_title: None,
-        date: None, web_enabled: false, brave_key: "",
-        local_date: LOCAL_DATE.into(), local_datetime: format!("{LOCAL_DATE} 10:30"),
+        profile_id: p,
+        conversation_id: c,
+        run_id: "dev0066b-run",
+        token: &token,
+        current_message_id: m,
+        user_message: "帮我看看我现在的整体情况",
+        primary: &cfg,
+        page_label: "Today",
+        knowledge_path: None,
+        session_title: None,
+        date: None,
+        web_enabled: false,
+        brave_key: "",
+        local_date: LOCAL_DATE.into(),
+        local_datetime: format!("{LOCAL_DATE} 10:30"),
         timezone_offset_minutes: 480,
         // DEV-0077.3 §十四/§七十九：测试默认（无 client_turn_id / 不捕获事件）
         client_turn_id: "",
@@ -403,7 +609,9 @@ fn b06_agent_answers_from_overview_end_to_end() {
     };
     let scripted = vec![
         Completion {
-            content: None, reasoning_content: None, finish_reason: Some("tool_calls".into()),
+            content: None,
+            reasoning_content: None,
+            finish_reason: Some("tool_calls".into()),
             tool_calls: Some(json!([{
                 "id": "c1", "type": "function",
                 "function": { "name": "get_higher_overview", "arguments": json!({ "date": LOCAL_DATE }).to_string() }
@@ -411,13 +619,18 @@ fn b06_agent_answers_from_overview_end_to_end() {
             usage: Usage::default(),
         },
         Completion {
-            content: Some("你的 REACH 目标是华中科技大学，今天有 1 个待办（高数冲刺），暂无规划蓝图。".into()),
-            reasoning_content: None, finish_reason: Some("stop".into()), tool_calls: None,
+            content: Some(
+                "你的 REACH 目标是华中科技大学，今天有 1 个待办（高数冲刺），暂无规划蓝图。".into(),
+            ),
+            reasoning_content: None,
+            finish_reason: Some("stop".into()),
+            tool_calls: None,
             usage: Usage::default(),
         },
     ];
     let responder = ModelResponder::Scripted(std::sync::Mutex::new(VecDeque::from(scripted)));
-    let out = tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
+    let out =
+        tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
@@ -429,10 +642,17 @@ fn b06_agent_answers_from_overview_end_to_end() {
         .filter(|x| x.role == "assistant")
         .map(|x| x.content)
         .collect::<Vec<_>>();
-    assert!(msgs.iter().any(|t| t.contains("华中科技大学") && t.contains("高数冲刺")),
-        "回答必须基于 overview 真实数据：{msgs:?}");
+    assert!(
+        msgs.iter()
+            .any(|t| t.contains("华中科技大学") && t.contains("高数冲刺")),
+        "回答必须基于 overview 真实数据：{msgs:?}"
+    );
     // 读路径 0 ChangeSet
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "overview 驱动的回答不得产生写入");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "overview 驱动的回答不得产生写入"
+    );
 }
 
 // =============== B07 · Phase B 收口：week 不得进入正式 Goal Tree 语义 ===============
@@ -475,10 +695,18 @@ fn b07_goal_tree_week_is_legacy_only() {
         p
     };
     let conn = state.0.lock().unwrap();
-    let v = read(&conn, p, "get_higher_overview", &json!({ "date": LOCAL_DATE }));
+    let v = read(
+        &conn,
+        p,
+        "get_higher_overview",
+        &json!({ "date": LOCAL_DATE }),
+    );
     let tree = &v["goal_tree"];
     // 正式层级严格 final → year → month → day
-    assert_eq!(tree["levels"], "final → year → month → day", "正式层级声明：{tree}");
+    assert_eq!(
+        tree["levels"], "final → year → month → day",
+        "正式层级声明：{tree}"
+    );
     assert_eq!(tree["final"], 1);
     assert_eq!(tree["year"], 1);
     assert_eq!(tree["day"], 1);
@@ -488,11 +716,20 @@ fn b07_goal_tree_week_is_legacy_only() {
         "week 不得作为正式层级暴露：{tree}"
     );
     // total_active 只计正式层级（final+year+day=3），week 不计入
-    assert_eq!(tree["total_active"], 3, "total_active 不得包含 legacy week：{tree}");
+    assert_eq!(
+        tree["total_active"], 3,
+        "total_active 不得包含 legacy week：{tree}"
+    );
     // week 只在 legacy 诊断块出现
-    assert_eq!(tree["legacy"]["week_goals"], 2, "历史 week 仅作诊断计数：{tree}");
+    assert_eq!(
+        tree["legacy"]["week_goals"], 2,
+        "历史 week 仅作诊断计数：{tree}"
+    );
     assert!(
-        tree["legacy"]["note"].as_str().unwrap().contains("禁止创建 week goal"),
+        tree["legacy"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("禁止创建 week goal"),
         "legacy note 必须明示禁止创建 week goal"
     );
 }

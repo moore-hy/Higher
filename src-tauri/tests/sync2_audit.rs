@@ -34,13 +34,21 @@ fn temp_db(tag: &str) -> Connection {
 }
 
 fn count_task(conn: &Connection, title: &str) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM tasks WHERE title = ?1", params![title], |r| r.get(0))
-        .unwrap()
+    conn.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE title = ?1",
+        params![title],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 fn count_profile(conn: &Connection, name: &str) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM study_profiles WHERE name = ?1", params![name], |r| r.get(0))
-        .unwrap()
+    conn.query_row(
+        "SELECT COUNT(*) FROM study_profiles WHERE name = ?1",
+        params![name],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 struct TestConnProvider(Arc<Mutex<Connection>>);
@@ -60,23 +68,33 @@ fn audit_android_legacy_profile_now_converges() {
     let a = temp_db("a1b");
     let b = temp_db("b1b");
 
-    a.execute("INSERT INTO study_profiles (name) VALUES ('2028考研')", []).unwrap();
+    a.execute("INSERT INTO study_profiles (name) VALUES ('2028考研')", [])
+        .unwrap();
     a.execute(
         "INSERT INTO tasks (profile_id, title) VALUES ((SELECT MAX(id) FROM study_profiles), 'A-存量任务')",
         [],
     )
     .unwrap();
 
-    b.execute("INSERT INTO study_profiles (name) VALUES ('2028测试')", []).unwrap();
+    b.execute("INSERT INTO study_profiles (name) VALUES ('2028测试')", [])
+        .unwrap();
     // 模拟迁移前存量：v028 backfill 只建 entity_map，不建 outbox；
     // 再重放 v029（幂等）= 真实设备上 v029 在存量数据之后执行的顺序
-    b.execute("DELETE FROM sync_outbox WHERE entity_type = 'study_profile'", []).unwrap();
+    b.execute(
+        "DELETE FROM sync_outbox WHERE entity_type = 'study_profile'",
+        [],
+    )
+    .unwrap();
     app_lib::migrations::v029_local_sync_backfill_outbox::up(&b).unwrap();
-    let b_profile: i64 = b.query_row("SELECT MAX(id) FROM study_profiles", [], |r| r.get(0)).unwrap();
+    let b_profile: i64 = b
+        .query_row("SELECT MAX(id) FROM study_profiles", [], |r| r.get(0))
+        .unwrap();
 
     let shared_a = Arc::new(Mutex::new(a));
     let handle = SyncServerHandle::new();
-    let port = handle.start(Arc::new(TestConnProvider(shared_a.clone()))).unwrap();
+    let port = handle
+        .start(Arc::new(TestConnProvider(shared_a.clone())))
+        .unwrap();
     let code = handle.new_pairing_session().0;
     pair_with_server(&b, "127.0.0.1", port, &code, None).unwrap();
 
@@ -94,9 +112,15 @@ fn audit_android_legacy_profile_now_converges() {
 
     let (a_task, a_profile) = {
         let guard = shared_a.lock().unwrap();
-        (count_task(&guard, "ANDROID-SYNC-001"), count_profile(&guard, "2028测试"))
+        (
+            count_task(&guard, "ANDROID-SYNC-001"),
+            count_profile(&guard, "2028测试"),
+        )
     };
-    assert_eq!(a_profile, 1, "A 必须收到 B 的存量 Profile（v029 补 outbox）");
+    assert_eq!(
+        a_profile, 1,
+        "A 必须收到 B 的存量 Profile（v029 补 outbox）"
+    );
     assert_eq!(a_task, 1, "A 必须收到 B 的新 Task（真机场景 A：修复）");
     handle.stop();
 }
@@ -108,14 +132,16 @@ fn audit_windows_to_android_reports_imported_profiles() {
     let a = temp_db("a2b");
     let b = temp_db("b2b");
 
-    a.execute("INSERT INTO study_profiles (name) VALUES ('2028考研')", []).unwrap();
+    a.execute("INSERT INTO study_profiles (name) VALUES ('2028考研')", [])
+        .unwrap();
     let a_profile = a.last_insert_rowid();
     a.execute(
         "INSERT INTO tasks (profile_id, title) VALUES (?1, 'A-存量任务')",
         params![a_profile],
     )
     .unwrap();
-    b.execute("INSERT INTO study_profiles (name) VALUES ('2028测试')", []).unwrap();
+    b.execute("INSERT INTO study_profiles (name) VALUES ('2028测试')", [])
+        .unwrap();
     let b_active = b.last_insert_rowid();
     b.execute(
         "INSERT INTO settings (key, value) VALUES ('active_profile_id', ?1)",
@@ -125,11 +151,15 @@ fn audit_windows_to_android_reports_imported_profiles() {
 
     let shared_a = Arc::new(Mutex::new(a));
     let handle = SyncServerHandle::new();
-    let port = handle.start(Arc::new(TestConnProvider(shared_a.clone()))).unwrap();
+    let port = handle
+        .start(Arc::new(TestConnProvider(shared_a.clone())))
+        .unwrap();
     let code = handle.new_pairing_session().0;
     let pair = pair_with_server(&b, "127.0.0.1", port, &code, None).unwrap();
     assert!(
-        pair.imported_profiles.iter().any(|p| p.name.contains("2028考研")),
+        pair.imported_profiles
+            .iter()
+            .any(|p| p.name.contains("2028考研")),
         "配对结果必须包含导入档案清单：{:?}",
         pair.imported_profiles
     );
@@ -159,10 +189,17 @@ fn audit_windows_to_android_reports_imported_profiles() {
         )
         .unwrap();
     assert_eq!(b_task, 1);
-    assert_eq!(b_task_profile, "2028考研", "数据归属远端档案（active_profile_id 本机状态不动）");
+    assert_eq!(
+        b_task_profile, "2028考研",
+        "数据归属远端档案（active_profile_id 本机状态不动）"
+    );
 
     // §六：pending per-peer 归零
     let peer_id = pair.server_device_id.clone();
-    assert_eq!(pending_outbox_count_for(&b, Some(&peer_id)).unwrap(), 0, "同步成功后待发送应归零");
+    assert_eq!(
+        pending_outbox_count_for(&b, Some(&peer_id)).unwrap(),
+        0,
+        "同步成功后待发送应归零"
+    );
     handle.stop();
 }

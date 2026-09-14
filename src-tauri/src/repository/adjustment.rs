@@ -62,10 +62,7 @@ impl<'a> AdjustmentRepository<'a> {
                 |row| row.get(0),
             )
             .map_err(|_| {
-                rusqlite::Error::InvalidParameterName(format!(
-                    "feedback_id {} 不存在",
-                    feedback_id
-                ))
+                rusqlite::Error::InvalidParameterName(format!("feedback_id {} 不存在", feedback_id))
             })?;
         if fb_goal != goal_id {
             return Err(rusqlite::Error::InvalidParameterName(

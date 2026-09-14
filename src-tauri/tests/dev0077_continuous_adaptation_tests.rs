@@ -13,14 +13,16 @@ use std::collections::VecDeque;
 use app_lib::ai::adaptation::{compiler, decision, evidence};
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{Completion, Usage};
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
 use app_lib::repository::conversation::ConversationRepository;
 use app_lib::repository::planning::PlanningRepository;
+use app_lib::repository::study_profile::StudyProfileRepository;
 use app_lib::repository::study_session::StudySessionRepository;
 use app_lib::repository::task::TaskRepository;
-use app_lib::repository::study_profile::StudyProfileRepository;
 use rusqlite::{params, Connection};
 
 const TODAY: &str = "2026-08-25";
@@ -31,8 +33,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0077_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0077_{name}_{}", std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn mk_profile(conn: &Connection) -> i64 {
@@ -131,7 +137,19 @@ fn seed_dense_reality(conn: &Connection, pid: i64) {
     // 精确对齐任务书：14 天 planned 1680min → 每天 1 任务 × 120min
     for i in 0..14 {
         let d = date_offset(TODAY, -(i as i64));
-        trepo.create_v2(pid, None, "数学复习", Some(&d), None, None, Some(120), "structured", "normal").unwrap();
+        trepo
+            .create_v2(
+                pid,
+                None,
+                "数学复习",
+                Some(&d),
+                None,
+                None,
+                Some(120),
+                "structured",
+                "normal",
+            )
+            .unwrap();
     }
     // completed 一部分 + Session 45min × 8 ≈ 360…（actual=760 → 用多条 session 累计）
     // 760min = 45+50+55+60+45+50+55+60+65+70+75+80+50 = 760（13 条）
@@ -162,7 +180,11 @@ fn seed_dense_reality(conn: &Connection, pid: i64) {
     for (i, id) in unfinished.iter().enumerate() {
         if i % 3 == 0 {
             // 留 2/3 未完成 → 偏差证据
-            conn.execute("UPDATE tasks SET status='completed' WHERE id=?1", params![id]).unwrap();
+            conn.execute(
+                "UPDATE tasks SET status='completed' WHERE id=?1",
+                params![id],
+            )
+            .unwrap();
         }
     }
 }
@@ -174,7 +196,13 @@ fn date_offset(base: &str, days: i64) -> String {
         match mm {
             1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
             4 | 6 | 9 | 11 => 30,
-            _ => if (yy % 4 == 0 && yy % 100 != 0) || yy % 400 == 0 { 29 } else { 28 },
+            _ => {
+                if (yy % 4 == 0 && yy % 100 != 0) || yy % 400 == 0 {
+                    29
+                } else {
+                    28
+                }
+            }
         }
     };
     let mut remain = days;
@@ -266,9 +294,17 @@ fn adapt_tc001_insufficient_evidence_keep_plan() {
     };
     // 零任务零 Session（数据不足）
     let out = run_turn(
-        &state, &vault, "ad77-tc001", pid, cid,
+        &state,
+        &vault,
+        "ad77-tc001",
+        pid,
+        cid,
         "帮我看看最近学习情况，后面的计划需要调整吗？",
-        vec![text_completion(&analyzer_json("KeepPlan", "目前没有足够证据说明规划需要调整。", serde_json::json!([])))],
+        vec![text_completion(&analyzer_json(
+            "KeepPlan",
+            "目前没有足够证据说明规划需要调整。",
+            serde_json::json!([]),
+        ))],
     )
     .unwrap();
     assert_eq!(out, "completed");
@@ -290,11 +326,24 @@ fn adapt_tc002_plan_too_dense_future_only_adjustments() {
         seed_dense_reality(&conn, pid);
         // 未来任务（调整对象）
         TaskRepository::new(&conn)
-            .create_v2(pid, None, "数学复习-未来", Some(&date_offset(TODAY, 3)), None, None, Some(120), "structured", "normal")
+            .create_v2(
+                pid,
+                None,
+                "数学复习-未来",
+                Some(&date_offset(TODAY, 3)),
+                None,
+                None,
+                Some(120),
+                "structured",
+                "normal",
+            )
             .unwrap();
         (pid, new_conv(&conn, pid))
     };
-    let before_sessions = { let conn = state.0.lock().unwrap(); session_minutes_sum(&conn, pid) };
+    let before_sessions = {
+        let conn = state.0.lock().unwrap();
+        session_minutes_sum(&conn, pid)
+    };
     assert_eq!(before_sessions, 760, "前置：真实投入 760 分钟");
 
     let intents = serde_json::json!([
@@ -302,16 +351,28 @@ fn adapt_tc002_plan_too_dense_future_only_adjustments() {
          "reason": "降低未来任务估时至真实水平"}
     ]);
     let out = run_turn(
-        &state, &vault, "ad77-tc002", pid, cid,
+        &state,
+        &vault,
+        "ad77-tc002",
+        pid,
+        cid,
         "最近确实每天只能学1小时了，帮我把计划调一下", // Explicit（§二十二A）
-        vec![text_completion(&analyzer_json("SuggestAdjustment", "发现计划与实际时间投入存在明显偏差", intents))],
+        vec![text_completion(&analyzer_json(
+            "SuggestAdjustment",
+            "发现计划与实际时间投入存在明显偏差",
+            intents,
+        ))],
     )
     .unwrap();
     assert_eq!(out, "completed");
 
     let conn = state.0.lock().unwrap();
     // 历史 Session 零修改（§四十六历史真实性）
-    assert_eq!(session_minutes_sum(&conn, pid), 760, "历史 Session 时长不变");
+    assert_eq!(
+        session_minutes_sum(&conn, pid),
+        760,
+        "历史 Session 时长不变"
+    );
     // 历史任务未被触碰：过去任务 status 不因 adaptation 改变（completed 部分保持）
     let hist: i64 = conn.query_row(
         "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND planned_date < ?2 AND (status='completed')",
@@ -338,7 +399,11 @@ fn adapt_tc003_temporary_situation_ask_then_keep() {
     };
     // 第一轮：短期下降，原因未知 → NeedUserInput（挂起 waiting_user）
     let out1 = run_turn(
-        &state, &vault, "ad77-tc003-r1", pid, cid,
+        &state,
+        &vault,
+        "ad77-tc003-r1",
+        pid,
+        cid,
         "帮我看看最近学习情况，后面的计划需要调整吗？",
         vec![text_completion(&json_body(&serde_json::json!({
             "decision": "NeedUserInput",
@@ -362,16 +427,31 @@ fn adapt_tc003_temporary_situation_ask_then_keep() {
 
     // 第二轮：用户答「临时出差，下周恢复」→ 同一 Workflow 续接 → KeepPlan
     let out2 = run_turn(
-        &state, &vault, "ad77-tc003-r2", pid, cid,
+        &state,
+        &vault,
+        "ad77-tc003-r2",
+        pid,
+        cid,
         "最近临时出差，下周恢复",
-        vec![text_completion(&analyzer_json("KeepPlan", "属临时情况，计划保持不变。", serde_json::json!([])))],
+        vec![text_completion(&analyzer_json(
+            "KeepPlan",
+            "属临时情况，计划保持不变。",
+            serde_json::json!([]),
+        ))],
     )
     .unwrap();
     assert_eq!(out2, "completed");
     let conn = state.0.lock().unwrap();
-    assert_eq!(count_change_sets(&conn, pid), 0, "临时情况不得永久降低规划（0 mutation）");
+    assert_eq!(
+        count_change_sets(&conn, pid),
+        0,
+        "临时情况不得永久降低规划（0 mutation）"
+    );
     let text = assistant_text(&conn, pid, cid);
-    assert!(text.contains("临时情况") || text.contains("保持不变"), "KeepPlan 文案：{text}");
+    assert!(
+        text.contains("临时情况") || text.contains("保持不变"),
+        "KeepPlan 文案：{text}"
+    );
 }
 
 // =============== ADAPT-TC004 · 只改未来（过去/今日/未来） ===============
@@ -379,37 +459,86 @@ fn adapt_tc003_temporary_situation_ask_then_keep() {
 #[test]
 fn adapt_tc004_future_tasks_only() {
     let (state, _vault) = setup("tc004");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
     let trepo = TaskRepository::new(&conn);
     let past = trepo
-        .create_v2(pid, None, "目标任务-过去", Some(&date_offset(TODAY, -3)), None, None, Some(60), "structured", "normal")
+        .create_v2(
+            pid,
+            None,
+            "目标任务-过去",
+            Some(&date_offset(TODAY, -3)),
+            None,
+            None,
+            Some(60),
+            "structured",
+            "normal",
+        )
         .unwrap();
     let _today = trepo
-        .create_v2(pid, None, "目标任务-今日", Some(TODAY), None, None, Some(60), "structured", "normal")
+        .create_v2(
+            pid,
+            None,
+            "目标任务-今日",
+            Some(TODAY),
+            None,
+            None,
+            Some(60),
+            "structured",
+            "normal",
+        )
         .unwrap();
     let _future = trepo
-        .create_v2(pid, None, "目标任务-未来", Some(&date_offset(TODAY, 5)), None, None, Some(60), "structured", "normal")
+        .create_v2(
+            pid,
+            None,
+            "目标任务-未来",
+            Some(&date_offset(TODAY, 5)),
+            None,
+            None,
+            Some(60),
+            "structured",
+            "normal",
+        )
         .unwrap();
 
     // 过去任务作为修改目标 → Compiler 拒绝（§十九）
-    let r1 = compiler::compile_intents(&conn, pid, TODAY, &[intent("RescheduleFutureTask")
-        .t("目标任务-过去")
-        .d(&date_offset(TODAY, -3))
-        .nd(&date_offset(TODAY, 2))]);
+    let r1 = compiler::compile_intents(
+        &conn,
+        pid,
+        TODAY,
+        &[intent("RescheduleFutureTask")
+            .t("目标任务-过去")
+            .d(&date_offset(TODAY, -3))
+            .nd(&date_offset(TODAY, 2))],
+    );
     assert!(r1.is_err(), "过去任务不得成为修改目标");
 
     // 今日 + 未来 → 允许
-    let r2 = compiler::compile_intents(&conn, pid, TODAY, &[intent("RescheduleFutureTask")
-        .t("目标任务-未来")
-        .nd(&date_offset(TODAY, 7))]);
+    let r2 = compiler::compile_intents(
+        &conn,
+        pid,
+        TODAY,
+        &[intent("RescheduleFutureTask")
+            .t("目标任务-未来")
+            .nd(&date_offset(TODAY, 7))],
+    );
     assert!(r2.is_ok());
     let past_unchanged: (i64, Option<String>) = conn
-        .query_row("SELECT id, planned_date FROM tasks WHERE id=?1", params![past.id], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            "SELECT id, planned_date FROM tasks WHERE id=?1",
+            params![past.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .unwrap();
-    assert_eq!(past_unchanged.1.as_deref(), Some(date_offset(TODAY, -3).as_str()), "过去任务完全不变");
+    assert_eq!(
+        past_unchanged.1.as_deref(),
+        Some(date_offset(TODAY, -3).as_str()),
+        "过去任务完全不变"
+    );
 }
 
 // =============== ADAPT-TC005 · completed 任务不可修改 ===============
@@ -417,26 +546,70 @@ fn adapt_tc004_future_tasks_only() {
 #[test]
 fn adapt_tc005_completed_task_immutable() {
     let (state, _vault) = setup("tc005");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
     let id = TaskRepository::new(&conn)
-        .create_v2(pid, None, "已完成的未来日任务", Some(&date_offset(TODAY, 1)), None, None, Some(60), "structured", "normal")
+        .create_v2(
+            pid,
+            None,
+            "已完成的未来日任务",
+            Some(&date_offset(TODAY, 1)),
+            None,
+            None,
+            Some(60),
+            "structured",
+            "normal",
+        )
         .unwrap()
         .id;
-    conn.execute("UPDATE tasks SET status='completed' WHERE id=?1", params![id]).unwrap();
+    conn.execute(
+        "UPDATE tasks SET status='completed' WHERE id=?1",
+        params![id],
+    )
+    .unwrap();
 
     // reschedule → 拒
-    assert!(compiler::compile_intents(&conn, pid, TODAY, &[intent("RescheduleFutureTask")
-        .t("已完成的未来日任务").nd(&date_offset(TODAY, 2))])
-    .is_err(), "completed 任务不得 reschedule");
+    assert!(
+        compiler::compile_intents(
+            &conn,
+            pid,
+            TODAY,
+            &[intent("RescheduleFutureTask")
+                .t("已完成的未来日任务")
+                .nd(&date_offset(TODAY, 2))]
+        )
+        .is_err(),
+        "completed 任务不得 reschedule"
+    );
     // change estimate → 拒
-    assert!(compiler::compile_intents(&conn, pid, TODAY, &[intent("ChangeFutureTaskEstimate")
-        .t("已完成的未来日任务").m(30)])
-    .is_err(), "completed 任务不得改估时");
+    assert!(
+        compiler::compile_intents(
+            &conn,
+            pid,
+            TODAY,
+            &[intent("ChangeFutureTaskEstimate")
+                .t("已完成的未来日任务")
+                .m(30)]
+        )
+        .is_err(),
+        "completed 任务不得改估时"
+    );
     // reprioritize → 拒
-    assert!(compiler::compile_intents(&conn, pid, TODAY, &[intent("ReprioritizeFutureTask")
-        .t("已完成的未来日任务").p("low")])
-    .is_err(), "completed 任务不得改优先级");
+    assert!(
+        compiler::compile_intents(
+            &conn,
+            pid,
+            TODAY,
+            &[intent("ReprioritizeFutureTask")
+                .t("已完成的未来日任务")
+                .p("low")]
+        )
+        .is_err(),
+        "completed 任务不得改优先级"
+    );
 }
 
 // =============== ADAPT-TC006 · Explicit Apply：ONE ChangeSet → auto Apply → ReadBack ===============
@@ -448,7 +621,17 @@ fn adapt_tc006_explicit_apply_one_changeset_readback() {
         let conn = state.0.lock().unwrap();
         let pid = mk_profile(&conn);
         TaskRepository::new(&conn)
-            .create_v2(pid, None, "英语阅读", Some(&date_offset(TODAY, 2)), None, None, Some(90), "structured", "normal")
+            .create_v2(
+                pid,
+                None,
+                "英语阅读",
+                Some(&date_offset(TODAY, 2)),
+                None,
+                None,
+                Some(90),
+                "structured",
+                "normal",
+            )
             .unwrap();
         (pid, new_conv(&conn, pid))
     };
@@ -457,18 +640,29 @@ fn adapt_tc006_explicit_apply_one_changeset_readback() {
          "reason": "对齐真实投入"}
     ]);
     let out = run_turn(
-        &state, &vault, "ad77-tc006", pid, cid,
+        &state,
+        &vault,
+        "ad77-tc006",
+        pid,
+        cid,
         "帮我调整并写进去",
-        vec![text_completion(&analyzer_json("SuggestAdjustment", "建议降低英语阅读估时", intents))],
+        vec![text_completion(&analyzer_json(
+            "SuggestAdjustment",
+            "建议降低英语阅读估时",
+            intents,
+        ))],
     )
     .unwrap();
     assert_eq!(out, "completed");
     let conn = state.0.lock().unwrap();
     assert_eq!(count_change_sets(&conn, pid), 1, "ONE ChangeSet");
-    let cs: (i64, String) = conn.query_row(
-        "SELECT id, status FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        }).unwrap();
+    let cs: (i64, String) = conn
+        .query_row(
+            "SELECT id, status FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
     assert_eq!(cs.1, "applied", "Level1 auto Apply");
     let est: i64 = conn.query_row(
         "SELECT COALESCE(estimated_minutes,0) FROM tasks WHERE profile_id=?1 AND title='英语阅读'",
@@ -494,14 +688,26 @@ fn adapt_tc007_proactive_suggestion_zero_mutation() {
          "reason": "建议降低估时"}
     ]);
     let out = run_turn(
-        &state, &vault, "ad77-tc007", pid, cid,
+        &state,
+        &vault,
+        "ad77-tc007",
+        pid,
+        cid,
         "帮我看看最近学习情况，后面的计划需要调整吗？", // Proactive（无 explicit intent）
-        vec![text_completion(&analyzer_json("SuggestAdjustment", "发现偏差，给出建议", intents))],
+        vec![text_completion(&analyzer_json(
+            "SuggestAdjustment",
+            "发现偏差，给出建议",
+            intents,
+        ))],
     )
     .unwrap();
     assert_eq!(out, "completed");
     let conn = state.0.lock().unwrap();
-    assert_eq!(count_change_sets(&conn, pid), 0, "AI 主动发现 → suggestion only，DB 0 mutation");
+    assert_eq!(
+        count_change_sets(&conn, pid),
+        0,
+        "AI 主动发现 → suggestion only，DB 0 mutation"
+    );
     let text = assistant_text(&conn, pid, cid);
     assert!(text.contains("建议"), "展示建议：{text}");
     assert!(text.contains("确认"), "提示需用户确认：{text}");
@@ -512,22 +718,46 @@ fn adapt_tc007_proactive_suggestion_zero_mutation() {
 #[test]
 fn adapt_tc008_atomicity_one_invalid_aborts_all() {
     let (state, _vault) = setup("tc008");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
     TaskRepository::new(&conn)
-        .create_v2(pid, None, "任务A", Some(&date_offset(TODAY, 2)), None, None, Some(60), "structured", "normal")
+        .create_v2(
+            pid,
+            None,
+            "任务A",
+            Some(&date_offset(TODAY, 2)),
+            None,
+            None,
+            Some(60),
+            "structured",
+            "normal",
+        )
         .unwrap();
     // Action B invalid：不存在的任务引用
-    let r = compiler::compile_intents(&conn, pid, TODAY, &[
-        intent("ChangeFutureTaskEstimate").t("任务A").m(45),
-        intent("ChangeFutureTaskEstimate").t("不存在的任务B").m(30),
-        intent("RescheduleFutureTask").t("任务A").nd(&date_offset(TODAY, 4)),
-    ]);
+    let r = compiler::compile_intents(
+        &conn,
+        pid,
+        TODAY,
+        &[
+            intent("ChangeFutureTaskEstimate").t("任务A").m(45),
+            intent("ChangeFutureTaskEstimate").t("不存在的任务B").m(30),
+            intent("RescheduleFutureTask")
+                .t("任务A")
+                .nd(&date_offset(TODAY, 4)),
+        ],
+    );
     assert!(r.is_err(), "B 无效 → 整包编译失败");
     // A 未被写入（0 mutation）
-    let est: i64 = conn.query_row(
-        "SELECT COALESCE(estimated_minutes,0) FROM tasks WHERE profile_id=?1 AND title='任务A'",
-        params![pid], |r| r.get(0)).unwrap();
+    let est: i64 = conn
+        .query_row(
+            "SELECT COALESCE(estimated_minutes,0) FROM tasks WHERE profile_id=?1 AND title='任务A'",
+            params![pid],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(est, 60, "A 保持原值（整包 0 mutation）");
     assert_eq!(count_change_sets(&conn, pid), 0);
 }
@@ -547,7 +777,17 @@ fn adapt_tc009_historical_truth_immutable() {
             params![pid],
         ).unwrap();
         TaskRepository::new(&conn)
-            .create_v2(pid, None, "调整对象", Some(&date_offset(TODAY, 2)), None, None, Some(90), "structured", "normal")
+            .create_v2(
+                pid,
+                None,
+                "调整对象",
+                Some(&date_offset(TODAY, 2)),
+                None,
+                None,
+                Some(90),
+                "structured",
+                "normal",
+            )
             .unwrap();
         (pid, new_conv(&conn, pid))
     };
@@ -555,16 +795,29 @@ fn adapt_tc009_historical_truth_immutable() {
         {"kind": "ChangeFutureTaskEstimate", "task_title_hint": "调整对象", "new_estimated_minutes": 45}
     ]);
     let out = run_turn(
-        &state, &vault, "ad77-tc009", pid, cid,
+        &state,
+        &vault,
+        "ad77-tc009",
+        pid,
+        cid,
         "复盘一下并更新我的计划",
-        vec![text_completion(&analyzer_json("SuggestAdjustment", "调整未来估时", intents))],
+        vec![text_completion(&analyzer_json(
+            "SuggestAdjustment",
+            "调整未来估时",
+            intents,
+        ))],
     )
     .unwrap();
     assert_eq!(out, "completed");
     let conn = state.0.lock().unwrap();
     // Session 仍 45min
-    let secs: i64 = conn.query_row(
-        "SELECT duration_seconds FROM study_sessions WHERE profile_id=?1", params![pid], |r| r.get(0)).unwrap();
+    let secs: i64 = conn
+        .query_row(
+            "SELECT duration_seconds FROM study_sessions WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(secs, 2700, "历史 Session 仍为 45 分钟");
 }
 
@@ -573,21 +826,37 @@ fn adapt_tc009_historical_truth_immutable() {
 #[test]
 fn adapt_tc010_formal_goal_tree_no_week() {
     let (state, _vault) = setup("tc010");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
     // Evidence 构建（含窗口）不产生任何 goal
     let ev = evidence::build_adaptation_evidence(&conn, pid, TODAY);
     assert_eq!(ev.windows.len(), 3, "三统计窗口");
-    assert!(ev.windows.iter().all(|w| [7u16, 14, 30].contains(&w.days)), "仅 7/14/30");
-    let weeks: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM goals WHERE goal_level='week'", [], |r| r.get(0)).unwrap();
+    assert!(
+        ev.windows.iter().all(|w| [7u16, 14, 30].contains(&w.days)),
+        "仅 7/14/30"
+    );
+    let weeks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM goals WHERE goal_level='week'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(weeks, 0, "Evidence 窗口不产生 week goal");
     // prompt 摘要无 week goal 语义
     let s = evidence::evidence_prompt_summary(&ev);
     assert!(!s.contains("week goal"));
     // 层级仅识别 final/year/month/day（goal_context.goal_levels_present 来自真实表）
-    let levels: Vec<String> = conn.query_row(
-        "SELECT COUNT(*) FROM goals WHERE profile_id=?1", params![pid], |_| Ok(vec![])).unwrap_or_default();
+    let levels: Vec<String> = conn
+        .query_row(
+            "SELECT COUNT(*) FROM goals WHERE profile_id=?1",
+            params![pid],
+            |_| Ok(vec![]),
+        )
+        .unwrap_or_default();
     let _ = levels;
 }
 
@@ -604,7 +873,17 @@ fn adapt_tc011_readback_mismatch_run_failed() {
         // 本 TC 验证 verify_failed 路径的汇报契约：pack 返回 verify_failed 时
         // adaptation 收口必须 failed 且不得输出「调整成功」类话术。
         TaskRepository::new(&conn)
-            .create_v2(pid, None, "验证目标", Some(&date_offset(TODAY, 2)), None, None, Some(60), "structured", "normal")
+            .create_v2(
+                pid,
+                None,
+                "验证目标",
+                Some(&date_offset(TODAY, 2)),
+                None,
+                None,
+                Some(60),
+                "structured",
+                "normal",
+            )
             .unwrap();
         (pid, new_conv(&conn, pid))
     };
@@ -614,15 +893,26 @@ fn adapt_tc011_readback_mismatch_run_failed() {
         {"kind": "ChangeFutureTaskEstimate", "task_title_hint": "验证目标", "new_estimated_minutes": 9999}
     ]);
     let out = run_turn(
-        &state, &vault, "ad77-tc011", pid, cid,
+        &state,
+        &vault,
+        "ad77-tc011",
+        pid,
+        cid,
         "帮我调整并写进去",
-        vec![text_completion(&analyzer_json("SuggestAdjustment", "调整", intents))],
+        vec![text_completion(&analyzer_json(
+            "SuggestAdjustment",
+            "调整",
+            intents,
+        ))],
     )
     .unwrap();
     assert_eq!(out, "failed", "失败路径 → run failed");
     let conn = state.0.lock().unwrap();
     let text = assistant_text(&conn, pid, cid);
-    assert!(text.contains("未生效") || text.contains("无变化"), "不得声称调整成功：{text}");
+    assert!(
+        text.contains("未生效") || text.contains("无变化"),
+        "不得声称调整成功：{text}"
+    );
     assert!(!text.contains("已真实写入"), "失败时禁止成功话术");
     assert_eq!(count_change_sets(&conn, pid), 0, "0 mutation");
     // 附：execute_higher_action_pack 内置 verify_written_ops——
@@ -646,10 +936,15 @@ fn adapt_tc012_no_direct_repository_mutation() {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         for banned in [
             // §四十九：写入方法 + 业务 SQL 直写（构造器与 list/get 等只读方法不在禁止之列）
-            "GoalRepository::create", "GoalRepository::update",
-            "TaskRepository::update", "PlanningRepository::update",
-            "create_for_profile", "create_v2", "update_blueprint_meta",
-            "update_note", "start_quick",
+            "GoalRepository::create",
+            "GoalRepository::update",
+            "TaskRepository::update",
+            "PlanningRepository::update",
+            "create_for_profile",
+            "create_v2",
+            "update_blueprint_meta",
+            "update_note",
+            "start_quick",
             "conn.execute(",
         ] {
             assert!(!src.contains(banned), "{name} 不得含写入调用 {banned}");
@@ -659,18 +954,41 @@ fn adapt_tc012_no_direct_repository_mutation() {
 
     // 行为：Evidence 全程只读（对种子数据无副作用）
     let (state, _vault) = setup("tc012b");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     {
         let conn = state.0.lock().unwrap();
         TaskRepository::new(&conn)
-            .create_v2(pid, None, "任务", Some(TODAY), None, None, Some(30), "structured", "normal")
+            .create_v2(
+                pid,
+                None,
+                "任务",
+                Some(TODAY),
+                None,
+                None,
+                Some(30),
+                "structured",
+                "normal",
+            )
             .unwrap();
-        let before: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1", params![pid], |r| r.get(0)).unwrap();
+        let before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE profile_id=?1",
+                params![pid],
+                |r| r.get(0),
+            )
+            .unwrap();
         let _ev = evidence::build_adaptation_evidence(&conn, pid, TODAY);
         let _ = compiler::compile_intents(&conn, pid, TODAY, &[]);
-        let after: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1", params![pid], |r| r.get(0)).unwrap();
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE profile_id=?1",
+                params![pid],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(before, after, "evidence/compiler 只读");
     }
     // decision 路由纯函数

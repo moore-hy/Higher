@@ -43,8 +43,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0066e_{}_{}", name, std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0066e_{}_{}", name, std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -145,11 +149,18 @@ fn run_turn(
 }
 
 fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
 }
 
 fn zero_mutation_tables() -> [&'static str; 5] {
-    ["goals", "goal_targets", "planning_blueprints", "tasks", "ai_change_sets"]
+    [
+        "goals",
+        "goal_targets",
+        "planning_blueprints",
+        "tasks",
+        "ai_change_sets",
+    ]
 }
 
 fn assert_zero_mutation(conn: &Connection) {
@@ -194,7 +205,9 @@ fn seed_waiting(
         });
     }
     for (k, v) in collected {
-        payload.collected_user_information.insert(k.to_string(), v.to_string());
+        payload
+            .collected_user_information
+            .insert(k.to_string(), v.to_string());
     }
     set_workflow_payload(conn, "prev-run", p, c, STATE_WAITING_USER, &payload);
 }
@@ -230,25 +243,51 @@ fn e01_missing_info_asks_user_and_hangs_up() {
     let scripted = vec![
         tool_call("read_personalization", json!({})),
         tool_call("get_higher_overview", json!({})),
-        tool_call("request_user_input", json!({
-            "reason": "生成正式规划前仍缺少必须由你本人确认的信息",
-            "questions": [
-                { "key": "weekday_study_hours", "question": "工作日每天大约能稳定用于备考多少小时？", "why_needed": "用于计算每日任务容量" },
-                { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？", "why_needed": "用于区分工作日与周末任务负荷" }
-            ]
-        })),
+        tool_call(
+            "request_user_input",
+            json!({
+                "reason": "生成正式规划前仍缺少必须由你本人确认的信息",
+                "questions": [
+                    { "key": "weekday_study_hours", "question": "工作日每天大约能稳定用于备考多少小时？", "why_needed": "用于计算每日任务容量" },
+                    { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？", "why_needed": "用于区分工作日与周末任务负荷" }
+                ]
+            }),
+        ),
     ];
-    let out = run_turn(&state, &vault, p, c, m, "我要准备 2028 考研，根据我的私人档案帮我规划。", scripted);
-    assert_eq!(out, Ok("needs_user_input"), "AgentOutcome 必须是 needs_user_input：{out:?}");
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "我要准备 2028 考研，根据我的私人档案帮我规划。",
+        scripted,
+    );
+    assert_eq!(
+        out,
+        Ok("needs_user_input"),
+        "AgentOutcome 必须是 needs_user_input：{out:?}"
+    );
 
     let conn = state.0.lock().unwrap();
     let (status, wf) = run_row(&conn);
     assert_eq!(status, "waiting_user", "run 不得是普通 completed：{status}");
     assert_eq!(wf.as_deref(), Some("waiting_user"));
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert_eq!(payload.pending_questions.len(), 2, "pending 2 项：{:?}", payload.pending_questions);
-    assert!(payload.pending_questions.iter().any(|q| q.key == "weekday_study_hours"));
-    assert!(payload.pending_questions.iter().any(|q| q.key == "weekend_study_hours"));
+    assert_eq!(
+        payload.pending_questions.len(),
+        2,
+        "pending 2 项：{:?}",
+        payload.pending_questions
+    );
+    assert!(payload
+        .pending_questions
+        .iter()
+        .any(|q| q.key == "weekday_study_hours"));
+    assert!(payload
+        .pending_questions
+        .iter()
+        .any(|q| q.key == "weekend_study_hours"));
     assert_eq!(payload.last_phase, "collecting_information");
     assert_zero_mutation(&conn);
     // 用户可见的问题文本（backend 生成）
@@ -277,19 +316,41 @@ fn e02_existing_profile_info_not_reasked() {
     // 模型读档案后：weekday 已知，只问 weekend
     let scripted = vec![
         tool_call("read_personalization", json!({})),
-        tool_call("request_user_input", json!({
-            "reason": "档案已有工作日时间，仍缺周末时间",
-            "questions": [
-                { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？" }
-            ]
-        })),
+        tool_call(
+            "request_user_input",
+            json!({
+                "reason": "档案已有工作日时间，仍缺周末时间",
+                "questions": [
+                    { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？" }
+                ]
+            }),
+        ),
     ];
-    let out = run_turn(&state, &vault, p, c, m, "我要准备 2028 考研，根据我的私人档案帮我规划。", scripted);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "我要准备 2028 考研，根据我的私人档案帮我规划。",
+        scripted,
+    );
     assert_eq!(out, Ok("needs_user_input"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert_eq!(payload.pending_questions.len(), 1, "只问仍缺的：{:?}", payload.pending_questions);
-    assert!(!payload.pending_questions.iter().any(|q| q.key == "weekday_study_hours"), "档案已有项不得重复问");
+    assert_eq!(
+        payload.pending_questions.len(),
+        1,
+        "只问仍缺的：{:?}",
+        payload.pending_questions
+    );
+    assert!(
+        !payload
+            .pending_questions
+            .iter()
+            .any(|q| q.key == "weekday_study_hours"),
+        "档案已有项不得重复问"
+    );
     assert_zero_mutation(&conn);
 }
 
@@ -303,33 +364,61 @@ fn e03_continuation_restores_workflow() {
     let (p, c, m) = {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "工作日 6 小时，周末 10 小时。");
-        seed_waiting(&conn, f.0, f.1, "我要准备 2028 考研规划", &[("daily_hours", "你每天能学多久？")], &[]);
+        seed_waiting(
+            &conn,
+            f.0,
+            f.1,
+            "我要准备 2028 考研规划",
+            &[("daily_hours", "你每天能学多久？")],
+            &[],
+        );
         f
     };
     // 模型判定回答完毕、信息足够 → 结构化提交（DEV-0077.2 §十八：
     // request_user_input(collected, questions=[]) = Answer 提交，不挂起）
     // + 总结文本 → 直接继续原任务收尾（§15 自动继续）
     let scripted = vec![
-        tool_call("request_user_input", json!({
-            "collected": { "daily_hours": "工作日 6 小时，周末 10 小时" },
-            "questions": []
-        })),
+        tool_call(
+            "request_user_input",
+            json!({
+                "collected": { "daily_hours": "工作日 6 小时，周末 10 小时" },
+                "questions": []
+            }),
+        ),
         final_answer("已记录你的可用时间，我继续做考研规划。"),
     ];
-    let out = run_turn(&state, &vault, p, c, m, "工作日 6 小时，周末 10 小时。", scripted);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "工作日 6 小时，周末 10 小时。",
+        scripted,
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert_eq!(payload.original_request, "我要准备 2028 考研规划", "恢复原 workflow（非独立聊天）");
+    assert_eq!(
+        payload.original_request, "我要准备 2028 考研规划",
+        "恢复原 workflow（非独立聊天）"
+    );
     assert!(
-        payload.collected_user_information.get("daily_hours").is_some_and(|v| v.contains("6")),
+        payload
+            .collected_user_information
+            .get("daily_hours")
+            .is_some_and(|v| v.contains("6")),
         "collected 更新：{:?}",
         payload.collected_user_information
     );
     assert!(payload.pending_questions.is_empty(), "pending 解决");
     // DEV-0077.4-A.1 F2 §四：pending 全 resolved + Decision Ready → workflow
     // 收口 ready_for_planning（信息齐备待进 Planning），不能 completed。
-    assert_eq!(run_row(&conn).1.as_deref(), Some("ready_for_planning"), "离开 waiting_user");
+    assert_eq!(
+        run_row(&conn).1.as_deref(),
+        Some("ready_for_planning"),
+        "离开 waiting_user"
+    );
     assert_zero_mutation(&conn);
 }
 
@@ -343,20 +432,29 @@ fn e04_partial_answer_keeps_remaining_question_only() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "工作日6小时。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做考研规划",
-            &[("weekday_study_hours", "工作日能学多久？"), ("weekend_study_hours", "周末能学多久？")],
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
+            &[
+                ("weekday_study_hours", "工作日能学多久？"),
+                ("weekend_study_hours", "周末能学多久？"),
+            ],
             &[],
         );
         f
     };
     // 模型判定只答了 weekday：collected 提交已答项，questions 只剩 weekend
-    let scripted = vec![tool_call("request_user_input", json!({
-        "reason": "还缺周末时间",
-        "collected": { "weekday_study_hours": "6" },
-        "questions": [
-            { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？" }
-        ]
-    }))];
+    let scripted = vec![tool_call(
+        "request_user_input",
+        json!({
+            "reason": "还缺周末时间",
+            "collected": { "weekday_study_hours": "6" },
+            "questions": [
+                { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？" }
+            ]
+        }),
+    )];
     let out = run_turn(&state, &vault, p, c, m, "工作日6小时。", scripted);
     assert_eq!(out, Ok("needs_user_input"), "{out:?}");
     let conn = state.0.lock().unwrap();
@@ -365,12 +463,20 @@ fn e04_partial_answer_keeps_remaining_question_only() {
     assert_eq!(wf.as_deref(), Some("waiting_user"));
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     assert_eq!(
-        payload.collected_user_information.get("weekday_study_hours").map(String::as_str),
+        payload
+            .collected_user_information
+            .get("weekday_study_hours")
+            .map(String::as_str),
         Some("6"),
         "已答项保存：{:?}",
         payload.collected_user_information
     );
-    assert_eq!(payload.pending_questions.len(), 1, "只继续问仍缺的：{:?}", payload.pending_questions);
+    assert_eq!(
+        payload.pending_questions.len(),
+        1,
+        "只继续问仍缺的：{:?}",
+        payload.pending_questions
+    );
     assert_eq!(payload.pending_questions[0].key, "weekend_study_hours");
     assert_zero_mutation(&conn);
 }
@@ -385,7 +491,10 @@ fn e05_complete_answer_auto_continues() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "周末10小时。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
             &[("weekend_study_hours", "周末能学多久？")],
             &[("weekday_study_hours", "6")],
         );
@@ -393,22 +502,45 @@ fn e05_complete_answer_auto_continues() {
     };
     // DEV-0077.2 §十八：完整回答 = 结构化提交（collected + questions=[]）+ 总结
     let scripted = vec![
-        tool_call("request_user_input", json!({
-            "collected": { "weekend_study_hours": "周末10小时" },
-            "questions": []
-        })),
+        tool_call(
+            "request_user_input",
+            json!({
+                "collected": { "weekend_study_hours": "周末10小时" },
+                "questions": []
+            }),
+        ),
         final_answer("信息齐全了，我现在开始制定考研规划方案。"),
     ];
     let out = run_turn(&state, &vault, p, c, m, "周末10小时。", scripted);
-    assert_eq!(out, Ok("completed"), "信息足够 → 自动继续（不挂起不追问）：{out:?}");
+    assert_eq!(
+        out,
+        Ok("completed"),
+        "信息足够 → 自动继续（不挂起不追问）：{out:?}"
+    );
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert!(payload.pending_questions.is_empty(), "pending_questions = []");
+    assert!(
+        payload.pending_questions.is_empty(),
+        "pending_questions = []"
+    );
     // DEV-0077.4-A.1 F2 §四：信息齐备 → ready_for_planning（非 completed）
-    assert_eq!(run_row(&conn).1.as_deref(), Some("ready_for_planning"), "workflow 离开 waiting_user");
+    assert_eq!(
+        run_row(&conn).1.as_deref(),
+        Some("ready_for_planning"),
+        "workflow 离开 waiting_user"
+    );
     // 两个信息都在 collected
-    assert_eq!(payload.collected_user_information.get("weekday_study_hours").map(String::as_str), Some("6"));
-    assert!(payload.collected_user_information.get("weekend_study_hours").is_some_and(|v| v.contains("10")));
+    assert_eq!(
+        payload
+            .collected_user_information
+            .get("weekday_study_hours")
+            .map(String::as_str),
+        Some("6")
+    );
+    assert!(payload
+        .collected_user_information
+        .get("weekend_study_hours")
+        .is_some_and(|v| v.contains("10")));
     assert_zero_mutation(&conn);
 }
 
@@ -422,7 +554,10 @@ fn e06_correction_overwrites_old_answer() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "改一下，工作日其实只有 4 小时。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
             &[("weekday_study_hours", "工作日能学多久？")],
             &[("weekday_study_hours", "6 小时")],
         );
@@ -430,24 +565,42 @@ fn e06_correction_overwrites_old_answer() {
     };
     // 单一 pending：轮首 backend 整段记入该 key（覆盖 6）；
     // 模型再通过 request_user_input(collected) 提交规范化值并追问剩余 → 精确覆盖
-    let scripted = vec![tool_call("request_user_input", json!({
-        "reason": "已更新工作日时间，还缺周末时间",
-        "collected": { "weekday_study_hours": "4" },
-        "questions": [
-            { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？" }
-        ]
-    }))];
-    let out = run_turn(&state, &vault, p, c, m, "改一下，工作日其实只有 4 小时。", scripted);
+    let scripted = vec![tool_call(
+        "request_user_input",
+        json!({
+            "reason": "已更新工作日时间，还缺周末时间",
+            "collected": { "weekday_study_hours": "4" },
+            "questions": [
+                { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？" }
+            ]
+        }),
+    )];
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "改一下，工作日其实只有 4 小时。",
+        scripted,
+    );
     assert_eq!(out, Ok("needs_user_input"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     assert_eq!(
-        payload.collected_user_information.get("weekday_study_hours").map(String::as_str),
+        payload
+            .collected_user_information
+            .get("weekday_study_hours")
+            .map(String::as_str),
         Some("4"),
         "纠正后以 4 为准：{:?}",
         payload.collected_user_information
     );
-    assert!(!payload.collected_user_information.get("weekday_study_hours").unwrap().contains("6"));
+    assert!(!payload
+        .collected_user_information
+        .get("weekday_study_hours")
+        .unwrap()
+        .contains("6"));
     assert_zero_mutation(&conn);
 }
 
@@ -461,14 +614,23 @@ fn e07_cancel_stops_workflow() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "算了，不做这个规划了。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做考研规划",
-            &[("weekday_study_hours", "工作日能学多久？"), ("weekend_study_hours", "周末能学多久？")],
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
+            &[
+                ("weekday_study_hours", "工作日能学多久？"),
+                ("weekend_study_hours", "周末能学多久？"),
+            ],
             &[],
         );
         f
     };
     let scripted = vec![
-        tool_call("cancel_current_task", json!({ "reason": "用户明确放弃规划任务" })),
+        tool_call(
+            "cancel_current_task",
+            json!({ "reason": "用户明确放弃规划任务" }),
+        ),
         final_answer("好的，已停止考研规划。需要时随时告诉我。"),
     ];
     let out = run_turn(&state, &vault, p, c, m, "算了，不做这个规划了。", scripted);
@@ -476,7 +638,11 @@ fn e07_cancel_stops_workflow() {
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     assert!(payload.pending_questions.is_empty(), "pending 清空");
-    assert_eq!(run_row(&conn).1.as_deref(), Some("cancelled"), "workflow_state = cancelled");
+    assert_eq!(
+        run_row(&conn).1.as_deref(),
+        Some("cancelled"),
+        "workflow_state = cancelled"
+    );
     assert_zero_mutation(&conn);
 }
 
@@ -492,7 +658,10 @@ fn e08_new_task_cancels_old_workflow_first() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "先不规划考研了，告诉我今天有什么任务。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
             &[("weekday_study_hours", "工作日能学多久？")],
             &[],
         );
@@ -506,22 +675,45 @@ fn e08_new_task_cancels_old_workflow_first() {
         f
     };
     let scripted = vec![
-        tool_call("cancel_current_task", json!({ "reason": "用户转向新任务", "new_task": true })),
+        tool_call(
+            "cancel_current_task",
+            json!({ "reason": "用户转向新任务", "new_task": true }),
+        ),
         tool_call("list_tasks", json!({ "date": "2026-08-21" })),
         final_answer("你今天有 1 个任务：复习高数第一章。"),
     ];
-    let out = run_turn(&state, &vault, p, c, m, "先不规划考研了，告诉我今天有什么任务。", scripted);
-    assert_eq!(out, Ok("completed"), "新任务正常完成 → completed（E-R1-02）：{out:?}");
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "先不规划考研了，告诉我今天有什么任务。",
+        scripted,
+    );
+    assert_eq!(
+        out,
+        Ok("completed"),
+        "新任务正常完成 → completed（E-R1-02）：{out:?}"
+    );
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     assert!(payload.pending_questions.is_empty(), "不继承旧 pending");
     assert_eq!(
-        payload.original_request,
-        "先不规划考研了，告诉我今天有什么任务。",
+        payload.original_request, "先不规划考研了，告诉我今天有什么任务。",
         "新 original_request = 当前消息（不得仍是考研任务）"
     );
-    assert!(!payload.collected_user_information.contains_key("weekday_study_hours"), "不继承旧 collected");
-    assert_eq!(run_row(&conn).1.as_deref(), Some("completed"), "新任务 workflow completed");
+    assert!(
+        !payload
+            .collected_user_information
+            .contains_key("weekday_study_hours"),
+        "不继承旧 collected"
+    );
+    assert_eq!(
+        run_row(&conn).1.as_deref(),
+        Some("completed"),
+        "新任务 workflow completed"
+    );
     // 新任务被正常处理（不塞进考研答案）
     let text = last_assistant(&conn, c, p);
     assert!(text.contains("复习高数第一章"), "新任务回答：{text}");
@@ -538,7 +730,14 @@ fn e09_profile_isolation() {
     let (pa, ca, _) = {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "工作日 6 小时。");
-        seed_waiting(&conn, f.0, f.1, "A 的考研规划", &[("daily_hours", "每天能学多久？")], &[]);
+        seed_waiting(
+            &conn,
+            f.0,
+            f.1,
+            "A 的考研规划",
+            &[("daily_hours", "每天能学多久？")],
+            &[],
+        );
         f
     };
     // Profile B：独立会话发普通消息
@@ -547,13 +746,28 @@ fn e09_profile_isolation() {
         mk_fixture(&conn, "今天天气怎么样？")
     };
     assert_ne!(pa, pb, "两个不同 Profile");
-    let out = run_turn(&state, &vault, pb, cb, mb, "今天天气怎么样？", vec![final_answer("今天是晴天。")]);
+    let out = run_turn(
+        &state,
+        &vault,
+        pb,
+        cb,
+        mb,
+        "今天天气怎么样？",
+        vec![final_answer("今天是晴天。")],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     // B 的 workflow：无 pending、original_request 是 B 自己的消息（未串 A）
     let (_, payload_b) = read_workflow_payload(&conn, pb, cb).unwrap();
-    assert!(payload_b.pending_questions.is_empty(), "B 不得继承 A 的 pending：{:?}", payload_b.pending_questions);
-    assert_eq!(payload_b.original_request, "今天天气怎么样？", "B 不串 A 的 original_request");
+    assert!(
+        payload_b.pending_questions.is_empty(),
+        "B 不得继承 A 的 pending：{:?}",
+        payload_b.pending_questions
+    );
+    assert_eq!(
+        payload_b.original_request, "今天天气怎么样？",
+        "B 不串 A 的 original_request"
+    );
     // A 的 waiting 行原样（未被动过）
     let (state_a, payload_a): (String, _) = conn
         .query_row(
@@ -576,29 +790,54 @@ fn e10_conversation_isolation() {
     let (p, c1, _) = {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "工作日 6 小时。");
-        seed_waiting(&conn, f.0, f.1, "会话一的考研规划", &[("daily_hours", "每天能学多久？")], &[]);
+        seed_waiting(
+            &conn,
+            f.0,
+            f.1,
+            "会话一的考研规划",
+            &[("daily_hours", "每天能学多久？")],
+            &[],
+        );
         f
     };
     // 同 Profile 新会话
     let (c2, m2) = {
         let conn = state.0.lock().unwrap();
-        let conv = ConversationRepository::new(&conn).create(p, "assistant", "DEV0066E-2").unwrap();
+        let conv = ConversationRepository::new(&conn)
+            .create(p, "assistant", "DEV0066E-2")
+            .unwrap();
         let msg = ConversationRepository::new(&conn)
             .add_message(conv.id, p, "user", "帮我安排明天的学习任务", None)
             .unwrap();
         (conv.id, msg.id)
     };
     assert_ne!(c1, c2);
-    let out = run_turn(&state, &vault, p, c2, m2, "帮我安排明天的学习任务", vec![final_answer("好的，明天安排数学。")]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c2,
+        m2,
+        "帮我安排明天的学习任务",
+        vec![final_answer("好的，明天安排数学。")],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     // c2 的 workflow 不含 c1 的 pending/original
     let (_, payload2) = read_workflow_payload(&conn, p, c2).unwrap();
-    assert!(payload2.pending_questions.is_empty(), "c2 不得串 c1 的 pending：{:?}", payload2.pending_questions);
+    assert!(
+        payload2.pending_questions.is_empty(),
+        "c2 不得串 c1 的 pending：{:?}",
+        payload2.pending_questions
+    );
     assert_eq!(payload2.original_request, "帮我安排明天的学习任务");
     // c1 的 waiting 原样
     let state1: String = conn
-        .query_row("SELECT workflow_state FROM ai_runs WHERE id='prev-run'", [], |r| r.get(0))
+        .query_row(
+            "SELECT workflow_state FROM ai_runs WHERE id='prev-run'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(state1, "waiting_user", "c1 的 workflow 未被 c2 触碰");
 }
@@ -612,7 +851,14 @@ fn e11_provider_error_closes_as_failed() {
     let (p, c, m) = {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "工作日 6 小时。");
-        seed_waiting(&conn, f.0, f.1, "帮我做考研规划", &[("daily_hours", "每天能学多久？")], &[]);
+        seed_waiting(
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
+            &[("daily_hours", "每天能学多久？")],
+            &[],
+        );
         f
     };
     // 空 Scripted 队列 = Provider 故障（首轮 chat 即 Err）
@@ -621,7 +867,11 @@ fn e11_provider_error_closes_as_failed() {
     let conn = state.0.lock().unwrap();
     let (status, wf) = run_row(&conn);
     assert_eq!(status, "failed", "run status = failed：{status}");
-    assert_eq!(wf.as_deref(), Some("failed"), "workflow_state = failed：{wf:?}");
+    assert_eq!(
+        wf.as_deref(),
+        Some("failed"),
+        "workflow_state = failed：{wf:?}"
+    );
     assert_zero_mutation(&conn);
 }
 
@@ -636,13 +886,16 @@ fn e12_zero_mutation_through_information_collection() {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "帮我做 2028 考研规划。")
     };
-    let ask = vec![tool_call("request_user_input", json!({
-        "reason": "规划前需要确认真实可用时间",
-        "questions": [
-            { "key": "weekday_study_hours", "question": "工作日每天能学多久？" },
-            { "key": "weekend_study_hours", "question": "周末每天能学多久？" }
-        ]
-    }))];
+    let ask = vec![tool_call(
+        "request_user_input",
+        json!({
+            "reason": "规划前需要确认真实可用时间",
+            "questions": [
+                { "key": "weekday_study_hours", "question": "工作日每天能学多久？" },
+                { "key": "weekend_study_hours", "question": "周末每天能学多久？" }
+            ]
+        }),
+    )];
     let out1 = run_turn(&state, &vault, p, c, m1, "帮我做 2028 考研规划。", ask);
     assert_eq!(out1, Ok("needs_user_input"), "{out1:?}");
     {
@@ -657,17 +910,26 @@ fn e12_zero_mutation_through_information_collection() {
             .unwrap()
             .id
     };
-    let reask = vec![tool_call("request_user_input", json!({
-        "reason": "还缺周末时间",
-        "collected": { "weekday_study_hours": "4" },
-        "questions": [ { "key": "weekend_study_hours", "question": "周末每天能学多久？" } ]
-    }))];
+    let reask = vec![tool_call(
+        "request_user_input",
+        json!({
+            "reason": "还缺周末时间",
+            "collected": { "weekday_study_hours": "4" },
+            "questions": [ { "key": "weekend_study_hours", "question": "周末每天能学多久？" } ]
+        }),
+    )];
     let out2 = run_turn(&state, &vault, p, c, m2, "工作日 4 小时。", reask);
     assert_eq!(out2, Ok("needs_user_input"), "{out2:?}");
     let conn = state.0.lock().unwrap();
     assert_zero_mutation(&conn);
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert_eq!(payload.collected_user_information.get("weekday_study_hours").map(String::as_str), Some("4"));
+    assert_eq!(
+        payload
+            .collected_user_information
+            .get("weekday_study_hours")
+            .map(String::as_str),
+        Some("4")
+    );
     assert_eq!(payload.pending_questions.len(), 1);
     assert_eq!(run_row(&conn).0, "waiting_user");
 }
@@ -687,7 +949,10 @@ fn er101_provider_failure_preserves_pending_questions() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "工作日 5 小时。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
             &[
                 ("weekday_study_hours", "工作日能学多久？"),
                 ("weekend_study_hours", "周末能学多久？"),
@@ -706,7 +971,12 @@ fn er101_provider_failure_preserves_pending_questions() {
     assert_eq!(wf.as_deref(), Some("failed"));
     // 原 3 项 pending 完整保留（未因本轮提前处理而清空）
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert_eq!(payload.pending_questions.len(), 3, "Provider 失败 → 原 pending 原样保留：{:?}", payload.pending_questions);
+    assert_eq!(
+        payload.pending_questions.len(),
+        3,
+        "Provider 失败 → 原 pending 原样保留：{:?}",
+        payload.pending_questions
+    );
     for key in ["weekday_study_hours", "weekend_study_hours", "target_major"] {
         assert!(
             payload.pending_questions.iter().any(|q| q.key == key),
@@ -715,7 +985,10 @@ fn er101_provider_failure_preserves_pending_questions() {
     }
     // 用户原始回复已保存（信息不丢）
     assert!(
-        payload.collected_user_information.get("_latest_reply").is_some_and(|v| v.contains("5")),
+        payload
+            .collected_user_information
+            .get("_latest_reply")
+            .is_some_and(|v| v.contains("5")),
         "用户原始回复保存：{:?}",
         payload.collected_user_information
     );
@@ -733,7 +1006,10 @@ fn er102_partial_answer_pending_replaced_atomically() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "工作日 5 小时。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
             &[
                 ("weekday_study_hours", "工作日能学多久？"),
                 ("weekend_study_hours", "周末能学多久？"),
@@ -743,14 +1019,17 @@ fn er102_partial_answer_pending_replaced_atomically() {
         );
         f
     };
-    let scripted = vec![tool_call("request_user_input", json!({
-        "reason": "已收到工作日时间，还缺周末时间与专业确认",
-        "collected": { "weekday_study_hours": "5" },
-        "questions": [
-            { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？" },
-            { "key": "target_major", "question": "报考专业已经确定了吗？确定的话是哪个？" }
-        ]
-    }))];
+    let scripted = vec![tool_call(
+        "request_user_input",
+        json!({
+            "reason": "已收到工作日时间，还缺周末时间与专业确认",
+            "collected": { "weekday_study_hours": "5" },
+            "questions": [
+                { "key": "weekend_study_hours", "question": "周末每天大约能稳定用于备考多少小时？" },
+                { "key": "target_major", "question": "报考专业已经确定了吗？确定的话是哪个？" }
+            ]
+        }),
+    )];
     let out = run_turn(&state, &vault, p, c, m, "工作日 5 小时。", scripted);
     assert_eq!(out, Ok("needs_user_input"), "{out:?}");
     let conn = state.0.lock().unwrap();
@@ -759,12 +1038,32 @@ fn er102_partial_answer_pending_replaced_atomically() {
     assert_eq!(wf.as_deref(), Some("waiting_user"));
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     // pending 精确为剩余 2 项（原子替换，无残留无丢失）
-    assert_eq!(payload.pending_questions.len(), 2, "pending 精确 2 项：{:?}", payload.pending_questions);
-    assert!(!payload.pending_questions.iter().any(|q| q.key == "weekday_study_hours"), "已答项不在 pending");
-    assert!(payload.pending_questions.iter().any(|q| q.key == "weekend_study_hours"));
-    assert!(payload.pending_questions.iter().any(|q| q.key == "target_major"));
     assert_eq!(
-        payload.collected_user_information.get("weekday_study_hours").map(String::as_str),
+        payload.pending_questions.len(),
+        2,
+        "pending 精确 2 项：{:?}",
+        payload.pending_questions
+    );
+    assert!(
+        !payload
+            .pending_questions
+            .iter()
+            .any(|q| q.key == "weekday_study_hours"),
+        "已答项不在 pending"
+    );
+    assert!(payload
+        .pending_questions
+        .iter()
+        .any(|q| q.key == "weekend_study_hours"));
+    assert!(payload
+        .pending_questions
+        .iter()
+        .any(|q| q.key == "target_major"));
+    assert_eq!(
+        payload
+            .collected_user_information
+            .get("weekday_study_hours")
+            .map(String::as_str),
         Some("5"),
         "已答项入 collected"
     );
@@ -784,7 +1083,10 @@ fn er103_new_task_waiting_continues_with_new_context() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "先不考研了，帮我规划英语学习。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做 2028 考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "帮我做 2028 考研规划",
             &[("weekday_study_hours", "工作日能学多久？")],
             &[("target_school", "清华大学")],
         );
@@ -792,16 +1094,30 @@ fn er103_new_task_waiting_continues_with_new_context() {
     };
     // 模型：取消旧任务（new_task）→ 新英语任务补问（英语自己的问题）
     let scripted = vec![
-        tool_call("cancel_current_task", json!({ "reason": "用户转向英语学习规划", "new_task": true })),
-        tool_call("request_user_input", json!({
-            "reason": "制定英语学习规划前需要确认基础与目标",
-            "questions": [
-                { "key": "english_level", "question": "你目前的英语水平如何（如四六级分数）？" },
-                { "key": "english_goal", "question": "英语学习的目标是什么（考试/口语/阅读）？" }
-            ]
-        })),
+        tool_call(
+            "cancel_current_task",
+            json!({ "reason": "用户转向英语学习规划", "new_task": true }),
+        ),
+        tool_call(
+            "request_user_input",
+            json!({
+                "reason": "制定英语学习规划前需要确认基础与目标",
+                "questions": [
+                    { "key": "english_level", "question": "你目前的英语水平如何（如四六级分数）？" },
+                    { "key": "english_goal", "question": "英语学习的目标是什么（考试/口语/阅读）？" }
+                ]
+            }),
+        ),
     ];
-    let out1 = run_turn(&state, &vault, p, c, m1, "先不考研了，帮我规划英语学习。", scripted);
+    let out1 = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m1,
+        "先不考研了，帮我规划英语学习。",
+        scripted,
+    );
     assert_eq!(out1, Ok("needs_user_input"), "新任务挂起：{out1:?}");
     {
         let conn = state.0.lock().unwrap();
@@ -810,10 +1126,25 @@ fn er103_new_task_waiting_continues_with_new_context() {
         assert_eq!(wf.as_deref(), Some("waiting_user"));
         let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
         // 新任务上下文：original_request = 英语消息；不继承考研任何进度
-        assert_eq!(payload.original_request, "先不考研了，帮我规划英语学习。", "新任务 original_request");
+        assert_eq!(
+            payload.original_request, "先不考研了，帮我规划英语学习。",
+            "新任务 original_request"
+        );
         assert_eq!(payload.pending_questions.len(), 2, "新任务自己的 pending");
-        assert!(payload.pending_questions.iter().all(|q| q.key.starts_with("english")), "均为英语问题：{:?}", payload.pending_questions);
-        assert!(!payload.collected_user_information.contains_key("target_school"), "不继承旧 collected");
+        assert!(
+            payload
+                .pending_questions
+                .iter()
+                .all(|q| q.key.starts_with("english")),
+            "均为英语问题：{:?}",
+            payload.pending_questions
+        );
+        assert!(
+            !payload
+                .collected_user_information
+                .contains_key("target_school"),
+            "不继承旧 collected"
+        );
         assert!(payload.current_goal.is_empty(), "不继承旧 current_goal");
         assert!(payload.unresolved.is_empty(), "不继承旧 unresolved");
     }
@@ -821,27 +1152,46 @@ fn er103_new_task_waiting_continues_with_new_context() {
     let m2 = {
         let conn = state.0.lock().unwrap();
         ConversationRepository::new(&conn)
-            .add_message(c, p, "user", "六级 480 分，主要想提升考研英语到 75+。", None)
+            .add_message(
+                c,
+                p,
+                "user",
+                "六级 480 分，主要想提升考研英语到 75+。",
+                None,
+            )
             .unwrap()
             .id
     };
-    let out2 = run_turn(&state, &vault, p, c, m2, "六级 480 分，主要想提升考研英语到 75+。", vec![
-        // DEV-0077.2 §十八：完整回答 = 结构化提交（不挂起，自动继续英语任务）
-        tool_call("request_user_input", json!({
-            "collected": { "english_level": "六级 480 分", "english_goal": "考研英语 75+" },
-            "questions": []
-        })),
-        final_answer("已记录你的英语基础与目标，我继续制定英语学习规划。"),
-    ]);
+    let out2 = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m2,
+        "六级 480 分，主要想提升考研英语到 75+。",
+        vec![
+            // DEV-0077.2 §十八：完整回答 = 结构化提交（不挂起，自动继续英语任务）
+            tool_call(
+                "request_user_input",
+                json!({
+                    "collected": { "english_level": "六级 480 分", "english_goal": "考研英语 75+" },
+                    "questions": []
+                }),
+            ),
+            final_answer("已记录你的英语基础与目标，我继续制定英语学习规划。"),
+        ],
+    );
     assert_eq!(out2, Ok("completed"), "{out2:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     assert_eq!(
-        payload.original_request,
-        "先不考研了，帮我规划英语学习。",
+        payload.original_request, "先不考研了，帮我规划英语学习。",
         "续接恢复的必须是英语任务，绝不能恢复考研上下文"
     );
-    assert!(payload.pending_questions.is_empty(), "completed 清空 pending");
+    assert!(
+        payload.pending_questions.is_empty(),
+        "completed 清空 pending"
+    );
     // 多 pending 时后端不猜归属（E-R1-01 设计）：精确拆分属模型职责，
     // 后端硬保证是「用户原始回复不丢失」
     assert!(
@@ -853,7 +1203,12 @@ fn er103_new_task_waiting_continues_with_new_context() {
         "英语回答原始内容不丢失：{:?}",
         payload.collected_user_information
     );
-    assert!(!payload.collected_user_information.contains_key("target_school"), "旧考研 collected 不复活");
+    assert!(
+        !payload
+            .collected_user_information
+            .contains_key("target_school"),
+        "旧考研 collected 不复活"
+    );
     assert_zero_mutation(&conn);
 }
 
@@ -868,7 +1223,10 @@ fn er104_pure_cancel_without_new_task_stays_cancelled() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "算了，不做这个规划了。");
         seed_waiting(
-            &conn, f.0, f.1, "帮我做考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "帮我做考研规划",
             &[("weekday_study_hours", "工作日能学多久？")],
             &[],
         );
@@ -920,8 +1278,12 @@ fn er201_new_task_prompt_isolation_captured() {
     let m = {
         let conn = state.0.lock().unwrap();
         // 旧考研任务的对话痕迹（bound_history 会带上——切换后必须从 Provider 上下文消失）
-        ConversationRepository::new(&conn).add_message(c, p, "user", "帮我做2028考研规划", None).unwrap();
-        ConversationRepository::new(&conn).add_message(c, p, "assistant", "请告诉我：工作日每天能学多久？", None).unwrap();
+        ConversationRepository::new(&conn)
+            .add_message(c, p, "user", "帮我做2028考研规划", None)
+            .unwrap();
+        ConversationRepository::new(&conn)
+            .add_message(c, p, "assistant", "请告诉我：工作日每天能学多久？", None)
+            .unwrap();
         ConversationRepository::new(&conn)
             .add_message(c, p, "user", "先不考研了，帮我规划三个月英语学习。", None)
             .unwrap()
@@ -938,27 +1300,41 @@ fn er201_new_task_prompt_isolation_captured() {
         let mut payload = app_lib::ai::workflow::AgentWorkflowPayload::default();
         payload.original_request = "2028考研规划".into();
         payload.current_goal = "考上研究生".into();
-        payload.pending_questions.push(app_lib::ai::workflow::AgentQuestion {
-            key: "weekday_study_hours".into(),
-            question: "工作日每天能学多久？".into(),
-            why_needed: String::new(),
-        });
-        payload.collected_user_information.insert("target_school".into(), "清华大学".into());
+        payload
+            .pending_questions
+            .push(app_lib::ai::workflow::AgentQuestion {
+                key: "weekday_study_hours".into(),
+                question: "工作日每天能学多久？".into(),
+                why_needed: String::new(),
+            });
+        payload
+            .collected_user_information
+            .insert("target_school".into(), "清华大学".into());
         app_lib::ai::workflow::set_workflow_payload(
-            &conn, "prev-run", p, c,
-            app_lib::ai::workflow::STATE_WAITING_USER, &payload,
+            &conn,
+            "prev-run",
+            p,
+            c,
+            app_lib::ai::workflow::STATE_WAITING_USER,
+            &payload,
         );
     }
 
     // ScriptedCapture：① cancel(new_task) ② request_user_input（英语基础）
     let scripted = vec![
-        tool_call("cancel_current_task", json!({ "reason": "用户转向新任务", "new_task": true })),
-        tool_call("request_user_input", json!({
-            "reason": "制定英语学习规划前需要确认基础",
-            "questions": [
-                { "key": "english_level", "question": "你的英语基础是什么？" }
-            ]
-        })),
+        tool_call(
+            "cancel_current_task",
+            json!({ "reason": "用户转向新任务", "new_task": true }),
+        ),
+        tool_call(
+            "request_user_input",
+            json!({
+                "reason": "制定英语学习规划前需要确认基础",
+                "questions": [
+                    { "key": "english_level", "question": "你的英语基础是什么？" }
+                ]
+            }),
+        ),
     ];
     let capture: std::sync::Arc<std::sync::Mutex<Vec<Vec<app_lib::ai::client::ChatMessage>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1006,13 +1382,26 @@ fn er201_new_task_prompt_isolation_captured() {
     };
     // 切换前（第 1 次调用）：旧上下文完整在场（证明 fixture 与恢复链路生效）
     let ctx0 = ctx_of(0);
-    for must in ["2028考研规划", "工作日每天能学多久", "清华大学", "任务续接"] {
-        assert!(ctx0.contains(must), "切换前 Provider 上下文应含「{must}」（fixture 生效）");
+    for must in ["2028考研规划", "工作日每天能学多久", "清华大学", "任务续接"]
+    {
+        assert!(
+            ctx0.contains(must),
+            "切换前 Provider 上下文应含「{must}」（fixture 生效）"
+        );
     }
     // 切换后（第 2 次调用 = cancel 之后的下一次 Provider 调用）：完全隔离
     let ctx1 = ctx_of(1);
-    assert!(ctx1.contains("帮我规划三个月英语学习"), "新任务消息必须在场：\n{ctx1}");
-    for banned in ["2028考研规划", "工作日每天能学多久", "清华大学", "任务续接", "考上研究生"] {
+    assert!(
+        ctx1.contains("帮我规划三个月英语学习"),
+        "新任务消息必须在场：\n{ctx1}"
+    );
+    for banned in [
+        "2028考研规划",
+        "工作日每天能学多久",
+        "清华大学",
+        "任务续接",
+        "考上研究生",
+    ] {
         assert!(
             !ctx1.contains(banned),
             "E-R2-01：切换后的 Provider 上下文不得再含「{banned}」：\n{ctx1}"
@@ -1026,9 +1415,15 @@ fn er201_new_task_prompt_isolation_captured() {
     assert_eq!(status, "waiting_user");
     assert_eq!(wf.as_deref(), Some("waiting_user"));
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert_eq!(payload.original_request, "先不考研了，帮我规划三个月英语学习。", "original_request = 新英语任务");
+    assert_eq!(
+        payload.original_request, "先不考研了，帮我规划三个月英语学习。",
+        "original_request = 新英语任务"
+    );
     assert_eq!(payload.pending_questions.len(), 1);
-    assert_eq!(payload.pending_questions[0].key, "english_level", "pending = 英语问题");
+    assert_eq!(
+        payload.pending_questions[0].key, "english_level",
+        "pending = 英语问题"
+    );
     // ---- E-R2-02：旧考研 waiting run 正式 cancelled ----
     let (old_state, old_json): (String, Option<String>) = conn
         .query_row(
@@ -1037,14 +1432,26 @@ fn er201_new_task_prompt_isolation_captured() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(old_state, "cancelled", "旧 waiting run 必须正式 cancelled（不得残留 waiting_user）");
+    assert_eq!(
+        old_state, "cancelled",
+        "旧 waiting run 必须正式 cancelled（不得残留 waiting_user）"
+    );
     let old_payload: app_lib::ai::workflow::AgentWorkflowPayload =
         serde_json::from_str(old_json.as_deref().unwrap_or("{}")).unwrap();
     assert!(old_payload.pending_questions.is_empty(), "旧 pending 清空");
-    assert_eq!(old_payload.last_phase, "cancelled", "旧 last_phase = cancelled");
-    assert_eq!(old_payload.original_request, "2028考研规划", "旧 original_request 保留作审计");
     assert_eq!(
-        old_payload.collected_user_information.get("target_school").map(String::as_str),
+        old_payload.last_phase, "cancelled",
+        "旧 last_phase = cancelled"
+    );
+    assert_eq!(
+        old_payload.original_request, "2028考研规划",
+        "旧 original_request 保留作审计"
+    );
+    assert_eq!(
+        old_payload
+            .collected_user_information
+            .get("target_school")
+            .map(String::as_str),
         Some("清华大学"),
         "旧 collected 保留作审计"
     );
@@ -1059,13 +1466,21 @@ fn er201_new_task_prompt_isolation_captured() {
             .id
     };
     let out2 = run_turn(
-        &state, &vault, p, c, m2, "六级 480 分，目标提升到 75+。",
+        &state,
+        &vault,
+        p,
+        c,
+        m2,
+        "六级 480 分，目标提升到 75+。",
         vec![
             // DEV-0077.2 §十八：完整回答 = 结构化提交（不挂起，自动继续英语任务）
-            tool_call("request_user_input", json!({
-                "collected": { "english_level": "六级 480 分", "english_goal": "考研英语 75+" },
-                "questions": []
-            })),
+            tool_call(
+                "request_user_input",
+                json!({
+                    "collected": { "english_level": "六级 480 分", "english_goal": "考研英语 75+" },
+                    "questions": []
+                }),
+            ),
             final_answer("已记录你的英语基础，我继续制定三个月英语学习计划。"),
         ],
     );
@@ -1073,8 +1488,7 @@ fn er201_new_task_prompt_isolation_captured() {
     let conn = state.0.lock().unwrap();
     let (_, payload2) = read_workflow_payload(&conn, p, c).unwrap();
     assert_eq!(
-        payload2.original_request,
-        "先不考研了，帮我规划三个月英语学习。",
+        payload2.original_request, "先不考研了，帮我规划三个月英语学习。",
         "续接的必须是英语 workflow，绝不能恢复考研上下文"
     );
     assert!(payload2.pending_questions.is_empty());
@@ -1094,7 +1508,10 @@ fn er202_pure_cancel_marks_old_waiting_run_cancelled() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "算了，不做这个规划了。");
         seed_waiting(
-            &conn, f.0, f.1, "2028考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "2028考研规划",
             &[("weekday_study_hours", "工作日每天能学多久？")],
             &[("target_school", "清华大学")],
         );
@@ -1115,13 +1532,22 @@ fn er202_pure_cancel_marks_old_waiting_run_cancelled() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(old_state, "cancelled", "纯放弃也必须正式标记旧 waiting run cancelled");
+    assert_eq!(
+        old_state, "cancelled",
+        "纯放弃也必须正式标记旧 waiting run cancelled"
+    );
     let old_payload: app_lib::ai::workflow::AgentWorkflowPayload =
         serde_json::from_str(old_json.as_deref().unwrap_or("{}")).unwrap();
     assert!(old_payload.pending_questions.is_empty());
     assert_eq!(old_payload.last_phase, "cancelled");
     assert_eq!(old_payload.original_request, "2028考研规划", "审计保留");
-    assert_eq!(old_payload.collected_user_information.get("target_school").map(String::as_str), Some("清华大学"));
+    assert_eq!(
+        old_payload
+            .collected_user_information
+            .get("target_school")
+            .map(String::as_str),
+        Some("清华大学")
+    );
     // 当前 run 亦 cancelled
     let (status, wf) = run_row(&conn);
     assert_eq!(status, "cancelled");
@@ -1178,8 +1604,12 @@ fn er303_hard_boundary_strict_isolation() {
     let m = {
         let conn = state.0.lock().unwrap();
         // 旧任务对话痕迹（切换后必须从 Provider 上下文消失）
-        ConversationRepository::new(&conn).add_message(c, p, "user", "帮我做2028考研规划", None).unwrap();
-        ConversationRepository::new(&conn).add_message(c, p, "assistant", "请告诉我：工作日每天能学多久？", None).unwrap();
+        ConversationRepository::new(&conn)
+            .add_message(c, p, "user", "帮我做2028考研规划", None)
+            .unwrap();
+        ConversationRepository::new(&conn)
+            .add_message(c, p, "assistant", "请告诉我：工作日每天能学多久？", None)
+            .unwrap();
         let msg = ConversationRepository::new(&conn)
             .add_message(c, p, "user", "先不考研了，帮我规划三个月英语学习。", None)
             .unwrap();
@@ -1203,15 +1633,23 @@ fn er303_hard_boundary_strict_isolation() {
         let mut payload = app_lib::ai::workflow::AgentWorkflowPayload::default();
         payload.original_request = "2028考研规划".into();
         payload.current_goal = "考上研究生".into();
-        payload.pending_questions.push(app_lib::ai::workflow::AgentQuestion {
-            key: "weekday_study_hours".into(),
-            question: "工作日每天能学多久？".into(),
-            why_needed: String::new(),
-        });
-        payload.collected_user_information.insert("target_school".into(), "清华大学".into());
+        payload
+            .pending_questions
+            .push(app_lib::ai::workflow::AgentQuestion {
+                key: "weekday_study_hours".into(),
+                question: "工作日每天能学多久？".into(),
+                why_needed: String::new(),
+            });
+        payload
+            .collected_user_information
+            .insert("target_school".into(), "清华大学".into());
         app_lib::ai::workflow::set_workflow_payload(
-            &conn, "prev-run", p, c,
-            app_lib::ai::workflow::STATE_WAITING_USER, &payload,
+            &conn,
+            "prev-run",
+            p,
+            c,
+            app_lib::ai::workflow::STATE_WAITING_USER,
+            &payload,
         );
     }
 
@@ -1221,14 +1659,20 @@ fn er303_hard_boundary_strict_isolation() {
     let scripted = vec![
         multi_tool_call(vec![
             ("read_personalization", json!({})),
-            ("cancel_current_task", json!({ "reason": "用户转向新任务", "new_task": true })),
+            (
+                "cancel_current_task",
+                json!({ "reason": "用户转向新任务", "new_task": true }),
+            ),
             ("list_tasks", json!({ "date": "2026-08-21" })), // cancel 后的旧任务 call，不得执行
         ]),
         // 第二轮（重建后的 [system, user] 上下文）：新任务补问
-        tool_call("request_user_input", json!({
-            "reason": "制定英语学习规划前需要确认基础",
-            "questions": [ { "key": "english_level", "question": "你的英语基础是什么？" } ]
-        })),
+        tool_call(
+            "request_user_input",
+            json!({
+                "reason": "制定英语学习规划前需要确认基础",
+                "questions": [ { "key": "english_level", "question": "你的英语基础是什么？" } ]
+            }),
+        ),
     ];
     let capture: std::sync::Arc<std::sync::Mutex<Vec<Vec<app_lib::ai::client::ChatMessage>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1267,34 +1711,63 @@ fn er303_hard_boundary_strict_isolation() {
     let calls = capture.lock().unwrap();
     assert_eq!(calls.len(), 2, "恰好两次 Provider 调用：{}", calls.len());
     // 第一次（切换前）：旧上下文 + continuation 在场（fixture 与恢复链路生效证明）
-    let ctx0: String = calls[0].iter().map(|x| x.content.clone()).collect::<Vec<_>>().join("\n");
-    for must in ["2028考研规划", "工作日每天能学多久", "清华大学", "任务续接", "考上研究生"] {
+    let ctx0: String = calls[0]
+        .iter()
+        .map(|x| x.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for must in [
+        "2028考研规划",
+        "工作日每天能学多久",
+        "清华大学",
+        "任务续接",
+        "考上研究生",
+    ] {
         assert!(ctx0.contains(must), "切换前应含「{must}」（fixture 生效）");
     }
     // 第二次（cancel 后的下一次 Provider 调用）：严格 [fresh system] + [当前用户消息]
     let second = &calls[1];
-    assert_eq!(second.len(), 2, "E-R3-01：重建后 messages 严格两条（system+user）：\n{second:?}");
+    assert_eq!(
+        second.len(),
+        2,
+        "E-R3-01：重建后 messages 严格两条（system+user）：\n{second:?}"
+    );
     assert_eq!(second[0].role, "system", "第一条必须是 fresh system prompt");
     assert_eq!(second[1].role, "user", "第二条必须是当前用户消息");
-    assert_eq!(second[1].content, "先不考研了，帮我规划三个月英语学习。", "user 内容 = 新任务消息");
+    assert_eq!(
+        second[1].content, "先不考研了，帮我规划三个月英语学习。",
+        "user 内容 = 新任务消息"
+    );
     assert!(
-        second.iter().all(|x| x.role != "tool" && x.role != "assistant"),
+        second
+            .iter()
+            .all(|x| x.role != "tool" && x.role != "assistant"),
         "E-R3-01：不得保留任何 tool result / 旧 assistant 消息（含 cancel exchange 与 read 结果）"
     );
-    let ctx1: String = second.iter().map(|x| x.content.clone()).collect::<Vec<_>>().join("\n");
+    let ctx1: String = second
+        .iter()
+        .map(|x| x.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
     for banned in [
         "OLD_TASK_SECRET_2028_POSTGRAD", // cancel 前已执行的旧 read 结果
-        "2028考研规划",                   // 旧 original_request
-        "工作日每天能学多久",             // 旧 pending
-        "清华大学",                       // 旧 collected
-        "考上研究生",                     // 旧 current_goal
-        "任务续接",                       // 旧 continuation block
-        "复习高数",                       // 旧任务 list_tasks 若被执行会出现的语境（未预置任务，防误报改用历史消息）
+        "2028考研规划",                  // 旧 original_request
+        "工作日每天能学多久",            // 旧 pending
+        "清华大学",                      // 旧 collected
+        "考上研究生",                    // 旧 current_goal
+        "任务续接",                      // 旧 continuation block
+        "复习高数", // 旧任务 list_tasks 若被执行会出现的语境（未预置任务，防误报改用历史消息）
     ] {
-        assert!(!ctx1.contains(banned), "E-R3-01：切换后上下文不得含「{banned}」：\n{ctx1}");
+        assert!(
+            !ctx1.contains(banned),
+            "E-R3-01：切换后上下文不得含「{banned}」：\n{ctx1}"
+        );
     }
     // 旧历史消息（bound_history）也不得出现
-    assert!(!ctx1.contains("请告诉我"), "旧历史 assistant 消息不得出现：\n{ctx1}");
+    assert!(
+        !ctx1.contains("请告诉我"),
+        "旧历史 assistant 消息不得出现：\n{ctx1}"
+    );
     drop(calls);
 
     // 收口：新任务 waiting_user（英语上下文）
@@ -1303,7 +1776,10 @@ fn er303_hard_boundary_strict_isolation() {
     assert_eq!(status, "waiting_user");
     assert_eq!(wf.as_deref(), Some("waiting_user"));
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert_eq!(payload.original_request, "先不考研了，帮我规划三个月英语学习。");
+    assert_eq!(
+        payload.original_request,
+        "先不考研了，帮我规划三个月英语学习。"
+    );
     assert_eq!(payload.pending_questions.len(), 1);
     assert_eq!(payload.pending_questions[0].key, "english_level");
     // E-R3-02：旧考研 waiting run 已在切换瞬间 durable cancelled
@@ -1335,7 +1811,10 @@ fn er304_provider_failure_after_switch_old_cancelled_current_failed() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "先不考研了，帮我规划英语学习。");
         seed_waiting(
-            &conn, f.0, f.1, "2028考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "2028考研规划",
             &[("weekday_study_hours", "工作日每天能学多久？")],
             &[("target_school", "清华大学")],
         );
@@ -1343,15 +1822,27 @@ fn er304_provider_failure_after_switch_old_cancelled_current_failed() {
     };
     // 队列只有 cancel：切换完成后下一次 Provider chat 耗尽 → 故障
     let out = run_turn(
-        &state, &vault, p, c, m, "先不考研了，帮我规划英语学习。",
-        vec![tool_call("cancel_current_task", json!({ "reason": "用户转向新任务", "new_task": true }))],
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "先不考研了，帮我规划英语学习。",
+        vec![tool_call(
+            "cancel_current_task",
+            json!({ "reason": "用户转向新任务", "new_task": true }),
+        )],
     );
     assert!(out.is_err(), "切换后 Provider 故障必须冒泡：{out:?}");
     let conn = state.0.lock().unwrap();
     // current run：failed（无 waiting/running 脏状态）
     let (status, wf) = run_row(&conn);
     assert_eq!(status, "failed", "current run status = failed：{status}");
-    assert_eq!(wf.as_deref(), Some("failed"), "current workflow = failed：{wf:?}");
+    assert_eq!(
+        wf.as_deref(),
+        Some("failed"),
+        "current workflow = failed：{wf:?}"
+    );
     // old 考研 run：durable cancelled（切换瞬间已写库，Provider 失败不影响）
     let (old_state, old_json): (String, Option<String>) = conn
         .query_row(
@@ -1360,12 +1851,18 @@ fn er304_provider_failure_after_switch_old_cancelled_current_failed() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(old_state, "cancelled", "old run 必须已 durable cancelled（不得残留 waiting_user）");
+    assert_eq!(
+        old_state, "cancelled",
+        "old run 必须已 durable cancelled（不得残留 waiting_user）"
+    );
     let old_payload: app_lib::ai::workflow::AgentWorkflowPayload =
         serde_json::from_str(old_json.as_deref().unwrap_or("{}")).unwrap();
     assert!(old_payload.pending_questions.is_empty(), "old pending = []");
     assert_eq!(old_payload.last_phase, "cancelled");
-    assert_eq!(old_payload.original_request, "2028考研规划", "old original_request 保留作审计");
+    assert_eq!(
+        old_payload.original_request, "2028考研规划",
+        "old original_request 保留作审计"
+    );
     // 库中不存在任何 waiting_user 行
     let waiting_rows: i64 = conn
         .query_row(
@@ -1448,7 +1945,10 @@ fn er401_fresh_workflow_durable_persist_and_retry_isolation() {
         let conn = state.0.lock().unwrap();
         let f = mk_fixture(&conn, "先不考研了，帮我规划三个月英语学习。");
         seed_waiting(
-            &conn, f.0, f.1, "2028考研规划",
+            &conn,
+            f.0,
+            f.1,
+            "2028考研规划",
             &[("weekday_study_hours", "工作日每天能学多久？")],
             &[("target_school", "清华大学")],
         );
@@ -1464,15 +1964,27 @@ fn er401_fresh_workflow_durable_persist_and_retry_isolation() {
             serde_json::from_str(&json).unwrap();
         payload.current_goal = "考上研究生".into();
         app_lib::ai::workflow::set_workflow_payload(
-            &conn, "prev-run", f.0, f.1,
-            app_lib::ai::workflow::STATE_WAITING_USER, &payload,
+            &conn,
+            "prev-run",
+            f.0,
+            f.1,
+            app_lib::ai::workflow::STATE_WAITING_USER,
+            &payload,
         );
         f
     };
     // 切换后下一次 Provider 故障（队列仅 cancel：硬切换完成 → 下一次 chat 耗尽）
     let out = run_turn(
-        &state, &vault, p, c, m, "先不考研了，帮我规划三个月英语学习。",
-        vec![tool_call("cancel_current_task", json!({ "reason": "用户转向新任务", "new_task": true }))],
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "先不考研了，帮我规划三个月英语学习。",
+        vec![tool_call(
+            "cancel_current_task",
+            json!({ "reason": "用户转向新任务", "new_task": true }),
+        )],
     );
     assert!(out.is_err(), "切换后 Provider 故障必须冒泡：{out:?}");
     {
@@ -1515,7 +2027,9 @@ fn er401_fresh_workflow_durable_persist_and_retry_isolation() {
             cur.collected_user_information
         );
         assert!(
-            cur.collected_user_information.values().all(|v| !v.contains("清华")),
+            cur.collected_user_information
+                .values()
+                .all(|v| !v.contains("清华")),
             "collected 值不含旧考研信息"
         );
         assert!(cur.current_goal.is_empty(), "current_goal 不含旧目标");
@@ -1530,7 +2044,13 @@ fn er401_fresh_workflow_durable_persist_and_retry_isolation() {
             .id
     };
     let (out2, capture) = run_turn_capture(
-        &state, &vault, p, c, m2, "继续", "dev0066e-retry",
+        &state,
+        &vault,
+        p,
+        c,
+        m2,
+        "继续",
+        "dev0066e-retry",
         vec![final_answer("好的，我继续制定三个月英语学习计划。")],
     );
     assert_eq!(out2, Ok("completed"), "{out2:?}");
@@ -1542,7 +2062,13 @@ fn er401_fresh_workflow_durable_persist_and_retry_isolation() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(first.contains("继续"), "当前用户消息在场");
-    for banned in ["2028考研规划", "清华大学", "工作日每天能学多久", "考上研究生", "任务续接"] {
+    for banned in [
+        "2028考研规划",
+        "清华大学",
+        "工作日每天能学多久",
+        "考上研究生",
+        "任务续接",
+    ] {
         assert!(
             !first.contains(banned),
             "E-R4-02：重试后第一次 Provider 输入不得含「{banned}」（硬边界在 failure→retry 后仍成立）：\n{first}"
@@ -1566,7 +2092,12 @@ fn er402_checked_helper_sql_error_propagates() {
     conn.execute("DROP TABLE ai_runs", []).unwrap();
     let payload = app_lib::ai::workflow::AgentWorkflowPayload::default();
     let r = app_lib::ai::workflow::set_workflow_payload_checked(
-        &conn, "any-run", 1, 1, "understanding", &payload,
+        &conn,
+        "any-run",
+        1,
+        1,
+        "understanding",
+        &payload,
     );
     let err = r.err().expect("SQL 失败必须返回 Err（不得静默）");
     assert!(err.contains("ai_runs"), "错误应指向真实 SQL 故障：{err}");

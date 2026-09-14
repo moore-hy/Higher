@@ -18,7 +18,5 @@ pub mod types;
 #[cfg(test)]
 pub mod tests;
 
-pub use evidence::{
-    build_learning_load_evidence, format_learning_load_evidence, QUERY_COUNT,
-};
+pub use evidence::{build_learning_load_evidence, format_learning_load_evidence, QUERY_COUNT};
 pub use types::*;

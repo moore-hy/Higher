@@ -28,7 +28,9 @@ use app_lib::ai::intelligence::{
     self, decision::AiDecision, goal_understanding, missing_information, user_context,
     ANALYSIS_STATE_FILE,
 };
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
 use app_lib::repository::conversation::ConversationRepository;
@@ -60,8 +62,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0070f21_{}_{}", name, std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0070f21_{}_{}", name, std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -146,7 +152,10 @@ fn run_turn_capture(
     user_message: &str,
     intel_scripted: Vec<Completion>,
     main_scripted: Vec<Completion>,
-) -> (Result<&'static str, String>, std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>) {
+) -> (
+    Result<&'static str, String>,
+    std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>,
+) {
     let token = tokio_util::sync::CancellationToken::new();
     let cfg = runtime_cfg(profile_id);
     let cap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -190,7 +199,11 @@ fn user_context_json(conn: &Connection, profile_id: i64) -> String {
     .unwrap_or_default()
 }
 
-fn read_workflow(conn: &Connection, profile_id: i64, conv: i64) -> (String, app_lib::ai::workflow::AgentWorkflowPayload) {
+fn read_workflow(
+    conn: &Connection,
+    profile_id: i64,
+    conv: i64,
+) -> (String, app_lib::ai::workflow::AgentWorkflowPayload) {
     app_lib::ai::workflow::read_workflow_payload(conn, profile_id, conv).unwrap()
 }
 
@@ -207,11 +220,20 @@ fn test_001_user_context_json_roundtrip() {
 
 #[test]
 fn test_005_template_generated() {
-    assert_eq!(user_context::TEMPLATE_FILE_NAME, "Higher_User_Profile_Template.md");
+    assert_eq!(
+        user_context::TEMPLATE_FILE_NAME,
+        "Higher_User_Profile_Template.md"
+    );
     let t = user_context::generate_template();
     for section in [
-        "# 基础信息", "# 当前状态", "# 教育背景", "# 能力基础",
-        "# 长期目标", "# 时间资源", "# 限制条件", "# 偏好",
+        "# 基础信息",
+        "# 当前状态",
+        "# 教育背景",
+        "# 能力基础",
+        "# 长期目标",
+        "# 时间资源",
+        "# 限制条件",
+        "# 偏好",
     ] {
         assert!(t.contains(section), "模板缺节：{section}");
     }
@@ -246,15 +268,15 @@ fn f21_t01_natural_language_profile_via_ai_analyzer() {
 
     // Scripted AI Analyzer 返回 structured result（intel 通道）
     let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(vec![
-            text_completion(AI_STRUCTURED_JSON),
-        ])),
+        intel: std::sync::Mutex::new(VecDeque::from(vec![text_completion(AI_STRUCTURED_JSON)])),
         main: std::sync::Mutex::new(VecDeque::new()),
         capture: None,
     };
-    let res =
-        tauri::async_runtime::block_on(user_context::analyze_strict(&responder, NATURAL_LANGUAGE_PROFILE))
-            .expect("AI 分析应成功");
+    let res = tauri::async_runtime::block_on(user_context::analyze_strict(
+        &responder,
+        NATURAL_LANGUAGE_PROFILE,
+    ))
+    .expect("AI 分析应成功");
     let dir = std::env::temp_dir().join(format!("higher_f21t01_{}", std::process::id()));
     let status = intelligence::apply_analysis(&conn, profile_id, &Ok(res.clone()), Some(&dir));
     assert_eq!(status, "analyzed");
@@ -263,7 +285,11 @@ fn f21_t01_natural_language_profile_via_ai_analyzer() {
     let stored = user_context_json(&conn, profile_id);
     let stored_uc: user_context::UserContext = serde_json::from_str(&stored).unwrap();
     assert_eq!(stored_uc, res);
-    assert!(stored_uc.current_status.as_deref().unwrap().contains("大三"));
+    assert!(stored_uc
+        .current_status
+        .as_deref()
+        .unwrap()
+        .contains("大三"));
     assert!(stored_uc.abilities.iter().any(|a| a.contains("数学比较差")));
 
     // 不是 deterministic parser 结果（自然语言无节/无 kv → 确定性解析必为空）
@@ -291,7 +317,15 @@ fn f21_t02_analyzer_failure_keeps_import_and_old_context() {
 
     // 预置 source 行（导入已成功的资料；status='extracted'）
     let sid = PersonalizationRepository::new(&conn)
-        .insert_source(profile_id, "note.md", "md", "rel", "sha", "path", "extracted")
+        .insert_source(
+            profile_id,
+            "note.md",
+            "md",
+            "rel",
+            "sha",
+            "path",
+            "extracted",
+        )
         .unwrap();
 
     // Provider failure：intel 队列耗尽 → Err（无确定性回退）
@@ -300,7 +334,10 @@ fn f21_t02_analyzer_failure_keeps_import_and_old_context() {
         main: std::sync::Mutex::new(VecDeque::new()),
         capture: None,
     };
-    let res = tauri::async_runtime::block_on(user_context::analyze_strict(&empty, NATURAL_LANGUAGE_PROFILE));
+    let res = tauri::async_runtime::block_on(user_context::analyze_strict(
+        &empty,
+        NATURAL_LANGUAGE_PROFILE,
+    ));
     assert!(res.is_err(), "Provider 失败必须 Err");
 
     let dir = std::env::temp_dir().join(format!("higher_f21t02_{}", std::process::id()));
@@ -317,7 +354,11 @@ fn f21_t02_analyzer_failure_keeps_import_and_old_context() {
         .unwrap();
     assert_eq!(src_status, "extracted", "原资料导入不受 AI 失败影响");
     // ② 旧 user_context_json 不覆盖
-    assert_eq!(user_context_json(&conn, profile_id), old_json, "旧理解不得被失败覆盖");
+    assert_eq!(
+        user_context_json(&conn, profile_id),
+        old_json,
+        "旧理解不得被失败覆盖"
+    );
     // ③ dirty 标记（状态文件）
     let marker = std::fs::read_to_string(dir.join(ANALYSIS_STATE_FILE)).unwrap();
     assert!(marker.contains("analysis_failed"), "dirty 状态：{marker}");
@@ -335,14 +376,16 @@ fn f21_t03_saas_goal_dynamic_required_information() {
       ]}"#;
     let uc: user_context::UserContext = serde_json::from_str(AI_STRUCTURED_JSON).unwrap();
     let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(vec![
-            text_completion(saas_json),
-        ])),
+        intel: std::sync::Mutex::new(VecDeque::from(vec![text_completion(saas_json)])),
         main: std::sync::Mutex::new(VecDeque::new()),
         capture: None,
     };
     let g = tauri::async_runtime::block_on(goal_understanding::analyze(
-        &responder, &uc, "我想三年内做一个自己的 SaaS", &Default::default(), "",
+        &responder,
+        &uc,
+        "我想三年内做一个自己的 SaaS",
+        &Default::default(),
+        "",
     ))
     .unwrap();
     // 动态推理结果原样通过（代码无考研/education 专用规则可依赖）
@@ -352,7 +395,10 @@ fn f21_t03_saas_goal_dynamic_required_information() {
     assert!(missing.iter().any(|m| m.field == "产品方向与目标用户"));
     assert!(missing.iter().any(|m| m.source_kind == "external"));
     // decision：存在 user 缺失 → AskUser
-    assert_eq!(intelligence::decision::decide(&missing), AiDecision::AskUser);
+    assert_eq!(
+        intelligence::decision::decide(&missing),
+        AiDecision::AskUser
+    );
 }
 
 // =============== F21-T04 · external 不生成用户问题 ===============
@@ -366,10 +412,20 @@ fn f21_t04_external_kind_no_user_question() {
     // 单元级：decision = Research；渠道标签指向 web 工具而非问用户
     let g: goal_understanding::GoalUnderstanding = serde_json::from_str(ext_json).unwrap();
     let missing = missing_information::from_goal(&g);
-    assert_eq!(intelligence::decision::decide(&missing), AiDecision::Research);
-    let block = intelligence::build_prompt_block(&user_context::UserContext::default(), &g, &missing);
-    assert!(block.contains("web_search"), "external 渠道应指向 Web Research：{block}");
-    assert!(!block.contains("request_user_input"), "external 不得生成用户问题：{block}");
+    assert_eq!(
+        intelligence::decision::decide(&missing),
+        AiDecision::Research
+    );
+    let block =
+        intelligence::build_prompt_block(&user_context::UserContext::default(), &g, &missing);
+    assert!(
+        block.contains("web_search"),
+        "external 渠道应指向 Web Research：{block}"
+    );
+    assert!(
+        !block.contains("request_user_input"),
+        "external 不得生成用户问题：{block}"
+    );
 
     // agent 级：external-only → 不挂起等用户，正常完成
     let (state, vault) = setup("f21t04");
@@ -380,10 +436,17 @@ fn f21_t04_external_kind_no_user_question() {
         f
     };
     let (out, _cap) = run_turn_capture(
-        &state, &vault, "f21t04-run", profile_id, conv, msg,
+        &state,
+        &vault,
+        "f21t04-run",
+        profile_id,
+        conv,
+        msg,
         "帮我了解2028考研国家线趋势",
         vec![intel(ext_json)],
-        vec![text_completion("根据近年公开数据，国家线整体…（联网查证后说明）")],
+        vec![text_completion(
+            "根据近年公开数据，国家线整体…（联网查证后说明）",
+        )],
     );
     assert_eq!(out.unwrap(), "completed");
     let conn = state.0.lock().unwrap();
@@ -416,15 +479,24 @@ fn f21_t05_user_kind_asks_via_request_user_input() {
         f
     };
     let (out, cap) = run_turn_capture(
-        &state, &vault, "f21t05-run", profile_id, conv, msg, "我要准备2028考研",
+        &state,
+        &vault,
+        "f21t05-run",
+        profile_id,
+        conv,
+        msg,
+        "我要准备2028考研",
         vec![intel(user_json)],
-        vec![tool_call("request_user_input", json!({
-            "questions": [{
-                "key": "target_school",
-                "question": "你的目标院校是哪所？",
-                "why_needed": "影响复习路线"
-            }]
-        }))],
+        vec![tool_call(
+            "request_user_input",
+            json!({
+                "questions": [{
+                    "key": "target_school",
+                    "question": "你的目标院校是哪所？",
+                    "why_needed": "影响复习路线"
+                }]
+            }),
+        )],
     );
     assert_eq!(out.unwrap(), "needs_user_input");
     // 注入断言：主循环 system 含 User Understanding + user 渠道缺失
@@ -438,13 +510,26 @@ fn f21_t05_user_kind_asks_via_request_user_input() {
             .map(|m| m.content.clone())
             .unwrap_or_default()
     };
-    assert!(first_system.contains("User Understanding"), "system 应含 User Understanding 块");
-    assert!(first_system.contains("target_school"), "应注入 user 渠道缺失：{first_system}");
+    assert!(
+        first_system.contains("User Understanding"),
+        "system 应含 User Understanding 块"
+    );
+    assert!(
+        first_system.contains("target_school"),
+        "应注入 user 渠道缺失：{first_system}"
+    );
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow(&conn, profile_id, conv);
-    assert!(payload.pending_questions.iter().any(|q| q.key == "target_school"));
+    assert!(payload
+        .pending_questions
+        .iter()
+        .any(|q| q.key == "target_school"));
     let status: String = conn
-        .query_row("SELECT status FROM ai_runs WHERE id=?1", params!["f21t05-run"], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM ai_runs WHERE id=?1",
+            params!["f21t05-run"],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(status, "waiting_user");
 }
@@ -466,11 +551,20 @@ fn f21_t06_final_answer_then_persistent_ready_for_planning() {
     };
     // Turn 1：缺 target_school → 挂起等用户
     let (out1, _) = run_turn_capture(
-        &state, &vault, "f21t06-run1", profile_id, conv, msg1, "我要准备2028考研",
+        &state,
+        &vault,
+        "f21t06-run1",
+        profile_id,
+        conv,
+        msg1,
+        "我要准备2028考研",
         vec![intel(ask_json)],
-        vec![tool_call("request_user_input", json!({
-            "questions": [{ "key": "target_school", "question": "目标院校？", "why_needed": "影响复习路线" }]
-        }))],
+        vec![tool_call(
+            "request_user_input",
+            json!({
+                "questions": [{ "key": "target_school", "question": "目标院校？", "why_needed": "影响复习路线" }]
+            }),
+        )],
     );
     assert_eq!(out1.unwrap(), "needs_user_input");
 
@@ -481,13 +575,22 @@ fn f21_t06_final_answer_then_persistent_ready_for_planning() {
     let ready_json = r#"{"goal":"2028考研","goal_type":"education","required_information":[]}"#;
     // DEV-0077.2 §十八：完整回答 = 结构化提交（collected + questions=[]，不挂起）
     let (out2, _cap) = run_turn_capture(
-        &state, &vault, "f21t06-run2", profile_id, conv, msg2.id, "华中科技大学",
+        &state,
+        &vault,
+        "f21t06-run2",
+        profile_id,
+        conv,
+        msg2.id,
+        "华中科技大学",
         vec![intel(ready_json)],
         vec![
-            tool_call("request_user_input", json!({
-                "collected": { "target_school": "华中科技大学" },
-                "questions": []
-            })),
+            tool_call(
+                "request_user_input",
+                json!({
+                    "collected": { "target_school": "华中科技大学" },
+                    "questions": []
+                }),
+            ),
             text_completion("好的，目标院校已记录：华中科技大学。信息已完整，可以进入规划。"),
         ],
     );
@@ -495,11 +598,18 @@ fn f21_t06_final_answer_then_persistent_ready_for_planning() {
     let conn = state.0.lock().unwrap();
     // F21-03 三重断言
     let status: String = conn
-        .query_row("SELECT status FROM ai_runs WHERE id=?1", params!["f21t06-run2"], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM ai_runs WHERE id=?1",
+            params!["f21t06-run2"],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(status, "completed");
     let (wf_state, payload) = read_workflow(&conn, profile_id, conv);
-    assert_eq!(wf_state, "ready_for_planning", "workflow_state 必须持久为 ready_for_planning");
+    assert_eq!(
+        wf_state, "ready_for_planning",
+        "workflow_state 必须持久为 ready_for_planning"
+    );
     assert_eq!(payload.last_phase, "ready_for_planning");
     assert!(payload.pending_questions.is_empty(), "pending 必须清空");
 }
@@ -517,7 +627,13 @@ fn f21_t07_casual_qa_stays_completed() {
         f
     };
     let (out, _cap) = run_turn_capture(
-        &state, &vault, "f21t07-run", profile_id, conv, msg, "1+1是多少",
+        &state,
+        &vault,
+        "f21t07-run",
+        profile_id,
+        conv,
+        msg,
+        "1+1是多少",
         vec![intel(casual_json)],
         vec![text_completion("1+1 = 2。")],
     );
@@ -558,20 +674,42 @@ fn f22_t01_no_profile_goal_still_understood() {
     assert!(uc_check.is_empty(), "前置：UserContext 为 EMPTY");
 
     let (out, cap) = run_turn_capture(
-        &state, &vault, "f22t01-run", profile_id, conv, msg,
+        &state,
+        &vault,
+        "f22t01-run",
+        profile_id,
+        conv,
+        msg,
         "我要准备2028考研，帮我规划。",
         vec![intel(goal_json)],
-        vec![tool_call("request_user_input", json!({
-            "questions": [{ "key": "target_school", "question": "你的目标院校是哪所？", "why_needed": "影响复习路线" }]
-        }))],
+        vec![tool_call(
+            "request_user_input",
+            json!({
+                "questions": [{ "key": "target_school", "question": "你的目标院校是哪所？", "why_needed": "影响复习路线" }]
+            }),
+        )],
     );
-    assert_eq!(out.unwrap(), "needs_user_input", "target_school(user) → 主动询问");
+    assert_eq!(
+        out.unwrap(),
+        "needs_user_input",
+        "target_school(user) → 主动询问"
+    );
     // Intelligence 被调用（intel 队列被消耗 + 捕获的首次调用是 structured prompt）
     {
         let calls = cap.lock().unwrap();
-        assert!(!calls.is_empty(), "Intelligence Analysis 必须被调用，不得跳过");
-        let first: String = calls[0].iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n");
-        assert!(first.contains("目标理解器"), "首次调用应为 structured intelligence：{first}");
+        assert!(
+            !calls.is_empty(),
+            "Intelligence Analysis 必须被调用，不得跳过"
+        );
+        let first: String = calls[0]
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            first.contains("目标理解器"),
+            "首次调用应为 structured intelligence：{first}"
+        );
     }
     // user 渠道 → request_user_input；external 渠道进入 Web 语义（注入块）
     let main_system = {
@@ -583,12 +721,24 @@ fn f22_t01_no_profile_goal_still_understood() {
             .map(|m| m.content.clone())
             .unwrap_or_default()
     };
-    assert!(main_system.contains("target_school"), "user 缺失注入：{main_system}");
-    assert!(main_system.contains("exam_subjects"), "external 缺失注入：{main_system}");
-    assert!(main_system.contains("web_search"), "exam_subjects 进入 Web 语义：{main_system}");
+    assert!(
+        main_system.contains("target_school"),
+        "user 缺失注入：{main_system}"
+    );
+    assert!(
+        main_system.contains("exam_subjects"),
+        "external 缺失注入：{main_system}"
+    );
+    assert!(
+        main_system.contains("web_search"),
+        "exam_subjects 进入 Web 语义：{main_system}"
+    );
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow(&conn, profile_id, conv);
-    assert!(payload.pending_questions.iter().any(|q| q.key == "target_school"));
+    assert!(payload
+        .pending_questions
+        .iter()
+        .any(|q| q.key == "target_school"));
     let evt: String = conn
         .query_row(
             "SELECT data_json FROM ai_run_events WHERE run_id=?1 AND event_type='workflow_user_context'",
@@ -596,7 +746,10 @@ fn f22_t01_no_profile_goal_still_understood() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!(evt.contains("\"ask_user\""), "存在 user 缺失 → ask_user：{evt}");
+    assert!(
+        evt.contains("\"ask_user\""),
+        "存在 user 缺失 → ask_user：{evt}"
+    );
 }
 
 // =============== F22-T02 · 无档案普通聊天不进入 ready_for_planning ===============
@@ -610,14 +763,24 @@ fn f22_t02_no_profile_casual_chat_stays_completed() {
         mk_fixture(&conn, "1+1是多少？")
     };
     let (out, cap) = run_turn_capture(
-        &state, &vault, "f22t02-run", profile_id, conv, msg, "1+1是多少？",
+        &state,
+        &vault,
+        "f22t02-run",
+        profile_id,
+        conv,
+        msg,
+        "1+1是多少？",
         vec![intel(casual_json)],
         vec![text_completion("1+1 = 2。")],
     );
     assert_eq!(out.unwrap(), "completed");
     {
         let calls = cap.lock().unwrap();
-        assert!(calls.len() >= 2, "intel 被调用 + 主循环应答：{}", calls.len());
+        assert!(
+            calls.len() >= 2,
+            "intel 被调用 + 主循环应答：{}",
+            calls.len()
+        );
     }
     let conn = state.0.lock().unwrap();
     let (wf_state, payload) = read_workflow(&conn, profile_id, conv);
@@ -636,11 +799,25 @@ fn f22_t02_no_profile_casual_chat_stays_completed() {
 // =============== F22-T03 · 多文件整体分析（旧资料 + 新增，单次调用） ===============
 
 /// 建 source + extracted.txt 的 helper。
-fn add_source_with_text(conn: &Connection, profile_id: i64, name: &str, text: &str, dir: &std::path::Path) -> i64 {
+fn add_source_with_text(
+    conn: &Connection,
+    profile_id: i64,
+    name: &str,
+    text: &str,
+    dir: &std::path::Path,
+) -> i64 {
     let path = dir.join(format!("{name}.txt"));
     std::fs::write(&path, text).unwrap();
     PersonalizationRepository::new(conn)
-        .insert_source(profile_id, name, "txt", "rel", &format!("sha-{name}"), &path.to_string_lossy(), "extracted")
+        .insert_source(
+            profile_id,
+            name,
+            "txt",
+            "rel",
+            &format!("sha-{name}"),
+            &path.to_string_lossy(),
+            "extracted",
+        )
         .unwrap()
 }
 
@@ -674,10 +851,15 @@ fn f22_t03_multi_file_full_corpus_analysis() {
         intelligence::build_profile_corpus(&conn, profile_id).expect("corpus 构建成功")
     };
     for (name, text) in [
-        ("A", "当前大三，计算机专业"), ("B", "数学基础较弱"),
-        ("C", "每周可学习40小时"), ("D", "目标华中科技大学"),
+        ("A", "当前大三，计算机专业"),
+        ("B", "数学基础较弱"),
+        ("C", "每周可学习40小时"),
+        ("D", "目标华中科技大学"),
     ] {
-        assert!(corpus.contains(&format!("Source")) && corpus.contains(name), "corpus 缺 source {name}");
+        assert!(
+            corpus.contains(&format!("Source")) && corpus.contains(name),
+            "corpus 缺 source {name}"
+        );
         assert!(corpus.contains(text), "corpus 缺文本：{text}");
     }
     assert!(corpus.contains("---"), "corpus 必须有 --- 分隔");
@@ -701,20 +883,35 @@ fn f22_t03_multi_file_full_corpus_analysis() {
     };
     // 编排：锁内 corpus → 锁外单次 analyze → 锁内单次写（复用 mod.rs 编排函数）
     let status = tauri::async_runtime::block_on(intelligence::run_full_profile_analysis(
-        &state.0.lock().unwrap(), profile_id, &responder, &[d_dir.clone()],
+        &state.0.lock().unwrap(),
+        profile_id,
+        &responder,
+        &[d_dir.clone()],
     ));
     assert_eq!(status, "analyzed");
     {
         let calls = capture.lock().unwrap();
         assert_eq!(calls.len(), 1, "Analyzer 只执行一次：{}", calls.len());
-        let input: String = calls[0].iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n");
-        for text in ["当前大三，计算机专业", "数学基础较弱", "每周可学习40小时", "目标华中科技大学"] {
+        let input: String = calls[0]
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for text in [
+            "当前大三，计算机专业",
+            "数学基础较弱",
+            "每周可学习40小时",
+            "目标华中科技大学",
+        ] {
             assert!(input.contains(text), "Analyzer 输入缺「{text}」");
         }
     }
     // 最终 user_context_json 同时包含五类信息
     let stored = user_context_json(&state.0.lock().unwrap(), profile_id);
-    assert!(stored.contains("大三") && stored.contains("计算机"), "当前状态+专业：{stored}");
+    assert!(
+        stored.contains("大三") && stored.contains("计算机"),
+        "当前状态+专业：{stored}"
+    );
     assert!(stored.contains("数学基础较弱"), "数学基础：{stored}");
     assert!(stored.contains("每周可学习40小时"), "时间资源：{stored}");
     assert!(stored.contains("华中科技大学"), "目标院校：{stored}");
@@ -736,7 +933,13 @@ fn f22_t04_last_file_must_not_overwrite() {
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     {
         let conn = state.0.lock().unwrap();
-        add_source_with_text(&conn, profile_id, "A", "学历本科，专业计算机，毕业三年", &dir);
+        add_source_with_text(
+            &conn,
+            profile_id,
+            "A",
+            "学历本科，专业计算机，毕业三年",
+            &dir,
+        );
         add_source_with_text(&conn, profile_id, "B", "每天晚上有2小时，周末全天", &dir);
     }
     let merged_json = r#"{
@@ -754,21 +957,37 @@ fn f22_t04_last_file_must_not_overwrite() {
         capture: Some(capture.clone()),
     };
     let status = tauri::async_runtime::block_on(intelligence::run_full_profile_analysis(
-        &state.0.lock().unwrap(), profile_id, &responder, &[dir.clone()],
+        &state.0.lock().unwrap(),
+        profile_id,
+        &responder,
+        &[dir.clone()],
     ));
     assert_eq!(status, "analyzed");
     // Analyzer 输入同时含两 source（不是只 B）
     {
         let calls = capture.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        let input: String = calls[0].iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n");
+        let input: String = calls[0]
+            .iter()
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(input.contains("专业计算机"), "输入必须含 source A：{input}");
-        assert!(input.contains("每天晚上有2小时"), "输入必须含 source B：{input}");
+        assert!(
+            input.contains("每天晚上有2小时"),
+            "输入必须含 source B：{input}"
+        );
     }
     // 最终 UserContext 同时拥有两类信息（禁止 == 只分析 B 的结果）
     let stored = user_context_json(&state.0.lock().unwrap(), profile_id);
-    assert!(stored.contains("计算机"), "education/background 保留：{stored}");
-    assert!(stored.contains("每天2小时"), "time/resources 保留：{stored}");
+    assert!(
+        stored.contains("计算机"),
+        "education/background 保留：{stored}"
+    );
+    assert!(
+        stored.contains("每天2小时"),
+        "time/resources 保留：{stored}"
+    );
 }
 
 // =============== F22-T05 · 完整档案读取失败 ===============
@@ -797,7 +1016,15 @@ fn f22_t05_partial_read_failure_blocks_analysis() {
         let conn = state.0.lock().unwrap();
         add_source_with_text(&conn, profile_id, "A", "当前大三，计算机专业", &dir);
         PersonalizationRepository::new(&conn)
-            .insert_source(profile_id, "B", "md", "rel", "sha-B", &dir.join("missing.txt").to_string_lossy(), "extracted")
+            .insert_source(
+                profile_id,
+                "B",
+                "md",
+                "rel",
+                "sha-B",
+                &dir.join("missing.txt").to_string_lossy(),
+                "extracted",
+            )
             .unwrap();
     }
     // corpus 构建必须失败（点名 B）
@@ -816,9 +1043,15 @@ fn f22_t05_partial_read_failure_blocks_analysis() {
         capture: None,
     };
     let status = tauri::async_runtime::block_on(intelligence::run_full_profile_analysis(
-        &state.0.lock().unwrap(), profile_id, &responder, &[dir.clone()],
+        &state.0.lock().unwrap(),
+        profile_id,
+        &responder,
+        &[dir.clone()],
     ));
     assert_eq!(status, "analysis_failed", "禁止只用 A 重新生成 UserContext");
     // 旧 user_context_json 完全不变（TRAP 未写入）
-    assert_eq!(user_context_json(&state.0.lock().unwrap(), profile_id), old_json);
+    assert_eq!(
+        user_context_json(&state.0.lock().unwrap(), profile_id),
+        old_json
+    );
 }

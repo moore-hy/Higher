@@ -39,8 +39,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0066_{}_{}", name, std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0066_{}_{}", name, std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64, basic_chat: Option<bool>) -> AiRuntimeConfig {
@@ -179,7 +183,11 @@ fn t01_free_question_answers_without_tools_or_changeset() {
         "assistant 消息应包含回答：{msgs:?}"
     );
     // 无任何 ChangeSet（自由问题 0 写入）
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "自由问题不得产生 ChangeSet");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "自由问题不得产生 ChangeSet"
+    );
     // ai_runs 终态 + workflow 收口（global_agent / completed）
     let (action, status): (String, String) = conn
         .query_row(
@@ -216,7 +224,10 @@ fn t02_higher_read_reads_real_tasks_without_write() {
         f
     };
     let scripted = vec![
-        tool_call("list_tasks", json!({ "start_date": LOCAL_DATE, "end_date": LOCAL_DATE })),
+        tool_call(
+            "list_tasks",
+            json!({ "start_date": LOCAL_DATE, "end_date": LOCAL_DATE }),
+        ),
         final_answer("你今天有 1 个任务：高数复习（待完成）。"),
     ];
 
@@ -225,7 +236,11 @@ fn t02_higher_read_reads_real_tasks_without_write() {
 
     let conn = state.0.lock().unwrap();
     // 读路径：无 ChangeSet；任务原样（不写）
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "读问题不得产生 ChangeSet");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "读问题不得产生 ChangeSet"
+    );
     let n: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='高数复习' AND planned_date=?2 AND status='pending'",
@@ -265,7 +280,15 @@ fn t03_task_write_creates_changeset_applies_and_verifies() {
         final_answer("已为你创建明天的数学任务（60 分钟）。"),
     ];
 
-    let out = run_turn(&state, &vault, p, c, m, "明天给我安排 60 分钟数学。", scripted);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "明天给我安排 60 分钟数学。",
+        scripted,
+    );
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
@@ -296,7 +319,11 @@ fn t03_task_write_creates_changeset_applies_and_verifies() {
     );
     // ④ ai_runs 审计标记（agent_executed）
     let err_flag: String = conn
-        .query_row("SELECT error FROM ai_runs WHERE id=?1", params![RUN_ID], |r| r.get(0))
+        .query_row(
+            "SELECT error FROM ai_runs WHERE id=?1",
+            params![RUN_ID],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(err_flag, "agent_executed");
     // ⑤ 最终声称完成
@@ -342,7 +369,8 @@ fn t04_basic_chat_known_false_refuses_without_provider_call() {
     };
     // Scripted 空：若发生 Provider 调用会 Err（耗尽）
     let responder = ModelResponder::Scripted(std::sync::Mutex::new(VecDeque::new()));
-    let out = tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
+    let out =
+        tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
@@ -389,7 +417,8 @@ fn t05_cancel_before_first_round_stops_without_provider_call() {
         event_sink: None,
     };
     let responder = ModelResponder::Scripted(std::sync::Mutex::new(VecDeque::new()));
-    let out = tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
+    let out =
+        tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
     assert_eq!(out, Ok("cancelled"));
 
     let conn = state.0.lock().unwrap();
@@ -414,23 +443,58 @@ fn t05_cancel_before_first_round_stops_without_provider_call() {
 fn t06_tool_surface_scopes_and_level3_absent() {
     let off = agent_tool_names(false);
     for must in [
-        "list_tasks", "read_personalization", "read_planning_source", "search_higher", "execute_higher_actions",
-        "get_higher_overview", "list_personalization_sources", "read_personalization_source",
+        "list_tasks",
+        "read_personalization",
+        "read_planning_source",
+        "search_higher",
+        "execute_higher_actions",
+        "get_higher_overview",
+        "list_personalization_sources",
+        "read_personalization_source",
     ] {
-        assert!(off.contains(&must.to_string()), "Agent 工具面缺 {must}（web=false）：{off:?}");
+        assert!(
+            off.contains(&must.to_string()),
+            "Agent 工具面缺 {must}（web=false）：{off:?}"
+        );
     }
     // Phase A 临时工具已被 Phase C 统一入口替换
-    assert!(!off.contains(&"execute_task_action".to_string()), "临时工具必须已下线：{off:?}");
-    for banned in ["web_search", "web_open", "propose_change_set", "get_current_stage", "list_plans"] {
-        assert!(!off.contains(&banned.to_string()), "Agent 工具面不应含 {banned}（web=false）：{off:?}");
+    assert!(
+        !off.contains(&"execute_task_action".to_string()),
+        "临时工具必须已下线：{off:?}"
+    );
+    for banned in [
+        "web_search",
+        "web_open",
+        "propose_change_set",
+        "get_current_stage",
+        "list_plans",
+    ] {
+        assert!(
+            !off.contains(&banned.to_string()),
+            "Agent 工具面不应含 {banned}（web=false）：{off:?}"
+        );
     }
     let on = agent_tool_names(true);
     for must in ["web_search", "web_open"] {
-        assert!(on.contains(&must.to_string()), "web=true 应暴露 {must}：{on:?}");
+        assert!(
+            on.contains(&must.to_string()),
+            "web=true 应暴露 {must}：{on:?}"
+        );
     }
     // Level 3（§12）：shell/源码/Schema/任意 SQL 永不提供工具——模型无法获得
-    for level3 in ["shell", "run_command", "execute_sql", "read_file", "write_file", "delete_file", "raw_sql"] {
-        assert!(!on.iter().any(|n| n.contains(level3)), "Level 3 能力 {level3} 泄漏进工具面：{on:?}");
+    for level3 in [
+        "shell",
+        "run_command",
+        "execute_sql",
+        "read_file",
+        "write_file",
+        "delete_file",
+        "raw_sql",
+    ] {
+        assert!(
+            !on.iter().any(|n| n.contains(level3)),
+            "Level 3 能力 {level3} 泄漏进工具面：{on:?}"
+        );
     }
 }
 
@@ -470,20 +534,36 @@ fn t07_waiting_user_reply_recorded_into_collected_information() {
     }
     // 本轮用户回复（DEV-0077.2 §十八：完整回答 = 结构化提交，不挂起自动续）
     let scripted = vec![
-        tool_call("request_user_input", json!({
-            "collected": { "daily_hours": "工作日 6 小时，周末 10 小时" },
-            "questions": []
-        })),
+        tool_call(
+            "request_user_input",
+            json!({
+                "collected": { "daily_hours": "工作日 6 小时，周末 10 小时" },
+                "questions": []
+            }),
+        ),
         final_answer("好的，我已记录你的可用时间。"),
     ];
-    let out = run_turn(&state, &vault, p, c, m, "工作日 6 小时，周末 10 小时。", scripted);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "工作日 6 小时，周末 10 小时。",
+        scripted,
+    );
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
-    assert_eq!(payload.original_request, "帮我做考研规划", "original_request 必须延续（不当独立聊天）");
+    assert_eq!(
+        payload.original_request, "帮我做考研规划",
+        "original_request 必须延续（不当独立聊天）"
+    );
     assert!(
-        payload.collected_user_information.contains_key("daily_hours"),
+        payload
+            .collected_user_information
+            .contains_key("daily_hours"),
         "回复应按 pending key 记录：{:?}",
         payload.collected_user_information
     );
@@ -495,5 +575,8 @@ fn t07_waiting_user_reply_recorded_into_collected_information() {
         "回复内容不得丢失：{:?}",
         payload.collected_user_information
     );
-    assert!(payload.pending_questions.is_empty(), "已回答的 pending 必须清空");
+    assert!(
+        payload.pending_questions.is_empty(),
+        "已回答的 pending 必须清空"
+    );
 }

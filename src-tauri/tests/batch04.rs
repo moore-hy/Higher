@@ -5,9 +5,7 @@
 
 use app_lib::repository::evaluation::EvaluationRepository;
 use app_lib::repository::learning_item::LearningItemRepository;
-use app_lib::repository::recurring_rule::{
-    materialize_recurring_tasks, RecurringRuleRepository,
-};
+use app_lib::repository::recurring_rule::{materialize_recurring_tasks, RecurringRuleRepository};
 use app_lib::repository::study_profile::StudyProfileRepository;
 use app_lib::repository::study_session::StudySessionRepository;
 use app_lib::repository::task::TaskRepository;
@@ -76,7 +74,9 @@ fn test_goal_free_full_loop() {
     assert_eq!(t.learning_item_id, None);
 
     // 开始学习（从 Task）：只要求 Profile
-    let s = StudySessionRepository::new(&conn).start_for_task(p.id, t.id).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start_for_task(p.id, t.id)
+        .unwrap();
     assert_eq!(s.profile_id, p.id);
     assert_eq!(s.goal_id, None);
     assert_eq!(s.task_id, Some(t.id));
@@ -291,40 +291,52 @@ fn test_v012_to_v013_migration_preserves_ids_and_fk() {
 
     // ID 全保留 + profile_id 正确回填
     let (task_p, task_g): (i64, Option<i64>) = conn
-        .query_row("SELECT profile_id, goal_id FROM tasks WHERE id = 7000", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            "SELECT profile_id, goal_id FROM tasks WHERE id = 7000",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .unwrap();
     assert_eq!((task_p, task_g), (7, Some(50)));
     let (sess_p, sess_title): (i64, String) = conn
-        .query_row("SELECT profile_id, title FROM study_sessions WHERE id = 8000", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            "SELECT profile_id, title FROM study_sessions WHERE id = 8000",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .unwrap();
     assert_eq!(sess_p, 7);
     assert_eq!(sess_title, "老知识"); // §11 从 Knowledge 开始默认 item.name
     let (item_p, item_g): (i64, Option<i64>) = conn
-        .query_row("SELECT profile_id, goal_id FROM learning_items WHERE id = 600", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            "SELECT profile_id, goal_id FROM learning_items WHERE id = 600",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .unwrap();
     assert_eq!((item_p, item_g), (7, Some(50)));
     let (eval_p,): (i64,) = conn
-        .query_row("SELECT profile_id FROM evaluations WHERE id = 9000", [], |r| {
-            Ok((r.get(0)?,))
-        })
+        .query_row(
+            "SELECT profile_id FROM evaluations WHERE id = 9000",
+            [],
+            |r| Ok((r.get(0)?,)),
+        )
         .unwrap();
     assert_eq!(eval_p, 7);
     let (rule_p,): (i64,) = conn
-        .query_row("SELECT profile_id FROM recurring_task_rules WHERE id = 11", [], |r| {
-            Ok((r.get(0)?,))
-        })
+        .query_row(
+            "SELECT profile_id FROM recurring_task_rules WHERE id = 11",
+            [],
+            |r| Ok((r.get(0)?,)),
+        )
         .unwrap();
     assert_eq!(rule_p, 7);
     let (att_p,): (i64,) = conn
-        .query_row("SELECT profile_id FROM learning_attachments WHERE id = 12", [], |r| {
-            Ok((r.get(0)?,))
-        })
+        .query_row(
+            "SELECT profile_id FROM learning_attachments WHERE id = 12",
+            [],
+            |r| Ok((r.get(0)?,)),
+        )
         .unwrap();
     assert_eq!(att_p, 7);
 
@@ -358,25 +370,66 @@ fn test_profile_isolation_all_core_entities() {
     let sess_a = StudySessionRepository::new(&conn)
         .start_for_item(item_a.id, None)
         .unwrap();
-    StudySessionRepository::new(&conn).end(sess_a.id, None).unwrap();
+    StudySessionRepository::new(&conn)
+        .end(sess_a.id, None)
+        .unwrap();
     let _sess_b = StudySessionRepository::new(&conn)
         .start_quick(pb.id, None)
         .unwrap();
     EvaluationRepository::new(&conn)
-        .create(pa.id, None, Some(item_a.id), "A验证", "test", None, None, None, None, None, None, None, Some("passed"), None)
+        .create(
+            pa.id,
+            None,
+            Some(item_a.id),
+            "A验证",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("passed"),
+            None,
+        )
         .unwrap();
     RecurringRuleRepository::new(&conn)
-        .create(pa.id, None, Some(item_a.id), "A规则", "daily", &[], Some("08:00"), "2026-08-01", None)
+        .create(
+            pa.id,
+            None,
+            Some(item_a.id),
+            "A规则",
+            "daily",
+            &[],
+            Some("08:00"),
+            "2026-08-01",
+            None,
+        )
         .unwrap();
     RecurringRuleRepository::new(&conn)
-        .create(pb.id, None, None, "B规则", "daily", &[], None, "2026-08-01", None)
+        .create(
+            pb.id,
+            None,
+            None,
+            "B规则",
+            "daily",
+            &[],
+            None,
+            "2026-08-01",
+            None,
+        )
         .unwrap();
 
     // A 视角只看到 A 的
-    let items = LearningItemRepository::new(&conn).list_by_profile(pa.id).unwrap();
+    let items = LearningItemRepository::new(&conn)
+        .list_by_profile(pa.id)
+        .unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "A知识");
-    let tasks = TaskRepository::new(&conn).list_all_by_profile(pa.id).unwrap();
+    let tasks = TaskRepository::new(&conn)
+        .list_all_by_profile(pa.id)
+        .unwrap();
     assert!(tasks.iter().all(|t| t.id == task_a.id));
     assert_eq!(tasks.len(), 1);
     let sessions = StudySessionRepository::new(&conn)
@@ -388,21 +441,42 @@ fn test_profile_isolation_all_core_entities() {
         .list_recent_by_profile(pa.id, 10)
         .unwrap();
     assert_eq!(evals.len(), 1);
-    let rules = RecurringRuleRepository::new(&conn).list_by_profile(pa.id).unwrap();
+    let rules = RecurringRuleRepository::new(&conn)
+        .list_by_profile(pa.id)
+        .unwrap();
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].title, "A规则");
 
     // 跨档案 Task 关联知识被拒
-    let cross = TaskRepository::new(&conn)
-        .create_quick_for_profile(pb.id, "越权", None, Some(item_a.id));
+    let cross =
+        TaskRepository::new(&conn).create_quick_for_profile(pb.id, "越权", None, Some(item_a.id));
     assert!(cross.is_err());
     // 跨档案 Evaluation 被拒
-    let cross_eval = EvaluationRepository::new(&conn)
-        .create(pb.id, None, Some(item_a.id), "越权", "test", None, None, None, None, None, None, None, None, None);
+    let cross_eval = EvaluationRepository::new(&conn).create(
+        pb.id,
+        None,
+        Some(item_a.id),
+        "越权",
+        "test",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
     assert!(cross_eval.is_err());
     // 跨档案 Knowledge parent 被拒
-    let cross_item = LearningItemRepository::new(&conn)
-        .create_for_profile(pb.id, None, "越权子", None, Some(item_a.id));
+    let cross_item = LearningItemRepository::new(&conn).create_for_profile(
+        pb.id,
+        None,
+        "越权子",
+        None,
+        Some(item_a.id),
+    );
     assert!(cross_item.is_err());
 
     // materialize 只生成所属档案的任务
@@ -445,13 +519,24 @@ fn test_session_history_edit_time_correct_delete() {
     assert_eq!(fixed.time_corrected, 1);
     assert_eq!(fixed.duration_seconds, Some(46 * 60));
     // 解除关联
-    StudySessionRepository::new(&conn).unlink_item(s.id).unwrap();
-    let after = StudySessionRepository::new(&conn).get(s.id).unwrap().unwrap();
+    StudySessionRepository::new(&conn)
+        .unlink_item(s.id)
+        .unwrap();
+    let after = StudySessionRepository::new(&conn)
+        .get(s.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(after.learning_item_id, None);
     // 删除
     StudySessionRepository::new(&conn).delete(s.id).unwrap();
-    assert!(StudySessionRepository::new(&conn).get(s.id).unwrap().is_none());
+    assert!(StudySessionRepository::new(&conn)
+        .get(s.id)
+        .unwrap()
+        .is_none());
     // Knowledge 正文不受影响
-    let item_after = LearningItemRepository::new(&conn).get(item.id).unwrap().unwrap();
+    let item_after = LearningItemRepository::new(&conn)
+        .get(item.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(item_after.content, "");
 }

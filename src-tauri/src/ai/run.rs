@@ -61,7 +61,11 @@ impl RunManager {
 /// Run 事件发射（AppHandle 可用；lib 测试中传 None 则跳过）。
 pub fn emit(app: Option<&tauri::AppHandle>, event: &str, run_id: &str, payload: serde_json::Value) {
     if let Some(a) = app {
-        let _ = emit_raw(a, event, serde_json::json!({ "run_id": run_id, "data": payload }));
+        let _ = emit_raw(
+            a,
+            event,
+            serde_json::json!({ "run_id": run_id, "data": payload }),
+        );
     }
 }
 

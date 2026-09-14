@@ -9,10 +9,8 @@
 //! 6. Session Note 不影响 learning_items.content
 
 use app_lib::repository::{
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
+    goal::GoalRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, study_session::StudySessionRepository,
 };
 use rusqlite::Connection;
 
@@ -48,12 +46,16 @@ fn create_default_profile(conn: &Connection) -> i64 {
 fn test_active_session_update_note() {
     let conn = setup();
     let profile_id = create_default_profile(&conn);
-    let goal = GoalRepository::new(&conn).create(profile_id, "G", None).unwrap();
+    let goal = GoalRepository::new(&conn)
+        .create(profile_id, "G", None)
+        .unwrap();
     let item = LearningItemRepository::new(&conn)
         .create_root(goal.id, "极限", None)
         .unwrap();
 
-    let s = StudySessionRepository::new(&conn).start(item.id, None).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start(item.id, None)
+        .unwrap();
     assert_eq!(s.note, None);
     assert_eq!(s.status, "active");
 
@@ -61,7 +63,10 @@ fn test_active_session_update_note() {
     StudySessionRepository::new(&conn)
         .update_note(s.id, "等价无穷小替换要注意条件：x→0")
         .unwrap();
-    let s2 = StudySessionRepository::new(&conn).get(s.id).unwrap().unwrap();
+    let s2 = StudySessionRepository::new(&conn)
+        .get(s.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(s2.note.as_deref(), Some("等价无穷小替换要注意条件：x→0"));
     assert_eq!(s2.status, "active", "更新笔记不改变会话状态");
 }
@@ -70,16 +75,26 @@ fn test_active_session_update_note() {
 fn test_ended_session_note_readable_and_updatable() {
     let conn = setup();
     let profile_id = create_default_profile(&conn);
-    let goal = GoalRepository::new(&conn).create(profile_id, "G", None).unwrap();
+    let goal = GoalRepository::new(&conn)
+        .create(profile_id, "G", None)
+        .unwrap();
     let item = LearningItemRepository::new(&conn)
         .create_root(goal.id, "导数", None)
         .unwrap();
 
-    let s = StudySessionRepository::new(&conn).start(item.id, None).unwrap();
-    StudySessionRepository::new(&conn).update_note(s.id, "原始笔记").unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start(item.id, None)
+        .unwrap();
+    StudySessionRepository::new(&conn)
+        .update_note(s.id, "原始笔记")
+        .unwrap();
     // Workspace 结束：note=None → 保留已保存笔记
     let ended = StudySessionRepository::new(&conn).end(s.id, None).unwrap();
-    assert_eq!(ended.note.as_deref(), Some("原始笔记"), "end(None) 不清除笔记");
+    assert_eq!(
+        ended.note.as_deref(),
+        Some("原始笔记"),
+        "end(None) 不清除笔记"
+    );
     assert_eq!(ended.status, "completed");
 
     // 结束后仍可读取（Knowledge 学习记录）
@@ -90,8 +105,13 @@ fn test_ended_session_note_readable_and_updatable() {
     assert_eq!(list[0].note.as_deref(), Some("原始笔记"));
 
     // 用户后续编辑（Knowledge 学习记录 → 编辑）
-    StudySessionRepository::new(&conn).update_note(s.id, "补充后的笔记").unwrap();
-    let again = StudySessionRepository::new(&conn).get(s.id).unwrap().unwrap();
+    StudySessionRepository::new(&conn)
+        .update_note(s.id, "补充后的笔记")
+        .unwrap();
+    let again = StudySessionRepository::new(&conn)
+        .get(s.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(again.note.as_deref(), Some("补充后的笔记"));
 }
 
@@ -99,18 +119,26 @@ fn test_ended_session_note_readable_and_updatable() {
 fn test_note_never_touches_knowledge_content() {
     let conn = setup();
     let profile_id = create_default_profile(&conn);
-    let goal = GoalRepository::new(&conn).create(profile_id, "G", None).unwrap();
+    let goal = GoalRepository::new(&conn)
+        .create(profile_id, "G", None)
+        .unwrap();
     let item_repo = LearningItemRepository::new(&conn);
     let item = item_repo.create_root(goal.id, "积分", None).unwrap();
     item_repo.update_content(item.id, "长期知识正文").unwrap();
 
-    let s = StudySessionRepository::new(&conn).start(item.id, None).unwrap();
-    StudySessionRepository::new(&conn).update_note(s.id, "学习过程原始记录").unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start(item.id, None)
+        .unwrap();
+    StudySessionRepository::new(&conn)
+        .update_note(s.id, "学习过程原始记录")
+        .unwrap();
     StudySessionRepository::new(&conn).end(s.id, None).unwrap();
 
     let after = item_repo.get(item.id).unwrap().unwrap();
-    assert_eq!(after.content, "长期知识正文",
-        "Session Note 绝不自动覆盖 Knowledge content");
+    assert_eq!(
+        after.content, "长期知识正文",
+        "Session Note 绝不自动覆盖 Knowledge content"
+    );
 }
 
 #[test]
@@ -121,8 +149,12 @@ fn test_list_by_item_order_and_profile_isolation() {
     let item_repo = LearningItemRepository::new(&conn);
     let session_repo = StudySessionRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "IA", None).unwrap();
@@ -144,5 +176,11 @@ fn test_list_by_item_order_and_profile_isolation() {
     assert!(list_a.iter().all(|s| s.learning_item_id == Some(item_a.id)));
 
     // limit 生效
-    assert_eq!(session_repo.list_by_learning_item(item_a.id, 1).unwrap().len(), 1);
+    assert_eq!(
+        session_repo
+            .list_by_learning_item(item_a.id, 1)
+            .unwrap()
+            .len(),
+        1
+    );
 }

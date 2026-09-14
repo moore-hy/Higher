@@ -50,7 +50,10 @@ impl<'a> MemoryRepository<'a> {
             return Err("system_observation 只能来自 Higher 数据库，不能是模型推断".to_string());
         }
         // 用户原话必须保留（user_* 类型）
-        if m.memory_type.starts_with("user_") && m.source_kind == "user_message" && m.source_excerpt.trim().is_empty() {
+        if m.memory_type.starts_with("user_")
+            && m.source_kind == "user_message"
+            && m.source_excerpt.trim().is_empty()
+        {
             return Err("来自用户消息的记忆必须保存 source_excerpt（用户原话片段）".to_string());
         }
         if !(1..=5).contains(&m.importance) {
@@ -86,7 +89,9 @@ impl<'a> MemoryRepository<'a> {
 
     /// §六：用户确认（pending_confirmation → confirmed；同 key 旧 confirmed → superseded）。
     pub fn confirm_memory(&self, id: i64, profile_id: i64) -> Result<(), String> {
-        let m = self.get(id, profile_id)?.ok_or("记忆不存在或不属于当前档案")?;
+        let m = self
+            .get(id, profile_id)?
+            .ok_or("记忆不存在或不属于当前档案")?;
         if m.status != "pending_confirmation" {
             return Err(format!("当前状态 {} 不可确认（仅待确认记忆）", m.status));
         }
@@ -121,10 +126,12 @@ impl<'a> MemoryRepository<'a> {
                 let rows = stmt
                     .query_map(params![profile_id, m.memory_key, id], |r| r.get(0))
                     .map_err(|e| e.to_string())?;
-                rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?
             };
             for old in old_ids {
-                let _ = crate::repository::search::SearchRepository::new(self.conn).remove("memory", old);
+                let _ = crate::repository::search::SearchRepository::new(self.conn)
+                    .remove("memory", old);
             }
         }
         // §七确认门：confirmed 进入 AI 检索（FTS）
@@ -169,7 +176,9 @@ impl<'a> MemoryRepository<'a> {
         memory_value: &str,
         source_excerpt: &str,
     ) -> Result<(), String> {
-        let m = self.get(id, profile_id)?.ok_or("记忆不存在或不属于当前档案")?;
+        let m = self
+            .get(id, profile_id)?
+            .ok_or("记忆不存在或不属于当前档案")?;
         if m.status != "confirmed" && m.status != "pending_confirmation" {
             return Err(format!("当前状态 {} 不可修改", m.status));
         }
@@ -179,7 +188,15 @@ impl<'a> MemoryRepository<'a> {
                  SET memory_type=?3, category=?4, memory_key=?5, memory_value=?6,
                      source_excerpt=?7, source_kind='user_edit', updated_at=datetime('now')
                  WHERE id=?1 AND profile_id=?2",
-                params![id, profile_id, memory_type, category, memory_key, memory_value, source_excerpt],
+                params![
+                    id,
+                    profile_id,
+                    memory_type,
+                    category,
+                    memory_key,
+                    memory_value,
+                    source_excerpt
+                ],
             )
             .map_err(|e| e.to_string())?;
         // §七确认门：仅 confirmed 在 AI 检索中——pending 期间修改不写 FTS，
@@ -222,8 +239,11 @@ impl<'a> MemoryRepository<'a> {
                 COLS
             ))
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![profile_id], parse).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![profile_id], parse)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// §九.3：待确认记忆列表（AI 认知卡片数据源）。
@@ -235,16 +255,24 @@ impl<'a> MemoryRepository<'a> {
                 COLS
             ))
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![profile_id], parse).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![profile_id], parse)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn get(&self, id: i64, profile_id: i64) -> Result<Option<MemoryRecord>, String> {
         let mut stmt = self
             .conn
-            .prepare(&format!("SELECT {} FROM memory_records WHERE id = ?1 AND profile_id = ?2", COLS))
+            .prepare(&format!(
+                "SELECT {} FROM memory_records WHERE id = ?1 AND profile_id = ?2",
+                COLS
+            ))
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query_map(params![id, profile_id], parse).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![id, profile_id], parse)
+            .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
@@ -261,12 +289,20 @@ impl<'a> MemoryRepository<'a> {
                 COLS
             ))
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![profile_id], parse).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![profile_id], parse)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// §35 加权检索（相关度/importance/confidence/recency/superseded/source）。
-    pub fn search(&self, profile_id: i64, query: &str, limit: i64) -> Result<Vec<MemoryRecord>, String> {
+    pub fn search(
+        &self,
+        profile_id: i64,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<MemoryRecord>, String> {
         let ids = crate::repository::search::SearchRepository::new(self.conn)
             .search_memory(profile_id, query, limit)?;
         let mut out = Vec::new();

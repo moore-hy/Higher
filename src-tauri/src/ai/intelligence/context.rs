@@ -34,7 +34,9 @@ pub fn build_personal_context(
     // current_goal：workflow.current_goal 优先，其次 Higher 正式目标摘要
     if !workflow.current_goal.trim().is_empty() {
         ctx.current_goal = workflow.current_goal.trim().to_string();
-    } else if let Ok(Some(summary)) = crate::ai::context_builder::current_goal_summary(conn, profile_id) {
+    } else if let Ok(Some(summary)) =
+        crate::ai::context_builder::current_goal_summary(conn, profile_id)
+    {
         ctx.current_goal = summary;
     }
 
@@ -65,15 +67,24 @@ pub fn build_personal_context(
         .into_iter()
         .take(8)
     {
-        let tag = if m.memory_type == "ai_inference" { "（AI推断·待确认）" } else { "" };
+        let tag = if m.memory_type == "ai_inference" {
+            "（AI推断·待确认）"
+        } else {
+            ""
+        };
         let line = format!("{}{}：{}", m.memory_key, tag, m.memory_value);
-        let line = if line.starts_with('：') { m.memory_value.clone() } else { line };
+        let line = if line.starts_with('：') {
+            m.memory_value.clone()
+        } else {
+            line
+        };
         ctx.recent_events.push(line);
     }
 
     // active_constraints：档案 constraints + workflow unresolved
     let uc = super::load_user_context(conn, profile_id);
-    ctx.active_constraints.extend(uc.constraints.iter().cloned());
+    ctx.active_constraints
+        .extend(uc.constraints.iter().cloned());
     for u in &workflow.unresolved {
         if !ctx.active_constraints.contains(u) {
             ctx.active_constraints.push(u.clone());

@@ -101,13 +101,19 @@ pub fn apply_remote_changes(
     let tx = conn.unchecked_transaction()?;
 
     // guard 置 1：Trigger 不再写 outbox（防回声）；entity_map 由本函数显式维护
-    tx.execute("UPDATE sync_runtime_guard SET applying_remote = 1 WHERE id = 1", [])?;
+    tx.execute(
+        "UPDATE sync_runtime_guard SET applying_remote = 1 WHERE id = 1",
+        [],
+    )?;
 
     let result = apply_inner(&tx, peer_device_id, changes, &opts);
 
     match result {
         Ok(outcome) => {
-            tx.execute("UPDATE sync_runtime_guard SET applying_remote = 0 WHERE id = 1", [])?;
+            tx.execute(
+                "UPDATE sync_runtime_guard SET applying_remote = 0 WHERE id = 1",
+                [],
+            )?;
             tx.commit()?;
             Ok(outcome)
         }
@@ -128,7 +134,10 @@ fn apply_inner(
     let mut outcome = ApplyOutcome::default();
 
     let (last_received, last_acked) = match super::identity::peer_row(tx, peer_device_id)? {
-        Some(peer) => (peer.last_received_remote_change_id, peer.last_acked_local_change_id),
+        Some(peer) => (
+            peer.last_received_remote_change_id,
+            peer.last_acked_local_change_id,
+        ),
         None => (0, 0),
     };
 
@@ -177,7 +186,12 @@ fn apply_inner(
         }
     }
     outcome.deferred = deferred_ids.len() as u32;
-    outcome.max_change_id = changes.iter().map(|c| c.change_id).max().unwrap_or(0).max(0);
+    outcome.max_change_id = changes
+        .iter()
+        .map(|c| c.change_id)
+        .max()
+        .unwrap_or(0)
+        .max(0);
 
     if outcome.max_change_id > 0 {
         advance_received_cursor(tx, peer_device_id, outcome.max_change_id)?;
@@ -219,7 +233,10 @@ fn apply_one(
     if change.operation == OP_DELETE {
         if let Some(local_id) = local_id_for(tx, &change.entity_type, &change.sync_id)? {
             let table = table_for(&change.entity_type).unwrap_or("");
-            let n = tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![local_id])?;
+            let n = tx.execute(
+                &format!("DELETE FROM {table} WHERE id = ?1"),
+                params![local_id],
+            )?;
             let _ = n;
             mark_mapping_deleted(tx, &change.entity_type, &change.sync_id)?;
             return Ok(ApplyOneResult::Deleted);
@@ -270,7 +287,9 @@ fn apply_one(
             apply_study_profile(tx, &change.sync_id, p, existing_local_id, opts)
         }
         SyncEntityPayload::Goal(p) => apply_goal(tx, &change.sync_id, p, existing_local_id),
-        SyncEntityPayload::LearningItem(p) => apply_learning_item(tx, &change.sync_id, p, existing_local_id),
+        SyncEntityPayload::LearningItem(p) => {
+            apply_learning_item(tx, &change.sync_id, p, existing_local_id)
+        }
         SyncEntityPayload::Task(p) => apply_task(tx, &change.sync_id, p, existing_local_id),
     }
 }
@@ -299,8 +318,17 @@ fn apply_study_profile(
                     created_at = ?10, updated_at = ?11
                  WHERE id = ?1",
                 params![
-                    local_id, p.name, p.profile_type, p.target_description, p.target_date,
-                    p.current_situation, p.notes, p.status, p.metadata_json, p.created_at, p.updated_at
+                    local_id,
+                    p.name,
+                    p.profile_type,
+                    p.target_description,
+                    p.target_date,
+                    p.current_situation,
+                    p.notes,
+                    p.status,
+                    p.metadata_json,
+                    p.created_at,
+                    p.updated_at
                 ],
             )?;
             revive_mapping(tx, ENTITY_STUDY_PROFILE, sync_id)?;
@@ -328,8 +356,16 @@ fn apply_study_profile(
                      notes, status, metadata_json, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
-                    name, p.profile_type, p.target_description, p.target_date,
-                    p.current_situation, p.notes, p.status, p.metadata_json, p.created_at, p.updated_at
+                    name,
+                    p.profile_type,
+                    p.target_description,
+                    p.target_date,
+                    p.current_situation,
+                    p.notes,
+                    p.status,
+                    p.metadata_json,
+                    p.created_at,
+                    p.updated_at
                 ],
             )?;
             let local_id = tx.last_insert_rowid();
@@ -339,7 +375,12 @@ fn apply_study_profile(
     }
 }
 
-fn apply_goal(tx: &Connection, sync_id: &str, p: &GoalPayload, existing: Option<i64>) -> rusqlite::Result<ApplyOneResult> {
+fn apply_goal(
+    tx: &Connection,
+    sync_id: &str,
+    p: &GoalPayload,
+    existing: Option<i64>,
+) -> rusqlite::Result<ApplyOneResult> {
     let Some(profile_id) = resolve_ref(tx, ENTITY_STUDY_PROFILE, p.profile_sync_id.as_deref())?
     else {
         return Ok(ApplyOneResult::MissingDependency);
@@ -361,9 +402,20 @@ fn apply_goal(tx: &Connection, sync_id: &str, p: &GoalPayload, existing: Option<
                     created_at = ?11, updated_at = ?12, profile_id = ?13, parent_goal_id = ?14
                  WHERE id = ?1",
                 params![
-                    local_id, p.name, p.description, p.status, p.goal_level, p.period_start,
-                    p.period_end, p.sort_order, p.goal_brief_json, p.day_kind, p.created_at,
-                    p.updated_at, profile_id, parent_goal_id
+                    local_id,
+                    p.name,
+                    p.description,
+                    p.status,
+                    p.goal_level,
+                    p.period_start,
+                    p.period_end,
+                    p.sort_order,
+                    p.goal_brief_json,
+                    p.day_kind,
+                    p.created_at,
+                    p.updated_at,
+                    profile_id,
+                    parent_goal_id
                 ],
             )?;
             revive_mapping(tx, ENTITY_GOAL, sync_id)?;
@@ -376,9 +428,19 @@ fn apply_goal(tx: &Connection, sync_id: &str, p: &GoalPayload, existing: Option<
                      goal_brief_json, day_kind, created_at, updated_at, profile_id, parent_goal_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
-                    p.name, p.description, p.status, p.goal_level, p.period_start, p.period_end,
-                    p.sort_order, p.goal_brief_json, p.day_kind, p.created_at, p.updated_at,
-                    profile_id, parent_goal_id
+                    p.name,
+                    p.description,
+                    p.status,
+                    p.goal_level,
+                    p.period_start,
+                    p.period_end,
+                    p.sort_order,
+                    p.goal_brief_json,
+                    p.day_kind,
+                    p.created_at,
+                    p.updated_at,
+                    profile_id,
+                    parent_goal_id
                 ],
             )?;
             let local_id = tx.last_insert_rowid();
@@ -405,7 +467,11 @@ fn apply_learning_item(
         Some(v) => v,
         None => return Ok(ApplyOneResult::MissingDependency),
     };
-    let parent_id = match resolve_ref(tx, ENTITY_LEARNING_ITEM, p.parent_learning_item_sync_id.as_deref())? {
+    let parent_id = match resolve_ref(
+        tx,
+        ENTITY_LEARNING_ITEM,
+        p.parent_learning_item_sync_id.as_deref(),
+    )? {
         Some(v) => v,
         None => return Ok(ApplyOneResult::MissingDependency),
     };
@@ -432,8 +498,16 @@ fn apply_learning_item(
                      sort_order, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
-                    profile_id, goal_id, parent_id, p.name, p.description, p.mastery_status,
-                    p.content, p.sort_order, p.created_at, p.updated_at
+                    profile_id,
+                    goal_id,
+                    parent_id,
+                    p.name,
+                    p.description,
+                    p.mastery_status,
+                    p.content,
+                    p.sort_order,
+                    p.created_at,
+                    p.updated_at
                 ],
             )?;
             let local_id = tx.last_insert_rowid();
@@ -443,7 +517,12 @@ fn apply_learning_item(
     }
 }
 
-fn apply_task(tx: &Connection, sync_id: &str, p: &TaskPayload, existing: Option<i64>) -> rusqlite::Result<ApplyOneResult> {
+fn apply_task(
+    tx: &Connection,
+    sync_id: &str,
+    p: &TaskPayload,
+    existing: Option<i64>,
+) -> rusqlite::Result<ApplyOneResult> {
     let Some(profile_id) = resolve_ref(tx, ENTITY_STUDY_PROFILE, p.profile_sync_id.as_deref())?
     else {
         return Ok(ApplyOneResult::MissingDependency);
@@ -489,9 +568,22 @@ fn apply_task(tx: &Connection, sync_id: &str, p: &TaskPayload, existing: Option<
                      projection_key, user_modified_at, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
-                    profile_id, goal_id, item_id, p.title, p.planned_date, p.planned_time,
-                    p.status, p.archived_at, p.estimated_minutes, p.task_kind, p.priority,
-                    p.origin, p.projection_key, p.user_modified_at, p.created_at, p.updated_at
+                    profile_id,
+                    goal_id,
+                    item_id,
+                    p.title,
+                    p.planned_date,
+                    p.planned_time,
+                    p.status,
+                    p.archived_at,
+                    p.estimated_minutes,
+                    p.task_kind,
+                    p.priority,
+                    p.origin,
+                    p.projection_key,
+                    p.user_modified_at,
+                    p.created_at,
+                    p.updated_at
                 ],
             )?;
             let local_id = tx.last_insert_rowid();

@@ -32,16 +32,27 @@ fn temp_db(tag: &str) -> Connection {
 }
 
 fn outbox_count(conn: &Connection) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0)).unwrap()
+    conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0))
+        .unwrap()
 }
 
 fn insert_profile(conn: &Connection, name: &str) -> i64 {
-    conn.execute("INSERT INTO study_profiles (name) VALUES (?1)", params![name])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO study_profiles (name) VALUES (?1)",
+        params![name],
+    )
+    .unwrap();
     conn.last_insert_rowid()
 }
 
-fn insert_goal(conn: &Connection, profile: i64, parent: Option<i64>, name: &str, level: &str, period: Option<&str>) -> i64 {
+fn insert_goal(
+    conn: &Connection,
+    profile: i64,
+    parent: Option<i64>,
+    name: &str,
+    level: &str,
+    period: Option<&str>,
+) -> i64 {
     conn.execute(
         "INSERT INTO goals (name, profile_id, parent_goal_id, goal_level, period_start)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -60,7 +71,13 @@ fn insert_item(conn: &Connection, profile: i64, parent: Option<i64>, name: &str)
     conn.last_insert_rowid()
 }
 
-fn insert_task(conn: &Connection, profile: i64, goal: Option<i64>, item: Option<i64>, title: &str) -> i64 {
+fn insert_task(
+    conn: &Connection,
+    profile: i64,
+    goal: Option<i64>,
+    item: Option<i64>,
+    title: &str,
+) -> i64 {
     conn.execute(
         "INSERT INTO tasks (profile_id, goal_id, learning_item_id, title) VALUES (?1, ?2, ?3, ?4)",
         params![profile, goal, item, title],
@@ -73,12 +90,28 @@ fn insert_task(conn: &Connection, profile: i64, goal: Option<i64>, item: Option<
 fn seed_a(conn: &Connection) -> (i64, i64, i64, i64, i64, i64, i64) {
     let profile = insert_profile(conn, "2028考研");
     let final_goal = insert_goal(conn, profile, None, "上岸", "final", None);
-    let year_goal = insert_goal(conn, profile, Some(final_goal), "2028", "year", Some("2028-01-01"));
-    let month_goal = insert_goal(conn, profile, Some(year_goal), "3月", "month", Some("2028-03-01"));
+    let year_goal = insert_goal(
+        conn,
+        profile,
+        Some(final_goal),
+        "2028",
+        "year",
+        Some("2028-01-01"),
+    );
+    let month_goal = insert_goal(
+        conn,
+        profile,
+        Some(year_goal),
+        "3月",
+        "month",
+        Some("2028-03-01"),
+    );
     let item_root = insert_item(conn, profile, None, "数学");
     let item_child = insert_item(conn, profile, Some(item_root), "线性代数");
     let task = insert_task(conn, profile, Some(month_goal), Some(item_child), "刷题");
-    (profile, final_goal, year_goal, month_goal, item_root, item_child, task)
+    (
+        profile, final_goal, year_goal, month_goal, item_root, item_child, task,
+    )
 }
 
 /// Bootstrap：A 导出 → 视为已交付（清 outbox）→ B 应用。
@@ -99,16 +132,30 @@ fn tc001_profile_bootstrap_same_sync_id() {
     let a_id = insert_profile(&a, "2028考研");
     let changes = bootstrap_a_to_b(&a, &b);
 
-    assert!(changes.iter().any(|c| c.entity_type == "study_profile" && c.sync_id.len() == 36));
-    let profile_changes: Vec<_> = changes.iter().filter(|c| c.entity_type == "study_profile").collect();
+    assert!(changes
+        .iter()
+        .any(|c| c.entity_type == "study_profile" && c.sync_id.len() == 36));
+    let profile_changes: Vec<_> = changes
+        .iter()
+        .filter(|c| c.entity_type == "study_profile")
+        .collect();
     let sync_id = profile_changes[0].sync_id.clone();
 
-    assert_eq!(sync_id_for(&a, "study_profile", a_id).unwrap().as_deref(), Some(sync_id.as_str()));
-    let b_id = local_id_for(&b, "study_profile", &sync_id).unwrap().expect("B 应有映射");
+    assert_eq!(
+        sync_id_for(&a, "study_profile", a_id).unwrap().as_deref(),
+        Some(sync_id.as_str())
+    );
+    let b_id = local_id_for(&b, "study_profile", &sync_id)
+        .unwrap()
+        .expect("B 应有映射");
     assert_ne!(a_id, b_id, "两端 local id 允许不同");
     assert_ne!(b_id, b_pre);
     let b_name: String = b
-        .query_row("SELECT name FROM study_profiles WHERE id = ?1", params![b_id], |r| r.get(0))
+        .query_row(
+            "SELECT name FROM study_profiles WHERE id = ?1",
+            params![b_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(b_name, "2028考研");
 }
@@ -136,10 +183,18 @@ fn tc002_goal_tree_parent_mapping() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(b_month_parent, Some(b_year), "month 的 parent 必须映射为 B 本机的 year");
-    let b_final = local_id_for(&b, "goal", &sync_id_for(&a, "goal", a_final).unwrap().unwrap())
-        .unwrap()
-        .unwrap();
+    assert_eq!(
+        b_month_parent,
+        Some(b_year),
+        "month 的 parent 必须映射为 B 本机的 year"
+    );
+    let b_final = local_id_for(
+        &b,
+        "goal",
+        &sync_id_for(&a, "goal", a_final).unwrap().unwrap(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(b_year_parent, Some(b_final));
     // local id 允许巧合相等（本用例专注 parent 映射；id 错位由 TC006 验证）
     let _ = a_month;
@@ -155,14 +210,30 @@ fn tc003_learning_item_tree_mapping() {
 
     let root_sync = sync_id_for(&a, "learning_item", a_root).unwrap().unwrap();
     let child_sync = sync_id_for(&a, "learning_item", a_child).unwrap().unwrap();
-    let b_root = local_id_for(&b, "learning_item", &root_sync).unwrap().unwrap();
-    let b_child = local_id_for(&b, "learning_item", &child_sync).unwrap().unwrap();
-    let b_child_parent: Option<i64> = b
-        .query_row("SELECT parent_id FROM learning_items WHERE id = ?1", params![b_child], |r| r.get(0))
+    let b_root = local_id_for(&b, "learning_item", &root_sync)
+        .unwrap()
         .unwrap();
-    assert_eq!(b_child_parent, Some(b_root), "child 的 parent 必须映射为 B 本机 root");
+    let b_child = local_id_for(&b, "learning_item", &child_sync)
+        .unwrap()
+        .unwrap();
+    let b_child_parent: Option<i64> = b
+        .query_row(
+            "SELECT parent_id FROM learning_items WHERE id = ?1",
+            params![b_child],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        b_child_parent,
+        Some(b_root),
+        "child 的 parent 必须映射为 B 本机 root"
+    );
     let b_root_parent: Option<i64> = b
-        .query_row("SELECT parent_id FROM learning_items WHERE id = ?1", params![b_root], |r| r.get(0))
+        .query_row(
+            "SELECT parent_id FROM learning_items WHERE id = ?1",
+            params![b_root],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(b_root_parent, None);
 }
@@ -177,11 +248,15 @@ fn tc004_task_appears_on_b() {
     bootstrap_a_to_b(&a, &b);
 
     let task_sync = sync_id_for(&a, "task", a_task).unwrap().unwrap();
-    let b_task = local_id_for(&b, "task", &task_sync).unwrap().expect("B 应出现该 Task");
+    let b_task = local_id_for(&b, "task", &task_sync)
+        .unwrap()
+        .expect("B 应出现该 Task");
     let b_profile = local_id_for(
         &b,
         "study_profile",
-        &sync_id_for(&a, "study_profile", a_profile).unwrap().unwrap(),
+        &sync_id_for(&a, "study_profile", a_profile)
+            .unwrap()
+            .unwrap(),
     )
     .unwrap()
     .unwrap();
@@ -195,12 +270,20 @@ fn tc004_task_appears_on_b() {
         .unwrap();
     assert_eq!(title, "刷题");
     assert_eq!(profile_id, b_profile, "FK 必须为 B 本机映射 id");
-    let b_month = local_id_for(&b, "goal", &sync_id_for(&a, "goal", a_month).unwrap().unwrap())
-        .unwrap()
-        .unwrap();
-    let b_child = local_id_for(&b, "learning_item", &sync_id_for(&a, "learning_item", a_child).unwrap().unwrap())
-        .unwrap()
-        .unwrap();
+    let b_month = local_id_for(
+        &b,
+        "goal",
+        &sync_id_for(&a, "goal", a_month).unwrap().unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    let b_child = local_id_for(
+        &b,
+        "learning_item",
+        &sync_id_for(&a, "learning_item", a_child).unwrap().unwrap(),
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(goal_id, Some(b_month));
     assert_eq!(item_id, Some(b_child));
 }
@@ -215,16 +298,25 @@ fn tc005_b_completes_task_syncs_to_a() {
 
     let task_sync = sync_id_for(&a, "task", a_task).unwrap().unwrap();
     let b_task = local_id_for(&b, "task", &task_sync).unwrap().unwrap();
-    b.execute("UPDATE tasks SET status = 'completed' WHERE id = ?1", params![b_task])
-        .unwrap();
+    b.execute(
+        "UPDATE tasks SET status = 'completed' WHERE id = ?1",
+        params![b_task],
+    )
+    .unwrap();
 
     let b_changes = export_outbox_changes(&b, 0).unwrap();
-    assert!(b_changes.iter().any(|c| c.sync_id == task_sync && c.operation == "upsert"));
+    assert!(b_changes
+        .iter()
+        .any(|c| c.sync_id == task_sync && c.operation == "upsert"));
     ack_bootstrap_outbox(&b, &b_changes);
     apply_remote_changes(&a, "client-device", &b_changes, ApplyOptions::default()).unwrap();
 
     let a_status: String = a
-        .query_row("SELECT status FROM tasks WHERE id = ?1", params![a_task], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM tasks WHERE id = ?1",
+            params![a_task],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(a_status, "completed");
 }
@@ -255,16 +347,27 @@ fn tc006_divergent_local_ids_map_by_sync_id() {
     let b_task = local_id_for(&b, "task", &task_sync).unwrap().unwrap();
     assert_ne!(a_task, b_task, "local id 已错位");
     let title: String = b
-        .query_row("SELECT title FROM tasks WHERE id = ?1", params![b_task], |r| r.get(0))
+        .query_row(
+            "SELECT title FROM tasks WHERE id = ?1",
+            params![b_task],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(title, "错位任务");
-    b.execute("UPDATE tasks SET title = 'B 改名' WHERE id = ?1", params![b_task])
-        .unwrap();
+    b.execute(
+        "UPDATE tasks SET title = 'B 改名' WHERE id = ?1",
+        params![b_task],
+    )
+    .unwrap();
     let changes = export_outbox_changes(&b, 0).unwrap();
     ack_bootstrap_outbox(&b, &changes);
     apply_remote_changes(&a, "client-device", &changes, ApplyOptions::default()).unwrap();
     let new_title: String = a
-        .query_row("SELECT title FROM tasks WHERE id = ?1", params![a_task], |r| r.get(0))
+        .query_row(
+            "SELECT title FROM tasks WHERE id = ?1",
+            params![a_task],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(new_title, "B 改名");
 }
@@ -279,7 +382,8 @@ fn tc007_delete_propagates() {
     let task_sync = sync_id_for(&a, "task", a_task).unwrap().unwrap();
     let b_task = local_id_for(&b, "task", &task_sync).unwrap().unwrap();
 
-    a.execute("DELETE FROM tasks WHERE id = ?1", params![a_task]).unwrap();
+    a.execute("DELETE FROM tasks WHERE id = ?1", params![a_task])
+        .unwrap();
     let changes = export_outbox_changes(&a, 0).unwrap();
     let delete = changes
         .iter()
@@ -289,7 +393,11 @@ fn tc007_delete_propagates() {
     apply_remote_changes(&b, "server-device", &changes, ApplyOptions::default()).unwrap();
 
     let exists: i64 = b
-        .query_row("SELECT COUNT(*) FROM tasks WHERE id = ?1", params![b_task], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE id = ?1",
+            params![b_task],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(exists, 0, "B 侧应已删除");
 }
@@ -304,10 +412,18 @@ fn tc008_remote_apply_no_echo() {
     let before = outbox_count(&b);
 
     apply_remote_changes(&b, "server-device", &changes, ApplyOptions::default()).unwrap();
-    assert_eq!(outbox_count(&b), before, "Remote Apply 不得产生 outbox echo");
+    assert_eq!(
+        outbox_count(&b),
+        before,
+        "Remote Apply 不得产生 outbox echo"
+    );
 
     let guard: i64 = b
-        .query_row("SELECT applying_remote FROM sync_runtime_guard WHERE id = 1", [], |r| r.get(0))
+        .query_row(
+            "SELECT applying_remote FROM sync_runtime_guard WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(guard, 0);
     let _ = a_task;
@@ -326,7 +442,11 @@ fn tc009_raw_sql_update_produces_outbox() {
         params![task],
     )
     .unwrap();
-    assert_eq!(outbox_count(&a), before + 1, "裸 SQL UPDATE 必须被 Trigger 捕获");
+    assert_eq!(
+        outbox_count(&a),
+        before + 1,
+        "裸 SQL UPDATE 必须被 Trigger 捕获"
+    );
 
     let changes = export_outbox_changes(&a, 0).unwrap();
     let task_sync = sync_id_for(&a, "task", task).unwrap().unwrap();
@@ -351,15 +471,28 @@ fn tc010_concurrent_edit_records_conflict() {
     let task_sync = sync_id_for(&a, "task", a_task).unwrap().unwrap();
     let b_task = local_id_for(&b, "task", &task_sync).unwrap().unwrap();
 
-    a.execute("UPDATE tasks SET title = '电脑版标题' WHERE id = ?1", params![a_task]).unwrap();
-    b.execute("UPDATE tasks SET title = '手机版标题' WHERE id = ?1", params![b_task]).unwrap();
+    a.execute(
+        "UPDATE tasks SET title = '电脑版标题' WHERE id = ?1",
+        params![a_task],
+    )
+    .unwrap();
+    b.execute(
+        "UPDATE tasks SET title = '手机版标题' WHERE id = ?1",
+        params![b_task],
+    )
+    .unwrap();
 
     let b_changes = export_outbox_changes(&b, 0).unwrap();
-    let outcome = apply_remote_changes(&a, "client-device", &b_changes, ApplyOptions::default()).unwrap();
+    let outcome =
+        apply_remote_changes(&a, "client-device", &b_changes, ApplyOptions::default()).unwrap();
     assert_eq!(outcome.conflicts, 1, "同一 sync_id 双端未确认变更 → 冲突");
 
     let a_title: String = a
-        .query_row("SELECT title FROM tasks WHERE id = ?1", params![a_task], |r| r.get(0))
+        .query_row(
+            "SELECT title FROM tasks WHERE id = ?1",
+            params![a_task],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(a_title, "电脑版标题", "不得静默覆盖本机数据");
 
@@ -397,8 +530,14 @@ fn tc011_api_key_never_in_packet() {
         serde_json::to_string(&bootstrap).unwrap(),
         serde_json::to_string(&b_out).unwrap()
     );
-    assert!(!json.contains("SECRET-DO-NOT-SYNC"), "API Key 不得进入 Packet");
-    assert!(!json.contains("Brave-SECRET-KEY"), "Web Search Key 不得进入 Packet");
+    assert!(
+        !json.contains("SECRET-DO-NOT-SYNC"),
+        "API Key 不得进入 Packet"
+    );
+    assert!(
+        !json.contains("Brave-SECRET-KEY"),
+        "Web Search Key 不得进入 Packet"
+    );
     assert!(!json.contains("api_key"));
     for c in bootstrap.iter().chain(b_out.iter()) {
         assert!(
@@ -428,7 +567,10 @@ fn tc012_search_index_not_in_packet() {
         serde_json::to_string(&bootstrap).unwrap(),
         serde_json::to_string(&out).unwrap()
     );
-    assert!(!json.contains("SECRET-SEARCH-INDEX-MARKER"), "search_index 不得进入 Packet");
+    assert!(
+        !json.contains("SECRET-SEARCH-INDEX-MARKER"),
+        "search_index 不得进入 Packet"
+    );
     assert!(!json.contains("索引标题"));
     assert!(!json.contains("search_index"));
 }
@@ -459,7 +601,10 @@ fn tc013_tcp_loopback_pair_and_bidirectional_sync() {
 
     // 1) 配对 + Bootstrap
     let pair = pair_with_server(&b, "127.0.0.1", port, &code, None).expect("配对成功");
-    assert_eq!(pair.outcome.inserted, 7, "Profile + 3 Goals + 2 Items + 1 Task");
+    assert_eq!(
+        pair.outcome.inserted, 7,
+        "Profile + 3 Goals + 2 Items + 1 Task"
+    );
     let a_task_sync = {
         let guard = shared_a.lock().unwrap();
         sync_id_for(&guard, "task", a_task).unwrap().unwrap()
@@ -471,8 +616,11 @@ fn tc013_tcp_loopback_pair_and_bidirectional_sync() {
         let guard = shared_a.lock().unwrap();
         insert_task(&guard, a_profile, None, None, "电脑新增任务");
     }
-    b.execute("UPDATE tasks SET status = 'completed' WHERE id = ?1", params![b_task])
-        .unwrap();
+    b.execute(
+        "UPDATE tasks SET status = 'completed' WHERE id = ?1",
+        params![b_task],
+    )
+    .unwrap();
     let summary = sync_now(&b, None).expect("立即同步成功");
     assert_eq!(summary.pushed, 1);
     assert_eq!(summary.pulled, 1);
@@ -481,12 +629,20 @@ fn tc013_tcp_loopback_pair_and_bidirectional_sync() {
     let a_status: String = {
         let guard = shared_a.lock().unwrap();
         guard
-            .query_row("SELECT status FROM tasks WHERE id = ?1", params![a_task], |r| r.get(0))
+            .query_row(
+                "SELECT status FROM tasks WHERE id = ?1",
+                params![a_task],
+                |r| r.get(0),
+            )
             .unwrap()
     };
     assert_eq!(a_status, "completed", "A 应收到 B 的完成状态");
     let b_new: i64 = b
-        .query_row("SELECT COUNT(*) FROM tasks WHERE title = '电脑新增任务'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE title = '电脑新增任务'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(b_new, 1, "B 应收到 A 的新任务");
 
@@ -527,7 +683,9 @@ fn f1_tc04_tc05_start_returns_running_port_and_pairing_session() {
     let conn = temp_db("f1b");
     let shared = Arc::new(Mutex::new(conn));
     let handle = SyncServerHandle::new();
-    let port = handle.start(Arc::new(TestConnProvider(shared.clone()))).expect("启动");
+    let port = handle
+        .start(Arc::new(TestConnProvider(shared.clone())))
+        .expect("启动");
 
     let status = {
         let guard = shared.lock().unwrap();
@@ -538,7 +696,10 @@ fn f1_tc04_tc05_start_returns_running_port_and_pairing_session() {
     assert_eq!(status.port, port, "返回真实监听端口");
     assert!(port > 0);
     // DEV-SYNC-003：启动不再自带 6 位码；仅 new_pairing_session 后 pairing_active
-    assert!(!status.pairing_active, "未生成配对会话 → pairing_active=false");
+    assert!(
+        !status.pairing_active,
+        "未生成配对会话 → pairing_active=false"
+    );
     let (token, expires_at) = handle.new_pairing_session();
     assert!(token.len() >= 32, "高熵 token（uuid v4）：{token}");
     assert!(expires_at > super_qr_now(), "expires_at 在未来");
@@ -547,7 +708,10 @@ fn f1_tc04_tc05_start_returns_running_port_and_pairing_session() {
         server_status(&handle, &guard)
     };
     assert!(active.pairing_active, "生成会话后 pairing_active=true");
-    assert!(active.pairing_ttl_secs > 0 && active.pairing_ttl_secs <= 600, "10 分钟内");
+    assert!(
+        active.pairing_ttl_secs > 0 && active.pairing_ttl_secs <= 600,
+        "10 分钟内"
+    );
     if let Some(ip) = &status.ip {
         assert_ne!(ip, "127.0.0.1");
         assert_ne!(ip, "0.0.0.0");

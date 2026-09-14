@@ -5,13 +5,9 @@
 //! AI 读取无知识 Task / 集成链（§139）。
 
 use app_lib::repository::{
-    goal::GoalRepository,
-    insight::InsightRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
-    study_stage::StudyStageRepository,
-    task::TaskRepository,
+    goal::GoalRepository, insight::InsightRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, study_session::StudySessionRepository,
+    study_stage::StudyStageRepository, task::TaskRepository,
 };
 use rusqlite::Connection;
 
@@ -48,7 +44,10 @@ fn seed(conn: &Connection) -> Seed {
     let goal = GoalRepository::new(conn)
         .create(profile.id, "数学", None)
         .unwrap();
-    Seed { profile: profile.id, goal: goal.id }
+    Seed {
+        profile: profile.id,
+        goal: goal.id,
+    }
 }
 
 fn today_str() -> String {
@@ -115,14 +114,17 @@ fn test_title_only_task_create() {
     let repo = TaskRepository::new(&conn);
 
     // §八：只输入标题
-    let t = repo.create_quick_for_profile(s.profile, "数学", Some("2026-08-15"), None).unwrap();
+    let t = repo
+        .create_quick_for_profile(s.profile, "数学", Some("2026-08-15"), None)
+        .unwrap();
     assert_eq!(t.title, "数学");
     assert_eq!(t.learning_item_id, None, "Knowledge 可空");
     assert_eq!(t.archived_at, None);
 
     // 连续创建 数学/英语/408/背单词/看网课
     for name in ["英语", "408", "背单词", "看网课"] {
-        repo.create_quick_for_profile(s.profile, name, Some("2026-08-15"), None).unwrap();
+        repo.create_quick_for_profile(s.profile, name, Some("2026-08-15"), None)
+            .unwrap();
     }
     let list = repo
         .list_by_range_by_profile(s.profile, "2026-08-15", "2026-08-15")
@@ -130,7 +132,9 @@ fn test_title_only_task_create() {
     assert_eq!(list.len(), 5, "五连创建全部成功");
 
     // 也可无日期
-    let no_date = repo.create_quick_for_profile(s.profile, "无日期任务", None, None).unwrap();
+    let no_date = repo
+        .create_quick_for_profile(s.profile, "无日期任务", None, None)
+        .unwrap();
     assert_eq!(no_date.planned_date, None);
 }
 
@@ -142,7 +146,9 @@ fn test_task_archive_lifecycle() {
     let today = today_str();
 
     // 无历史 → 物理删除
-    let plain = repo.create_quick_for_profile(s.profile, "临时", Some(&today), None).unwrap();
+    let plain = repo
+        .create_quick_for_profile(s.profile, "临时", Some(&today), None)
+        .unwrap();
     assert!(repo.delete(plain.id).unwrap(), "无历史直接删除");
 
     // 有 Session → delete 返回 false → archive
@@ -155,7 +161,9 @@ fn test_task_archive_lifecycle() {
     let sess = StudySessionRepository::new(&conn)
         .start(item.id, Some(studied.id))
         .unwrap();
-    StudySessionRepository::new(&conn).end(sess.id, None).unwrap();
+    StudySessionRepository::new(&conn)
+        .end(sess.id, None)
+        .unwrap();
 
     assert!(!repo.delete(studied.id).unwrap(), "有历史 → 提示归档");
     repo.archive(studied.id).unwrap();
@@ -198,14 +206,23 @@ fn test_title_only_task_profile_isolation() {
     let other = StudyProfileRepository::new(&conn)
         .create("B", None, None, None, None, None)
         .unwrap();
-    let other_goal = GoalRepository::new(&conn).create(other.id, "B目标", None).unwrap().id;
+    let other_goal = GoalRepository::new(&conn)
+        .create(other.id, "B目标", None)
+        .unwrap()
+        .id;
     let repo = TaskRepository::new(&conn);
     let today = today_str();
-    repo.create_quick_for_profile(s.profile, "A任务", Some(&today), None).unwrap();
-    repo.create_quick_for_profile(other.id, "B任务", Some(&today), None).unwrap();
+    repo.create_quick_for_profile(s.profile, "A任务", Some(&today), None)
+        .unwrap();
+    repo.create_quick_for_profile(other.id, "B任务", Some(&today), None)
+        .unwrap();
 
-    let a = repo.list_by_range_by_profile(s.profile, &today, &today).unwrap();
-    let b = repo.list_by_range_by_profile(other.id, &today, &today).unwrap();
+    let a = repo
+        .list_by_range_by_profile(s.profile, &today, &today)
+        .unwrap();
+    let b = repo
+        .list_by_range_by_profile(other.id, &today, &today)
+        .unwrap();
     assert_eq!(a.len(), 1);
     assert_eq!(b.len(), 1);
     assert_eq!(b[0].title, "B任务");
@@ -221,7 +238,13 @@ fn test_stage_delete_safe_guard() {
     let plans = app_lib::repository::plan::PlanRepository::new(&conn);
 
     let stage = stages
-        .create(s.goal, "基础阶段", None, Some("2026-01-01"), Some("2026-03-01"))
+        .create(
+            s.goal,
+            "基础阶段",
+            None,
+            Some("2026-01-01"),
+            Some("2026-03-01"),
+        )
         .unwrap();
 
     // 无下游 → 删除成功
@@ -229,9 +252,7 @@ fn test_stage_delete_safe_guard() {
     assert!(stages.get(stage.id).unwrap().is_none());
 
     // 有 Plan → 人话拒绝（含计划数）
-    let stage2 = stages
-        .create(s.goal, "强化阶段", None, None, None)
-        .unwrap();
+    let stage2 = stages.create(s.goal, "强化阶段", None, None, None).unwrap();
     plans
         .create(s.goal, Some(stage2.id), None, "极限专项", None, None, None)
         .unwrap();
@@ -252,12 +273,19 @@ fn test_ai_reads_title_only_and_archived_tasks() {
     let s = seed(&conn);
     let today = today_str();
     let repo = TaskRepository::new(&conn);
-    let t1 = repo.create_quick_for_profile(s.profile, "整理数学资料", Some(&today), None).unwrap();
-    let archived = repo.create_quick_for_profile(s.profile, "已归档任务", Some(&today), None).unwrap();
+    let t1 = repo
+        .create_quick_for_profile(s.profile, "整理数学资料", Some(&today), None)
+        .unwrap();
+    let archived = repo
+        .create_quick_for_profile(s.profile, "已归档任务", Some(&today), None)
+        .unwrap();
     repo.archive(archived.id).unwrap();
 
     let out = app_lib::ai::tools::execute_read_tool(
-        &conn, s.profile, "list_tasks", &serde_json::json!({}),
+        &conn,
+        s.profile,
+        "list_tasks",
+        &serde_json::json!({}),
     )
     .unwrap();
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -295,7 +323,9 @@ fn test_full_integration_chain() {
     // 1) title-only Task 安排今天
     let repo = TaskRepository::new(&conn);
     let today = today_str();
-    let task = repo.create_quick_for_profile(s.profile, "数学", Some(&today), None).unwrap();
+    let task = repo
+        .create_quick_for_profile(s.profile, "数学", Some(&today), None)
+        .unwrap();
 
     // 2) 完成 / 取消
     repo.complete(task.id).unwrap();
@@ -317,7 +347,9 @@ fn test_full_integration_chain() {
     let sess_repo = StudySessionRepository::new(&conn);
     let sess = sess_repo.start(item.id, Some(task.id)).unwrap();
     let note = app_lib::repository::note::serialize_blocks(&[
-        app_lib::repository::note::NoteBlock::Text { c: "ε-δ 语言通了".into() },
+        app_lib::repository::note::NoteBlock::Text {
+            c: "ε-δ 语言通了".into(),
+        },
     ]);
     sess_repo.update_note(sess.id, &note).unwrap();
     sess_repo.end(sess.id, None).unwrap();
@@ -360,13 +392,17 @@ fn test_legacy_create_signatures_still_work() {
     let repo = TaskRepository::new(&conn);
 
     // 旧签名 create(item_id, title, date)（大量既有测试使用）
-    let t1 = repo.create(item.id, "旧签名任务", Some("2026-02-02")).unwrap();
+    let t1 = repo
+        .create(item.id, "旧签名任务", Some("2026-02-02"))
+        .unwrap();
     assert_eq!(t1.learning_item_id, Some(item.id));
     assert_eq!(t1.goal_id, Some(s.goal), "内部解析 goal");
 
     // 旧签名 create_with_plan_legacy
     let plans = app_lib::repository::plan::PlanRepository::new(&conn);
-    let plan = plans.create(s.goal, None, Some(item.id), "P", None, None, None).unwrap();
+    let plan = plans
+        .create(s.goal, None, Some(item.id), "P", None, None, None)
+        .unwrap();
     let t2 = repo
         .create_with_plan_legacy(item.id, "带计划", Some("2026-02-03"), Some(plan.id))
         .unwrap();

@@ -285,7 +285,9 @@ pub fn up(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     }
     // foreign_key_check（v013 后必须 0 error；RENAME 后的 legacy_alter_table 兼容已关闭时
     // 子表 FK 引用旧表名的问题不存在——所有新表均重建）
-    let fk_err: i64 = conn.query_row("PRAGMA foreign_key_check", [], |_| Ok(1)).unwrap_or(0);
+    let fk_err: i64 = conn
+        .query_row("PRAGMA foreign_key_check", [], |_| Ok(1))
+        .unwrap_or(0);
     if fk_err > 0 {
         return Err(rusqlite::Error::InvalidParameterName(
             "v013 foreign_key_check 存在违例，已中止".to_string(),

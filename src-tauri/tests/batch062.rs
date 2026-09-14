@@ -26,9 +26,7 @@ use app_lib::ai::provider::{
 use app_lib::ai::runtime::{
     needs_reference_history, turn_interpreter_prompt, AiRuntimeEnvelope, TemporalIntent,
 };
-use app_lib::repository::ai_pending_action::{
-    AiPendingActionRepository, PendingCandidate,
-};
+use app_lib::repository::ai_pending_action::{AiPendingActionRepository, PendingCandidate};
 use app_lib::repository::ai_provider_profile::AiProviderProfileRepository;
 use app_lib::repository::changeset::ChangeSetRepository;
 use app_lib::repository::study_profile::StudyProfileRepository;
@@ -68,7 +66,14 @@ fn count(conn: &Connection, table: &str) -> i64 {
 /// 固定 Runtime：local_date=2026-08-21（周五），tz=+08:00。
 fn env() -> AiRuntimeEnvelope {
     AiRuntimeEnvelope::validated(
-        "2026-08-21", "2026-08-21 10:30", 480, "Today", None, 1, CONV, "assistant",
+        "2026-08-21",
+        "2026-08-21 10:30",
+        480,
+        "Today",
+        None,
+        1,
+        CONV,
+        "assistant",
     )
     .unwrap()
 }
@@ -123,14 +128,20 @@ fn mk_run(conn: &Connection, p: i64, run_id: &str) {
 fn t01_latest_schema_v024() {
     let conn = setup();
     let v: i64 = conn
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     // DEV-0076 §四：v027（memory_confirmation_lifecycle）已追加
     // DEV-SYNC-001：v028（local_sync_foundation）已追加
     assert_eq!(v, 29, "T01: schema = v029");
     assert_eq!(app_lib::migrations::latest_version(), 29);
     // 新表存在
-    assert_eq!(count(&conn, "ai_provider_profiles"), 1, "T01: legacy 迁移出 1 个连接");
+    assert_eq!(
+        count(&conn, "ai_provider_profiles"),
+        1,
+        "T01: legacy 迁移出 1 个连接"
+    );
     let (tbl,): (i64,) = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ai_pending_actions'",
@@ -202,13 +213,22 @@ fn t02_legacy_settings_preserved() {
         .unwrap();
     assert_eq!(p.display_name, "DeepSeek");
     assert_eq!(p.adapter_kind, "deepseek");
-    assert_eq!(p.base_url, "https://api.deepseek.com/v1", "T02: base_url 原值");
+    assert_eq!(
+        p.base_url, "https://api.deepseek.com/v1",
+        "T02: base_url 原值"
+    );
     assert_eq!(p.api_key, "sk-legacy-key-123", "T02: api_key 原值");
     assert_eq!(p.model, "deepseek-v4-pro", "T02: model 原值");
-    assert_eq!(p.thinking_mode, "deepseek_model_suffix", "T02: thinking 迁移");
+    assert_eq!(
+        p.thinking_mode, "deepseek_model_suffix",
+        "T02: thinking 迁移"
+    );
     // 缺省兜底
     let conn2 = setup();
-    let p2 = AiProviderProfileRepository::new(&conn2).list().unwrap().remove(0);
+    let p2 = AiProviderProfileRepository::new(&conn2)
+        .list()
+        .unwrap()
+        .remove(0);
     assert_eq!(p2.base_url, "https://api.deepseek.com");
     assert_eq!(p2.model, "deepseek-v4-flash");
     assert_eq!(p2.thinking_mode, "off");
@@ -220,10 +240,16 @@ fn t03_migration_sets_active_primary() {
     let repo = AiProviderProfileRepository::new(&conn);
     let pid = repo.active_primary_id();
     assert!(pid.is_some(), "T03: migration 自动 active primary");
-    assert!(repo.active_control_id().is_none(), "T03: control 缺省 = follow primary");
+    assert!(
+        repo.active_control_id().is_none(),
+        "T03: control 缺省 = follow primary"
+    );
     let resolved = resolve_active_ai_profiles(&conn).unwrap();
     assert_eq!(resolved.primary.profile_id, pid.unwrap());
-    assert!(resolved.control_follows_primary, "T03: control follows primary");
+    assert!(
+        resolved.control_follows_primary,
+        "T03: control follows primary"
+    );
     assert_eq!(resolved.control.profile_id, resolved.primary.profile_id);
 }
 
@@ -261,8 +287,14 @@ fn t05_profile_crud() {
     let conn = setup();
     let repo = AiProviderProfileRepository::new(&conn);
     let id = repo
-        .create("GLM", &AdapterKind::OpenaiCompatible, "https://open.bigmodel.cn/api/paas/v4",
-            "sk-glm", "glm-5-air", &ThinkingMode::Off)
+        .create(
+            "GLM",
+            &AdapterKind::OpenaiCompatible,
+            "https://open.bigmodel.cn/api/paas/v4",
+            "sk-glm",
+            "glm-5-air",
+            &ThinkingMode::Off,
+        )
         .unwrap();
     let p = repo.get(id).unwrap().unwrap();
     assert_eq!(p.display_name, "GLM");
@@ -274,16 +306,32 @@ fn t05_profile_crud() {
         params![id, full_caps().to_string()],
     )
     .unwrap();
-    repo.update(id, "GLM-5", &AdapterKind::OpenaiCompatible,
-        "https://open.bigmodel.cn/api/paas/v4", "sk-glm", "glm-5-air", &ThinkingMode::Off, true)
-        .unwrap();
+    repo.update(
+        id,
+        "GLM-5",
+        &AdapterKind::OpenaiCompatible,
+        "https://open.bigmodel.cn/api/paas/v4",
+        "sk-glm",
+        "glm-5-air",
+        &ThinkingMode::Off,
+        true,
+    )
+    .unwrap();
     let p = repo.get(id).unwrap().unwrap();
     assert_eq!(p.display_name, "GLM-5");
     assert_eq!(p.compatibility_status, "full", "T05: 只改名不清兼容结果");
     // disable
-    repo.update(id, "GLM-5", &AdapterKind::OpenaiCompatible,
-        "https://open.bigmodel.cn/api/paas/v4", "sk-glm", "glm-5-air", &ThinkingMode::Off, false)
-        .unwrap();
+    repo.update(
+        id,
+        "GLM-5",
+        &AdapterKind::OpenaiCompatible,
+        "https://open.bigmodel.cn/api/paas/v4",
+        "sk-glm",
+        "glm-5-air",
+        &ThinkingMode::Off,
+        false,
+    )
+    .unwrap();
     assert!(!repo.get(id).unwrap().unwrap().enabled, "T05: disable");
     // delete
     repo.delete(id).unwrap();
@@ -297,17 +345,36 @@ fn t06_active_primary_rules() {
     // 不存在
     assert!(repo.set_active_primary(9999).is_err(), "T06: 不存在禁止");
     // incompatible 禁止
-    let bad = repo.create("BadAI", &AdapterKind::OpenaiCompatible, "https://x.example",
-        "k", "m1", &ThinkingMode::Off).unwrap();
+    let bad = repo
+        .create(
+            "BadAI",
+            &AdapterKind::OpenaiCompatible,
+            "https://x.example",
+            "k",
+            "m1",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     conn.execute(
         "UPDATE ai_provider_profiles SET compatibility_status='incompatible' WHERE id=?1",
         params![bad],
     )
     .unwrap();
-    assert!(repo.set_active_primary(bad).is_err(), "T06: incompatible 禁止");
+    assert!(
+        repo.set_active_primary(bad).is_err(),
+        "T06: incompatible 禁止"
+    );
     // disabled 禁止
-    let off = repo.create("OffAI", &AdapterKind::OpenaiCompatible, "https://x.example",
-        "k", "m2", &ThinkingMode::Off).unwrap();
+    let off = repo
+        .create(
+            "OffAI",
+            &AdapterKind::OpenaiCompatible,
+            "https://x.example",
+            "k",
+            "m2",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     conn.execute(
         "UPDATE ai_provider_profiles SET enabled=0 WHERE id=?1",
         params![off],
@@ -315,12 +382,31 @@ fn t06_active_primary_rules() {
     .unwrap();
     assert!(repo.set_active_primary(off).is_err(), "T06: disabled 禁止");
     // untested（新连接）禁止
-    let fresh = repo.create("FreshAI", &AdapterKind::OpenaiCompatible, "https://x.example",
-        "k", "m3", &ThinkingMode::Off).unwrap();
-    assert!(repo.set_active_primary(fresh).is_err(), "T06: untested 新连接必须先 Probe");
+    let fresh = repo
+        .create(
+            "FreshAI",
+            &AdapterKind::OpenaiCompatible,
+            "https://x.example",
+            "k",
+            "m3",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
+    assert!(
+        repo.set_active_primary(fresh).is_err(),
+        "T06: untested 新连接必须先 Probe"
+    );
     // full 允许
-    let ok = repo.create("GoodAI", &AdapterKind::OpenaiCompatible, "https://x.example",
-        "k", "m4", &ThinkingMode::Off).unwrap();
+    let ok = repo
+        .create(
+            "GoodAI",
+            &AdapterKind::OpenaiCompatible,
+            "https://x.example",
+            "k",
+            "m4",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     conn.execute(
         "UPDATE ai_provider_profiles SET compatibility_status='full' WHERE id=?1",
         params![ok],
@@ -334,27 +420,55 @@ fn t07_active_control_rules() {
     let conn = setup();
     let repo = AiProviderProfileRepository::new(&conn);
     // 非 control-compatible（structured_json 缺失）禁止显式选择
-    let weak = repo.create("WeakAI", &AdapterKind::OpenaiCompatible, "https://x.example",
-        "k", "m", &ThinkingMode::Off).unwrap();
+    let weak = repo
+        .create(
+            "WeakAI",
+            &AdapterKind::OpenaiCompatible,
+            "https://x.example",
+            "k",
+            "m",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     conn.execute(
         "UPDATE ai_provider_profiles SET capabilities_json=?2, compatibility_status='limited'
          WHERE id=?1",
-        params![weak, json!({"basic_chat": true, "tool_calls": true}).to_string()],
+        params![
+            weak,
+            json!({"basic_chat": true, "tool_calls": true}).to_string()
+        ],
     )
     .unwrap();
-    assert!(repo.set_active_control(Some(weak)).is_err(), "T07: 非 control-compatible 禁止");
+    assert!(
+        repo.set_active_control(Some(weak)).is_err(),
+        "T07: 非 control-compatible 禁止"
+    );
     // control-compatible 允许
-    let strong = repo.create("StrongAI", &AdapterKind::Deepseek, "https://api.deepseek.com",
-        "k", "dsm", &ThinkingMode::Off).unwrap();
+    let strong = repo
+        .create(
+            "StrongAI",
+            &AdapterKind::Deepseek,
+            "https://api.deepseek.com",
+            "k",
+            "dsm",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     conn.execute(
         "UPDATE ai_provider_profiles SET capabilities_json=?2, compatibility_status='full'
          WHERE id=?1",
         params![strong, full_caps().to_string()],
     )
     .unwrap();
-    assert!(repo.set_active_control(Some(strong)).is_ok(), "T07: control-compatible 允许");
+    assert!(
+        repo.set_active_control(Some(strong)).is_ok(),
+        "T07: control-compatible 允许"
+    );
     // None = Follow Primary 永远允许
-    assert!(repo.set_active_control(None).is_ok(), "T07: follow primary 允许");
+    assert!(
+        repo.set_active_control(None).is_ok(),
+        "T07: follow primary 允许"
+    );
 }
 
 #[test]
@@ -362,10 +476,21 @@ fn t08_delete_guards() {
     let conn = setup();
     let repo = AiProviderProfileRepository::new(&conn);
     let active = repo.active_primary_id().unwrap();
-    assert!(repo.delete_guarded(active).is_err(), "T08: active primary 不能直接删除");
+    assert!(
+        repo.delete_guarded(active).is_err(),
+        "T08: active primary 不能直接删除"
+    );
     // 显式 control 不能删
-    let ctl = repo.create("CtlAI", &AdapterKind::Deepseek, "https://api.deepseek.com",
-        "k", "dsm", &ThinkingMode::Off).unwrap();
+    let ctl = repo
+        .create(
+            "CtlAI",
+            &AdapterKind::Deepseek,
+            "https://api.deepseek.com",
+            "k",
+            "dsm",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     conn.execute(
         "UPDATE ai_provider_profiles SET capabilities_json=?2, compatibility_status='full'
          WHERE id=?1",
@@ -373,19 +498,41 @@ fn t08_delete_guards() {
     )
     .unwrap();
     repo.set_active_control(Some(ctl)).unwrap();
-    assert!(repo.delete_guarded(ctl).is_err(), "T08: 显式 control 不能直接删除");
+    assert!(
+        repo.delete_guarded(ctl).is_err(),
+        "T08: 显式 control 不能直接删除"
+    );
     repo.set_active_control(None).unwrap();
     // 最后一个可用连接不能删（active DeepSeek 已被上方规则保护；这里删非 active 的 ctl：
     // 它 enabled=1 且删除后仍有 active 可用 → 允许）
     assert!(repo.delete_guarded(ctl).is_ok(), "T08: 非 active 可删");
     // 全部停用后：唯一 enabled 不可删
-    conn.execute("UPDATE ai_provider_profiles SET enabled=0 WHERE id != ?1", params![active]).unwrap();
+    conn.execute(
+        "UPDATE ai_provider_profiles SET enabled=0 WHERE id != ?1",
+        params![active],
+    )
+    .unwrap();
     // 只剩 active 一个 enabled：delete_guarded(active) 已由第一条覆盖；
     // 再造一个 enabled=0 的目标验证「最后一个可用」守卫路径
-    let extra = repo.create("Extra", &AdapterKind::OpenaiCompatible, "https://x", "k", "m",
-        &ThinkingMode::Off).unwrap();
-    conn.execute("UPDATE ai_provider_profiles SET enabled=0 WHERE id=?1", params![extra]).unwrap();
-    assert!(repo.delete_guarded(extra).is_ok(), "T08: disabled 非 active 可删");
+    let extra = repo
+        .create(
+            "Extra",
+            &AdapterKind::OpenaiCompatible,
+            "https://x",
+            "k",
+            "m",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE ai_provider_profiles SET enabled=0 WHERE id=?1",
+        params![extra],
+    )
+    .unwrap();
+    assert!(
+        repo.delete_guarded(extra).is_ok(),
+        "T08: disabled 非 active 可删"
+    );
 }
 
 // ==================== T09-T13 · Adapter 行为（纯函数） ====================
@@ -407,24 +554,52 @@ fn cfg(adapter: AdapterKind, model: &str, thinking: ThinkingMode) -> AiRuntimeCo
 
 #[test]
 fn t09_deepseek_thinking_suffix() {
-    let c = cfg(AdapterKind::Deepseek, "deepseek-v4-flash", ThinkingMode::DeepseekModelSuffix);
-    assert_eq!(c.effective_model(), "deepseek-v4-flash-thinking", "T09: DeepSeek suffix");
+    let c = cfg(
+        AdapterKind::Deepseek,
+        "deepseek-v4-flash",
+        ThinkingMode::DeepseekModelSuffix,
+    );
+    assert_eq!(
+        c.effective_model(),
+        "deepseek-v4-flash-thinking",
+        "T09: DeepSeek suffix"
+    );
     // 已含 thinking 不重复
-    let c2 = cfg(AdapterKind::Deepseek, "deepseek-v4-thinking", ThinkingMode::DeepseekModelSuffix);
-    assert_eq!(c2.effective_model(), "deepseek-v4-thinking", "T09: 不双重 suffix");
+    let c2 = cfg(
+        AdapterKind::Deepseek,
+        "deepseek-v4-thinking",
+        ThinkingMode::DeepseekModelSuffix,
+    );
+    assert_eq!(
+        c2.effective_model(),
+        "deepseek-v4-thinking",
+        "T09: 不双重 suffix"
+    );
     // off 不加
-    let c3 = cfg(AdapterKind::Deepseek, "deepseek-v4-flash", ThinkingMode::Off);
+    let c3 = cfg(
+        AdapterKind::Deepseek,
+        "deepseek-v4-flash",
+        ThinkingMode::Off,
+    );
     assert_eq!(c3.effective_model(), "deepseek-v4-flash");
 }
 
 #[test]
 fn t10_openai_compatible_model_verbatim() {
-    let c = cfg(AdapterKind::OpenaiCompatible, "glm-5-air", ThinkingMode::DeepseekModelSuffix);
+    let c = cfg(
+        AdapterKind::OpenaiCompatible,
+        "glm-5-air",
+        ThinkingMode::DeepseekModelSuffix,
+    );
     assert_eq!(
-        c.effective_model(), "glm-5-air",
+        c.effective_model(),
+        "glm-5-air",
         "T10: OpenAI Compatible model 原样（即使 thinking_mode 字段被误设）"
     );
-    assert!(!c.effective_model().contains("thinking"), "T10: 绝不追加 -thinking");
+    assert!(
+        !c.effective_model().contains("thinking"),
+        "T10: 绝不追加 -thinking"
+    );
 }
 
 #[test]
@@ -452,7 +627,10 @@ fn t11_endpoint_single_chat_completions() {
 fn t12_json_native_strategy() {
     let mut c = cfg(AdapterKind::Deepseek, "m", ThinkingMode::Off);
     c.capabilities.json_strategy = JsonStrategy::Native;
-    assert!(c.use_native_json(true), "T12: native → response_format 存在");
+    assert!(
+        c.use_native_json(true),
+        "T12: native → response_format 存在"
+    );
     let client_src = read_src("src/ai/client.rs");
     assert!(
         client_src.contains("use_native_json(json_mode)"),
@@ -464,7 +642,10 @@ fn t12_json_native_strategy() {
 fn t13_json_prompt_only_strategy() {
     let mut c = cfg(AdapterKind::OpenaiCompatible, "m", ThinkingMode::Off);
     c.capabilities.json_strategy = JsonStrategy::PromptOnly;
-    assert!(!c.use_native_json(true), "T13: prompt_only → 禁发 response_format");
+    assert!(
+        !c.use_native_json(true),
+        "T13: prompt_only → 禁发 response_format"
+    );
     assert!(!c.use_native_json(false));
     // unknown → adapter 默认 native
     let c2 = cfg(AdapterKind::Deepseek, "m", ThinkingMode::Off);
@@ -477,8 +658,16 @@ fn t13_json_prompt_only_strategy() {
 fn t14_capability_fields_changed_reset() {
     let conn = setup();
     let repo = AiProviderProfileRepository::new(&conn);
-    let id = repo.create("A", &AdapterKind::Deepseek, "https://api.deepseek.com",
-        "k1", "m1", &ThinkingMode::Off).unwrap();
+    let id = repo
+        .create(
+            "A",
+            &AdapterKind::Deepseek,
+            "https://api.deepseek.com",
+            "k1",
+            "m1",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     conn.execute(
         "UPDATE ai_provider_profiles SET capabilities_json=?2, compatibility_status='full',
             last_tested_at='2026-08-21 09:00', last_test_message='ok' WHERE id=?1",
@@ -486,11 +675,26 @@ fn t14_capability_fields_changed_reset() {
     )
     .unwrap();
     // 改 model（能力字段）→ 重置
-    repo.update(id, "A", &AdapterKind::Deepseek, "https://api.deepseek.com",
-        "k1", "m2", &ThinkingMode::Off, true).unwrap();
+    repo.update(
+        id,
+        "A",
+        &AdapterKind::Deepseek,
+        "https://api.deepseek.com",
+        "k1",
+        "m2",
+        &ThinkingMode::Off,
+        true,
+    )
+    .unwrap();
     let p = repo.get(id).unwrap().unwrap();
-    assert_eq!(p.compatibility_status, "untested", "T14: 改 model → untested");
-    assert!(p.capabilities.basic_chat.is_none(), "T14: capabilities 清空");
+    assert_eq!(
+        p.compatibility_status, "untested",
+        "T14: 改 model → untested"
+    );
+    assert!(
+        p.capabilities.basic_chat.is_none(),
+        "T14: capabilities 清空"
+    );
     assert!(p.last_tested_at.is_none(), "T14: last_tested_at NULL");
     // 改 api_key 同理
     conn.execute(
@@ -499,14 +703,28 @@ fn t14_capability_fields_changed_reset() {
         params![id, json!({"basic_chat": true}).to_string()],
     )
     .unwrap();
-    repo.update(id, "A", &AdapterKind::Deepseek, "https://api.deepseek.com",
-        "k2", "m2", &ThinkingMode::Off, true).unwrap();
-    assert_eq!(repo.get(id).unwrap().unwrap().compatibility_status, "untested", "T14: 改 key → untested");
+    repo.update(
+        id,
+        "A",
+        &AdapterKind::Deepseek,
+        "https://api.deepseek.com",
+        "k2",
+        "m2",
+        &ThinkingMode::Off,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        repo.get(id).unwrap().unwrap().compatibility_status,
+        "untested",
+        "T14: 改 key → untested"
+    );
 }
 
 #[test]
 fn t15_basic_chat_false_incompatible() {
-    let (caps, status) = summarize_probe(Some(false), None, JsonStrategy::Unknown, None, None, None);
+    let (caps, status) =
+        summarize_probe(Some(false), None, JsonStrategy::Unknown, None, None, None);
     assert_eq!(status, "incompatible", "T15");
     assert_eq!(caps.basic_chat, Some(false));
 }
@@ -514,7 +732,12 @@ fn t15_basic_chat_false_incompatible() {
 #[test]
 fn t16_full_requires_all() {
     let (caps, status) = summarize_probe(
-        Some(true), Some(true), JsonStrategy::Native, Some(true), Some(true), Some(true),
+        Some(true),
+        Some(true),
+        JsonStrategy::Native,
+        Some(true),
+        Some(true),
+        Some(true),
     );
     assert_eq!(status, "full", "T16: basic+json+tools+temp0 → full");
     assert!(caps.control_compatible());
@@ -523,12 +746,25 @@ fn t16_full_requires_all() {
 #[test]
 fn t17_limited() {
     let (caps, status) = summarize_probe(
-        Some(true), Some(true), JsonStrategy::Native, Some(false), Some(true), Some(true),
+        Some(true),
+        Some(true),
+        JsonStrategy::Native,
+        Some(false),
+        Some(true),
+        Some(true),
     );
     assert_eq!(status, "limited", "T17: 缺 tool → limited");
-    assert!(caps.control_compatible(), "T17: Control 不要求 tools（json/temp0 已满足）");
+    assert!(
+        caps.control_compatible(),
+        "T17: Control 不要求 tools（json/temp0 已满足）"
+    );
     let (_, s2) = summarize_probe(
-        Some(true), Some(false), JsonStrategy::Unknown, Some(true), Some(true), Some(true),
+        Some(true),
+        Some(false),
+        JsonStrategy::Unknown,
+        Some(true),
+        Some(true),
+        Some(true),
     );
     assert_eq!(s2, "limited", "T17: 缺 json → limited");
 }
@@ -537,9 +773,17 @@ fn t17_limited() {
 fn t18_streaming_not_formal() {
     // streaming=false 不导致 incompatible；也不阻止 full
     let (caps, status) = summarize_probe(
-        Some(true), Some(true), JsonStrategy::Native, Some(true), Some(false), Some(true),
+        Some(true),
+        Some(true),
+        JsonStrategy::Native,
+        Some(true),
+        Some(false),
+        Some(true),
     );
-    assert_eq!(status, "full", "T18: streaming 不是 Formal Semantic Requirement");
+    assert_eq!(
+        status, "full",
+        "T18: streaming 不是 Formal Semantic Requirement"
+    );
     assert_eq!(caps.streaming, Some(false));
 }
 
@@ -553,10 +797,15 @@ fn t19_single_nonstream_fallback() {
         "T19: streaming=false 已知 → 跳过 stream（单次 non-stream）"
     );
     // unknown → 先 stream；fallback 只在 Err 分支（一次）
-    let fast = lib.split("if route == \"fast_chat\" {").nth(1).unwrap_or_default();
+    let fast = lib
+        .split("if route == \"fast_chat\" {")
+        .nth(1)
+        .unwrap_or_default();
     let fast = fast.split("// ---- DEV-0061R").next().unwrap_or_default();
-    assert!(fast.matches("client.chat(msgs").count() == 1,
-        "T19: 恰好一次 non-stream fallback");
+    assert!(
+        fast.matches("client.chat(msgs").count() == 1,
+        "T19: 恰好一次 non-stream fallback"
+    );
 }
 
 #[test]
@@ -590,7 +839,10 @@ fn t21_control_incompatible_safe_reject() {
         "T21: 用户友好文案"
     );
     // 0 ChangeSet：guard 分支无 ChangeSetRepository 调用
-    let seg = lib.split("control_capability_guard").nth(1).unwrap_or_default();
+    let seg = lib
+        .split("control_capability_guard")
+        .nth(1)
+        .unwrap_or_default();
     let seg = seg.split("DEV-0062 §28").next().unwrap_or_default();
     assert!(!seg.contains("ChangeSetRepository"), "T21: 0 ChangeSet");
 }
@@ -604,8 +856,14 @@ fn t22_primary_tools_guard() {
         "T22: HigherRead/Planner 工具能力守卫 + 用户文案"
     );
     let msg = app_lib::ai::provider::primary_tools_error("TestAI");
-    assert!(!msg.contains("400") && !msg.contains("missing field"), "T22: 无 raw 错误");
-    assert!(msg.contains("检测兼容性") && msg.contains("切换主要 AI"), "T22: 指引文案");
+    assert!(
+        !msg.contains("400") && !msg.contains("missing field"),
+        "T22: 无 raw 错误"
+    );
+    assert!(
+        msg.contains("检测兼容性") && msg.contains("切换主要 AI"),
+        "T22: 指引文案"
+    );
 }
 
 #[test]
@@ -613,21 +871,39 @@ fn t23_api_key_never_leaks() {
     // 行为级：probe message / trace 不含 Key
     let conn = setup();
     let repo = AiProviderProfileRepository::new(&conn);
-    let id = repo.create("K", &AdapterKind::Deepseek, "https://api.deepseek.com",
-        "sk-SECRET-XYZ", "m", &ThinkingMode::Off).unwrap();
+    let id = repo
+        .create(
+            "K",
+            &AdapterKind::Deepseek,
+            "https://api.deepseek.com",
+            "sk-SECRET-XYZ",
+            "m",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     let caps = app_lib::ai::provider::AiCapabilities {
         basic_chat: Some(false),
         ..Default::default()
     };
-    repo.save_probe_result(id, &caps, "incompatible", "连接失败：网络连接失败").unwrap();
+    repo.save_probe_result(id, &caps, "incompatible", "连接失败：网络连接失败")
+        .unwrap();
     let p = repo.get(id).unwrap().unwrap();
-    assert!(!p.last_test_message.contains("sk-SECRET"), "T23: message 无 Key");
+    assert!(
+        !p.last_test_message.contains("sk-SECRET"),
+        "T23: message 无 Key"
+    );
     // 源码级：trace provider 事件只记 role/profile/adapter/model
     let trace = read_src("src/ai/trace.rs");
     assert!(!trace.contains("api_key"), "T23: trace 无 api_key 字段");
     let lib = read_src("src/lib.rs");
-    let probe_seg = lib.split("test_ai_provider_compatibility").nth(1).unwrap_or_default();
-    assert!(!probe_seg.contains("api_key.to_string()") && !probe_seg.contains("bearer"), "T23: probe 输出无 Key");
+    let probe_seg = lib
+        .split("test_ai_provider_compatibility")
+        .nth(1)
+        .unwrap_or_default();
+    assert!(
+        !probe_seg.contains("api_key.to_string()") && !probe_seg.contains("bearer"),
+        "T23: probe 输出无 Key"
+    );
 }
 
 // ==================== T24-T25 · Run Provider Snapshot ====================
@@ -645,7 +921,11 @@ fn t24_run_snapshot_columns() {
             control_ai_profile_id, control_profile_name, control_adapter_kind, control_model)
          VALUES ('r1', 1, 1, 'assistant', 'turn', 'running', '',
             ?1, ?2, 'deepseek', ?3, ?1, ?2, 'deepseek', ?3)",
-        params![primary, resolved.primary.display_name, resolved.primary.model],
+        params![
+            primary,
+            resolved.primary.display_name,
+            resolved.primary.model
+        ],
     )
     .unwrap();
     let (n, m): (i64, String) = conn
@@ -665,7 +945,9 @@ fn t24_run_snapshot_columns() {
     )
     .unwrap();
     let old: Option<String> = conn
-        .query_row("SELECT primary_model FROM ai_runs WHERE id='r0'", [], |r| r.get(0))
+        .query_row("SELECT primary_model FROM ai_runs WHERE id='r0'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert!(old.is_none(), "T24: 旧 Run NULL，不得拿当前配置冒充");
 }
@@ -683,8 +965,16 @@ fn t25_old_runs_do_not_drift() {
     )
     .unwrap();
     // 用户后来换 Primary
-    let p2 = repo.create("GLM", &AdapterKind::OpenaiCompatible, "https://x", "k", "glm-5",
-        &ThinkingMode::Off).unwrap();
+    let p2 = repo
+        .create(
+            "GLM",
+            &AdapterKind::OpenaiCompatible,
+            "https://x",
+            "k",
+            "glm-5",
+            &ThinkingMode::Off,
+        )
+        .unwrap();
     conn.execute(
         "UPDATE ai_provider_profiles SET capabilities_json=?2, compatibility_status='full' WHERE id=?1",
         params![p2, full_caps().to_string()],
@@ -707,14 +997,23 @@ fn t25_old_runs_do_not_drift() {
 #[test]
 fn t26_no_disabled_provider_select() {
     let s = read_src("../src/pages/Settings.tsx");
-    assert!(!s.contains("value=\"deepseek\" disabled"), "T26: 无 disabled Provider 下拉");
+    assert!(
+        !s.contains("value=\"deepseek\" disabled"),
+        "T26: 无 disabled Provider 下拉"
+    );
 }
 
 #[test]
 fn t27_adapter_selectable() {
     let s = read_src("../src/pages/Settings.tsx");
-    assert!(s.contains("value=\"deepseek\">DeepSeek"), "T27: deepseek 可选");
-    assert!(s.contains("value=\"openai_compatible\">OpenAI Compatible"), "T27: openai_compatible 可选");
+    assert!(
+        s.contains("value=\"deepseek\">DeepSeek"),
+        "T27: deepseek 可选"
+    );
+    assert!(
+        s.contains("value=\"openai_compatible\">OpenAI Compatible"),
+        "T27: openai_compatible 可选"
+    );
 }
 
 #[test]
@@ -730,23 +1029,35 @@ fn t28_no_legacy_ai_section_title() {
 #[test]
 fn t29_panel_no_hardcoded_provider() {
     let p = read_src("../src/components/ai/AiPanel.tsx");
-    assert!(!p.contains("Provider：DeepSeek"), "T29: 不写死 Provider：DeepSeek");
+    assert!(
+        !p.contains("Provider：DeepSeek"),
+        "T29: 不写死 Provider：DeepSeek"
+    );
 }
 
 #[test]
 fn t30_panel_no_hardcoded_models() {
     let p = read_src("../src/components/ai/AiPanel.tsx");
-    assert!(!p.contains("DeepSeek V4 Flash"), "T30: 无硬编码 model selector");
+    assert!(
+        !p.contains("DeepSeek V4 Flash"),
+        "T30: 无硬编码 model selector"
+    );
     assert!(!p.contains("__custom"), "T30: 旧双输入删除");
 }
 
 #[test]
 fn t31_panel_footer_from_profiles() {
     let p = read_src("../src/components/ai/AiPanel.tsx");
-    assert!(p.contains("listAiProviderProfiles"), "T31: 来源 = enabled profiles");
+    assert!(
+        p.contains("listAiProviderProfiles"),
+        "T31: 来源 = enabled profiles"
+    );
     assert!(p.contains("conns.map"), "T31: dropdown 渲染 profiles");
     assert!(p.contains("disabled={runBusy}"), "T31: runBusy 时 disabled");
-    assert!(p.contains("setActiveAiProfiles"), "T31: 切换 = active primary");
+    assert!(
+        p.contains("setActiveAiProfiles"),
+        "T31: 切换 = active primary"
+    );
 }
 
 #[test]
@@ -754,11 +1065,20 @@ fn t32_shared_active_truth() {
     let s = read_src("../src/pages/Settings.tsx");
     let p = read_src("../src/components/ai/AiPanel.tsx");
     for src in [&s, &p] {
-        assert!(src.contains("higher:ai-profiles-changed"), "T32: 双向监听同步事件");
+        assert!(
+            src.contains("higher:ai-profiles-changed"),
+            "T32: 双向监听同步事件"
+        );
     }
     // 单一 Canonical：都走 set_active_ai_profiles，不再走旧单例 saveAiSettings
-    assert!(!p.contains("saveAiSettings"), "T32: Panel 不再依赖旧单例 Settings API");
-    assert!(!s.contains("saveAiSettings"), "T32: Settings 不再依赖旧单例 Settings API");
+    assert!(
+        !p.contains("saveAiSettings"),
+        "T32: Panel 不再依赖旧单例 Settings API"
+    );
+    assert!(
+        !s.contains("saveAiSettings"),
+        "T32: Settings 不再依赖旧单例 Settings API"
+    );
 }
 
 // ==================== T33-T53 · Action Continuation ====================
@@ -830,10 +1150,19 @@ fn t33_ambiguous_creates_pending_zero_changeset() {
     match out {
         ActionOutcome::Clarification { candidates, .. } => {
             assert_eq!(candidates.len(), 2, "T33: Ambiguous 两候选");
-            let pid = persist_pending_from_clarification(&conn, fx.p, "run-t33", &stable_action(), &candidates);
+            let pid = persist_pending_from_clarification(
+                &conn,
+                fx.p,
+                "run-t33",
+                &stable_action(),
+                &candidates,
+            );
             assert!(pid > 0, "T33: pending active");
             let repo = AiPendingActionRepository::new(&conn);
-            assert!(repo.find_active(fx.p, CONV).unwrap().is_some(), "T33: 可读取 active");
+            assert!(
+                repo.find_active(fx.p, CONV).unwrap().is_some(),
+                "T33: 可读取 active"
+            );
         }
         other => panic!("T33: 应 Clarification，得到 {other:?}"),
     }
@@ -848,7 +1177,8 @@ fn t34_pending_persists_full_state() {
     let ActionOutcome::Clarification { candidates, .. } = out else {
         panic!("T34")
     };
-    let pid = persist_pending_from_clarification(&conn, fx.p, "run-t34", &stable_action(), &candidates);
+    let pid =
+        persist_pending_from_clarification(&conn, fx.p, "run-t34", &stable_action(), &candidates);
     let row: (String, String, String, i64, i64) = conn
         .query_row(
             "SELECT semantic_action_json, candidates_json, status, profile_id, conversation_id
@@ -869,8 +1199,14 @@ fn t34_pending_persists_full_state() {
     // Candidate real ids + 显示 snapshot + profile/conversation
     let cands: Vec<PendingCandidate> = serde_json::from_str(&row.1).unwrap();
     let ids: Vec<i64> = cands.iter().map(|c| c.real_id).collect();
-    assert!(ids.contains(&fx.a) && ids.contains(&fx.b), "T34: real ids 持久化");
-    assert!(cands.iter().all(|c| c.title == "TEST-STABLE"), "T34: 显示 snapshot");
+    assert!(
+        ids.contains(&fx.a) && ids.contains(&fx.b),
+        "T34: real ids 持久化"
+    );
+    assert!(
+        cands.iter().all(|c| c.title == "TEST-STABLE"),
+        "T34: 显示 snapshot"
+    );
     assert_eq!((row.3, row.4), (fx.p, CONV), "T34: profile/conversation");
     assert_eq!(row.2, "active");
 }
@@ -880,7 +1216,9 @@ fn t35_first_selection_creates_changeset() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let out = plan_action(&conn, fx.p, &env(), &plan_msg(), &stable_action()).unwrap();
-    let ActionOutcome::Clarification { candidates, .. } = out else { panic!("T35") };
+    let ActionOutcome::Clarification { candidates, .. } = out else {
+        panic!("T35")
+    };
     persist_pending_from_clarification(&conn, fx.p, "run-t35", &stable_action(), &candidates);
     let repo = AiPendingActionRepository::new(&conn);
     let pending = repo.find_active(fx.p, CONV).unwrap().unwrap();
@@ -911,7 +1249,10 @@ fn t35_first_selection_creates_changeset() {
         other => panic!("T35: 第一个应 Selected，得到 {other:?}"),
     }
     repo.set_status(pending.id, "resolved").unwrap();
-    assert!(repo.find_active(fx.p, CONV).unwrap().is_none(), "T35: resolved 后无 active");
+    assert!(
+        repo.find_active(fx.p, CONV).unwrap().is_none(),
+        "T35: resolved 后无 active"
+    );
 }
 
 #[test]
@@ -920,18 +1261,33 @@ fn t36_combined_selection() {
     let fx = mk_ambiguous(&conn);
     let repo = AiPendingActionRepository::new(&conn);
     let cands = vec![
-        PendingCandidate { candidate_id: "T-1".into(), real_id: fx.a, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), status: Some("pending".into()),
-            ..Default::default() },
-        PendingCandidate { candidate_id: "T-2".into(), real_id: fx.b, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-23".into()), status: Some("pending".into()),
-            ..Default::default() },
+        PendingCandidate {
+            candidate_id: "T-1".into(),
+            real_id: fx.a,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-24".into()),
+            status: Some("pending".into()),
+            ..Default::default()
+        },
+        PendingCandidate {
+            candidate_id: "T-2".into(),
+            real_id: fx.b,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-23".into()),
+            status: Some("pending".into()),
+            ..Default::default()
+        },
     ];
     // 候选顺序 = 显示顺序（1=8-24，2=8-23）
-    assert!(matches!(
-        resolve_pending_selection("第一个，8月24日那个", &cands, &env()),
-        PendingSelection::Selected(id, 0) if id == fx.a
-    ), "T36: 序数+日期组合唯一命中");
+    assert!(
+        matches!(
+            resolve_pending_selection("第一个，8月24日那个", &cands, &env()),
+            PendingSelection::Selected(id, 0) if id == fx.a
+        ),
+        "T36: 序数+日期组合唯一命中"
+    );
 }
 
 #[test]
@@ -939,10 +1295,22 @@ fn t37_date_only_selection() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let cands = vec![
-        PendingCandidate { candidate_id: "T-1".into(), real_id: fx.a, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), ..Default::default() },
-        PendingCandidate { candidate_id: "T-2".into(), real_id: fx.b, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-23".into()), ..Default::default() },
+        PendingCandidate {
+            candidate_id: "T-1".into(),
+            real_id: fx.a,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-24".into()),
+            ..Default::default()
+        },
+        PendingCandidate {
+            candidate_id: "T-2".into(),
+            real_id: fx.b,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-23".into()),
+            ..Default::default()
+        },
     ];
     for msg in ["8月24日那个", "08-24", "2026-08-24"] {
         assert!(
@@ -958,15 +1326,30 @@ fn t38_second_selection() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let cands = vec![
-        PendingCandidate { candidate_id: "T-1".into(), real_id: fx.a, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), ..Default::default() },
-        PendingCandidate { candidate_id: "T-2".into(), real_id: fx.b, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-23".into()), ..Default::default() },
+        PendingCandidate {
+            candidate_id: "T-1".into(),
+            real_id: fx.a,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-24".into()),
+            ..Default::default()
+        },
+        PendingCandidate {
+            candidate_id: "T-2".into(),
+            real_id: fx.b,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-23".into()),
+            ..Default::default()
+        },
     ];
-    assert!(matches!(
-        resolve_pending_selection("第二个", &cands, &env()),
-        PendingSelection::Selected(id, 1) if id == fx.b
-    ), "T38: 第二个 → 第二候选");
+    assert!(
+        matches!(
+            resolve_pending_selection("第二个", &cands, &env()),
+            PendingSelection::Selected(id, 1) if id == fx.b
+        ),
+        "T38: 第二个 → 第二候选"
+    );
 }
 
 #[test]
@@ -975,10 +1358,22 @@ fn t39_still_ambiguous() {
     let fx = mk_ambiguous(&conn);
     let _ = fx;
     let cands = vec![
-        PendingCandidate { candidate_id: "T-1".into(), real_id: 1, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), ..Default::default() },
-        PendingCandidate { candidate_id: "T-2".into(), real_id: 2, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), ..Default::default() },
+        PendingCandidate {
+            candidate_id: "T-1".into(),
+            real_id: 1,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-24".into()),
+            ..Default::default()
+        },
+        PendingCandidate {
+            candidate_id: "T-2".into(),
+            real_id: 2,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-24".into()),
+            ..Default::default()
+        },
     ];
     // 标题+日期都相同 → 「就是那个TEST-STABLE」仍不唯一
     assert_eq!(
@@ -993,14 +1388,24 @@ fn t40_cancel() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let out = plan_action(&conn, fx.p, &env(), &plan_msg(), &stable_action()).unwrap();
-    let ActionOutcome::Clarification { candidates, .. } = out else { panic!("T40") };
-    let pid = persist_pending_from_clarification(&conn, fx.p, "run-t40", &stable_action(), &candidates);
+    let ActionOutcome::Clarification { candidates, .. } = out else {
+        panic!("T40")
+    };
+    let pid =
+        persist_pending_from_clarification(&conn, fx.p, "run-t40", &stable_action(), &candidates);
     let repo = AiPendingActionRepository::new(&conn);
     let pending = repo.find_active(fx.p, CONV).unwrap().unwrap();
     let cands = repo.candidates(&pending);
-    assert_eq!(resolve_pending_selection("算了", &cands, &env()), PendingSelection::Cancel, "T40");
+    assert_eq!(
+        resolve_pending_selection("算了", &cands, &env()),
+        PendingSelection::Cancel,
+        "T40"
+    );
     repo.set_status(pid, "cancelled").unwrap();
-    assert!(repo.find_active(fx.p, CONV).unwrap().is_none(), "T40: cancelled");
+    assert!(
+        repo.find_active(fx.p, CONV).unwrap().is_none(),
+        "T40: cancelled"
+    );
     assert_eq!(count(&conn, "ai_change_sets"), 0, "T40: 0 ChangeSet");
 }
 
@@ -1009,7 +1414,9 @@ fn t41_new_intent_exits_pending() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let out = plan_action(&conn, fx.p, &env(), &plan_msg(), &stable_action()).unwrap();
-    let ActionOutcome::Clarification { candidates, .. } = out else { panic!("T41") };
+    let ActionOutcome::Clarification { candidates, .. } = out else {
+        panic!("T41")
+    };
     persist_pending_from_clarification(&conn, fx.p, "run-t41", &stable_action(), &candidates);
     let repo = AiPendingActionRepository::new(&conn);
     let pending = repo.find_active(fx.p, CONV).unwrap().unwrap();
@@ -1025,7 +1432,10 @@ fn t41_new_intent_exits_pending() {
         "T41: 新动作不劫持"
     );
     repo.set_status(pending.id, "cancelled").unwrap();
-    assert!(repo.find_active(fx.p, CONV).unwrap().is_none(), "T41: 旧 pending cancelled");
+    assert!(
+        repo.find_active(fx.p, CONV).unwrap().is_none(),
+        "T41: 旧 pending cancelled"
+    );
 }
 
 #[test]
@@ -1033,23 +1443,36 @@ fn t42_nomatch_stays_active() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let out = plan_action(&conn, fx.p, &env(), &plan_msg(), &stable_action()).unwrap();
-    let ActionOutcome::Clarification { candidates, .. } = out else { panic!("T42") };
-    let pid = persist_pending_from_clarification(&conn, fx.p, "run-t42", &stable_action(), &candidates);
+    let ActionOutcome::Clarification { candidates, .. } = out else {
+        panic!("T42")
+    };
+    let pid =
+        persist_pending_from_clarification(&conn, fx.p, "run-t42", &stable_action(), &candidates);
     let repo = AiPendingActionRepository::new(&conn);
     let pending = repo.find_active(fx.p, CONV).unwrap().unwrap();
     let cands = repo.candidates(&pending);
     match resolve_pending_selection("8月27日那个", &cands, &env()) {
         PendingSelection::NoMatch(refed) => {
             let text = no_match_text(&refed, &cands);
-            assert!(text.contains("8月27日") && text.contains("没有"), "T42: 候选里没有提示");
+            assert!(
+                text.contains("8月27日") && text.contains("没有"),
+                "T42: 候选里没有提示"
+            );
         }
         other => panic!("T42: 应 NoMatch，得到 {other:?}"),
     }
     repo.bump_attempt(pid).unwrap();
     assert_eq!(count(&conn, "ai_change_sets"), 0, "T42: 0 ChangeSet");
-    assert!(repo.find_active(fx.p, CONV).unwrap().is_some(), "T42: pending 仍 active");
+    assert!(
+        repo.find_active(fx.p, CONV).unwrap().is_some(),
+        "T42: pending 仍 active"
+    );
     let ac: i64 = conn
-        .query_row("SELECT attempt_count FROM ai_pending_actions WHERE id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT attempt_count FROM ai_pending_actions WHERE id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(ac, 1, "T42: attempt +1");
 }
@@ -1059,16 +1482,23 @@ fn t43_cross_conversation_isolated() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let out = plan_action(&conn, fx.p, &env(), &plan_msg(), &stable_action()).unwrap();
-    let ActionOutcome::Clarification { candidates, .. } = out else { panic!("T43") };
+    let ActionOutcome::Clarification { candidates, .. } = out else {
+        panic!("T43")
+    };
     // pending 只落在 CONV
     persist_pending_from_clarification(&conn, fx.p, "run-t43", &stable_action(), &candidates);
     let repo = AiPendingActionRepository::new(&conn);
     // CONV_B 读取不到（conversation 隔离）
-    assert!(repo.find_active(fx.p, CONV_B).unwrap().is_none(), "T43: 跨 conversation 绝不读取");
+    assert!(
+        repo.find_active(fx.p, CONV_B).unwrap().is_none(),
+        "T43: 跨 conversation 绝不读取"
+    );
     // partial unique index：同 (profile, conv) 只能 1 active
     let repo2 = AiPendingActionRepository::new(&conn);
     mk_run(&conn, fx.p, "r2");
-    repo2.create_or_replace(fx.p, CONV, Some("r2"), "{}", &[], "again").unwrap();
+    repo2
+        .create_or_replace(fx.p, CONV, Some("r2"), "{}", &[], "again")
+        .unwrap();
     let n: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM ai_pending_actions WHERE profile_id=?1 AND conversation_id=?2 AND status='active'",
@@ -1085,10 +1515,15 @@ fn t44_cross_profile_isolated() {
     let fx = mk_ambiguous(&conn);
     let pb = mk_profile_b(&conn);
     let out = plan_action(&conn, fx.p, &env(), &plan_msg(), &stable_action()).unwrap();
-    let ActionOutcome::Clarification { candidates, .. } = out else { panic!("T44") };
+    let ActionOutcome::Clarification { candidates, .. } = out else {
+        panic!("T44")
+    };
     persist_pending_from_clarification(&conn, fx.p, "run-t44", &stable_action(), &candidates);
     let repo = AiPendingActionRepository::new(&conn);
-    assert!(repo.find_active(pb, CONV).unwrap().is_none(), "T44: 跨 profile 绝不命中");
+    assert!(
+        repo.find_active(pb, CONV).unwrap().is_none(),
+        "T44: 跨 profile 绝不命中"
+    );
 }
 
 #[test]
@@ -1096,7 +1531,9 @@ fn t45_restart_persistence() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let out = plan_action(&conn, fx.p, &env(), &plan_msg(), &stable_action()).unwrap();
-    let ActionOutcome::Clarification { candidates, .. } = out else { panic!("T45") };
+    let ActionOutcome::Clarification { candidates, .. } = out else {
+        panic!("T45")
+    };
     persist_pending_from_clarification(&conn, fx.p, "run-t45", &stable_action(), &candidates);
     // 重启模拟：全新 Connection（RAM state 清空；pending 在 SQLite）
     let conn2 = Connection::open_in_memory().unwrap();
@@ -1104,7 +1541,9 @@ fn t45_restart_persistence() {
     let path = std::env::temp_dir().join(format!("higher_t45_{}.db", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let file_conn = Connection::open(&path).unwrap();
-    file_conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    file_conn
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .unwrap();
     app_lib::migrations::run_migrations(&file_conn).unwrap();
     let p2 = mk_profile(&file_conn);
     mk_conv(&file_conn, p2, CONV);
@@ -1112,14 +1551,32 @@ fn t45_restart_persistence() {
     let t2 = mk_task(&file_conn, p2, "TEST-STABLE", "2026-08-23");
     mk_run(&file_conn, p2, "r1");
     let cands = vec![
-        PendingCandidate { candidate_id: "T-1".into(), real_id: t1, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), ..Default::default() },
-        PendingCandidate { candidate_id: "T-2".into(), real_id: t2, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-23".into()), ..Default::default() },
+        PendingCandidate {
+            candidate_id: "T-1".into(),
+            real_id: t1,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-24".into()),
+            ..Default::default()
+        },
+        PendingCandidate {
+            candidate_id: "T-2".into(),
+            real_id: t2,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-23".into()),
+            ..Default::default()
+        },
     ];
     AiPendingActionRepository::new(&file_conn)
-        .create_or_replace(p2, CONV, Some("r1"), &serde_json::to_string(&stable_action()).unwrap(),
-            &cands, "选哪个")
+        .create_or_replace(
+            p2,
+            CONV,
+            Some("r1"),
+            &serde_json::to_string(&stable_action()).unwrap(),
+            &cands,
+            "选哪个",
+        )
         .unwrap();
     drop(file_conn);
     // 重启：重新打开同一文件 DB
@@ -1130,10 +1587,13 @@ fn t45_restart_persistence() {
         .unwrap()
         .expect("T45: 重启后 pending 从 SQLite 继续读取");
     let cands2 = AiPendingActionRepository::new(&reopened).candidates(&pending);
-    assert!(matches!(
-        resolve_pending_selection("第一个", &cands2, &env()),
-        PendingSelection::Selected(id, 0) if id == t1
-    ), "T45: 重启后「第一个」仍可继续");
+    assert!(
+        matches!(
+            resolve_pending_selection("第一个", &cands2, &env()),
+            PendingSelection::Selected(id, 0) if id == t1
+        ),
+        "T45: 重启后「第一个」仍可继续"
+    );
     let _ = std::fs::remove_file(&path);
 }
 
@@ -1142,14 +1602,27 @@ fn t46_candidate_deleted_stale() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
     let cands = vec![
-        PendingCandidate { candidate_id: "T-1".into(), real_id: fx.a, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), status: Some("pending".into()),
-            ..Default::default() },
-        PendingCandidate { candidate_id: "T-2".into(), real_id: fx.b, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-23".into()), status: Some("pending".into()),
-            ..Default::default() },
+        PendingCandidate {
+            candidate_id: "T-1".into(),
+            real_id: fx.a,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-24".into()),
+            status: Some("pending".into()),
+            ..Default::default()
+        },
+        PendingCandidate {
+            candidate_id: "T-2".into(),
+            real_id: fx.b,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-23".into()),
+            status: Some("pending".into()),
+            ..Default::default()
+        },
     ];
-    conn.execute("DELETE FROM tasks WHERE id=?1", params![fx.a]).unwrap();
+    conn.execute("DELETE FROM tasks WHERE id=?1", params![fx.a])
+        .unwrap();
     assert!(candidates_stale(&conn, fx.p, &cands), "T46: 删除 → stale");
     assert_eq!(count(&conn, "ai_change_sets"), 0, "T46: 0 ChangeSet");
 }
@@ -1158,17 +1631,24 @@ fn t46_candidate_deleted_stale() {
 fn t47_candidate_date_changed_stale() {
     let conn = setup();
     let fx = mk_ambiguous(&conn);
-    let cands = vec![
-        PendingCandidate { candidate_id: "T-1".into(), real_id: fx.a, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), status: Some("pending".into()),
-            ..Default::default() },
-    ];
+    let cands = vec![PendingCandidate {
+        candidate_id: "T-1".into(),
+        real_id: fx.a,
+        entity_type: "task".into(),
+        title: "TEST-STABLE".into(),
+        date: Some("2026-08-24".into()),
+        status: Some("pending".into()),
+        ..Default::default()
+    }];
     conn.execute(
         "UPDATE tasks SET planned_date='2026-08-26' WHERE id=?1",
         params![fx.a],
     )
     .unwrap();
-    assert!(candidates_stale(&conn, fx.p, &cands), "T47: 日期变化 → stale");
+    assert!(
+        candidates_stale(&conn, fx.p, &cands),
+        "T47: 日期变化 → stale"
+    );
     // 身份一致 → 不 stale
     conn.execute(
         "UPDATE tasks SET planned_date='2026-08-24' WHERE id=?1",
@@ -1194,9 +1674,16 @@ fn t48_expired_not_hijack() {
     )
     .unwrap();
     // 下次 Turn 发现到期 → expired 且不劫持（find_active 返回 None）
-    assert!(repo.find_active(fx.p, CONV).unwrap().is_none(), "T48: expired");
+    assert!(
+        repo.find_active(fx.p, CONV).unwrap().is_none(),
+        "T48: expired"
+    );
     let st: String = conn
-        .query_row("SELECT status FROM ai_pending_actions WHERE id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM ai_pending_actions WHERE id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(st, "expired", "T48: 惰性置 expired");
 }
@@ -1209,11 +1696,19 @@ fn t49_selection_reuses_original_patch() {
     mk_run(&conn, fx.p, "r");
     let pending = {
         repo.create_or_replace(
-            fx.p, CONV, Some("r"),
+            fx.p,
+            CONV,
+            Some("r"),
             &serde_json::to_string(&stable_action()).unwrap(),
-            &[PendingCandidate { candidate_id: "T-1".into(), real_id: fx.a, entity_type: "task".into(),
-                title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), status: Some("pending".into()),
-                ..Default::default() }],
+            &[PendingCandidate {
+                candidate_id: "T-1".into(),
+                real_id: fx.a,
+                entity_type: "task".into(),
+                title: "TEST-STABLE".into(),
+                date: Some("2026-08-24".into()),
+                status: Some("pending".into()),
+                ..Default::default()
+            }],
             "选哪个",
         )
         .unwrap();
@@ -1221,7 +1716,10 @@ fn t49_selection_reuses_original_patch() {
     };
     let cands = repo.candidates(&pending);
     let PendingSelection::Selected(real_id, _) =
-        resolve_pending_selection("第一个", &cands, &env()) else { panic!("T49") };
+        resolve_pending_selection("第一个", &cands, &env())
+    else {
+        panic!("T49")
+    };
     // gate 复用原 SemanticAction（模型不重新生成 Patch）
     let act: SemanticAction = serde_json::from_str(&pending.semantic_action_json).unwrap();
     let input = PlanInput {
@@ -1252,17 +1750,28 @@ fn t50_provider_unavailable_still_works() {
     let repo = AiPendingActionRepository::new(&conn);
     mk_run(&conn, fx.p, "r");
     repo.create_or_replace(
-        fx.p, CONV, Some("r"),
+        fx.p,
+        CONV,
+        Some("r"),
         &serde_json::to_string(&stable_action()).unwrap(),
-        &[PendingCandidate { candidate_id: "T-1".into(), real_id: fx.a, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), ..Default::default() }],
+        &[PendingCandidate {
+            candidate_id: "T-1".into(),
+            real_id: fx.a,
+            entity_type: "task".into(),
+            title: "TEST-STABLE".into(),
+            date: Some("2026-08-24".into()),
+            ..Default::default()
+        }],
         "选哪个",
     )
     .unwrap();
     let pending = repo.find_active(fx.p, CONV).unwrap().unwrap();
     let cands = repo.candidates(&pending);
     let PendingSelection::Selected(real_id, _) =
-        resolve_pending_selection("第一个", &cands, &env()) else { panic!("T50") };
+        resolve_pending_selection("第一个", &cands, &env())
+    else {
+        panic!("T50")
+    };
     let act: SemanticAction = serde_json::from_str(&pending.semantic_action_json).unwrap();
     let input = PlanInput {
         user_message: "第一个",
@@ -1283,10 +1792,15 @@ fn t50_provider_unavailable_still_works() {
     }
     // lib.rs Pending Gate 源码级：块内无 Provider 调用
     let lib = read_src("src/lib.rs");
-    let gate = lib.split("Pending Action Continuation Gate").nth(1).unwrap_or_default();
+    let gate = lib
+        .split("Pending Action Continuation Gate")
+        .nth(1)
+        .unwrap_or_default();
     let gate = gate.split("DEV-0060 PART F").next().unwrap_or_default();
     assert!(
-        !gate.contains("chat_with_temperature") && !gate.contains("chat_stream") && !gate.contains("client.chat"),
+        !gate.contains("chat_with_temperature")
+            && !gate.contains("chat_stream")
+            && !gate.contains("client.chat"),
         "T50: gate 内 0 Provider Call"
     );
 }
@@ -1297,15 +1811,28 @@ fn t51_resolved_after_changeset() {
     let fx = mk_ambiguous(&conn);
     let repo = AiPendingActionRepository::new(&conn);
     mk_run(&conn, fx.p, "r");
-    let pid = repo.create_or_replace(
-        fx.p, CONV, Some("r"), "{}",
-        &[PendingCandidate { candidate_id: "T-1".into(), real_id: fx.a, entity_type: "task".into(),
-            title: "TEST-STABLE".into(), date: Some("2026-08-24".into()), ..Default::default() }],
-        "选哪个",
-    )
-    .unwrap();
+    let pid = repo
+        .create_or_replace(
+            fx.p,
+            CONV,
+            Some("r"),
+            "{}",
+            &[PendingCandidate {
+                candidate_id: "T-1".into(),
+                real_id: fx.a,
+                entity_type: "task".into(),
+                title: "TEST-STABLE".into(),
+                date: Some("2026-08-24".into()),
+                ..Default::default()
+            }],
+            "选哪个",
+        )
+        .unwrap();
     repo.set_status(pid, "resolved").unwrap();
-    assert!(repo.find_active(fx.p, CONV).unwrap().is_none(), "T51: pending resolved");
+    assert!(
+        repo.find_active(fx.p, CONV).unwrap().is_none(),
+        "T51: pending resolved"
+    );
     let (st, ra): (String, Option<String>) = conn
         .query_row(
             "SELECT status, resolved_at FROM ai_pending_actions WHERE id=?1",
@@ -1334,7 +1861,10 @@ fn t52_pending_proposal_not_recent() {
         .create(fx.p, Some(CONV), Some("r"), "t", "s", &ops)
         .unwrap();
     let rec = app_lib::ai::grounding::resolve_recent(
-        &conn, fx.p, CONV, &hint("task", "TEST-STABLE", false),
+        &conn,
+        fx.p,
+        CONV,
+        &hint("task", "TEST-STABLE", false),
     )
     .unwrap();
     assert!(
@@ -1358,11 +1888,18 @@ fn t53_apply_updates_recent() {
     let cs = ChangeSetRepository::new(&conn)
         .create(fx.p, Some(CONV), Some("r"), "t", "s", &ops)
         .unwrap();
-    ChangeSetRepository::new(&conn).apply(cs, fx.p, false).unwrap();
+    ChangeSetRepository::new(&conn)
+        .apply(cs, fx.p, false)
+        .unwrap();
     app_lib::ai::grounding::record_apply(&conn, fx.p, CONV, cs);
     let rec = app_lib::ai::grounding::resolve_recent(
-        &conn, fx.p, CONV,
-        &EntityHint { recency_hint: Some("recent_updated".into()), ..hint("task", "TEST-STABLE", false) },
+        &conn,
+        fx.p,
+        CONV,
+        &EntityHint {
+            recency_hint: Some("recent_updated".into()),
+            ..hint("task", "TEST-STABLE", false)
+        },
     )
     .unwrap();
     assert!(
@@ -1379,7 +1916,10 @@ fn t54_complete_request_no_history() {
     assert!(!needs_reference_history(msg), "T54: 完整请求无引用 cue");
     // lib 门控：无 cue → 注入空历史（控制输入不被无关历史污染）
     let lib = read_src("src/lib.rs");
-    assert!(lib.contains("needs_reference_history(user_message)"), "T54: 门控接入");
+    assert!(
+        lib.contains("needs_reference_history(user_message)"),
+        "T54: 门控接入"
+    );
     let prompt = turn_interpreter_prompt(msg, &env(), false, &[], &[]);
     assert!(!prompt.contains("无关"), "T54: 控制输入不含无关历史");
 }
@@ -1387,10 +1927,16 @@ fn t54_complete_request_no_history() {
 #[test]
 fn t55_reference_request_allows_history() {
     let msg = "把刚才那个改成20分钟";
-    assert!(needs_reference_history(msg), "T55: 引用请求允许 bounded recent history");
+    assert!(
+        needs_reference_history(msg),
+        "T55: 引用请求允许 bounded recent history"
+    );
     // 主聊天路径 bounded history 不删除（§61）
     let lib = read_src("src/lib.rs");
-    assert!(lib.contains("bound_history"), "T55: FastChat/Read 保留 bounded history");
+    assert!(
+        lib.contains("bound_history"),
+        "T55: FastChat/Read 保留 bounded history"
+    );
 }
 
 #[test]
@@ -1414,7 +1960,10 @@ fn t56_same_request_same_control_input() {
 #[test]
 fn t57_no_fake_proposal_prose() {
     let lib = read_src("src/lib.rs");
-    assert!(lib.contains("write_route_miss"), "T57: error/trace = write_route_miss");
+    assert!(
+        lib.contains("write_route_miss"),
+        "T57: error/trace = write_route_miss"
+    );
     assert!(
         lib.contains("final_text = \"本轮没有生成可审批的修改方案"),
         "T57: 确定性真话替换（非 append）"

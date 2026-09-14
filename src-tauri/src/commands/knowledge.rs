@@ -1,11 +1,11 @@
 // Foundation 2.0 §6: knowledge-domain commands (KnowledgeDocument / workspace / move).
 use crate::db;
-use crate::sandbox;
-use crate::AttachmentDir;
 use crate::repository;
 use crate::repository::attachment::AttachmentRepository;
 use crate::repository::learning_item::LearningItemRepository;
 use crate::repository::study_session::StudySessionRepository;
+use crate::sandbox;
+use crate::AttachmentDir;
 use rusqlite::Connection;
 
 // =============== Knowledge Move（DEV-0028） ===============
@@ -20,7 +20,6 @@ pub fn move_learning_item(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     LearningItemRepository::new(&conn).move_item(id, new_parent_id)
 }
-
 
 // =============== Session Note / 学习附件（Section 6 increment 8，verbatim from lib.rs） ===============
 // =============== Session Note / 学习记录（DEV-0017） ===============
@@ -58,7 +57,9 @@ pub fn get_session(
     id: i64,
 ) -> Result<Option<repository::study_session::StudySession>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    StudySessionRepository::new(&conn).get(id).map_err(|e| e.to_string())
+    StudySessionRepository::new(&conn)
+        .get(id)
+        .map_err(|e| e.to_string())
 }
 
 // =============== 学习附件（DEV-0018，文件本体在 app data / attachments） ===============
@@ -156,7 +157,8 @@ pub fn save_drawing_attachment(
     caption: Option<String>,
 ) -> Result<repository::attachment::LearningAttachment, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let (full, rel) = attachment_target(&conn, &adir.0, profile_id, learning_item_id, "drawing.png")?;
+    let (full, rel) =
+        attachment_target(&conn, &adir.0, profile_id, learning_item_id, "drawing.png")?;
     let bytes = base64_decode(data_base64.trim())?;
     std::fs::write(&full, bytes).map_err(|e| format!("保存画图失败：{}", e))?;
     AttachmentRepository::new(&conn)
@@ -298,7 +300,8 @@ pub fn read_attachment_image(
     // Sandbox Guard：DB 中的 relative_path 不可信（可能被篡改），必须校验
     let full = sandbox::resolve_in_sandbox(&adir.0, &att.relative_path)
         .map_err(|_| "附件路径非法，已拒绝读取".to_string())?;
-    let bytes = std::fs::read(&full).map_err(|_| "附件文件已丢失（请删除该附件记录）".to_string())?;
+    let bytes =
+        std::fs::read(&full).map_err(|_| "附件文件已丢失（请删除该附件记录）".to_string())?;
     let b64 = base64_encode(&bytes);
     let mime = att
         .mime_type
@@ -350,12 +353,19 @@ pub fn base64_encode(bytes: &[u8]) -> String {
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(TABLE[(n >> 18) as usize & 63] as char);
         out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
-
 
 // =============== Knowledge Documents + Document Attachments（DEV-0051；Section 6 increment 11） ===============
 // =============== Knowledge Documents（DEV-0051 / PHASE B-E） ===============
@@ -368,8 +378,11 @@ pub fn create_knowledge_document(
     title: Option<String>,
 ) -> Result<repository::knowledge_document::KnowledgeDocument, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let d = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
-        .create(profile_id, learning_item_id, title.as_deref().unwrap_or("未命名文档"))?;
+    let d = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn).create(
+        profile_id,
+        learning_item_id,
+        title.as_deref().unwrap_or("未命名文档"),
+    )?;
     repository::search::sync_document(&conn, profile_id, d.id); // DEV-0057 §66
     Ok(d)
 }
@@ -381,8 +394,7 @@ pub fn get_knowledge_document(
     id: i64,
 ) -> Result<Option<repository::knowledge_document::KnowledgeDocument>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
-        .get(id, profile_id)
+    repository::knowledge_document::KnowledgeDocumentRepository::new(&conn).get(id, profile_id)
 }
 
 #[tauri::command]
@@ -407,8 +419,13 @@ pub fn update_knowledge_document(
     content_document_json: Option<String>,
 ) -> Result<repository::knowledge_document::KnowledgeDocument, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let d = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn)
-        .update(id, profile_id, &title, &content_text, content_document_json.as_deref())?;
+    let d = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn).update(
+        id,
+        profile_id,
+        &title,
+        &content_text,
+        content_document_json.as_deref(),
+    )?;
     repository::search::sync_document(&conn, profile_id, d.id); // DEV-0057 §66
     Ok(d)
 }
@@ -439,7 +456,8 @@ pub fn delete_knowledge_document(
     let repo = repository::knowledge_document::KnowledgeDocumentRepository::new(&conn);
     let att_repo = AttachmentRepository::new(&conn);
     // 归属预检
-    repo.get(id, profile_id)?.ok_or("文档不存在或不属于当前档案")?;
+    repo.get(id, profile_id)?
+        .ok_or("文档不存在或不属于当前档案")?;
     let atts = att_repo.list_by_document(id).map_err(|e| e.to_string())?;
     // 物理删除（PathGuard：resolve 相对路径进 Sandbox）
     let mut failed: Vec<String> = Vec::new();
@@ -457,7 +475,10 @@ pub fn delete_knowledge_document(
         }
     }
     if !failed.is_empty() {
-        return Err(format!("部分附件文件删除失败，已中止（数据库未改动）：{}", failed.join("；")));
+        return Err(format!(
+            "部分附件文件删除失败，已中止（数据库未改动）：{}",
+            failed.join("；")
+        ));
     }
     // 附件行（文档 FK CASCADE 也会清，这里显式删以明确语义）
     for a in &atts {
@@ -501,7 +522,13 @@ pub fn add_document_attachment(
         .and_then(|n| n.to_str())
         .unwrap_or("attachment")
         .to_string();
-    let (full, rel) = attachment_target(&conn, &adir.0, profile_id, Some(learning_item_id), &original)?;
+    let (full, rel) = attachment_target(
+        &conn,
+        &adir.0,
+        profile_id,
+        Some(learning_item_id),
+        &original,
+    )?;
     std::fs::copy(&src, &full).map_err(|e| format!("复制附件失败：{}", e))?;
     let mime = mime_from_ext(&rel);
     AttachmentRepository::new(&conn)
@@ -535,7 +562,13 @@ pub fn add_document_attachment_from_base64(
     data_base64: String,
 ) -> Result<repository::attachment::LearningAttachment, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let (full, rel) = attachment_target(&conn, &adir.0, profile_id, Some(learning_item_id), &file_name)?;
+    let (full, rel) = attachment_target(
+        &conn,
+        &adir.0,
+        profile_id,
+        Some(learning_item_id),
+        &file_name,
+    )?;
     let bytes = base64_decode(&data_base64)?;
     if bytes.is_empty() {
         return Err("文件内容为空".to_string());
@@ -571,7 +604,13 @@ pub fn save_document_drawing(
     caption: Option<String>,
 ) -> Result<repository::attachment::LearningAttachment, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let (full, rel) = attachment_target(&conn, &adir.0, profile_id, Some(learning_item_id), "drawing.png")?;
+    let (full, rel) = attachment_target(
+        &conn,
+        &adir.0,
+        profile_id,
+        Some(learning_item_id),
+        "drawing.png",
+    )?;
     let bytes = base64_decode(data_base64.trim())?;
     std::fs::write(&full, bytes).map_err(|e| format!("保存画图失败：{}", e))?;
     AttachmentRepository::new(&conn)
@@ -605,4 +644,3 @@ pub fn list_attachments_by_document(
         .list_by_document(document_id)
         .map_err(|e| e.to_string())
 }
-

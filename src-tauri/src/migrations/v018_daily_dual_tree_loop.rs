@@ -10,7 +10,8 @@ pub fn up(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     // ---------- tasks ----------
     let has: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='estimated_minutes'",
-        [], |r| r.get(0),
+        [],
+        |r| r.get(0),
     )?;
     if has == 0 {
         conn.execute_batch(
@@ -20,7 +21,8 @@ pub fn up(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     }
     let has: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='task_kind'",
-        [], |r| r.get(0),
+        [],
+        |r| r.get(0),
     )?;
     if has == 0 {
         conn.execute_batch(
@@ -30,7 +32,8 @@ pub fn up(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     }
     let has: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='priority'",
-        [], |r| r.get(0),
+        [],
+        |r| r.get(0),
     )?;
     if has == 0 {
         conn.execute_batch(
@@ -42,7 +45,8 @@ pub fn up(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     // ---------- study_sessions ----------
     let has: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('study_sessions') WHERE name='activity_kind'",
-        [], |r| r.get(0),
+        [],
+        |r| r.get(0),
     )?;
     if has == 0 {
         conn.execute_batch(
@@ -66,7 +70,8 @@ pub fn up(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     // ---------- ai_change_operations ----------
     let has: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('ai_change_operations') WHERE name='operation_ref'",
-        [], |r| r.get(0),
+        [],
+        |r| r.get(0),
     )?;
     if has == 0 {
         conn.execute_batch(

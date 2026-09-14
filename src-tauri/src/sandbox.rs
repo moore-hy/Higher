@@ -40,7 +40,9 @@ pub fn validate_relative(rel: &str) -> Result<(), String> {
 /// 先静态校验，再规范化并验证仍在 sandbox_root 内（双重防线）。
 pub fn resolve_in_sandbox(sandbox_root: &Path, rel: &str) -> Result<PathBuf, String> {
     validate_relative(rel)?;
-    let root = sandbox_root.canonicalize().map_err(|_| "附件存储目录不可用".to_string())?;
+    let root = sandbox_root
+        .canonicalize()
+        .map_err(|_| "附件存储目录不可用".to_string())?;
     let joined = root.join(rel.trim());
 
     // 逐组件规范化（不要求文件已存在）

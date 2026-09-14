@@ -82,10 +82,7 @@ fn local_date_time_to_epoch(date: &str, time: &str) -> Option<SystemTime> {
     if d.len() != 3 {
         return None;
     }
-    let mut t: Vec<i64> = time
-        .split(':')
-        .filter_map(|s| s.parse().ok())
-        .collect();
+    let mut t: Vec<i64> = time.split(':').filter_map(|s| s.parse().ok()).collect();
     while t.len() < 3 {
         t.push(0);
     }
@@ -121,7 +118,11 @@ fn is_enabled(conn: &Connection) -> bool {
 /// 同步某 profile 的学习提醒：
 /// 期望集合（未来 30 天、有 planned_time、未归档、未完成的任务）与
 /// 当前已注册项对齐；enabled=0 时只清理（期望集合为空）。
-pub fn sync_notifications(conn: &Connection, app: &AppHandle, profile_id: i64) -> Result<(), String> {
+pub fn sync_notifications(
+    conn: &Connection,
+    app: &AppHandle,
+    profile_id: i64,
+) -> Result<(), String> {
     // 1) 期望集合（enabled=0 → 空 = 只清理）
     let mut desired: HashMap<String, (u32, SystemTime, String)> = HashMap::new();
     if is_enabled(conn) {
@@ -177,7 +178,10 @@ pub fn sync_notifications(conn: &Connection, app: &AppHandle, profile_id: i64) -
     // 3) 持久化注册记录（settings KV；`_ = app` 保留签名与插件注册语义一致）
     let _ = app;
     let store = NotificationStore {
-        ids: desired.iter().map(|(k, (nid, _, _))| (k.clone(), *nid)).collect(),
+        ids: desired
+            .iter()
+            .map(|(k, (nid, _, _))| (k.clone(), *nid))
+            .collect(),
     };
     let json = serde_json::to_string(&store).map_err(|e| e.to_string())?;
     SettingRepository::new(conn)
@@ -193,7 +197,9 @@ pub fn resync(app: &AppHandle) {
     std::thread::spawn(move || {
         let state = app.state::<crate::db::DbState>();
         let Ok(conn) = state.0.lock() else { return };
-        let profiles = StudyProfileRepository::new(&conn).list().unwrap_or_default();
+        let profiles = StudyProfileRepository::new(&conn)
+            .list()
+            .unwrap_or_default();
         for p in profiles {
             if let Err(e) = sync_notifications(&conn, &app, p.id) {
                 log::warn!("学习提醒同步失败（profile {}）：{}", p.id, e);
@@ -208,7 +214,9 @@ pub fn start_scheduler(app: AppHandle) {
         std::thread::sleep(Duration::from_secs(20));
         let now = SystemTime::now();
         let due: Vec<ScheduledItem> = {
-            let Ok(mut items) = scheduled_items().lock() else { return };
+            let Ok(mut items) = scheduled_items().lock() else {
+                return;
+            };
             let mut i = 0;
             let mut due = Vec::new();
             while i < items.len() {

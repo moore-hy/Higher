@@ -50,7 +50,9 @@ fn item(key: &str, value: &str) -> pi_memory::ExtractedMemory {
 
 /// 建候选 → （可选）确认。返回 memory id。
 fn seed(conn: &Connection, pid: i64, key: &str, value: &str, confirm: bool) -> i64 {
-    let id = intelligence::memory_confirmation::create_memory_proposal(conn, pid, &item(key, value)).unwrap();
+    let id =
+        intelligence::memory_confirmation::create_memory_proposal(conn, pid, &item(key, value))
+            .unwrap();
     if confirm {
         intelligence::memory_confirmation::confirm_memory(conn, pid, id).unwrap();
     }
@@ -71,12 +73,19 @@ fn search_memory_hits(conn: &Connection, pid: i64, q: &str) -> Vec<(String, i64)
 #[test]
 fn f2_tc001_pending_not_searchable_after_rebuild() {
     let state = setup("tc001");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let mut conn = state.0.lock().unwrap();
 
     let a = seed(&conn, pid, "QWERTY候选", "UNIQUE-PENDING-ALPHA-XYZ", false);
     assert_eq!(
-        MemoryRepository::new(&conn).get(a, pid).unwrap().unwrap().status,
+        MemoryRepository::new(&conn)
+            .get(a, pid)
+            .unwrap()
+            .unwrap()
+            .status,
         "pending_confirmation"
     );
 
@@ -84,7 +93,10 @@ fn f2_tc001_pending_not_searchable_after_rebuild() {
     app_lib::repository::search::rebuild_profile(&mut conn, pid).unwrap();
 
     let hits = search_memory_hits(&conn, pid, "UNIQUE-PENDING-ALPHA");
-    assert!(hits.is_empty(), "pending 经 rebuild 后不得被通用搜索返回：{hits:?}");
+    assert!(
+        hits.is_empty(),
+        "pending 经 rebuild 后不得被通用搜索返回：{hits:?}"
+    );
     // search_index 物理不含该行（只收 confirmed）
     let n: i64 = conn
         .query_row(
@@ -101,7 +113,10 @@ fn f2_tc001_pending_not_searchable_after_rebuild() {
 #[test]
 fn f2_tc002_confirmed_searchable_after_rebuild() {
     let state = setup("tc002");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let mut conn = state.0.lock().unwrap();
 
     let b = seed(&conn, pid, "QWERTY记忆", "UNIQUE-CONFIRMED-BRAVO-XYZ", true);
@@ -121,16 +136,28 @@ fn f2_tc002_confirmed_searchable_after_rebuild() {
 #[test]
 fn f2_tc003_rejected_not_searchable_after_rebuild() {
     let state = setup("tc003");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let mut conn = state.0.lock().unwrap();
 
     // 合法 rejected 场景：候选 → 用户拒绝（§五 FTS 契约：rejected 不可搜索）
-    let c = seed(&conn, pid, "QWERTY拒绝", "UNIQUE-REJECTED-CHARLIE-XYZ", false);
+    let c = seed(
+        &conn,
+        pid,
+        "QWERTY拒绝",
+        "UNIQUE-REJECTED-CHARLIE-XYZ",
+        false,
+    );
     intelligence::memory_confirmation::reject_memory(&conn, pid, c).unwrap();
     app_lib::repository::search::rebuild_profile(&mut conn, pid).unwrap();
 
     let hits = search_memory_hits(&conn, pid, "UNIQUE-REJECTED-CHARLIE");
-    assert!(hits.is_empty(), "rejected 经 rebuild 后不得被通用搜索返回：{hits:?}");
+    assert!(
+        hits.is_empty(),
+        "rejected 经 rebuild 后不得被通用搜索返回：{hits:?}"
+    );
 }
 
 // =============== F2-TC004 · 历史脏 FTS 防御（核心） ===============
@@ -140,7 +167,10 @@ fn f2_tc003_rejected_not_searchable_after_rebuild() {
 #[test]
 fn f2_tc004_stale_fts_entry_defended_by_db_status() {
     let state = setup("tc004");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     let d = seed(&conn, pid, "QWERTY脏索", "UNIQUE-STALE-DELTA-XYZ", false); // pending
@@ -200,7 +230,10 @@ fn f2_tc004_stale_fts_entry_defended_by_db_status() {
 #[test]
 fn f2_tc005_search_higher_shares_repository_gate() {
     let state = setup("tc005");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let mut conn = state.0.lock().unwrap();
 
     let p = seed(&conn, pid, "QWERTY甲", "UNIQUE-SHARE-PENDING-XYZ", false); // pending
@@ -210,10 +243,19 @@ fn f2_tc005_search_higher_shares_repository_gate() {
     app_lib::repository::search::rebuild_profile(&mut conn, pid).unwrap();
 
     // 行为层：search_higher 的实际后端（不带 entity_types 过滤 = 工具默认形态）
-    let hits = SearchRepository::new(&conn).search(pid, "UNIQUE-SHARE", None, 10).unwrap();
-    let mem_hits: Vec<i64> = hits.iter().filter(|h| h.entity_type == "memory").map(|h| h.entity_id).collect();
+    let hits = SearchRepository::new(&conn)
+        .search(pid, "UNIQUE-SHARE", None, 10)
+        .unwrap();
+    let mem_hits: Vec<i64> = hits
+        .iter()
+        .filter(|h| h.entity_type == "memory")
+        .map(|h| h.entity_id)
+        .collect();
     assert!(mem_hits.contains(&c), "confirmed 可见：{mem_hits:?}");
-    assert!(!mem_hits.contains(&p), "pending 不可见（§四：search_higher 与 Repository 同口径）");
+    assert!(
+        !mem_hits.contains(&p),
+        "pending 不可见（§四：search_higher 与 Repository 同口径）"
+    );
     assert!(!mem_hits.contains(&r), "rejected 不可见");
 
     // 源码层：search_higher 分支零 Memory 权限逻辑（§四：权限集中在 Repository）
@@ -227,7 +269,8 @@ fn f2_tc005_search_higher_shares_repository_gate() {
         .and_then(|s| s.split("}\"").next())
         .unwrap_or_default();
     assert!(
-        branch.contains("SearchRepository::new(conn)\n                .search") || branch.contains(".search(profile_id, q, ets.as_deref(), limit)"),
+        branch.contains("SearchRepository::new(conn)\n                .search")
+            || branch.contains(".search(profile_id, q, ets.as_deref(), limit)"),
         "search_higher 必须委托 SearchRepository::search（不得自造过滤器）"
     );
     assert!(

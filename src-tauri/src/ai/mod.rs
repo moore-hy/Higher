@@ -12,16 +12,16 @@
 pub mod client;
 pub mod context;
 pub mod context_builder;
+pub mod planner;
 pub mod prompts;
 pub mod run;
 pub mod tools;
-pub mod planner;
 pub mod vault;
 pub mod web;
 // DEV-0060.1：Semantic Action Runtime（envelope/skills/router/action/trace）
+pub mod action;
 pub mod runtime;
 pub mod skills;
-pub mod action;
 pub mod trace;
 // DEV-0060.2：Grounding Layer（reference/candidates/selection/recent context）
 pub mod grounding;
@@ -103,8 +103,13 @@ impl Default for AiSettings {
     }
 }
 
-pub const AI_SETTING_KEYS: (&str, &str, &str, &str, &str) =
-    ("ai.provider", "ai.base_url", "ai.api_key", "ai.model", "ai.thinking_enabled");
+pub const AI_SETTING_KEYS: (&str, &str, &str, &str, &str) = (
+    "ai.provider",
+    "ai.base_url",
+    "ai.api_key",
+    "ai.model",
+    "ai.thinking_enabled",
+);
 
 /// DEV-0062 §66 Legacy 兼容 wrapper：get/save_ai_settings 操作 **Active Primary Profile**。
 /// v024 起旧 ai.* KV 不再是 Canonical Truth（migration 读取一次后不再被 Runtime 消费）。
@@ -122,22 +127,19 @@ pub fn load_ai_settings(conn: &rusqlite::Connection) -> Result<AiSettings, Strin
 /// 保存到 Active Primary Profile（legacy 兼容；改能力字段会重置兼容检测结果）。
 /// DEV-0062R §16 Provider Truth：只允许真实 Active Primary——引用失效返回明确错误，
 /// 禁止 first-enabled fallback（AI-INV-022）。
-pub fn save_ai_settings(
-    conn: &rusqlite::Connection,
-    s: &AiSettings,
-) -> Result<(), String> {
+pub fn save_ai_settings(conn: &rusqlite::Connection, s: &AiSettings) -> Result<(), String> {
     let repo = crate::repository::ai_provider_profile::AiProviderProfileRepository::new(conn);
     let pid = repo
         .active_primary_id()
         .ok_or_else(|| "尚未设置主要 AI。请在「设置 → AI」选择主要 AI。".to_string())?;
-    let old = repo
-        .get(pid)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "当前主要 AI 连接已不存在。请在「设置 → AI」重新选择主要 AI。".to_string())?;
+    let old = repo.get(pid).map_err(|e| e.to_string())?.ok_or_else(|| {
+        "当前主要 AI 连接已不存在。请在「设置 → AI」重新选择主要 AI。".to_string()
+    })?;
     repo.update(
         pid,
         &old.display_name,
-        &provider::AdapterKind::from_str(&old.adapter_kind).unwrap_or(provider::AdapterKind::Deepseek),
+        &provider::AdapterKind::from_str(&old.adapter_kind)
+            .unwrap_or(provider::AdapterKind::Deepseek),
         &s.base_url,
         &s.api_key,
         &s.model,
@@ -271,7 +273,11 @@ pub struct FollowupHistory {
 impl FollowupHistory {
     /// 截断规则：最多 max_turns 个 user/assistant turn，或总字符 ≤ max_chars（先到先触发，丢最旧）。
     /// 非 user/assistant 角色一律不保留（注入防御）；最近一条永远保留。
-    pub fn trim(msgs: &[FollowupHistory], max_turns: usize, max_chars: usize) -> Vec<FollowupHistory> {
+    pub fn trim(
+        msgs: &[FollowupHistory],
+        max_turns: usize,
+        max_chars: usize,
+    ) -> Vec<FollowupHistory> {
         let mut kept: Vec<&FollowupHistory> = msgs
             .iter()
             .filter(|m| (m.role == "user" || m.role == "assistant") && !m.content.trim().is_empty())
@@ -300,8 +306,8 @@ impl AssistantChatResponse {
             .trim_start_matches("```")
             .trim_end_matches("```")
             .trim();
-        let v: serde_json::Value = serde_json::from_str(trimmed)
-            .map_err(|_| "AI 输出 JSON 无法解析".to_string())?;
+        let v: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|_| "AI 输出 JSON 无法解析".to_string())?;
         let resp_type = v
             .get("type")
             .and_then(|t| t.as_str())

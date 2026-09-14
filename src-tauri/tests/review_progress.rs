@@ -11,13 +11,9 @@
 //! 运行：`cargo test --manifest-path src-tauri/Cargo.toml --test review_progress`
 
 use app_lib::repository::{
-    evaluation::EvaluationRepository,
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    plan::PlanRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
-    task::TaskRepository,
+    evaluation::EvaluationRepository, goal::GoalRepository, learning_item::LearningItemRepository,
+    plan::PlanRepository, study_profile::StudyProfileRepository,
+    study_session::StudySessionRepository, task::TaskRepository,
 };
 use rusqlite::Connection;
 
@@ -57,8 +53,12 @@ fn test_sessions_by_date_profile_isolation() {
     let item_repo = LearningItemRepository::new(&conn);
     let session_repo = StudySessionRepository::new(&conn);
 
-    let pa = profile_repo.create("档案 A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("档案 B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("档案 A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("档案 B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "IA", None).unwrap();
@@ -95,16 +95,50 @@ fn test_evaluations_by_date_profile_isolation() {
     let goal_repo = GoalRepository::new(&conn);
     let eval_repo = EvaluationRepository::new(&conn);
 
-    let pa = profile_repo.create("档案 A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("档案 B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("档案 A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("档案 B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
 
     eval_repo
-        .create(pa.id, Some(goal_a.id), None, "A 测试", "test", None, None, None, None, None, None, None, Some("passed"), None)
+        .create(
+            pa.id,
+            Some(goal_a.id),
+            None,
+            "A 测试",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("passed"),
+            None,
+        )
         .unwrap();
     eval_repo
-        .create(pb.id, Some(goal_b.id), None, "B 回忆", "recall", None, None, None, None, None, None, None, Some("partial"), None)
+        .create(
+            pb.id,
+            Some(goal_b.id),
+            None,
+            "B 回忆",
+            "recall",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("partial"),
+            None,
+        )
         .unwrap();
 
     let today = today_str();
@@ -124,8 +158,12 @@ fn test_knowledge_status_counts_by_profile() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let pa = profile_repo.create("档案 A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("档案 B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("档案 A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("档案 B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
 
@@ -149,7 +187,11 @@ fn test_knowledge_status_counts_by_profile() {
     assert_eq!(get("not_started"), 1);
     assert_eq!(get("learning"), 1);
     assert_eq!(get("mastered"), 1);
-    assert_eq!(counts_a.iter().map(|c| c.count).sum::<i64>(), 3, "档案 A 共 3 个节点");
+    assert_eq!(
+        counts_a.iter().map(|c| c.count).sum::<i64>(),
+        3,
+        "档案 A 共 3 个节点"
+    );
 
     let counts_b = item_repo.status_counts_by_profile(pb.id).unwrap();
     assert_eq!(counts_b.iter().map(|c| c.count).sum::<i64>(), 2);
@@ -162,23 +204,69 @@ fn test_evaluation_stats_by_profile() {
     let goal_repo = GoalRepository::new(&conn);
     let eval_repo = EvaluationRepository::new(&conn);
 
-    let pa = profile_repo.create("档案 A", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("档案 A", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     // B 档案干扰数据
-    let pb = profile_repo.create("档案 B", None, None, None, None, None).unwrap();
+    let pb = profile_repo
+        .create("档案 B", None, None, None, None, None)
+        .unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     eval_repo
-        .create(pb.id, Some(goal_b.id), None, "干扰", "test", None, None, None, None, None, None, None, Some("passed"), None)
+        .create(
+            pb.id,
+            Some(goal_b.id),
+            None,
+            "干扰",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("passed"),
+            None,
+        )
         .unwrap();
 
-    for (t, o) in [("test", "passed"), ("test", "failed"), ("recall", "partial"), ("recall", "partial")] {
+    for (t, o) in [
+        ("test", "passed"),
+        ("test", "failed"),
+        ("recall", "partial"),
+        ("recall", "partial"),
+    ] {
         eval_repo
-            .create(pa.id, Some(goal_a.id), None, "e", t, None, None, None, None, None, None, None, Some(o), None)
+            .create(
+                pa.id,
+                Some(goal_a.id),
+                None,
+                "e",
+                t,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(o),
+                None,
+            )
             .unwrap();
     }
 
     let stats = eval_repo.stats_by_profile(pa.id).unwrap();
-    let by_type = |k: &str| stats.by_type.iter().find(|c| c.label == k).map(|c| c.count).unwrap_or(0);
+    let by_type = |k: &str| {
+        stats
+            .by_type
+            .iter()
+            .find(|c| c.label == k)
+            .map(|c| c.count)
+            .unwrap_or(0)
+    };
     let by_outcome = |k: &str| {
         stats
             .by_outcome
@@ -240,9 +328,19 @@ fn test_arrange_to_today_flow() {
         .create(goal.id, "基础学习", None, None, None)
         .unwrap();
     let math = item_repo.create_root(goal.id, "高等数学", None).unwrap();
-    let limit = item_repo.create_child(goal.id, math.id, "极限", None).unwrap();
+    let limit = item_repo
+        .create_child(goal.id, math.id, "极限", None)
+        .unwrap();
     let plan = plan_repo
-        .create(goal.id, Some(stage.id), Some(limit.id), "函数极限第一轮", None, None, None)
+        .create(
+            goal.id,
+            Some(stage.id),
+            Some(limit.id),
+            "函数极限第一轮",
+            None,
+            None,
+            None,
+        )
         .unwrap();
 
     // 安排到今天：Task.title = Plan.title（允许用户改），planned_date = 今天
@@ -275,7 +373,11 @@ fn today_str() -> String {
     let mut y = 1970i64;
     let mut d = days;
     loop {
-        let dy = if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 { 366 } else { 365 };
+        let dy = if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 {
+            366
+        } else {
+            365
+        };
         if d < dy {
             break;
         }
@@ -283,7 +385,20 @@ fn today_str() -> String {
         y += 1;
     }
     let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let months = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 1i64;
     for &dm in &months {
         if d < dm {

@@ -37,12 +37,20 @@ pub fn list_zip_entries(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> 
     }
     let eocd = eocd.ok_or("ZIP 缺少 End of Central Directory".to_string())?;
     let cd_size = u32::from_le_bytes([
-        bytes[eocd + 12], bytes[eocd + 13], bytes[eocd + 14], bytes[eocd + 15],
+        bytes[eocd + 12],
+        bytes[eocd + 13],
+        bytes[eocd + 14],
+        bytes[eocd + 15],
     ]) as usize;
     let cd_offset = u32::from_le_bytes([
-        bytes[eocd + 16], bytes[eocd + 17], bytes[eocd + 18], bytes[eocd + 19],
+        bytes[eocd + 16],
+        bytes[eocd + 17],
+        bytes[eocd + 18],
+        bytes[eocd + 19],
     ]) as usize;
-    let cd_end = cd_offset.checked_add(cd_size).ok_or("ZIP 目录越界".to_string())?;
+    let cd_end = cd_offset
+        .checked_add(cd_size)
+        .ok_or("ZIP 目录越界".to_string())?;
     if cd_end > bytes.len() {
         return Err("ZIP 目录越界".to_string());
     }
@@ -54,11 +62,13 @@ pub fn list_zip_entries(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> 
             return Err("ZIP 中央目录解析失败".to_string());
         }
         let method = u16::from_le_bytes([bytes[p + 10], bytes[p + 11]]);
-        let csize = u32::from_le_bytes([bytes[p + 20], bytes[p + 21], bytes[p + 22], bytes[p + 23]]) as usize;
+        let csize = u32::from_le_bytes([bytes[p + 20], bytes[p + 21], bytes[p + 22], bytes[p + 23]])
+            as usize;
         let nlen = u16::from_le_bytes([bytes[p + 28], bytes[p + 29]]) as usize;
         let elen = u16::from_le_bytes([bytes[p + 30], bytes[p + 31]]) as usize;
         let clen = u16::from_le_bytes([bytes[p + 32], bytes[p + 33]]) as usize;
-        let lho = u32::from_le_bytes([bytes[p + 42], bytes[p + 43], bytes[p + 44], bytes[p + 45]]) as usize;
+        let lho = u32::from_le_bytes([bytes[p + 42], bytes[p + 43], bytes[p + 44], bytes[p + 45]])
+            as usize;
         let name_bytes = &bytes[p + 46..p + 46 + nlen];
         let name = String::from_utf8_lossy(name_bytes).to_string();
         // 跳过目录条目
@@ -71,7 +81,9 @@ pub fn list_zip_entries(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> 
             let l_nlen = u16::from_le_bytes([bytes[lho + 26], bytes[lho + 27]]) as usize;
             let l_elen = u16::from_le_bytes([bytes[lho + 28], bytes[lho + 29]]) as usize;
             let data_start = lho + 30 + l_nlen + l_elen;
-            let data_end = data_start.checked_add(csize).ok_or("ZIP 数据越界".to_string())?;
+            let data_end = data_start
+                .checked_add(csize)
+                .ok_or("ZIP 数据越界".to_string())?;
             if data_end > bytes.len() {
                 return Err("ZIP 数据越界".to_string());
             }
@@ -79,7 +91,11 @@ pub fn list_zip_entries(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> 
             let content = match method {
                 0 => raw.to_vec(),
                 8 => inflate_raw(raw).map_err(|_| format!("解压失败：{name}"))?,
-                m => return Err(format!("不支持的 ZIP 压缩方式 {m}：{name}（NOT SUPPORTED）")),
+                m => {
+                    return Err(format!(
+                        "不支持的 ZIP 压缩方式 {m}：{name}（NOT SUPPORTED）"
+                    ))
+                }
             };
             entries.push((name, content));
         }
@@ -97,7 +113,8 @@ pub fn read_zip_entry(bytes: &[u8], name: &str) -> Result<Option<Vec<u8>>, Strin
 fn read_file_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let mut f = std::fs::File::open(path).map_err(|e| format!("打开文件失败：{e}"))?;
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf).map_err(|e| format!("读取文件失败：{e}"))?;
+    f.read_to_end(&mut buf)
+        .map_err(|e| format!("读取文件失败：{e}"))?;
     Ok(buf)
 }
 
@@ -110,10 +127,16 @@ pub fn extract_xlsx_text(path: &Path) -> Result<String, String> {
         return Err("这不是有效的 .xlsx 文件（旧版 .xls 请先转换为 .xlsx / .csv）".to_string());
     }
     let entries = list_zip_entries(&bytes)?;
-    let get = |name: &str| entries.iter().find(|(n, _)| n == name).map(|(_, c)| c.as_slice());
+    let get = |name: &str| {
+        entries
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, c)| c.as_slice())
+    };
 
     // 1) workbook.xml：sheet 名 + r:id
-    let workbook_xml = get("xl/workbook.xml").ok_or("xlsx 缺少 xl/workbook.xml（NOT SUPPORTED）".to_string())?;
+    let workbook_xml =
+        get("xl/workbook.xml").ok_or("xlsx 缺少 xl/workbook.xml（NOT SUPPORTED）".to_string())?;
     let workbook_text = String::from_utf8_lossy(workbook_xml).to_string();
     let mut sheet_names: Vec<(String, String)> = Vec::new(); // (rId, name)
     {
@@ -146,7 +169,8 @@ pub fn extract_xlsx_text(path: &Path) -> Result<String, String> {
     }
 
     // 2) workbook.xml.rels：rId → target（sheetN.xml 路径）
-    let mut rid_target: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut rid_target: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     if let Some(rels_xml) = get("xl/_rels/workbook.xml.rels") {
         let rels_text = String::from_utf8_lossy(rels_xml).to_string();
         let mut reader = quick_xml::Reader::from_str(&rels_text);
@@ -154,12 +178,16 @@ pub fn extract_xlsx_text(path: &Path) -> Result<String, String> {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(quick_xml::events::Event::Start(e)) if e.name().as_ref() == b"Relationship" => {
-                    let mut id = None; let mut target = None;
+                    let mut id = None;
+                    let mut target = None;
                     for attr in e.attributes().flatten() {
                         let k = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                         let v = String::from_utf8_lossy(&attr.value).to_string();
-                        if k == "Id" { id = Some(v); }
-                        else if k == "Target" { target = Some(v); }
+                        if k == "Id" {
+                            id = Some(v);
+                        } else if k == "Target" {
+                            target = Some(v);
+                        }
                     }
                     if let (Some(i), Some(t)) = (id, target) {
                         rid_target.insert(i, t);
@@ -185,10 +213,15 @@ pub fn extract_xlsx_text(path: &Path) -> Result<String, String> {
             match reader.read_event_into(&mut buf) {
                 Ok(quick_xml::events::Event::Start(e)) => {
                     let name = e.name();
-                    if name.as_ref() == b"si" { in_si = true; text_parts.clear(); }
+                    if name.as_ref() == b"si" {
+                        in_si = true;
+                        text_parts.clear();
+                    }
                 }
                 Ok(quick_xml::events::Event::Text(t)) => {
-                    if in_si { text_parts.push(String::from_utf8_lossy(&t).to_string()); }
+                    if in_si {
+                        text_parts.push(String::from_utf8_lossy(&t).to_string());
+                    }
                 }
                 Ok(quick_xml::events::Event::End(e)) => {
                     let name = e.name();
@@ -211,7 +244,9 @@ pub fn extract_xlsx_text(path: &Path) -> Result<String, String> {
         let target = rid_target.get(rid).cloned().unwrap_or_default();
         let entry_name = normalize_sheet_target(&target);
         let Some(sheet_xml) = get(&entry_name) else {
-            out.push(format!("Sheet: {name}（NOT SUPPORTED：找不到 {entry_name}）"));
+            out.push(format!(
+                "Sheet: {name}（NOT SUPPORTED：找不到 {entry_name}）"
+            ));
             continue;
         };
         let sheet_text = String::from_utf8_lossy(sheet_xml).to_string();
@@ -249,12 +284,17 @@ fn parse_sheet_cells(sheet_xml: &str, shared: &[String]) -> Result<String, Strin
                 let name = e.name();
                 let tag = name.as_ref();
                 if tag == b"c" {
-                    cur_ref = None; cur_type = None; cur_value.clear();
+                    cur_ref = None;
+                    cur_type = None;
+                    cur_value.clear();
                     for attr in e.attributes().flatten() {
                         let k = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                         let v = String::from_utf8_lossy(&attr.value).to_string();
-                        if k == "r" { cur_ref = Some(v); }
-                        else if k == "t" { cur_type = Some(v); }
+                        if k == "r" {
+                            cur_ref = Some(v);
+                        } else if k == "t" {
+                            cur_type = Some(v);
+                        }
                     }
                 } else if tag == b"v" {
                     in_v = true;
@@ -264,8 +304,11 @@ fn parse_sheet_cells(sheet_xml: &str, shared: &[String]) -> Result<String, Strin
             }
             Ok(quick_xml::events::Event::Text(t)) => {
                 let txt = String::from_utf8_lossy(&t).to_string();
-                if in_v { cur_value.push_str(&txt); }
-                else if in_is_t { cur_value.push_str(&txt); }
+                if in_v {
+                    cur_value.push_str(&txt);
+                } else if in_is_t {
+                    cur_value.push_str(&txt);
+                }
             }
             Ok(quick_xml::events::Event::End(e)) => {
                 let name = e.name();

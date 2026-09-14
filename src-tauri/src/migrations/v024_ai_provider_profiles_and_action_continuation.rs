@@ -94,11 +94,9 @@ pub fn up(conn: &Connection) -> rusqlite::Result<()> {
             .unwrap_or(false);
         (base, key, model, thinking)
     };
-    let existing: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM ai_provider_profiles",
-        [],
-        |r| r.get(0),
-    )?;
+    let existing: i64 = conn.query_row("SELECT COUNT(*) FROM ai_provider_profiles", [], |r| {
+        r.get(0)
+    })?;
     if existing == 0 {
         conn.execute(
             "INSERT INTO ai_provider_profiles
@@ -108,7 +106,11 @@ pub fn up(conn: &Connection) -> rusqlite::Result<()> {
                 legacy.0.trim(),
                 legacy.1,
                 legacy.2.trim(),
-                if legacy.3 { "deepseek_model_suffix" } else { "off" }
+                if legacy.3 {
+                    "deepseek_model_suffix"
+                } else {
+                    "off"
+                }
             ],
         )?;
     }

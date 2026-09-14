@@ -120,9 +120,16 @@ impl TestAiEventSink {
             .iter()
             .map(|v| {
                 (
-                    v.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                    v.get("stage").or_else(|| v.get("status")).or_else(|| v.get("delta"))
-                        .and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                    v.get("kind")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    v.get("stage")
+                        .or_else(|| v.get("status"))
+                        .or_else(|| v.get("delta"))
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0),
                 )
             })
@@ -217,7 +224,9 @@ impl AiRuntimeEmitter {
     /// 送达核心事件；失败 → trace（§十三），绝不传播。
     fn dispatch(&self, kind_: &str, mut payload: serde_json::Value) -> u64 {
         let seq = self.next_seq();
-        let obj = payload.as_object_mut().expect("runtime payload must be object");
+        let obj = payload
+            .as_object_mut()
+            .expect("runtime payload must be object");
         obj.insert("version".into(), json!(PROTOCOL_VERSION));
         obj.insert("client_turn_id".into(), json!(self.client_turn_id));
         obj.insert("run_id".into(), json!(self.run_id));
@@ -246,8 +255,12 @@ impl AiRuntimeEmitter {
     /// 不得直接调用 run::emit（§五十四 / RUNTIME-TC015）。
     pub fn emit_side_effect(&self, event: &str, payload: serde_json::Value) {
         let res = match &self.sink {
-            SinkRef::Tauri(t) => t.deliver(event, &json!({ "run_id": self.run_id, "data": payload })),
-            SinkRef::Test(t) => t.deliver(event, &json!({ "run_id": self.run_id, "data": payload })),
+            SinkRef::Tauri(t) => {
+                t.deliver(event, &json!({ "run_id": self.run_id, "data": payload }))
+            }
+            SinkRef::Test(t) => {
+                t.deliver(event, &json!({ "run_id": self.run_id, "data": payload }))
+            }
             SinkRef::Noop => Ok(()),
         };
         if let Err(e) = res {

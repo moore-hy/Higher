@@ -49,7 +49,9 @@ impl<'a> MasteryRepository<'a> {
                 if !(0..=100).contains(&s) {
                     return Err(format!("score 超出 0-100：{s}"));
                 }
-                let u = a.understanding_score.ok_or("scored 评估缺少 understanding")?;
+                let u = a
+                    .understanding_score
+                    .ok_or("scored 评估缺少 understanding")?;
                 let c = a.coverage_score.ok_or("scored 评估缺少 coverage")?;
                 let v = a.verification_score.ok_or("scored 评估缺少 verification")?;
                 if u > 40 || c > 30 || v > 30 || u < 0 || c < 0 || v < 0 {
@@ -187,9 +189,8 @@ impl<'a> MasteryRepository<'a> {
 }
 
 fn parse_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MasteryAssessment> {
-    let parse_list = |raw: String| -> Vec<String> {
-        serde_json::from_str(&raw).unwrap_or_default()
-    };
+    let parse_list =
+        |raw: String| -> Vec<String> { serde_json::from_str(&raw).unwrap_or_default() };
     Ok(MasteryAssessment {
         id: row.get(0)?,
         profile_id: row.get(1)?,

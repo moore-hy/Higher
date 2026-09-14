@@ -15,16 +15,10 @@
 //! 运行：`cargo test --manifest-path src-tauri/Cargo.toml --test insight_review`
 
 use app_lib::repository::{
-    adjustment::AdjustmentRepository,
-    evaluation::EvaluationRepository,
-    feedback::FeedbackRepository,
-    goal::GoalRepository,
-    insight::InsightRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
-    study_stage::StudyStageRepository,
-    task::TaskRepository,
+    adjustment::AdjustmentRepository, evaluation::EvaluationRepository,
+    feedback::FeedbackRepository, goal::GoalRepository, insight::InsightRepository,
+    learning_item::LearningItemRepository, study_profile::StudyProfileRepository,
+    study_session::StudySessionRepository, study_stage::StudyStageRepository, task::TaskRepository,
 };
 use rusqlite::Connection;
 
@@ -68,7 +62,14 @@ fn test_schema_stays_v008() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29], "DEV-0015 不创建 v009");
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ],
+        "DEV-0015 不创建 v009"
+    );
 }
 
 #[test]
@@ -83,8 +84,12 @@ fn test_range_boundaries_and_profile_isolation() {
     let fb_repo = FeedbackRepository::new(&conn);
     let adj_repo = AdjustmentRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "IA", None).unwrap();
@@ -99,49 +104,170 @@ fn test_range_boundaries_and_profile_isolation() {
     session_repo.end(sb.id, None).unwrap();
 
     eval_repo
-        .create(pa.id, Some(goal_a.id), Some(item_a.id), "A", "test", None, None, None, None, None, None, None, Some("passed"), None)
+        .create(
+            pa.id,
+            Some(goal_a.id),
+            Some(item_a.id),
+            "A",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("passed"),
+            None,
+        )
         .unwrap();
     eval_repo
-        .create(pb.id, Some(goal_b.id), Some(item_b.id), "B", "test", None, None, None, None, None, None, None, Some("failed"), None)
+        .create(
+            pb.id,
+            Some(goal_b.id),
+            Some(item_b.id),
+            "B",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("failed"),
+            None,
+        )
         .unwrap();
 
-    task_repo.create_with_plan_legacy(item_a.id, "TA", Some(&today), None).unwrap();
-    task_repo.create_with_plan_legacy(item_b.id, "TB", Some(&today), None).unwrap();
+    task_repo
+        .create_with_plan_legacy(item_a.id, "TA", Some(&today), None)
+        .unwrap();
+    task_repo
+        .create_with_plan_legacy(item_b.id, "TB", Some(&today), None)
+        .unwrap();
 
-    let fb_a = fb_repo.create(goal_a.id, Some(item_a.id), None, "weakness", "A 问题", "").unwrap();
-    let fb_b = fb_repo.create(goal_b.id, Some(item_b.id), None, "weakness", "B 问题", "").unwrap();
-    adj_repo.create(fb_a.id, goal_a.id, Some(item_a.id), "relearn", "A 调整", "", Some(&today), None, None).unwrap();
-    adj_repo.create(fb_b.id, goal_b.id, Some(item_b.id), "relearn", "B 调整", "", Some(&today), None, None).unwrap();
+    let fb_a = fb_repo
+        .create(goal_a.id, Some(item_a.id), None, "weakness", "A 问题", "")
+        .unwrap();
+    let fb_b = fb_repo
+        .create(goal_b.id, Some(item_b.id), None, "weakness", "B 问题", "")
+        .unwrap();
+    adj_repo
+        .create(
+            fb_a.id,
+            goal_a.id,
+            Some(item_a.id),
+            "relearn",
+            "A 调整",
+            "",
+            Some(&today),
+            None,
+            None,
+        )
+        .unwrap();
+    adj_repo
+        .create(
+            fb_b.id,
+            goal_b.id,
+            Some(item_b.id),
+            "relearn",
+            "B 调整",
+            "",
+            Some(&today),
+            None,
+            None,
+        )
+        .unwrap();
 
     // Today Review（start=end=today）
-    let a_sess = session_repo.list_by_range_by_profile(pa.id, &today, &today).unwrap();
+    let a_sess = session_repo
+        .list_by_range_by_profile(pa.id, &today, &today)
+        .unwrap();
     assert_eq!(a_sess.len(), 1);
-    let b_sess = session_repo.list_by_range_by_profile(pb.id, &today, &today).unwrap();
+    let b_sess = session_repo
+        .list_by_range_by_profile(pb.id, &today, &today)
+        .unwrap();
     assert_eq!(b_sess.len(), 1);
-    assert_ne!(a_sess[0].learning_item_id, b_sess[0].learning_item_id, "Profile 隔离");
+    assert_ne!(
+        a_sess[0].learning_item_id, b_sess[0].learning_item_id,
+        "Profile 隔离"
+    );
 
-    assert_eq!(eval_repo.list_by_range_by_profile(pa.id, &today, &today).unwrap().len(), 1);
-    assert_eq!(task_repo.list_by_range_by_profile(pa.id, &today, &today).unwrap().len(), 1);
+    assert_eq!(
+        eval_repo
+            .list_by_range_by_profile(pa.id, &today, &today)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        task_repo
+            .list_by_range_by_profile(pa.id, &today, &today)
+            .unwrap()
+            .len(),
+        1
+    );
 
     // 边界：过去范围查不到今天数据
     let past = "2020-01-01";
-    assert_eq!(session_repo.list_by_range_by_profile(pa.id, past, past).unwrap().len(), 0);
+    assert_eq!(
+        session_repo
+            .list_by_range_by_profile(pa.id, past, past)
+            .unwrap()
+            .len(),
+        0
+    );
 
     // 周范围（周一→今天，包含今天）
     let monday = week_start_str();
-    assert!(session_repo.list_by_range_by_profile(pa.id, &monday, &today).unwrap().len() >= 1);
+    assert!(
+        session_repo
+            .list_by_range_by_profile(pa.id, &monday, &today)
+            .unwrap()
+            .len()
+            >= 1
+    );
 
     // Feedback created / resolved 统计
-    let created = fb_repo.list_created_by_range_by_profile(pa.id, &past, &today).unwrap();
+    let created = fb_repo
+        .list_created_by_range_by_profile(pa.id, &past, &today)
+        .unwrap();
     assert_eq!(created.len(), 1);
-    assert_eq!(fb_repo.list_resolved_by_range_by_profile(pa.id, &past, &today).unwrap().len(), 0);
+    assert_eq!(
+        fb_repo
+            .list_resolved_by_range_by_profile(pa.id, &past, &today)
+            .unwrap()
+            .len(),
+        0
+    );
     fb_repo.resolve(fb_a.id).unwrap();
-    assert_eq!(fb_repo.list_resolved_by_range_by_profile(pa.id, &past, &today).unwrap().len(), 1);
+    assert_eq!(
+        fb_repo
+            .list_resolved_by_range_by_profile(pa.id, &past, &today)
+            .unwrap()
+            .len(),
+        1
+    );
     // B 不受影响
-    assert_eq!(fb_repo.list_resolved_by_range_by_profile(pb.id, &past, &today).unwrap().len(), 0);
+    assert_eq!(
+        fb_repo
+            .list_resolved_by_range_by_profile(pb.id, &past, &today)
+            .unwrap()
+            .len(),
+        0
+    );
 
     // Adjustment 统计
-    assert_eq!(adj_repo.count_by_status_by_profile(pa.id).unwrap().iter().map(|c| c.count).sum::<i64>(), 1);
+    assert_eq!(
+        adj_repo
+            .count_by_status_by_profile(pa.id)
+            .unwrap()
+            .iter()
+            .map(|c| c.count)
+            .sum::<i64>(),
+        1
+    );
     let planned_a = adj_repo.list_pending_by_profile(pa.id).unwrap();
     assert_eq!(planned_a.len(), 1);
 }
@@ -162,7 +288,13 @@ fn test_stage_review_range() {
     let past_start = "2026-08-01";
     let future_end = "2026-12-31";
     let stage = stage_repo
-        .create(goal.id, "基础阶段", None, Some(past_start), Some(future_end))
+        .create(
+            goal.id,
+            "基础阶段",
+            None,
+            Some(past_start),
+            Some(future_end),
+        )
         .unwrap();
     assert!(stage.start_date.is_some(), "阶段有时间范围");
 
@@ -171,17 +303,37 @@ fn test_stage_review_range() {
     session_repo.end(s.id, None).unwrap();
 
     let today = today_str();
-    let end: String = [today.clone(), future_end.to_string()].into_iter().min().unwrap(); // min(today, end)
+    let end: String = [today.clone(), future_end.to_string()]
+        .into_iter()
+        .min()
+        .unwrap(); // min(today, end)
     let in_stage = session_repo
         .list_by_range_by_profile(profile_id, past_start, &end)
         .unwrap();
     assert_eq!(in_stage.len(), 1, "阶段范围内包含今天的学习");
 
     // 阶段范围内的调整与问题
-    let fb = fb_repo.create(goal.id, Some(item.id), None, "weakness", "阶段问题", "").unwrap();
-    adj_repo.create(fb.id, goal.id, Some(item.id), "relearn", "阶段调整", "", Some(&today), None, None).unwrap();
+    let fb = fb_repo
+        .create(goal.id, Some(item.id), None, "weakness", "阶段问题", "")
+        .unwrap();
+    adj_repo
+        .create(
+            fb.id,
+            goal.id,
+            Some(item.id),
+            "relearn",
+            "阶段调整",
+            "",
+            Some(&today),
+            None,
+            None,
+        )
+        .unwrap();
     assert_eq!(
-        adj_repo.list_created_by_range_by_profile(profile_id, past_start, &end).unwrap().len(),
+        adj_repo
+            .list_created_by_range_by_profile(profile_id, past_start, &end)
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -205,11 +357,30 @@ fn test_learning_trend_30_days_single_query() {
     let s = session_repo.start(item.id, None).unwrap();
     session_repo.end(s.id, None).unwrap();
     eval_repo
-        .create(profile_id, Some(goal.id), Some(item.id), "E1", "test", None, None, None, None, None, None, None, Some("passed"), None)
+        .create(
+            profile_id,
+            Some(goal.id),
+            Some(item.id),
+            "E1",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("passed"),
+            None,
+        )
         .unwrap();
-    let task = task_repo.create_with_plan_legacy(item.id, "T", Some(&today), None).unwrap();
+    let task = task_repo
+        .create_with_plan_legacy(item.id, "T", Some(&today), None)
+        .unwrap();
     task_repo.complete(task.id).unwrap();
-    let fb = fb_repo.create(goal.id, Some(item.id), None, "weakness", "问题", "").unwrap();
+    let fb = fb_repo
+        .create(goal.id, Some(item.id), None, "weakness", "问题", "")
+        .unwrap();
     fb_repo.resolve(fb.id).unwrap();
 
     let trend = insight.learning_trend_by_profile(profile_id, 30).unwrap();
@@ -245,7 +416,14 @@ fn test_next_actions_source_chain() {
     let goal = goal_repo.create(profile_id, "G", None).unwrap();
     let item = item_repo.create_root(goal.id, "函数极限", None).unwrap();
     let fb = fb_repo
-        .create(goal.id, Some(item.id), None, "weakness", "极限定义理解不稳定", "")
+        .create(
+            goal.id,
+            Some(item.id),
+            None,
+            "weakness",
+            "极限定义理解不稳定",
+            "",
+        )
         .unwrap();
 
     let today = today_str();
@@ -253,17 +431,37 @@ fn test_next_actions_source_chain() {
         .create_with_plan_legacy(item.id, "重新学习 · 函数极限", Some(&today), None)
         .unwrap();
     let adj = adj_repo
-        .create(fb.id, goal.id, Some(item.id), "relearn", "重新学习 · 函数极限", "", Some(&today), Some(task.id), None)
+        .create(
+            fb.id,
+            goal.id,
+            Some(item.id),
+            "relearn",
+            "重新学习 · 函数极限",
+            "",
+            Some(&today),
+            Some(task.id),
+            None,
+        )
         .unwrap();
 
     let next = insight.next_actions_by_profile(profile_id, 10).unwrap();
     assert_eq!(next.len(), 1);
     assert_eq!(next[0].title, "重新学习 · 函数极限");
-    assert_eq!(next[0].source.as_deref(), Some("极限定义理解不稳定"), "来源链：Evidence→Feedback→Adjustment→Task");
+    assert_eq!(
+        next[0].source.as_deref(),
+        Some("极限定义理解不稳定"),
+        "来源链：Evidence→Feedback→Adjustment→Task"
+    );
 
     // Task 完成后不再出现在下一步
     task_repo.complete(task.id).unwrap();
-    assert_eq!(insight.next_actions_by_profile(profile_id, 10).unwrap().len(), 0);
+    assert_eq!(
+        insight
+            .next_actions_by_profile(profile_id, 10)
+            .unwrap()
+            .len(),
+        0
+    );
     // Adjustment 标记完成同样移除
     let _ = adj;
 }
@@ -284,26 +482,53 @@ fn test_full_self_correcting_loop_same_data() {
     let adj_repo = AdjustmentRepository::new(&conn);
     let insight = InsightRepository::new(&conn);
 
-    let profile = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
+    let profile = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
     let goal = goal_repo.create(profile.id, "考研", None).unwrap();
     let math = item_repo.create_root(goal.id, "高等数学", None).unwrap();
-    let limit = item_repo.create_child(goal.id, math.id, "极限", None).unwrap();
+    let limit = item_repo
+        .create_child(goal.id, math.id, "极限", None)
+        .unwrap();
 
     let today = today_str();
-    let t1 = task_repo.create_with_plan_legacy(limit.id, "函数极限第一轮", Some(&today), None).unwrap();
+    let t1 = task_repo
+        .create_with_plan_legacy(limit.id, "函数极限第一轮", Some(&today), None)
+        .unwrap();
 
     // 第一次学习 + 失败验证
     let s1 = session_repo.start(limit.id, Some(t1.id)).unwrap();
     session_repo.end(s1.id, None).unwrap();
     let ev1 = eval_repo
-        .create(profile.id, Some(goal.id), Some(limit.id), "极限回忆", "recall", None, None,
-                None, None, None, None, None, Some("failed"), None)
+        .create(
+            profile.id,
+            Some(goal.id),
+            Some(limit.id),
+            "极限回忆",
+            "recall",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("failed"),
+            None,
+        )
         .unwrap();
 
     // 用户确认 → Feedback（不自动）
     assert_eq!(fb_repo.list_by_profile(profile.id).unwrap().len(), 0);
     let fb = fb_repo
-        .create(goal.id, Some(limit.id), Some(ev1.id), "weakness", "极限定义理解不稳定", "回忆失败")
+        .create(
+            goal.id,
+            Some(limit.id),
+            Some(ev1.id),
+            "weakness",
+            "极限定义理解不稳定",
+            "回忆失败",
+        )
         .unwrap();
 
     // 安排重新学习：Task + Adjustment 双记录（与 arrange_relearn_adjustment command 相同逻辑）
@@ -311,28 +536,61 @@ fn test_full_self_correcting_loop_same_data() {
         .create_with_plan_legacy(limit.id, "重新学习 · 极限", Some(&today), None)
         .unwrap();
     adj_repo
-        .create(fb.id, goal.id, Some(limit.id), "relearn", "重新学习 · 极限", "基于回忆失败",
-                Some(&today), Some(t2.id), None)
+        .create(
+            fb.id,
+            goal.id,
+            Some(limit.id),
+            "relearn",
+            "重新学习 · 极限",
+            "基于回忆失败",
+            Some(&today),
+            Some(t2.id),
+            None,
+        )
         .unwrap();
 
     // 重新学习 + 通过验证
     let s2 = session_repo.start(limit.id, Some(t2.id)).unwrap();
     session_repo.end(s2.id, None).unwrap();
     eval_repo
-        .create(profile.id, Some(goal.id), Some(limit.id), "再回忆", "recall", None, None,
-                None, None, None, None, None, Some("passed"), None)
+        .create(
+            profile.id,
+            Some(goal.id),
+            Some(limit.id),
+            "再回忆",
+            "recall",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("passed"),
+            None,
+        )
         .unwrap();
 
     // 用户确认 resolve（禁止自动）
     fb_repo.resolve(fb.id).unwrap();
 
     // Review Range（今天窗口）能看到完整证据链
-    let evals_today = eval_repo.list_by_date_by_profile(profile.id, &today).unwrap();
+    let evals_today = eval_repo
+        .list_by_date_by_profile(profile.id, &today)
+        .unwrap();
     assert_eq!(evals_today.len(), 2, "failed + passed 都在");
-    assert_eq!(session_repo.list_by_date_by_profile(profile.id, &today).unwrap().len(), 2);
+    assert_eq!(
+        session_repo
+            .list_by_date_by_profile(profile.id, &today)
+            .unwrap()
+            .len(),
+        2
+    );
 
     // 问题已解决且计入周期统计
-    let resolved = fb_repo.list_resolved_by_range_by_profile(profile.id, &today, &today).unwrap();
+    let resolved = fb_repo
+        .list_resolved_by_range_by_profile(profile.id, &today, &today)
+        .unwrap();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].title, "极限定义理解不稳定");
 
@@ -362,7 +620,11 @@ fn today_str() -> String {
     let mut y = 1970i64;
     let mut d = days;
     loop {
-        let dy = if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 { 366 } else { 365 };
+        let dy = if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 {
+            366
+        } else {
+            365
+        };
         if d < dy {
             break;
         }
@@ -370,7 +632,20 @@ fn today_str() -> String {
         y += 1;
     }
     let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let months = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 1i64;
     for &dm in &months {
         if d < dm {
@@ -393,7 +668,11 @@ fn week_start_str() -> String {
     let mut y = 1970i64;
     let mut d = monday;
     loop {
-        let dy = if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 { 366 } else { 365 };
+        let dy = if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 {
+            366
+        } else {
+            365
+        };
         if d < dy {
             break;
         }
@@ -401,7 +680,20 @@ fn week_start_str() -> String {
         y += 1;
     }
     let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let months = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 1i64;
     for &dm in &months {
         if d < dm {

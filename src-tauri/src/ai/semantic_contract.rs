@@ -48,7 +48,9 @@ pub fn parse_example(raw: &str) -> Option<SemanticAction> {
 
 /// 全部 Canonical examples 必须可被 Parser 读取（batch061r R05 / §18.2）。
 pub fn all_examples_parse() -> bool {
-    CANONICAL_EXAMPLES.iter().all(|e| parse_example(e).is_some())
+    CANONICAL_EXAMPLES
+        .iter()
+        .all(|e| parse_example(e).is_some())
 }
 
 /// Prompt 里的 Contract 说明块（runtime.rs semantic prompt 引用；唯一来源）。

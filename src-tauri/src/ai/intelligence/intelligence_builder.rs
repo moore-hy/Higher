@@ -67,7 +67,12 @@ pub fn post_turn_apply(
     //（explicit 且价值高）时产出 draft（用户确认前对 Decision 不可见）。
     let mut proposed = false;
     let has_profile_signal = items.iter().any(|it| {
-        it.kind == "explicit" && it.importance >= 4 && matches!(it.memory_type.as_str(), "user_fact" | "user_constraint" | "goal_context")
+        it.kind == "explicit"
+            && it.importance >= 4
+            && matches!(
+                it.memory_type.as_str(),
+                "user_fact" | "user_constraint" | "goal_context"
+            )
     });
     if has_profile_signal {
         let profile = load_profile(conn, profile_id);
@@ -102,14 +107,26 @@ fn merge_profile_patch(
     //（basic_information/current_status/abilities/constraints/long_term_goals）
     let mut next = current.clone();
     let mut changed = false;
-    for it in items.iter().filter(|i| i.kind == "explicit" && i.importance >= 4) {
-        let val = if it.value.is_empty() { it.excerpt.clone() } else { it.value.clone() };
+    for it in items
+        .iter()
+        .filter(|i| i.kind == "explicit" && i.importance >= 4)
+    {
+        let val = if it.value.is_empty() {
+            it.excerpt.clone()
+        } else {
+            it.value.clone()
+        };
         if val.trim().is_empty() {
             continue;
         }
         match it.memory_type.as_str() {
             "user_fact" => {
-                if !next.basic_information.as_deref().map(|b| b.contains(&val)).unwrap_or(false) {
+                if !next
+                    .basic_information
+                    .as_deref()
+                    .map(|b| b.contains(&val))
+                    .unwrap_or(false)
+                {
                     next.basic_information = Some(match next.basic_information.take() {
                         Some(b) => format!("{b}；{val}"),
                         None => val,

@@ -23,22 +23,62 @@ use serde_json::json;
 
 const PLANNING_WRITE_PATTERNS: &[&str] = &[
     // 未来范围 / 重排
-    "规划未来", "规划接下来", "规划一下未来", "重新规划", "重排未来", "重排接下来",
-    "安排未来", "安排接下来",
+    "规划未来",
+    "规划接下来",
+    "规划一下未来",
+    "重新规划",
+    "重排未来",
+    "重排接下来",
+    "安排未来",
+    "安排接下来",
     // 完整 / 阶段蓝图
-    "制定完整", "完整学习计划", "完整计划", "阶段学习蓝图", "学习蓝图", "规划蓝图",
+    "制定完整",
+    "完整学习计划",
+    "完整计划",
+    "阶段学习蓝图",
+    "学习蓝图",
+    "规划蓝图",
     // 计划制定
-    "制定计划", "制定学习计划", "生成学习计划", "做个计划", "做一个计划", "做个规划",
-    "制定个计划", "生成个计划", "做个两周计划", "做个月计划",
+    "制定计划",
+    "制定学习计划",
+    "生成学习计划",
+    "做个计划",
+    "做一个计划",
+    "做个规划",
+    "制定个计划",
+    "生成个计划",
+    "做个两周计划",
+    "做个月计划",
     // 落库短语
-    "加入 higher", "加入higher", "排进 higher", "排进higher", "排入 higher", "排入higher",
-    "排个日程", "排一下日程", "排进日历", "排入日历", "调整计划", "修改计划",
-    "重新调整", "更新计划", "建立计划", "建立知识框架",
+    "加入 higher",
+    "加入higher",
+    "排进 higher",
+    "排进higher",
+    "排入 higher",
+    "排入higher",
+    "排个日程",
+    "排一下日程",
+    "排进日历",
+    "排入日历",
+    "调整计划",
+    "修改计划",
+    "重新调整",
+    "更新计划",
+    "建立计划",
+    "建立知识框架",
 ];
 const PLANNING_WRITE_HINTS: &[&str] = &["计划", "规划", "蓝图", "日程"];
-const PLANNING_WRITE_VERBS: &[&str] =
-    &["制定", "建立", "做个", "重排", "重新", "加入", "排"];
-const ADVICE_ONLY_HINTS: &[&str] = &["建议", "怎么复习", "怎么学", "怎么看", "如何复习", "如何学", "意见", "思路"];
+const PLANNING_WRITE_VERBS: &[&str] = &["制定", "建立", "做个", "重排", "重新", "加入", "排"];
+const ADVICE_ONLY_HINTS: &[&str] = &[
+    "建议",
+    "怎么复习",
+    "怎么学",
+    "怎么看",
+    "如何复习",
+    "如何学",
+    "意见",
+    "思路",
+];
 
 /// §12.2：明确 Planning Write Intent → true（进入 Pipeline）；
 /// 纯咨询（含"建议/怎么…"且无 写动词+计划词）→ false。
@@ -116,7 +156,10 @@ pub const WORKFLOW_STATE_CANCELLED: &str = "cancelled";
 pub fn workflow_active(state: &str) -> bool {
     matches!(
         state,
-        WORKFLOW_STATE_COLLECTING | WORKFLOW_STATE_CLARIFYING | WORKFLOW_STATE_DRAFTING | WORKFLOW_STATE_VALIDATING
+        WORKFLOW_STATE_COLLECTING
+            | WORKFLOW_STATE_CLARIFYING
+            | WORKFLOW_STATE_DRAFTING
+            | WORKFLOW_STATE_VALIDATING
     )
 }
 
@@ -181,10 +224,7 @@ pub fn format_clarification_reply(qs: &[PlannerQuestion]) -> String {
     if qs.is_empty() {
         return "信息已经足够，我会继续生成计划。".to_string();
     }
-    let lines: Vec<String> = qs
-        .iter()
-        .map(|q| format!("- {}", q.question))
-        .collect();
+    let lines: Vec<String> = qs.iter().map(|q| format!("- {}", q.question)).collect();
     format!(
         "在生成正式计划前，还需要确认 {} 项：\n{}\n\n请直接回复以上问题（可一次回答多项），我会继续生成计划。",
         qs.len(),
@@ -227,13 +267,24 @@ pub fn set_workflow_payload(
     payload: &PlanningWorkflowPayload,
 ) {
     let json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
-    set_workflow_state(conn, run_id, profile_id, conversation_id, state, Some(&json));
+    set_workflow_state(
+        conn,
+        run_id,
+        profile_id,
+        conversation_id,
+        state,
+        Some(&json),
+    );
 }
 
 /// 读该会话最近一条 planning workflow 的显式状态（§6.8 主源；无 → None）。
 /// DEV-0060 §11（PART G）：ai_runs.id 是 UUID 字符串，字典序≠时间序——
 /// 必须按真实时间 `created_at DESC, rowid DESC` 取最新。
-pub fn read_workflow_state(conn: &Connection, profile_id: i64, conversation_id: i64) -> Option<String> {
+pub fn read_workflow_state(
+    conn: &Connection,
+    profile_id: i64,
+    conversation_id: i64,
+) -> Option<String> {
     conn.query_row(
         "SELECT workflow_state FROM ai_runs
          WHERE profile_id=?1 AND conversation_id=?2 AND workflow_type='planning' AND workflow_state IS NOT NULL
@@ -271,9 +322,17 @@ pub fn read_workflow_payload(
 /// PART I：用户明确取消规划的关键词（不需要调用 AI）。
 pub fn is_workflow_exit_intent(m: &str) -> bool {
     let t = m.trim();
-    ["取消规划", "停止规划", "先不做这个计划了", "退出规划", "先不规划了", "不规划了", "取消计划"]
-        .iter()
-        .any(|p| t.contains(p))
+    [
+        "取消规划",
+        "停止规划",
+        "先不做这个计划了",
+        "退出规划",
+        "先不规划了",
+        "不规划了",
+        "取消计划",
+    ]
+    .iter()
+    .any(|p| t.contains(p))
 }
 
 /// §12 TYPE C / T12：当前消息明显不是继续回答旧 Planner，而是新请求
@@ -284,8 +343,21 @@ pub fn is_new_intent_message(m: &str) -> bool {
         return false;
     }
     let new_intent_cues = [
-        "帮我看看", "帮我看一下", "帮我查", "看一下", "查一下", "等于多少", "是多少",
-        "帮我算", "算一下", "算算", "什么是", "解释", "翻译", "你好", "谢谢",
+        "帮我看看",
+        "帮我看一下",
+        "帮我查",
+        "看一下",
+        "查一下",
+        "等于多少",
+        "是多少",
+        "帮我算",
+        "算一下",
+        "算算",
+        "什么是",
+        "解释",
+        "翻译",
+        "你好",
+        "谢谢",
     ];
     new_intent_cues.iter().any(|c| t.contains(c))
 }
@@ -301,7 +373,10 @@ pub enum PlanningContinuation {
     NewIntent,
 }
 
-pub fn planning_continuation_decision(user_message: &str, workflow_state: Option<&str>) -> PlanningContinuation {
+pub fn planning_continuation_decision(
+    user_message: &str,
+    workflow_state: Option<&str>,
+) -> PlanningContinuation {
     let active = workflow_state.map(workflow_active).unwrap_or(false);
     if !active {
         return PlanningContinuation::NewIntent; // 无 active workflow：不适用（调用方不会走到）
@@ -334,7 +409,11 @@ pub fn read_goal_state(conn: &Connection, profile_id: i64) -> GoalState {
     let brief = repo.get_final_brief(profile_id).unwrap_or_default();
     let conflicts = repo.detect_goal_conflicts(profile_id);
     let missing = brief.readiness_missing();
-    GoalState { brief, conflicts, missing }
+    GoalState {
+        brief,
+        conflicts,
+        missing,
+    }
 }
 
 // =============== DEV-0059.1 §1：Planning Truth Context（正式事实主源） ===============
@@ -355,25 +434,32 @@ pub struct PlanningTruthContext {
 /// 【Current Active Blueprint】【Trusted Learning Evidence】。
 pub fn build_planning_truth_context(conn: &Connection, profile_id: i64) -> PlanningTruthContext {
     // —— Confirmed PersonalProfile（§8 version rows）——
-    let profile_text = match crate::repository::personalization::PersonalizationRepository::new(conn)
-        .get_confirmed_profile(profile_id)
-        .ok()
-        .flatten()
-    {
-        Some(p) => {
-            let mut t = format!("（v{}，确认于 {}）\n", p.version, p.confirmed_at.as_deref().unwrap_or("—"));
-            if let Some(sj) = &p.structured_json {
-                // DEV-0059.2 §3：共享结构化摘要（字段优先级截断；不 raw 截 JSON，杜绝半截 JSON）
-                t.push_str("结构化摘要：");
-                t.push_str(&crate::ai::context_builder::personal_profile_structured_summary(sj, 1800));
-                t.push('\n');
+    let profile_text =
+        match crate::repository::personalization::PersonalizationRepository::new(conn)
+            .get_confirmed_profile(profile_id)
+            .ok()
+            .flatten()
+        {
+            Some(p) => {
+                let mut t = format!(
+                    "（v{}，确认于 {}）\n",
+                    p.version,
+                    p.confirmed_at.as_deref().unwrap_or("—")
+                );
+                if let Some(sj) = &p.structured_json {
+                    // DEV-0059.2 §3：共享结构化摘要（字段优先级截断；不 raw 截 JSON，杜绝半截 JSON）
+                    t.push_str("结构化摘要：");
+                    t.push_str(
+                        &crate::ai::context_builder::personal_profile_structured_summary(sj, 1800),
+                    );
+                    t.push('\n');
+                }
+                t.push_str("完整档案：");
+                t.push_str(&p.md_content.chars().take(2500).collect::<String>());
+                t
             }
-            t.push_str("完整档案：");
-            t.push_str(&p.md_content.chars().take(2500).collect::<String>());
-            t
-        }
-        None => "未配置（用户尚未形成 confirmed PersonalProfile）".to_string(),
-    };
+            None => "未配置（用户尚未形成 confirmed PersonalProfile）".to_string(),
+        };
 
     // —— Active GoalTargets（正式目标主源）——
     let targets = crate::repository::goal_target::GoalTargetRepository::new(conn)
@@ -382,14 +468,25 @@ pub fn build_planning_truth_context(conn: &Connection, profile_id: i64) -> Plann
     let has_active_goal_target = !targets.is_empty();
     let mut targets_text = String::new();
     for t in &targets {
-        let role = if t.role.is_empty() { String::new() } else { format!("[{}] ", t.role) };
+        let role = if t.role.is_empty() {
+            String::new()
+        } else {
+            format!("[{}] ", t.role)
+        };
         targets_text.push_str(&format!(
             "- {}{}（scenario={}）{}{}\n",
             role,
             t.title,
             t.scenario_type,
-            t.target_date.as_deref().map(|d| format!("，目标日期 {}", d)).unwrap_or_default(),
-            if t.status == "active" { " · active" } else { "" }
+            t.target_date
+                .as_deref()
+                .map(|d| format!("，目标日期 {}", d))
+                .unwrap_or_default(),
+            if t.status == "active" {
+                " · active"
+            } else {
+                ""
+            }
         ));
         // DEV-0059.2 §5：解析 data_json 的结构化摘要（考研字段必须直接进入 instruction，
         // 不允许只靠 title 猜）
@@ -423,8 +520,15 @@ pub fn build_planning_truth_context(conn: &Connection, profile_id: i64) -> Plann
         .collect();
     let mut sources_text = String::new();
     for s in &sources {
-        let chars = src_repo.joined_text(profile_id, s.id).unwrap_or_default().chars().count();
-        sources_text.push_str(&format!("- {}（{} · {} · {}字）\n", s.original_name, s.file_type, s.source_kind, chars));
+        let chars = src_repo
+            .joined_text(profile_id, s.id)
+            .unwrap_or_default()
+            .chars()
+            .count();
+        sources_text.push_str(&format!(
+            "- {}（{} · {} · {}字）\n",
+            s.original_name, s.file_type, s.source_kind, chars
+        ));
     }
     if sources_text.is_empty() {
         sources_text.push_str("未导入规划资料。\n");
@@ -469,16 +573,16 @@ pub fn build_planning_truth_context(conn: &Connection, profile_id: i64) -> Plann
 /// DEV-0077.4-A.1 §二十/G5：已有学习单元树文本（供 Planner 复用；1 条批量 SELECT）。
 /// 渲染 `路径 > 名（id=N）`，防环（visited 深度上限），上限 120 行 / 3000 字防 Context 膨胀。
 fn existing_learning_units_text(conn: &Connection, profile_id: i64) -> String {
-    let mut stmt = match conn.prepare(
-        "SELECT id, parent_id, name FROM learning_items WHERE profile_id=?1 ORDER BY id",
-    ) {
+    let mut stmt = match conn
+        .prepare("SELECT id, parent_id, name FROM learning_items WHERE profile_id=?1 ORDER BY id")
+    {
         Ok(s) => s,
         Err(_) => return "（暂不可读）".to_string(),
     };
-    let rows: Vec<(i64, Option<i64>, String)> = match stmt.query_map(
-        rusqlite::params![profile_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    ) {
+    let rows: Vec<(i64, Option<i64>, String)> = match stmt
+        .query_map(rusqlite::params![profile_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        }) {
         Ok(it) => it.filter_map(|x| x.ok()).collect(),
         Err(_) => return "（暂不可读）".to_string(),
     };
@@ -576,8 +680,10 @@ fn trusted_evidence_summary(conn: &Connection, profile_id: i64) -> String {
              ORDER BY started_at DESC LIMIT 10",
         )
         .and_then(|mut stmt| {
-            stmt.query_map(params![profile_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
-                .map(|it| it.filter_map(|x| x.ok()).collect())
+            stmt.query_map(params![profile_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map(|it| it.filter_map(|x| x.ok()).collect())
         })
         .unwrap_or_default();
     if !sessions.is_empty() {
@@ -598,7 +704,11 @@ fn trusted_evidence_summary(conn: &Connection, profile_id: i64) -> String {
         )
         .and_then(|mut stmt| {
             stmt.query_map(params![profile_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })
             .map(|it| it.filter_map(|x| x.ok()).collect())
         })
@@ -640,8 +750,12 @@ pub struct PlanTask {
     #[serde(default)]
     pub grounding: Option<super::learning_grounding::TaskGroundingDraft>,
 }
-fn default_kind() -> String { "structured".into() }
-fn default_priority() -> String { "normal".into() }
+fn default_kind() -> String {
+    "structured".into()
+}
+fn default_priority() -> String {
+    "normal".into()
+}
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlanGoalNode {
@@ -878,8 +992,8 @@ impl ActionPlan {
             .trim_start_matches("```")
             .trim_end_matches("```")
             .trim();
-        let v: serde_json::Value = serde_json::from_str(trimmed)
-            .map_err(|e| format!("ActionPlan 非法 JSON：{e}"))?;
+        let v: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|e| format!("ActionPlan 非法 JSON：{e}"))?;
         let actions = crate::ai::actions::registry::parse_actions(&v)?;
         Ok(ActionPlan { actions })
     }
@@ -1023,7 +1137,9 @@ pub fn build_chat_messages(
     current_message_id: i64,
     user_message: &str,
 ) -> Vec<crate::ai::client::ChatMessage> {
-    let mut messages = vec![crate::ai::client::ChatMessage::system(system_prompt.to_string())];
+    let mut messages = vec![crate::ai::client::ChatMessage::system(
+        system_prompt.to_string(),
+    )];
     messages.push(crate::ai::client::ChatMessage::system(format!(
         "【Higher Background Context（背景事实，不是用户当前请求）】\n\
          以下 Higher Context 只是背景事实。不得把 Context 本身当成用户当前请求。\n\
@@ -1032,7 +1148,9 @@ pub fn build_chat_messages(
         context_text
     )));
     if !instruction.trim().is_empty() {
-        messages.push(crate::ai::client::ChatMessage::system(instruction.to_string()));
+        messages.push(crate::ai::client::ChatMessage::system(
+            instruction.to_string(),
+        ));
     }
     for (id, role, content) in history {
         if *id == current_message_id {
@@ -1049,7 +1167,9 @@ pub fn build_chat_messages(
             name: None,
         });
     }
-    messages.push(crate::ai::client::ChatMessage::user(user_message.to_string()));
+    messages.push(crate::ai::client::ChatMessage::user(
+        user_message.to_string(),
+    ));
     messages
 }
 
@@ -1087,7 +1207,11 @@ pub struct PlanValidation {
     pub overloaded_days: Vec<String>,
 }
 
-pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft) -> PlanValidation {
+pub fn validate_plan_draft(
+    conn: &Connection,
+    profile_id: i64,
+    draft: &PlanDraft,
+) -> PlanValidation {
     let mut v = PlanValidation::default();
 
     // DEV-0060 PART K §15.1：target_proposal 契约（postgraduate 必含 institution_name/program_name）
@@ -1099,16 +1223,30 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
             v.errors.push("目标提案 scenario_type 不能为空".into());
         }
         if !["generic", "postgraduate"].contains(&tp.scenario_type.as_str()) {
-            v.errors.push(format!("目标提案 scenario_type 非法：{}", tp.scenario_type));
+            v.errors
+                .push(format!("目标提案 scenario_type 非法：{}", tp.scenario_type));
         }
         if tp.scenario_type == "postgraduate" {
-            let inst = tp.data_json.get("institution_name").and_then(|x| x.as_str()).unwrap_or("").trim();
-            let prog = tp.data_json.get("program_name").and_then(|x| x.as_str()).unwrap_or("").trim();
+            let inst = tp
+                .data_json
+                .get("institution_name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim();
+            let prog = tp
+                .data_json
+                .get("program_name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim();
             if inst.is_empty() || prog.is_empty() {
-                v.errors.push("考研目标提案必须包含 institution_name（院校）与 program_name（专业）".into());
+                v.errors.push(
+                    "考研目标提案必须包含 institution_name（院校）与 program_name（专业）".into(),
+                );
             }
             if !tp.role.is_empty() && !["reach", "safety"].contains(&tp.role.as_str()) {
-                v.errors.push(format!("考研目标提案 role 非法：{}", tp.role));
+                v.errors
+                    .push(format!("考研目标提案 role 非法：{}", tp.role));
             }
         }
     }
@@ -1120,7 +1258,8 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
         }
         // DEV-0059.2 §7：场景只允许合法非空字符串（compile 前 resolve 已继承；直接构造时兜底）
         if bp.scenario_type.trim().is_empty() {
-            v.errors.push("蓝图 scenario_type 不能为空（未继承到正式场景）".into());
+            v.errors
+                .push("蓝图 scenario_type 不能为空（未继承到正式场景）".into());
         }
         if bp.review_interval_days < 1 {
             v.errors.push("复盘间隔必须 ≥1 天".into());
@@ -1128,13 +1267,20 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
         // DEV-0059.2 §8：source_review 契约——decision 合法值；modify 必须 reason 非空
         for sr in &bp.source_review {
             if !["keep", "modify", "conflict", "missing"].contains(&sr.decision.as_str()) {
-                v.errors.push(format!("资料审查 decision 非法：{}", sr.decision));
+                v.errors
+                    .push(format!("资料审查 decision 非法：{}", sr.decision));
             }
             if sr.decision == "modify" && sr.reason.trim().is_empty() {
-                v.errors.push(format!("资料「{}」标记修改但缺少理由（reason）", sr.source_name));
+                v.errors.push(format!(
+                    "资料「{}」标记修改但缺少理由（reason）",
+                    sr.source_name
+                ));
             }
             if sr.decision == "modify" && sr.suggested.trim().is_empty() {
-                v.errors.push(format!("资料「{}」标记修改但缺少建议内容（suggested）", sr.source_name));
+                v.errors.push(format!(
+                    "资料「{}」标记修改但缺少建议内容（suggested）",
+                    sr.source_name
+                ));
             }
         }
         // phases
@@ -1148,12 +1294,14 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
             }
             if let Some(s) = &p.start_date {
                 if !valid_date(s) {
-                    v.errors.push(format!("阶段「{}」开始日期非法：{}", p.title, s));
+                    v.errors
+                        .push(format!("阶段「{}」开始日期非法：{}", p.title, s));
                 }
             }
             if let Some(e) = &p.end_date {
                 if !valid_date(e) {
-                    v.errors.push(format!("阶段「{}」结束日期非法：{}", p.title, e));
+                    v.errors
+                        .push(format!("阶段「{}」结束日期非法：{}", p.title, e));
                 }
             }
             if p.start_date.is_some() && p.end_date.is_some() {
@@ -1169,8 +1317,14 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
             if m.title.trim().is_empty() {
                 v.errors.push("存在空标题里程碑".into());
             }
-            if !matches!(m.date_precision.as_str(), "day" | "range" | "month" | "unknown") {
-                v.errors.push(format!("里程碑「{}」date_precision 非法：{}", m.title, m.date_precision));
+            if !matches!(
+                m.date_precision.as_str(),
+                "day" | "range" | "month" | "unknown"
+            ) {
+                v.errors.push(format!(
+                    "里程碑「{}」date_precision 非法：{}",
+                    m.title, m.date_precision
+                ));
             }
             if let Some(s) = &m.start_date {
                 // month 精度允许 "YYYY-MM"（§29：不伪装成某一天）；其余要求完整日期
@@ -1180,7 +1334,8 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
                     valid_date(s)
                 };
                 if !ok {
-                    v.errors.push(format!("里程碑「{}」开始日期非法：{}", m.title, s));
+                    v.errors
+                        .push(format!("里程碑「{}」开始日期非法：{}", m.title, s));
                 }
             }
         }
@@ -1190,19 +1345,29 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
                 v.errors.push("存在空标题计划任务".into());
             }
             if is_placeholder_name(&t.title) {
-                v.errors.push(format!("计划任务标题是占位词：「{}」", t.title));
+                v.errors
+                    .push(format!("计划任务标题是占位词：「{}」", t.title));
             }
             if !valid_date(&t.planned_date) {
-                v.errors.push(format!("计划任务「{}」日期非法：{}", t.title, t.planned_date));
+                v.errors.push(format!(
+                    "计划任务「{}」日期非法：{}",
+                    t.title, t.planned_date
+                ));
             }
             if let Some(m) = t.estimated_minutes {
                 if !(1..=1440).contains(&m) {
-                    v.errors.push(format!("计划任务「{}」预计分钟非法：{m}", t.title));
+                    v.errors
+                        .push(format!("计划任务「{}」预计分钟非法：{m}", t.title));
                 }
             }
         }
         {
-            let mut dates: Vec<&str> = bp.future_tasks.iter().map(|t| t.planned_date.as_str()).filter(|d| valid_date(d)).collect();
+            let mut dates: Vec<&str> = bp
+                .future_tasks
+                .iter()
+                .map(|t| t.planned_date.as_str())
+                .filter(|d| valid_date(d))
+                .collect();
             dates.sort_unstable();
             if let (Some(first), Some(last)) = (dates.first().copied(), dates.last().copied()) {
                 if let Some(span) = date_span_days(first, last) {
@@ -1240,10 +1405,14 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
     for y in &draft.year_goals {
         let (s, e) = parse_range(&y.period);
         if s.is_none() || e.is_none() {
-            v.errors.push(format!("年度目标「{}」period 非法：{}", y.name, y.period));
+            v.errors
+                .push(format!("年度目标「{}」period 非法：{}", y.name, y.period));
         }
         if !y.operation_ref.is_empty() {
-            refs.insert(y.operation_ref.clone(), ("year".into(), y.period.clone(), y.name.clone()));
+            refs.insert(
+                y.operation_ref.clone(),
+                ("year".into(), y.period.clone(), y.name.clone()),
+            );
         }
     }
     // month 必须落在 parent year 内
@@ -1262,10 +1431,15 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
                     _ => v.errors.push(format!("月目标「{}」period 非法", m.name)),
                 }
             }
-            _ => v.errors.push(format!("月目标「{}」的 parent_ref 无效或不是 year", m.name)),
+            _ => v
+                .errors
+                .push(format!("月目标「{}」的 parent_ref 无效或不是 year", m.name)),
         }
         if !m.operation_ref.is_empty() {
-            refs.insert(m.operation_ref.clone(), ("month".into(), m.period.clone(), m.name.clone()));
+            refs.insert(
+                m.operation_ref.clone(),
+                ("month".into(), m.period.clone(), m.name.clone()),
+            );
         }
     }
     // day 属于 month；rest day 无 task
@@ -1276,39 +1450,58 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
                     v.errors.push(format!("日目标「{}」不属于其父月", d.name));
                 }
             }
-            _ => v.errors.push(format!("日目标「{}」的 parent_ref 无效或不是 month", d.name)),
+            _ => v.errors.push(format!(
+                "日目标「{}」的 parent_ref 无效或不是 month",
+                d.name
+            )),
         }
         if !d.operation_ref.is_empty() {
-            refs.insert(d.operation_ref.clone(), ("day".into(), d.period.clone(), d.name.clone()));
+            refs.insert(
+                d.operation_ref.clone(),
+                ("day".into(), d.period.clone(), d.name.clone()),
+            );
         }
         if d.rest_day {
             for t in &draft.tasks {
                 if t.date == d.period {
-                    v.errors.push(format!("休息日 {} 不应安排任务「{}」", d.period, t.title));
+                    v.errors
+                        .push(format!("休息日 {} 不应安排任务「{}」", d.period, t.title));
                 }
             }
         }
     }
     // Task 校验（§56）
-    let krefs: std::collections::HashSet<String> =
-        draft.knowledge_nodes.iter().map(|k| k.operation_ref.clone()).collect();
+    let krefs: std::collections::HashSet<String> = draft
+        .knowledge_nodes
+        .iter()
+        .map(|k| k.operation_ref.clone())
+        .collect();
     for t in &draft.tasks {
         if t.title.trim().is_empty() {
             v.errors.push("存在空标题任务".into());
         }
         if !valid_date(&t.date) {
-            v.errors.push(format!("任务「{}」日期非法：{}", t.title, t.date));
+            v.errors
+                .push(format!("任务「{}」日期非法：{}", t.title, t.date));
         }
         if let Some(m) = t.estimated_minutes {
             if !(1..=1440).contains(&m) {
-                v.errors.push(format!("任务「{}」预计分钟非法：{m}", t.title));
+                v.errors
+                    .push(format!("任务「{}」预计分钟非法：{m}", t.title));
             }
         }
         if !t.goal_ref.is_empty() && !refs.contains_key(&t.goal_ref) {
-            v.errors.push(format!("任务「{}」goal_ref 无效：{}", t.title, t.goal_ref));
+            v.errors
+                .push(format!("任务「{}」goal_ref 无效：{}", t.title, t.goal_ref));
         }
-        if t.task_kind == "structured" && !t.knowledge_ref.is_empty() && !krefs.contains(&t.knowledge_ref) {
-            v.errors.push(format!("任务「{}」knowledge_ref 无效：{}", t.title, t.knowledge_ref));
+        if t.task_kind == "structured"
+            && !t.knowledge_ref.is_empty()
+            && !krefs.contains(&t.knowledge_ref)
+        {
+            v.errors.push(format!(
+                "任务「{}」knowledge_ref 无效：{}",
+                t.title, t.knowledge_ref
+            ));
         }
         if is_placeholder_name(&t.title) {
             v.errors.push(format!("任务标题是占位词：「{}」", t.title));
@@ -1337,11 +1530,14 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
             .map(|it| it.filter_map(|x| x.ok()).collect())
             .unwrap_or_default();
         for t in &draft.tasks {
-            let dup = existing
-                .iter()
-                .any(|(d, title)| d.as_deref() == Some(t.date.as_str()) && title.trim() == t.title.trim());
+            let dup = existing.iter().any(|(d, title)| {
+                d.as_deref() == Some(t.date.as_str()) && title.trim() == t.title.trim()
+            });
             if dup {
-                v.errors.push(format!("已存在同日同名正式任务，勿重复生成：{} {}", t.date, t.title));
+                v.errors.push(format!(
+                    "已存在同日同名正式任务，勿重复生成：{} {}",
+                    t.date, t.title
+                ));
             }
         }
     }
@@ -1366,7 +1562,12 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
         }
     }
     let mut seen_g = std::collections::HashSet::new();
-    for g in draft.year_goals.iter().chain(&draft.month_goals).chain(&draft.day_goals) {
+    for g in draft
+        .year_goals
+        .iter()
+        .chain(&draft.month_goals)
+        .chain(&draft.day_goals)
+    {
         if !seen_g.insert((g.period.clone(), g.name.trim().to_string())) {
             v.errors.push(format!("重复目标：{} {}", g.period, g.name));
         }
@@ -1374,7 +1575,8 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
     // knowledge 粒度 / 防碎片（§56 + PART 14 禁清单）：节点名不得为单词/单题形态（英文单词≤2词且短 / 含"第X题"）
     for k in &draft.knowledge_nodes {
         if k.name.contains("第") && k.name.contains("题") {
-            v.errors.push(format!("知识节点「{}」粒度过细（单题）", k.name));
+            v.errors
+                .push(format!("知识节点「{}」粒度过细（单题）", k.name));
         }
         if is_placeholder_name(&k.name) {
             v.errors.push(format!("知识节点名是占位词：「{}」", k.name));
@@ -1412,7 +1614,8 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
                     "learning_units 与 knowledge_nodes 禁止混用（knowledge_nodes 已废弃，请全部改用 learning_units）".into(),
                 );
             }
-            v.errors.extend(lg::validate_unit_graph(&draft.learning_units));
+            v.errors
+                .extend(lg::validate_unit_graph(&draft.learning_units));
             let mut pairs: Vec<(String, Option<&lg::TaskGroundingDraft>)> = draft
                 .tasks
                 .iter()
@@ -1423,7 +1626,8 @@ pub fn validate_plan_draft(conn: &Connection, profile_id: i64, draft: &PlanDraft
                     pairs.push((t.title.clone(), t.grounding.as_ref()));
                 }
             }
-            v.errors.extend(lg::validate_task_groundings(&pairs, &draft.learning_units));
+            v.errors
+                .extend(lg::validate_task_groundings(&pairs, &draft.learning_units));
             for t in &draft.tasks {
                 if !t.knowledge_ref.is_empty() {
                     v.errors.push(format!(
@@ -1556,7 +1760,9 @@ pub fn validate_production_grounding_contract(
     errs.extend(lg::validate_task_groundings(&pairs, &draft.learning_units));
     // §六二 ProductionGroundingCompletion：invalid=0 且 learning==grounded
     let c = lg::grounding_completeness(&pairs.iter().map(|p| p.1).collect::<Vec<_>>());
-    if c.invalid_unlinked_learning_task_count > 0 || c.learning_task_count != c.grounded_learning_task_count {
+    if c.invalid_unlinked_learning_task_count > 0
+        || c.learning_task_count != c.grounded_learning_task_count
+    {
         errs.push(format!(
             "planning_grounding_required: Grounding Rate {:.0}%（{}/{} 学习任务已关联），\
              Production 要求 100%；每个任务必须 grounding.mode=learning(unit_refs 恰1) 或 meta(unit_refs 空)",
@@ -1611,11 +1817,8 @@ pub fn compile_production_plan(
         }
     };
     // §六二 最终完成度（resolve 后再核一次，含复用/新建绑定）
-    let mut pairs: Vec<Option<&lg::TaskGroundingDraft>> = draft
-        .tasks
-        .iter()
-        .map(|t| t.grounding.as_ref())
-        .collect();
+    let mut pairs: Vec<Option<&lg::TaskGroundingDraft>> =
+        draft.tasks.iter().map(|t| t.grounding.as_ref()).collect();
     if let Some(bp) = &draft.blueprint {
         for t in &bp.future_tasks {
             pairs.push(t.grounding.as_ref());
@@ -1623,7 +1826,11 @@ pub fn compile_production_plan(
     }
     let completeness = lg::grounding_completeness(&pairs);
     let total_tasks = draft.tasks.len()
-        + draft.blueprint.as_ref().map(|b| b.future_tasks.len()).unwrap_or(0);
+        + draft
+            .blueprint
+            .as_ref()
+            .map(|b| b.future_tasks.len())
+            .unwrap_or(0);
     if completeness.invalid_unlinked_learning_task_count > 0
         || completeness.learning_task_count != completeness.grounded_learning_task_count
     {
@@ -1649,7 +1856,8 @@ pub fn compile_production_plan(
             completeness.meta_task_count
         ),
     };
-    let ops = compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, Some(&resolution));
+    let ops =
+        compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, Some(&resolution));
     println!(
         "[AI-PLANNING] PRODUCTION_COMPILE_GROUNDED ops={} units(new={},reuse={}) tasks={}",
         ops.len(),
@@ -1685,7 +1893,10 @@ pub fn compile_to_changeset_ops_grounded(
         || draft.tasks.iter().any(|t| t.grounding.is_some())
         || bp_grounded;
     if !grounded {
-        return Ok((compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, None), None));
+        return Ok((
+            compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, None),
+            None,
+        ));
     }
     // §六一 defense in depth：validate 已拦，这里再拦一次（resolver 前置条件）
     let mut errs = lg::validate_unit_graph(&draft.learning_units);
@@ -1726,7 +1937,8 @@ pub fn compile_to_changeset_ops_grounded(
             completeness.meta_task_count
         ),
     };
-    let ops = compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, Some(&resolution));
+    let ops =
+        compile_to_changeset_ops_inner(final_id, has_active_goal_target, draft, Some(&resolution));
     Ok((ops, Some(report)))
 }
 
@@ -1743,7 +1955,11 @@ fn compile_to_changeset_ops_inner(
     // 禁止 AI 直接调用 Repository 写 GoalTarget；未批准 0 落库。
     if !has_active_goal_target {
         if let Some(tp) = &draft.target_proposal {
-            let scenario = if tp.scenario_type.trim().is_empty() { "generic" } else { tp.scenario_type.trim() };
+            let scenario = if tp.scenario_type.trim().is_empty() {
+                "generic"
+            } else {
+                tp.scenario_type.trim()
+            };
             let role = match (scenario, tp.role.trim()) {
                 ("postgraduate", "") => "reach",
                 ("postgraduate", r) => r,
@@ -1816,7 +2032,11 @@ fn compile_to_changeset_ops_inner(
                     c.original,
                     c.suggested,
                     c.reason,
-                    if c.evidence.is_empty() { String::new() } else { format!("（依据：{}）", c.evidence) }
+                    if c.evidence.is_empty() {
+                        String::new()
+                    } else {
+                        format!("（依据：{}）", c.evidence)
+                    }
                 ));
             }
         }
@@ -1828,11 +2048,27 @@ fn compile_to_changeset_ops_inner(
                     "- 《{}》[{}]{}{}\n",
                     sr.source_name,
                     sr.decision,
-                    if sr.original.is_empty() { String::new() } else { format!("原：{}", sr.original) },
-                    if sr.suggested.is_empty() { String::new() } else { format!(" 建议：{}", sr.suggested) },
+                    if sr.original.is_empty() {
+                        String::new()
+                    } else {
+                        format!("原：{}", sr.original)
+                    },
+                    if sr.suggested.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" 建议：{}", sr.suggested)
+                    },
                 ));
                 if !sr.reason.is_empty() {
-                    md.push_str(&format!("  理由：{}{}\n", sr.reason, if sr.evidence.is_empty() { String::new() } else { format!("（依据：{}）", sr.evidence) }));
+                    md.push_str(&format!(
+                        "  理由：{}{}\n",
+                        sr.reason,
+                        if sr.evidence.is_empty() {
+                            String::new()
+                        } else {
+                            format!("（依据：{}）", sr.evidence)
+                        }
+                    ));
                 }
             }
         }
@@ -1855,9 +2091,18 @@ fn compile_to_changeset_ops_inner(
         structured.insert("milestones".to_string(), serde_json::json!(bp.milestones));
         structured.insert("assumptions".to_string(), serde_json::json!(bp.assumptions));
         structured.insert("unresolved".to_string(), serde_json::json!(bp.unresolved));
-        structured.insert("external_facts".to_string(), serde_json::json!(bp.external_facts));
-        structured.insert("suggested_target_changes".to_string(), serde_json::json!(bp.suggested_target_changes));
-        structured.insert("source_review".to_string(), serde_json::json!(bp.source_review));
+        structured.insert(
+            "external_facts".to_string(),
+            serde_json::json!(bp.external_facts),
+        );
+        structured.insert(
+            "suggested_target_changes".to_string(),
+            serde_json::json!(bp.suggested_target_changes),
+        );
+        structured.insert(
+            "source_review".to_string(),
+            serde_json::json!(bp.source_review),
+        );
         ops.push(ProposedOp {
             entity_type: "planning_blueprint".into(),
             entity_id: None,
@@ -1898,7 +2143,11 @@ fn compile_to_changeset_ops_inner(
                     "sort_order": if p.sort_order == 0 { i as i64 } else { p.sort_order },
                 }),
                 reason: "蓝图阶段".into(),
-                operation_ref: Some(if p.phase_key.is_empty() { format!("PH{i}") } else { format!("PH{}", p.phase_key) }),
+                operation_ref: Some(if p.phase_key.is_empty() {
+                    format!("PH{i}")
+                } else {
+                    format!("PH{}", p.phase_key)
+                }),
             });
         }
         // milestones（引用 BP1）
@@ -2014,9 +2263,13 @@ fn compile_to_changeset_ops_inner(
     for y in &draft.year_goals {
         let mut after = json!({ "goal_level": "year", "name": y.name, "period": y.period });
         match final_id {
-            Some(fid) => { after["parent_goal_id"] = json!(fid); }
+            Some(fid) => {
+                after["parent_goal_id"] = json!(fid);
+            }
             // 无 final 根：同包前序 F0 create（apply 期 resolve_refs → parent_real_id）
-            None => { after["parent_ref"] = json!("F0"); }
+            None => {
+                after["parent_ref"] = json!("F0");
+            }
         }
         ops.push(ProposedOp {
             entity_type: "goal".into(),
@@ -2024,7 +2277,11 @@ fn compile_to_changeset_ops_inner(
             action: "create".into(),
             after,
             reason: "年度目标".into(),
-            operation_ref: Some(if y.operation_ref.is_empty() { "G_".into() } else { y.operation_ref.clone() }),
+            operation_ref: Some(if y.operation_ref.is_empty() {
+                "G_".into()
+            } else {
+                y.operation_ref.clone()
+            }),
         });
     }
     for m in &draft.month_goals {
@@ -2035,7 +2292,11 @@ fn compile_to_changeset_ops_inner(
             after: json!({ "goal_level": "month", "name": m.name, "period": m.period,
                            "parent_ref": m.parent_ref }),
             reason: "月目标".into(),
-            operation_ref: Some(if m.operation_ref.is_empty() { "GM_".into() } else { m.operation_ref.clone() }),
+            operation_ref: Some(if m.operation_ref.is_empty() {
+                "GM_".into()
+            } else {
+                m.operation_ref.clone()
+            }),
         });
     }
     // DEV-0077.4-A.1 §二九：知识 create（Grounded 来自 Resolution——复用项不发 op，
@@ -2087,7 +2348,11 @@ fn compile_to_changeset_ops_inner(
                     action: "create".into(),
                     after,
                     reason: "知识结构".into(),
-                    operation_ref: Some(if k.operation_ref.is_empty() { "K_".into() } else { k.operation_ref.clone() }),
+                    operation_ref: Some(if k.operation_ref.is_empty() {
+                        "K_".into()
+                    } else {
+                        k.operation_ref.clone()
+                    }),
                 }
             })
             .collect()
@@ -2195,7 +2460,11 @@ pub fn grounding_repair_prompt(draft: &PlanDraft, errors: &[String]) -> String {
          4. 其余内容原样保留。\n\n\
          严格只返回完整修复后的 PlanDraft JSON（同一 schema，不要解释文字）。",
         errors.join("\n"),
-        if units.is_empty() { "（空）".to_string() } else { units.join("\n") },
+        if units.is_empty() {
+            "（空）".to_string()
+        } else {
+            units.join("\n")
+        },
         task_lines.join("\n")
     )
 }
@@ -2205,7 +2474,10 @@ fn t_title(t: &impl TaskTitleLike) -> String {
 }
 
 /// Repair prompt 的任务行渲染（PlanTask / BlueprintTaskDraft 共用）。
-fn render_task_grounding_line(title: &str, g: Option<&super::learning_grounding::TaskGroundingDraft>) -> String {
+fn render_task_grounding_line(
+    title: &str,
+    g: Option<&super::learning_grounding::TaskGroundingDraft>,
+) -> String {
     let g = match g {
         Some(g) => format!("mode={} unit_refs={:?}", g.mode.as_str(), g.unit_refs),
         None => "（无 grounding）".to_string(),
@@ -2248,9 +2520,18 @@ pub fn is_replacement_intent(text: &str) -> bool {
         return false;
     }
     // 替换类动词（「重新生成/重新规划」本身蕴含以新代旧的执行语义）
-    let has_verb = ["替换", "取代", "代替", "覆盖", "重新生成", "重新规划", "作废", "清空"]
-        .iter()
-        .any(|v| t.contains(v));
+    let has_verb = [
+        "替换",
+        "取代",
+        "代替",
+        "覆盖",
+        "重新生成",
+        "重新规划",
+        "作废",
+        "清空",
+    ]
+    .iter()
+    .any(|v| t.contains(v));
     if !has_verb {
         return false;
     }
@@ -2290,7 +2571,13 @@ pub fn select_replaceable_future_tasks(
     };
     stmt.query_map(
         rusqlite::params![profile_id, window_start, window_end],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?)),
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+            ))
+        },
     )
     .map(|rows| rows.filter_map(|x| x.ok()).collect())
     .unwrap_or_default()
@@ -2332,7 +2619,11 @@ pub fn future_tasks_truth_block(conn: &Connection, profile_id: i64, today: &str)
     ) {
         Ok(mut s) => s
             .query_map(rusqlite::params![profile_id, ws, we], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })
             .map(|rows| rows.filter_map(|x| x.ok()).collect())
             .unwrap_or_default(),
@@ -2370,7 +2661,6 @@ pub fn log_continuation_event(event: &str) {
     println!("[AI-CONTINUATION] {event}");
 }
 
-
 pub fn ops_within_limit(ops: &[ProposedOp]) -> bool {
     ops.len() <= MAX_PLAN_OPS
 }
@@ -2378,7 +2668,11 @@ pub fn ops_within_limit(ops: &[ProposedOp]) -> bool {
 /// DEV-0077.2 F1 §六 · Apply 后 ReadBack 实际创建清单（自 DB 读取，零编造）。
 /// 返回「- Final Goal：…\n- REACH：…\n…」多行文本，供 Assistant Final Response；
 /// 各行只在真实存在时输出（REACH/SAFETY 缺行即如实缺行，不伪造）。
-pub fn planning_apply_readback_summary(conn: &rusqlite::Connection, profile_id: i64, today: &str) -> String {
+pub fn planning_apply_readback_summary(
+    conn: &rusqlite::Connection,
+    profile_id: i64,
+    today: &str,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
     // Final Goal（active final 根）
     let final_name: Option<String> = conn
@@ -2522,7 +2816,10 @@ pub fn validate_planning_completeness(
     {
         notes.push("规划蓝图（Blueprint）缺失".to_string());
     }
-    if !ops.iter().any(|o| o.entity_type == "planning_phase" && o.action == "create") {
+    if !ops
+        .iter()
+        .any(|o| o.entity_type == "planning_phase" && o.action == "create")
+    {
         notes.push("规划阶段（Phase）缺失".to_string());
     }
     if !ops
@@ -2535,15 +2832,16 @@ pub fn validate_planning_completeness(
     // REACH / SAFETY：goal_targets 既有事实（目标对话产物；planner 不补写）
     let (has_reach, has_safety) = {
         let roles: Vec<String> = conn
-            .prepare(
-                "SELECT role FROM goal_targets WHERE profile_id=?1 AND status='active'",
-            )
+            .prepare("SELECT role FROM goal_targets WHERE profile_id=?1 AND status='active'")
             .and_then(|mut stmt| {
                 stmt.query_map(rusqlite::params![profile_id], |r| r.get::<_, String>(0))
                     .map(|it| it.filter_map(|x| x.ok()).collect())
             })
             .unwrap_or_default();
-        (roles.iter().any(|r| r == "reach"), roles.iter().any(|r| r == "safety"))
+        (
+            roles.iter().any(|r| r == "reach"),
+            roles.iter().any(|r| r == "safety"),
+        )
     };
     if !has_reach {
         notes.push("REACH 主目标尚未设置（建议先在目标对话中确认）".to_string());
@@ -2562,7 +2860,10 @@ pub fn validate_planning_completeness(
         notes.push("近期执行任务（未来 7 天）为 0".to_string());
     }
 
-    PlanningCompleteness { missing_tasks, notes }
+    PlanningCompleteness {
+        missing_tasks,
+        notes,
+    }
 }
 
 /// DEV-0059.2 §7：Blueprint scenario_type 解析（compile 前必须调用）。
@@ -2642,26 +2943,40 @@ pub fn apply_review_assessment(
         .filter(|s| !s.is_empty())
         .unwrap_or("normal")
         .to_string();
-    let recommendation = parsed.get("recommendation").cloned().unwrap_or(serde_json::Value::Null);
-    let recommendation_json = serde_json::to_string(&recommendation).unwrap_or_else(|_| "{}".into());
+    let recommendation = parsed
+        .get("recommendation")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let recommendation_json =
+        serde_json::to_string(&recommendation).unwrap_or_else(|_| "{}".into());
     let rrepo = PlanningReviewRepository::new(conn);
     let rev = rrepo
         .get(review_id, profile_id)?
         .ok_or("复盘记录不存在或不属于当前档案")?;
     if rev.status != "running" {
-        return Err(format!("复盘当前状态为 {}，请先准备后再启动 AI 评估", rev.status));
+        return Err(format!(
+            "复盘当前状态为 {}，请先准备后再启动 AI 评估",
+            rev.status
+        ));
     }
     match decision.as_str() {
         "NO_CHANGE" => {
             rrepo.complete_no_change_with(
-                review_id, profile_id, rev.blueprint_id, &assessment_md, &risk_state,
+                review_id,
+                profile_id,
+                rev.blueprint_id,
+                &assessment_md,
+                &risk_state,
             )?;
             Ok("completed".to_string())
         }
         "ADJUSTMENT_PROPOSAL" => {
-            let bp_val = parsed.get("blueprint").cloned().unwrap_or(serde_json::Value::Null);
-            let mut bp: BlueprintDraft =
-                serde_json::from_value(bp_val).map_err(|e| format!("AI 蓝图输出无法解析：{}", e))?;
+            let bp_val = parsed
+                .get("blueprint")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let mut bp: BlueprintDraft = serde_json::from_value(bp_val)
+                .map_err(|e| format!("AI 蓝图输出无法解析：{}", e))?;
             // DEV-0059.2 §7：Review 调整继承当前 active Blueprint 场景（不让模型随意改场景）
             bp.scenario_type = resolve_blueprint_scenario(conn, profile_id, &bp, true);
             // DEV-0077.4-A.1 F1 §四：Review 蓝图的 future_tasks 同受 Production
@@ -2728,7 +3043,10 @@ pub fn apply_review_assessment(
         }
         other => {
             let _ = rrepo.set_status(review_id, profile_id, "failed");
-            Err(format!("AI 输出无法识别（decision={}），正式数据未变化", other))
+            Err(format!(
+                "AI 输出无法识别（decision={}），正式数据未变化",
+                other
+            ))
         }
     }
 }
@@ -2763,7 +3081,9 @@ pub fn time_of_day_distribution(conn: &Connection, profile_id: i64) -> Vec<(Stri
     };
     for row in rows.filter_map(|x| x.ok()) {
         let (started, dur) = row;
-        let Some(start_secs) = sqlite_dt_to_epoch(&started) else { continue };
+        let Some(start_secs) = sqlite_dt_to_epoch(&started) else {
+            continue;
+        };
         // UTC → UTC+8 学习时段（§68 同一语义）
         let start_secs = start_secs + 8 * 3600;
         let end_secs = start_secs + dur;
@@ -2789,7 +3109,11 @@ pub fn time_of_day_distribution(conn: &Connection, profile_id: i64) -> Vec<(Stri
             day += 1;
         }
     }
-    BUCKETS.iter().zip(total).map(|((n, _, _), s)| (n.to_string(), s)).collect()
+    BUCKETS
+        .iter()
+        .zip(total)
+        .map(|((n, _, _), s)| (n.to_string(), s))
+        .collect()
 }
 
 /// SQLite "YYYY-MM-DD HH:MM:SS"（UTC）→ epoch 秒（civil-from-days 逆；无外部依赖）。
@@ -2802,7 +3126,11 @@ pub fn sqlite_dt_to_epoch(s: &str) -> Option<i64> {
         return None;
     }
     let (y, mo, d) = (p[0], p[1], p[2]);
-    let (h, mi, se) = if p.len() >= 6 { (p[3], p[4], p[5]) } else { (0, 0, 0) };
+    let (h, mi, se) = if p.len() >= 6 {
+        (p[3], p[4], p[5])
+    } else {
+        (0, 0, 0)
+    };
     let y_adj = if mo <= 2 { y - 1 } else { y };
     let era = if y_adj >= 0 { y_adj } else { y_adj - 399 } / 400;
     let yoe = y_adj - era * 400;

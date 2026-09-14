@@ -54,7 +54,10 @@ fn t01_dynamic_window_remains() {
 fn t02_decorations_off() {
     // DEV-MOBILE-001 §40-42：builder 链迁移至 src/platform/window.rs（Windows 语义不变）
     let win = read_src("src/platform/window.rs");
-    let chain = win.split("WebviewWindowBuilder::new").nth(1).unwrap_or_default();
+    let chain = win
+        .split("WebviewWindowBuilder::new")
+        .nth(1)
+        .unwrap_or_default();
     let chain = chain.split("builder.build()").next().unwrap_or_default();
     assert!(
         chain.contains(".decorations(false)"),
@@ -66,9 +69,16 @@ fn t02_decorations_off() {
 fn t03_no_transparent_os_window() {
     // DEV-MOBILE-001 §40-42：builder 链迁移至 src/platform/window.rs（Windows 语义不变）
     let win = read_src("src/platform/window.rs");
-    let chain = win.split("WebviewWindowBuilder::new").nth(1).unwrap_or_default();
+    let chain = win
+        .split("WebviewWindowBuilder::new")
+        .nth(1)
+        .unwrap_or_default();
     let chain = chain.split("builder.build()").next().unwrap_or_default();
-    for forbidden in [".transparent(true)", ".fullscreen(true)", ".always_on_top(true)"] {
+    for forbidden in [
+        ".transparent(true)",
+        ".fullscreen(true)",
+        ".always_on_top(true)",
+    ] {
         assert!(
             !chain.contains(forbidden),
             "T03: main builder 禁止 {forbidden}"
@@ -89,7 +99,10 @@ fn t04_exact_window_permissions() {
     }
     // 不越权（§4：无 shell/process/文件系统宽写/全局快捷键）
     for overreach in ["shell:", "process:", "fs:", "global-shortcut"] {
-        assert!(!cap.contains(overreach), "T04: 不得新增越权权限 {overreach}");
+        assert!(
+            !cap.contains(overreach),
+            "T04: 不得新增越权权限 {overreach}"
+        );
     }
 }
 
@@ -97,16 +110,31 @@ fn t04_exact_window_permissions() {
 fn t05_desktoptitlebar_at_app_root() {
     let app = read_src("../src/App.tsx");
     let root = app.split("function App()").nth(1).unwrap_or_default();
-    assert!(root.contains("<WallpaperLayers />"), "T05: WallpaperLayers 根级");
-    assert!(root.contains("<DesktopTitlebar />"), "T05: DesktopTitlebar 根级");
-    assert!(root.contains("app-shell__content"), "T05: app-shell__content 存在");
-    assert!(root.contains("<ProfileGate />"), "T05: ProfileGate 在 content 内");
+    assert!(
+        root.contains("<WallpaperLayers />"),
+        "T05: WallpaperLayers 根级"
+    );
+    assert!(
+        root.contains("<DesktopTitlebar />"),
+        "T05: DesktopTitlebar 根级"
+    );
+    assert!(
+        root.contains("app-shell__content"),
+        "T05: app-shell__content 存在"
+    );
+    assert!(
+        root.contains("<ProfileGate />"),
+        "T05: ProfileGate 在 content 内"
+    );
     // 顺序：Wallpaper → Titlebar → content → ProfileGate
     let p_wall = root.find("<WallpaperLayers />").unwrap_or(usize::MAX);
     let p_bar = root.find("<DesktopTitlebar />").unwrap_or(usize::MAX);
     let p_content = root.find("app-shell__content").unwrap_or(usize::MAX);
     let p_gate = root.find("<ProfileGate />").unwrap_or(usize::MAX);
-    assert!(p_wall < p_bar && p_bar < p_content && p_content < p_gate, "T05: Shell 结构顺序");
+    assert!(
+        p_wall < p_bar && p_bar < p_content && p_content < p_gate,
+        "T05: Shell 结构顺序"
+    );
 }
 
 #[test]
@@ -118,10 +146,18 @@ fn t06_titlebar_not_wallpaper_consumer() {
         !bar.contains("background-image") && !bar.contains("--h-wallpaper-image"),
         "T06: .titlebar 无壁纸图片声明"
     );
-    assert!(bar.contains("var(--h-sidebar)"), "T06: 标题栏背景 = var(--h-sidebar)（半透明 token）");
+    assert!(
+        bar.contains("var(--h-sidebar)"),
+        "T06: 标题栏背景 = var(--h-sidebar)（半透明 token）"
+    );
     // 生产图片消费者仍 = 2（壁纸层 + Settings 预览）
-    let n = css.matches("background-image: var(--h-wallpaper-image").count();
-    assert_eq!(n, 2, "T06: 生产壁纸图片消费者 = 2（layer+preview），当前 {n}");
+    let n = css
+        .matches("background-image: var(--h-wallpaper-image")
+        .count();
+    assert_eq!(
+        n, 2,
+        "T06: 生产壁纸图片消费者 = 2（layer+preview），当前 {n}"
+    );
 }
 
 #[test]
@@ -133,7 +169,10 @@ fn t07_titlebar_geometry() {
     );
     let bar = block_of(&css, ".titlebar {");
     assert!(bar.contains("position: fixed"), "T07: fixed");
-    assert!(bar.contains("top: 0") && bar.contains("left: 0") && bar.contains("right: 0"), "T07: top/left/right 0");
+    assert!(
+        bar.contains("top: 0") && bar.contains("left: 0") && bar.contains("right: 0"),
+        "T07: top/left/right 0"
+    );
     assert!(
         bar.contains("height: var(--h-titlebar-height)"),
         "T07: height = var(--h-titlebar-height)"
@@ -165,7 +204,8 @@ fn t08_content_offset() {
     );
     // 禁止各页散落 padding-top: 34px（§12）
     assert!(
-        !css.contains("padding-top: 34px") && !css.contains("padding-top: var(--h-titlebar-height)"),
+        !css.contains("padding-top: 34px")
+            && !css.contains("padding-top: var(--h-titlebar-height)"),
         "T08: 无各页散落 titlebar padding"
     );
 }
@@ -199,7 +239,10 @@ fn t10_drag_region() {
     let p_ctrl = bar.find("titlebar__controls").unwrap_or(usize::MAX);
     assert!(p_drag < p_ctrl, "T10: drag 与 controls 结构分离");
     let drag_block = bar.split("titlebar__drag").nth(1).unwrap_or_default();
-    let drag_block = drag_block.split("titlebar__controls").next().unwrap_or_default();
+    let drag_block = drag_block
+        .split("titlebar__controls")
+        .next()
+        .unwrap_or_default();
     assert!(
         !drag_block.contains("titlebar__btn"),
         "T10: 三个窗口控件不在 drag-region 节点内"
@@ -216,13 +259,19 @@ fn t11_ai_no_closed_state() {
     assert!(!p.contains("setOpen(false)"), "T11: setOpen(false) 已删除");
     assert!(!p.contains("if (!open)"), "T11: Closed 分支已删除");
     let css = read_src("../src/styles.css");
-    assert!(!css.contains(".aipanel-fab {"), "T11: .aipanel-fab 样式已删除");
+    assert!(
+        !css.contains(".aipanel-fab {"),
+        "T11: .aipanel-fab 样式已删除"
+    );
 }
 
 #[test]
 fn t12_ai_only_two_modes() {
     let p = read_src("../src/components/ai/AiPanel.tsx");
-    assert!(p.contains("higher.aiPanel.mode"), "T12: localStorage key 保留");
+    assert!(
+        p.contains("higher.aiPanel.mode"),
+        "T12: localStorage key 保留"
+    );
     assert!(
         p.contains("\"expanded\"") && p.contains("\"collapsed\""),
         "T12: 只写 expanded|collapsed"
@@ -283,7 +332,10 @@ fn t15_expanded_header_three_actions() {
 #[test]
 fn t16_ai_runtime_frozen() {
     let p = read_src("../src/components/ai/AiPanel.tsx");
-    assert!(p.contains("aiStartRun") && p.contains("aiCancelRun"), "T16: run API 保留");
+    assert!(
+        p.contains("aiStartRun") && p.contains("aiCancelRun"),
+        "T16: run API 保留"
+    );
     for ev in [
         "ai://delta",
         "ai://source",
@@ -317,7 +369,9 @@ fn t18_send_semantics_frozen() {
 #[test]
 fn t19_no_new_wallpaper_consumer() {
     let css = read_src("../src/styles.css");
-    let n = css.matches("background-image: var(--h-wallpaper-image").count();
+    let n = css
+        .matches("background-image: var(--h-wallpaper-image")
+        .count();
     assert_eq!(n, 2, "T19: 壁纸图片消费者仍 = 2（壁纸层 + Settings 预览）");
     // 桌面标题栏与 AI rail 均 0 图片声明（§44）
     let bar = block_of(&css, ".titlebar {");
@@ -379,11 +433,25 @@ fn t20_no_new_dependencies() {
             .filter(|d| !head.contains(d) && !allowed.contains(&d.as_str()))
             .cloned()
             .collect();
-        assert!(extra.is_empty(), "T20: {label} 依赖新增超出 DEV-SYNC-003 授权（{extra:?}）");
-        let removed: Vec<String> = head.iter().filter(|d| !current.contains(d)).cloned().collect();
-        assert!(removed.is_empty(), "T20: {label} 依赖不得移除（{removed:?}）");
+        assert!(
+            extra.is_empty(),
+            "T20: {label} 依赖新增超出 DEV-SYNC-003 授权（{extra:?}）"
+        );
+        let removed: Vec<String> = head
+            .iter()
+            .filter(|d| !current.contains(d))
+            .cloned()
+            .collect();
+        assert!(
+            removed.is_empty(),
+            "T20: {label} 依赖不得移除（{removed:?}）"
+        );
     }
-    const QR_NPM: [&str; 3] = ["qrcode", "@types/qrcode", "@tauri-apps/plugin-barcode-scanner"];
+    const QR_NPM: [&str; 3] = [
+        "qrcode",
+        "@types/qrcode",
+        "@tauri-apps/plugin-barcode-scanner",
+    ];
     const QR_CARGO: [&str; 1] = ["tauri-plugin-barcode-scanner"];
     assert_dep_delta(
         npm_deps(&read_src("../package.json")),
@@ -400,6 +468,13 @@ fn t20_no_new_dependencies() {
     let conf: serde_json::Value =
         serde_json::from_str(&read_src("tauri.conf.json")).expect("tauri.conf.json 解析失败");
     assert_eq!(conf["productName"], "Higher", "T20: productName 身份不变");
-    assert_eq!(conf["identifier"], "com.higher.desktop", "T20: identifier 身份不变");
-    assert_eq!(conf["app"]["windows"], serde_json::json!([]), "T20: 动态主窗口不变");
+    assert_eq!(
+        conf["identifier"], "com.higher.desktop",
+        "T20: identifier 身份不变"
+    );
+    assert_eq!(
+        conf["app"]["windows"],
+        serde_json::json!([]),
+        "T20: 动态主窗口不变"
+    );
 }

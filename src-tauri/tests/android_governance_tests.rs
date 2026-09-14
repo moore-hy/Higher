@@ -12,8 +12,12 @@ fn mobile_dir() -> PathBuf {
 }
 
 fn web(rel: &str) -> String {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../src").join(rel))
-        .unwrap_or_default()
+    std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src")
+            .join(rel),
+    )
+    .unwrap_or_default()
 }
 
 fn each_mobile_source() -> Vec<(String, String)> {
@@ -24,7 +28,11 @@ fn each_mobile_source() -> Vec<(String, String)> {
                 let p = e.path();
                 if p.is_dir() {
                     walk(&p, out);
-                } else if p.extension().map(|x| x == "ts" || x == "tsx").unwrap_or(false) {
+                } else if p
+                    .extension()
+                    .map(|x| x == "ts" || x == "tsx")
+                    .unwrap_or(false)
+                {
                     if let Ok(c) = std::fs::read_to_string(&p) {
                         out.push((p.display().to_string(), c));
                     }
@@ -57,7 +65,9 @@ fn gov_mobile_source_purity() {
             // DEV-SYNC-002 §十二 追加授权（本任务直接后果）：MobileSettings.tsx
             // 「我的」列表的设备同步状态摘要需要 syncClientStatus 只读查询
             //（经 src/api 统一封装，非第二套业务；其余 banned 项照常生效）。
-            if path.ends_with("MobileSettings.tsx") && (banned == "from \"../api\"" || banned == "from '../api'") {
+            if path.ends_with("MobileSettings.tsx")
+                && (banned == "from \"../api\"" || banned == "from '../api'")
+            {
                 continue;
             }
             assert!(
@@ -73,7 +83,14 @@ fn gov_mobile_source_purity() {
 fn gov_mobile_css_page_coverage() {
     let css = std::fs::read_to_string(mobile_dir().join("mobile.css")).unwrap_or_default();
     assert!(!css.is_empty(), "governance：mobile.css 存在");
-    for domain in ["today", "planning", "knowledge", "ai", "settings", "learning"] {
+    for domain in [
+        "today",
+        "planning",
+        "knowledge",
+        "ai",
+        "settings",
+        "learning",
+    ] {
         assert!(
             css.to_lowercase().contains(domain),
             "governance：mobile.css 缺 {domain} 域规则（§80）"
@@ -86,7 +103,10 @@ fn gov_mobile_css_page_coverage() {
     );
     // 主样式表引入链：main.tsx 引入 mobile.css
     let main = web("main.tsx");
-    assert!(main.contains("mobile/mobile.css"), "governance：main.tsx 引入 mobile.css");
+    assert!(
+        main.contains("mobile/mobile.css"),
+        "governance：main.tsx 引入 mobile.css"
+    );
 }
 
 /// §16/§60：Planning 必须有独立 Mobile View；controller 双 View 同源。
@@ -94,12 +114,21 @@ fn gov_mobile_css_page_coverage() {
 fn gov_planning_dual_view() {
     let view = std::fs::read_to_string(mobile_dir().join("pages/MobilePlanningView.tsx"))
         .unwrap_or_default();
-    assert!(!view.is_empty(), "governance：MobilePlanningView.tsx 存在（§60 强制）");
+    assert!(
+        !view.is_empty(),
+        "governance：MobilePlanningView.tsx 存在（§60 强制）"
+    );
     for tab in ["\"计划\"", "\"日历\"", "\"目标\""] {
-        assert!(view.contains(tab), "governance：MobilePlanningView 三 Tab 含 {tab}");
+        assert!(
+            view.contains(tab),
+            "governance：MobilePlanningView 三 Tab 含 {tab}"
+        );
     }
     // 纯 Presentation：无 api import
-    assert!(!view.contains("../api"), "governance：MobilePlanningView 不直连 api（§17）");
+    assert!(
+        !view.contains("../api"),
+        "governance：MobilePlanningView 不直连 api（§17）"
+    );
     let planning = web("pages/Planning.tsx");
     assert!(
         planning.contains("IS_ANDROID") && planning.contains("MobilePlanningView"),
@@ -111,16 +140,25 @@ fn gov_planning_dual_view() {
 #[test]
 fn gov_ai_single_runtime() {
     let panel = web("components/ai/AiPanel.tsx");
-    assert!(panel.contains("presentation=\"mobile\"") || panel.contains("isMobile"),
-        "governance：AiPanel 内部 isMobile 分支");
+    assert!(
+        panel.contains("presentation=\"mobile\"") || panel.contains("isMobile"),
+        "governance：AiPanel 内部 isMobile 分支"
+    );
     // mobileBack 纯函数存在（§49）
     let back = std::fs::read_to_string(mobile_dir().join("mobileBack.ts")).unwrap_or_default();
-    assert!(back.contains("pressBack"), "governance：mobileBack.pressBack 存在");
+    assert!(
+        back.contains("pressBack"),
+        "governance：mobileBack.pressBack 存在"
+    );
     // F1-B：AI 一级页无大返回箭头；保留来源上下文 subtitle（F1-C）
-    assert!(!panel.contains("aipanel__mobile-backrow"),
-        "governance：AI 一级页无 backrow（F1-B）");
-    assert!(panel.contains("aipanel__mobile-subtitle"),
-        "governance：AI mobile subtitle（来源上下文，F1-C）");
+    assert!(
+        !panel.contains("aipanel__mobile-backrow"),
+        "governance：AI 一级页无 backrow（F1-B）"
+    );
+    assert!(
+        panel.contains("aipanel__mobile-subtitle"),
+        "governance：AI mobile subtitle（来源上下文，F1-C）"
+    );
 }
 
 /// §40-41：Settings mobile-section 契约。
@@ -143,7 +181,12 @@ fn gov_settings_mobile_section() {
 #[test]
 fn gov_today_mobile_ia() {
     let t = web("pages/Today.tsx");
-    assert!(t.contains("!IS_ANDROID &&") && t.contains("AI安排"),
-        "governance：AI安排 桌面保留、Android 不并列（§13）");
-    assert!(t.contains("aria-label=\"新建任务\""), "governance：Card header 小 + icon（§15）");
+    assert!(
+        t.contains("!IS_ANDROID &&") && t.contains("AI安排"),
+        "governance：AI安排 桌面保留、Android 不并列（§13）"
+    );
+    assert!(
+        t.contains("aria-label=\"新建任务\""),
+        "governance：Card header 小 + icon（§15）"
+    );
 }

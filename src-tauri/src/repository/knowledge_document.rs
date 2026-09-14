@@ -55,7 +55,11 @@ impl<'a> KnowledgeDocumentRepository<'a> {
         title: &str,
     ) -> Result<KnowledgeDocument, String> {
         self.validate_item(profile_id, learning_item_id)?;
-        let t = if title.trim().is_empty() { "未命名文档" } else { title.trim() };
+        let t = if title.trim().is_empty() {
+            "未命名文档"
+        } else {
+            title.trim()
+        };
         self.conn
             .execute(
                 "INSERT INTO knowledge_documents (profile_id, learning_item_id, title) VALUES (?1, ?2, ?3)",
@@ -63,7 +67,8 @@ impl<'a> KnowledgeDocumentRepository<'a> {
             )
             .map_err(|e| e.to_string())?;
         let id = self.conn.last_insert_rowid();
-        self.get(id, profile_id)?.ok_or_else(|| "创建失败".to_string())
+        self.get(id, profile_id)?
+            .ok_or_else(|| "创建失败".to_string())
     }
 
     /// 读取（Profile 校验）。
@@ -99,7 +104,8 @@ impl<'a> KnowledgeDocumentRepository<'a> {
         let rows = stmt
             .query_map(params![learning_item_id, profile_id], parse_row)
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 原子更新（§37：title + content_text + content_document_json + updated_at 单事务同时成败）。
@@ -112,7 +118,8 @@ impl<'a> KnowledgeDocumentRepository<'a> {
         content_document_json: Option<&str>,
     ) -> Result<KnowledgeDocument, String> {
         // 归属预检（给用户明确错误）
-        self.get(id, profile_id)?.ok_or("文档不存在或不属于当前档案")?;
+        self.get(id, profile_id)?
+            .ok_or("文档不存在或不属于当前档案")?;
         let tx = self
             .conn
             .unchecked_transaction()
@@ -125,25 +132,38 @@ impl<'a> KnowledgeDocumentRepository<'a> {
         )
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
-        self.get(id, profile_id)?.ok_or_else(|| "更新失败".to_string())
+        self.get(id, profile_id)?
+            .ok_or_else(|| "更新失败".to_string())
     }
 
     /// 重命名（单独改 title）。
-    pub fn rename(&self, id: i64, profile_id: i64, title: &str) -> Result<KnowledgeDocument, String> {
-        self.get(id, profile_id)?.ok_or("文档不存在或不属于当前档案")?;
-        let t = if title.trim().is_empty() { "未命名文档" } else { title.trim() };
+    pub fn rename(
+        &self,
+        id: i64,
+        profile_id: i64,
+        title: &str,
+    ) -> Result<KnowledgeDocument, String> {
+        self.get(id, profile_id)?
+            .ok_or("文档不存在或不属于当前档案")?;
+        let t = if title.trim().is_empty() {
+            "未命名文档"
+        } else {
+            title.trim()
+        };
         self.conn
             .execute(
                 "UPDATE knowledge_documents SET title = ?1, updated_at = datetime('now') WHERE id = ?2 AND profile_id = ?3",
                 params![t, id, profile_id],
             )
             .map_err(|e| e.to_string())?;
-        self.get(id, profile_id)?.ok_or_else(|| "重命名失败".to_string())
+        self.get(id, profile_id)?
+            .ok_or_else(|| "重命名失败".to_string())
     }
 
     /// 该文档的全部附件（relative_path 列表，删除文件用；由 AttachmentRepository 复用查询亦可）。
     pub fn attachment_paths(&self, id: i64, profile_id: i64) -> Result<Vec<String>, String> {
-        self.get(id, profile_id)?.ok_or("文档不存在或不属于当前档案")?;
+        self.get(id, profile_id)?
+            .ok_or("文档不存在或不属于当前档案")?;
         let mut stmt = self
             .conn
             .prepare("SELECT relative_path FROM learning_attachments WHERE document_id = ?1")
@@ -151,13 +171,15 @@ impl<'a> KnowledgeDocumentRepository<'a> {
         let rows = stmt
             .query_map(params![id], |r| r.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 删除（§20：附件行随 FK CASCADE 由 command 层先取 path 删文件后调用；
     /// 本方法只删文档行——返回被 CASCADE 的附件数供校验）。
     pub fn delete(&self, id: i64, profile_id: i64) -> Result<usize, String> {
-        self.get(id, profile_id)?.ok_or("文档不存在或不属于当前档案")?;
+        self.get(id, profile_id)?
+            .ok_or("文档不存在或不属于当前档案")?;
         let n = self
             .conn
             .execute(

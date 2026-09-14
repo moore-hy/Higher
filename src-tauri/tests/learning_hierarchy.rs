@@ -11,9 +11,7 @@
 //! 运行：`cargo test --manifest-path src-tauri/Cargo.toml --test learning_hierarchy`
 
 use app_lib::db::DbState;
-use app_lib::repository::{
-    goal::GoalRepository, learning_item::LearningItemRepository,
-};
+use app_lib::repository::{goal::GoalRepository, learning_item::LearningItemRepository};
 use rusqlite::Connection;
 
 /// 创建一个默认 StudyProfile 并返回其 id（用于测试中创建 Goal）。
@@ -52,7 +50,9 @@ fn test_b_create_root_node_parent_id_null() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let root = item_repo.create_root(goal.id, "数学", None).unwrap();
 
     assert_eq!(root.goal_id, Some(goal.id));
@@ -67,7 +67,9 @@ fn test_c_multi_level_hierarchy() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
     let adv_math = item_repo
         .create_child(goal.id, math.id, "高等数学", None)
@@ -104,7 +106,9 @@ fn test_d_multiple_root_nodes_same_goal() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
     let english = item_repo.create_root(goal.id, "英语", None).unwrap();
     let cs408 = item_repo.create_root(goal.id, "408", None).unwrap();
@@ -126,8 +130,12 @@ fn test_h_goal_isolation() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal_a = goal_repo.create(create_default_profile(&conn), "Goal A", None).unwrap();
-    let goal_b = goal_repo.create(create_default_profile(&conn), "Goal B", None).unwrap();
+    let goal_a = goal_repo
+        .create(create_default_profile(&conn), "Goal A", None)
+        .unwrap();
+    let goal_b = goal_repo
+        .create(create_default_profile(&conn), "Goal B", None)
+        .unwrap();
 
     let _a_root = item_repo.create_root(goal_a.id, "A 的根", None).unwrap();
     let _b_root = item_repo.create_root(goal_b.id, "B 的根", None).unwrap();
@@ -153,23 +161,27 @@ fn test_i_cross_goal_parent_rejected() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal_a = goal_repo.create(create_default_profile(&conn), "Goal A", None).unwrap();
-    let goal_b = goal_repo.create(create_default_profile(&conn), "Goal B", None).unwrap();
+    let goal_a = goal_repo
+        .create(create_default_profile(&conn), "Goal A", None)
+        .unwrap();
+    let goal_b = goal_repo
+        .create(create_default_profile(&conn), "Goal B", None)
+        .unwrap();
 
     // 在 Goal B 下创建根节点
     let b_root = item_repo.create_root(goal_b.id, "B 的根", None).unwrap();
 
     // 尝试用 Goal A 的 goal_id + Goal B 的 parent_id 创建子节点 —— 必须拒绝
     let result = item_repo.create_child(goal_a.id, b_root.id, "违规子项", None);
-    assert!(
-        result.is_err(),
-        "跨 Goal parent 必须被 Repository 拒绝"
-    );
+    assert!(result.is_err(), "跨 Goal parent 必须被 Repository 拒绝");
 
     // 验证错误信息提到跨 Goal
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
-        err_msg.contains("跨 Goal") || err_msg.contains("goal_id") || err_msg.contains("跨档案") || err_msg.contains("不属于"),
+        err_msg.contains("跨 Goal")
+            || err_msg.contains("goal_id")
+            || err_msg.contains("跨档案")
+            || err_msg.contains("不属于"),
         "错误信息应说明跨 Goal 拒绝原因，实际: {}",
         err_msg
     );
@@ -187,7 +199,9 @@ fn test_i_nonexistent_parent_rejected() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "Goal", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "Goal", None)
+        .unwrap();
 
     // parent_id 指向不存在的 id —— 必须拒绝
     let result = item_repo.create_child(goal.id, 99999, "无父节点", None);
@@ -213,7 +227,9 @@ fn test_l_hierarchy_persistence() {
         let goal_repo = GoalRepository::new(&conn);
         let item_repo = LearningItemRepository::new(&conn);
 
-        let goal = goal_repo.create(create_default_profile(&conn), "持久化层级", None).unwrap();
+        let goal = goal_repo
+            .create(create_default_profile(&conn), "持久化层级", None)
+            .unwrap();
         goal_id = goal.id;
         let math = item_repo.create_root(goal_id, "数学", None).unwrap();
         math_id = math.id;
@@ -246,10 +262,7 @@ fn test_l_hierarchy_persistence() {
         assert_eq!(adv.parent_id, Some(math_id));
         let limit = item_repo.get(limit_id).unwrap().unwrap();
         assert_eq!(limit.parent_id, Some(adv_math_id));
-        assert_eq!(
-            limit.mastery_status, "learning",
-            "掌握状态应持久化"
-        );
+        assert_eq!(limit.mastery_status, "learning", "掌握状态应持久化");
 
         // Migration 不应重复执行
         let versions: Vec<u32> = {
@@ -261,7 +274,14 @@ fn test_l_hierarchy_persistence() {
                 .filter_map(|v| v.ok())
                 .collect()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29], "schema 版本应为 v006");
+        assert_eq!(
+            versions,
+            vec![
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29
+            ],
+            "schema 版本应为 v006"
+        );
     }
 
     let _ = std::fs::remove_file(&db_path);
@@ -275,8 +295,12 @@ fn test_list_all_items_returns_across_goals() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let g1 = goal_repo.create(create_default_profile(&conn), "G1", None).unwrap();
-    let g2 = goal_repo.create(create_default_profile(&conn), "G2", None).unwrap();
+    let g1 = goal_repo
+        .create(create_default_profile(&conn), "G1", None)
+        .unwrap();
+    let g2 = goal_repo
+        .create(create_default_profile(&conn), "G2", None)
+        .unwrap();
     item_repo.create_root(g1.id, "A", None).unwrap();
     item_repo.create_root(g2.id, "B", None).unwrap();
 
@@ -291,7 +315,9 @@ fn test_mastery_status_display_in_tree_data() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "测试", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "测试", None)
+        .unwrap();
     let root = item_repo.create_root(goal.id, "根", None).unwrap();
     let child = item_repo
         .create_child(goal.id, root.id, "子", None)
@@ -305,5 +331,8 @@ fn test_mastery_status_display_in_tree_data() {
     let child_fetched = items.iter().find(|i| i.id == child.id).unwrap();
     assert_eq!(child_fetched.mastery_status, "mastered");
     let root_fetched = items.iter().find(|i| i.id == root.id).unwrap();
-    assert_eq!(root_fetched.mastery_status, "not_started", "未修改的应保持默认");
+    assert_eq!(
+        root_fetched.mastery_status, "not_started",
+        "未修改的应保持默认"
+    );
 }

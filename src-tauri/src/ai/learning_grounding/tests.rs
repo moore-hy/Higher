@@ -49,13 +49,16 @@ fn normalize_conservative() {
     assert_eq!(normalize_name("  极限  "), "极限");
     assert_eq!(normalize_name("  极  限 "), "极 限"); // 连续空白压缩为单空格
     assert_eq!(normalize_name("ABC"), "abc"); // ASCII fold
-    // 语义改写禁止：不会把「极限」变「函数极限」（本函数根本不做语义）
+                                              // 语义改写禁止：不会把「极限」变「函数极限」（本函数根本不做语义）
     assert_ne!(normalize_name("极限"), normalize_name("函数极限"));
 }
 
 #[test]
 fn completeness_rate() {
-    let c = grounding_completeness(&[Some(&g(TaskGroundingMode::Learning, &["a"])), Some(&g(TaskGroundingMode::Meta, &[]))]);
+    let c = grounding_completeness(&[
+        Some(&g(TaskGroundingMode::Learning, &["a"])),
+        Some(&g(TaskGroundingMode::Meta, &[])),
+    ]);
     assert_eq!(c.learning_task_count, 1);
     assert_eq!(c.grounded_learning_task_count, 1);
     assert_eq!(c.meta_task_count, 1);

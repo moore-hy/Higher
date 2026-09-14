@@ -16,8 +16,9 @@ use rusqlite::Connection;
 use super::apply::{apply_remote_changes, ApplyOptions, ApplyOutcome};
 use super::export::export_outbox_changes;
 use super::identity::{
-    advance_acked_cursor, advance_received_cursor, first_peer, local_device, pending_conflicts_count,
-    pending_outbox_count_for, sync_id_for, touch_peer_sync, trim_acked_outbox, upsert_peer,
+    advance_acked_cursor, advance_received_cursor, first_peer, local_device,
+    pending_conflicts_count, pending_outbox_count_for, sync_id_for, touch_peer_sync,
+    trim_acked_outbox, upsert_peer,
 };
 use super::transport::{read_message, write_message};
 use super::types::WireMessage;
@@ -93,8 +94,12 @@ pub struct ClientStatus {
 
 fn connect(addr: &str) -> Result<TcpStream, String> {
     let stream = TcpStream::connect(addr).map_err(|e| format!("无法连接对端（{addr}）：{e}"))?;
-    stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(|e| e.to_string())?;
-    stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(IO_TIMEOUT))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(IO_TIMEOUT))
+        .map_err(|e| e.to_string())?;
     stream.set_nodelay(true).map_err(|e| e.to_string())?;
     Ok(stream)
 }
@@ -219,8 +224,15 @@ fn pair_on_stream(
         return Err(reason.unwrap_or_else(|| "配对失败".into()));
     }
 
-    upsert_peer(conn, &server_device_id, &server_name, &server_platform, Some(addr), &shared_token)
-        .map_err(|e| e.to_string())?;
+    upsert_peer(
+        conn,
+        &server_device_id,
+        &server_name,
+        &server_platform,
+        Some(addr),
+        &shared_token,
+    )
+    .map_err(|e| e.to_string())?;
 
     // Bootstrap 导入：Profile 重名 → 「xxx（来自电脑）」，绝不静默覆盖本机已有档案
     let outcome = apply_remote_changes(
@@ -277,8 +289,11 @@ fn pair_on_stream(
 
 /// DEV-SYNC-003 §九：解除配对——仅删除 peer trust/token，绝不删除业务数据。
 pub fn unpair(conn: &Connection, peer_device_id: &str) -> Result<(), String> {
-    conn.execute("DELETE FROM sync_peers WHERE peer_device_id = ?1", rusqlite::params![peer_device_id])
-        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM sync_peers WHERE peer_device_id = ?1",
+        rusqlite::params![peer_device_id],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -289,9 +304,7 @@ fn offline_error(peer_platform: Option<&str>, addr: &str, cause: &str) -> String
         Some("android") => {
             "Higher Android 当前未在线\n\n请在手机 Higher 中打开：\n我的 → 设备同步\n然后重试。"
         }
-        _ => {
-            "Higher Windows 当前不可连接\n\n请确认电脑 Higher 已打开，\n并已启动设备同步。"
-        }
+        _ => "Higher Windows 当前不可连接\n\n请确认电脑 Higher 已打开，\n并已启动设备同步。",
     };
     format!("{hint}\n\n（{addr}：{cause}）")
 }
@@ -318,10 +331,12 @@ pub fn sync_now(conn: &Connection, listen_addr: Option<&str>) -> Result<SyncSumm
     let device = local_device(conn).map_err(|e| e.to_string())?;
 
     // 1) 待推送：未被对端 ack 的本机 outbox 增量（per-peer 游标）
-    let changes = export_outbox_changes(conn, peer.last_acked_local_change_id).map_err(|e| e.to_string())?;
+    let changes =
+        export_outbox_changes(conn, peer.last_acked_local_change_id).map_err(|e| e.to_string())?;
     let pushed = changes.len();
 
-    let mut stream = connect(&addr).map_err(|e| offline_error(peer.peer_platform.as_deref(), &addr, &e))?;
+    let mut stream =
+        connect(&addr).map_err(|e| offline_error(peer.peer_platform.as_deref(), &addr, &e))?;
     write_message(
         &mut stream,
         &WireMessage::SyncRequest {
@@ -335,8 +350,13 @@ pub fn sync_now(conn: &Connection, listen_addr: Option<&str>) -> Result<SyncSumm
     )
     .map_err(|e| offline_error(peer.peer_platform.as_deref(), &addr, &e.to_string()))?;
 
-    let resp = read_message(&mut stream)
-        .map_err(|e| offline_error(peer.peer_platform.as_deref(), &addr, &format!("同步响应读取失败：{e}")))?;
+    let resp = read_message(&mut stream).map_err(|e| {
+        offline_error(
+            peer.peer_platform.as_deref(),
+            &addr,
+            &format!("同步响应读取失败：{e}"),
+        )
+    })?;
     let WireMessage::SyncResponse {
         ok,
         acked_change_id,
@@ -356,18 +376,29 @@ pub fn sync_now(conn: &Connection, listen_addr: Option<&str>) -> Result<SyncSumm
     let pulled = remote_changes.len();
 
     // 2) 应用对端下发变更（guard 防回声 + 冲突守卫）
-    let local_outcome =
-        apply_remote_changes(conn, &peer.peer_device_id, &remote_changes, ApplyOptions::default())
-            .map_err(|e| format!("应用对端变更失败：{e}"))?;
+    let local_outcome = apply_remote_changes(
+        conn,
+        &peer.peer_device_id,
+        &remote_changes,
+        ApplyOptions::default(),
+    )
+    .map_err(|e| format!("应用对端变更失败：{e}"))?;
 
     // 3) 游标推进 + trim（§六：成功 ack 的变化不再计入「待同步」）
     if acked_change_id > 0 {
-        advance_acked_cursor(conn, &peer.peer_device_id, acked_change_id).map_err(|e| e.to_string())?;
+        advance_acked_cursor(conn, &peer.peer_device_id, acked_change_id)
+            .map_err(|e| e.to_string())?;
         trim_acked_outbox(conn).map_err(|e| e.to_string())?;
     }
-    let local_max = remote_changes.iter().map(|c| c.change_id).max().unwrap_or(0).max(0);
+    let local_max = remote_changes
+        .iter()
+        .map(|c| c.change_id)
+        .max()
+        .unwrap_or(0)
+        .max(0);
     if local_max > 0 {
-        advance_received_cursor(conn, &peer.peer_device_id, local_max).map_err(|e| e.to_string())?;
+        advance_received_cursor(conn, &peer.peer_device_id, local_max)
+            .map_err(|e| e.to_string())?;
         // F3 §四：同一连接内回反向 ACK —— 对端游标推进 + trim 立即完成（双方 pending 归零）
         write_message(
             &mut stream,
@@ -460,12 +491,13 @@ pub fn resolve_conflicts(conn: &Connection, resolution: &str) -> Result<u32, Str
         match resolution {
             "local" => {
                 // 本机为准：本机当前状态重新入队，下次同步覆盖对端
-                super::identity::requeue_entity(conn, &entity_type, &sync_id).map_err(|e| e.to_string())?;
+                super::identity::requeue_entity(conn, &entity_type, &sync_id)
+                    .map_err(|e| e.to_string())?;
             }
             _ => {
                 // 对端为准：用冲突记录中的 remote payload 强制覆盖本机
-                let payload: super::types::SyncEntityPayload = serde_json::from_str(&remote_json)
-                    .map_err(|e| format!("冲突记录损坏：{e}"))?;
+                let payload: super::types::SyncEntityPayload =
+                    serde_json::from_str(&remote_json).map_err(|e| format!("冲突记录损坏：{e}"))?;
                 let full = super::types::SyncChange {
                     change_id: 0,
                     entity_type: entity_type.clone(),

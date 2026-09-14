@@ -11,12 +11,12 @@
 //!   StudySession 事实的历史永不重写。
 //! - 全部 Provider 无关（fixture 可测）；Semantic Runtime 禁止直接写库（§41）。
 
-use super::grounding::{
-    ground_single, record_grounded, resolve_recent, retrieve_bulk_tasks,
-    retrieve_rule_candidates, retrieve_task_candidates, BulkFilter, Candidate,
-    GroundingOutcome, SelectionOutcome, TargetScope, MAX_BULK,
-};
 pub use super::grounding::EntityHint;
+use super::grounding::{
+    ground_single, record_grounded, resolve_recent, retrieve_bulk_tasks, retrieve_rule_candidates,
+    retrieve_task_candidates, BulkFilter, Candidate, GroundingOutcome, SelectionOutcome,
+    TargetScope, MAX_BULK,
+};
 use super::runtime::{AiRuntimeEnvelope, RecurrenceIntent, TemporalIntent};
 use crate::repository::changeset::ProposedOp;
 use rusqlite::{params, Connection};
@@ -124,9 +124,7 @@ pub enum SemanticAction {
         status: String,
     },
     /// 删除单次任务出现（"删除今天这条，但每日规则继续"）
-    DeleteTask {
-        target: EntityHint,
-    },
+    DeleteTask { target: EntityHint },
     CreateRecurringTask {
         title: String,
         recurrence: RecurrenceIntent,
@@ -185,14 +183,20 @@ impl SemanticAction {
             | SemanticAction::DeleteTask { .. }
             | SemanticAction::BulkUpdateTasks { .. } => vec!["task"],
             SemanticAction::CreateRecurringTask { .. } => vec!["recurring_rule", "task"],
-            SemanticAction::UpdateRecurringTask { reconcile_future, .. } => {
+            SemanticAction::UpdateRecurringTask {
+                reconcile_future, ..
+            } => {
                 if *reconcile_future {
                     vec!["recurring_rule", "task"]
                 } else {
                     vec!["recurring_rule"]
                 }
             }
-            SemanticAction::SetRecurringEnabled { enabled, cleanup_future, .. } => {
+            SemanticAction::SetRecurringEnabled {
+                enabled,
+                cleanup_future,
+                ..
+            } => {
                 if !*enabled && *cleanup_future {
                     vec!["recurring_rule", "task"]
                 } else {
@@ -410,7 +414,12 @@ pub struct PlanInput<'a> {
 
 fn hint_desc(hint: &EntityHint) -> String {
     let t = hint.title_hint.trim();
-    if t.is_empty() { "用户提到的对象" } else { t }.to_string()
+    if t.is_empty() {
+        "用户提到的对象"
+    } else {
+        t
+    }
+    .to_string()
 }
 
 fn ground_task(
@@ -429,7 +438,11 @@ fn ground_task(
         return resolve_recent(conn, profile_id, conversation_id, hint);
     }
     let cands = retrieve_task_candidates(conn, profile_id, hint, env)?;
-    Ok(ground_single(&hint_desc(hint), cands, input.selection.as_ref()))
+    Ok(ground_single(
+        &hint_desc(hint),
+        cands,
+        input.selection.as_ref(),
+    ))
 }
 
 fn ground_rule(
@@ -449,7 +462,11 @@ fn ground_rule(
         return resolve_recent(conn, profile_id, conversation_id, &rule_hint);
     }
     let cands = retrieve_rule_candidates(conn, profile_id, hint)?;
-    Ok(ground_single(&hint_desc(hint), cands, input.selection.as_ref()))
+    Ok(ground_single(
+        &hint_desc(hint),
+        cands,
+        input.selection.as_ref(),
+    ))
 }
 
 fn ambiguous_text(noun: &str, cands: &[Candidate]) -> String {
@@ -534,7 +551,11 @@ fn task_update_after(
         }
     }
     if let Some(t) = &payload.planned_time {
-        let want = if t.trim().is_empty() { None } else { Some(t.clone()) };
+        let want = if t.trim().is_empty() {
+            None
+        } else {
+            Some(t.clone())
+        };
         if want != row.planned_time {
             after.insert("planned_time".into(), json!(t));
         }
@@ -669,7 +690,10 @@ pub fn plan_action(
                     operation_ref: Some("T1".into()),
                 }],
                 title: format!("创建任务「{title}」"),
-                summary: format!("{planned_date} · {}", task_kind.clone().unwrap_or_else(|| "structured".into())),
+                summary: format!(
+                    "{planned_date} · {}",
+                    task_kind.clone().unwrap_or_else(|| "structured".into())
+                ),
                 scope: TargetScope::Occurrence,
                 selection_provider_called: false,
             })
@@ -800,7 +824,11 @@ pub fn plan_action(
                     }
                     let n = after.len();
                     Ok(ActionOutcome::ProposalReady {
-                        ops: vec![task_update_op(id, after, "AI 语义更新任务（未提供字段保留原值）")],
+                        ops: vec![task_update_op(
+                            id,
+                            after,
+                            "AI 语义更新任务（未提供字段保留原值）",
+                        )],
                         title: format!("修改任务「{}」", row.title),
                         summary: format!("task #{id} · {n} 项变更"),
                         scope: TargetScope::Occurrence,
@@ -834,14 +862,21 @@ pub fn plan_action(
                         selection_provider_called: sel_called,
                     })
                 }
-                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification { message: ambiguous_text("任务", &c), candidates: c }),
-                GroundingOutcome::NotFound(_) => Ok(ActionOutcome::NotFound(not_found_text("任务", target))),
+                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification {
+                    message: ambiguous_text("任务", &c),
+                    candidates: c,
+                }),
+                GroundingOutcome::NotFound(_) => {
+                    Ok(ActionOutcome::NotFound(not_found_text("任务", target)))
+                }
                 GroundingOutcome::Unsupported(m) => Ok(ActionOutcome::Unsupported(m)),
             }
         }
         SemanticAction::SetTaskStatus { target, status } => {
             if !["pending", "in_progress", "completed", "skipped"].contains(&status.as_str()) {
-                return Ok(ActionOutcome::Unsupported(format!("不支持的任务状态：{status}")));
+                return Ok(ActionOutcome::Unsupported(format!(
+                    "不支持的任务状态：{status}"
+                )));
             }
             match ground_task(conn, profile_id, input.conversation_id, target, env, input)? {
                 GroundingOutcome::Resolved(id) => {
@@ -871,8 +906,13 @@ pub fn plan_action(
                 GroundingOutcome::ResolvedMany(_) => Ok(ActionOutcome::Unsupported(
                     "一次只能修改一个任务的状态；批量状态修改请说明具体范围。".into(),
                 )),
-                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification { message: ambiguous_text("任务", &c), candidates: c }),
-                GroundingOutcome::NotFound(_) => Ok(ActionOutcome::NotFound(not_found_text("任务", target))),
+                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification {
+                    message: ambiguous_text("任务", &c),
+                    candidates: c,
+                }),
+                GroundingOutcome::NotFound(_) => {
+                    Ok(ActionOutcome::NotFound(not_found_text("任务", target)))
+                }
                 GroundingOutcome::Unsupported(m) => Ok(ActionOutcome::Unsupported(m)),
             }
         }
@@ -899,14 +939,23 @@ pub fn plan_action(
                 GroundingOutcome::ResolvedMany(_) => Ok(ActionOutcome::Unsupported(
                     "一次只能删除一个任务；要删除多个请逐个说明或使用明确范围。".into(),
                 )),
-                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification { message: ambiguous_text("任务", &c), candidates: c }),
-                GroundingOutcome::NotFound(_) => Ok(ActionOutcome::NotFound(not_found_text("任务", target))),
+                GroundingOutcome::Ambiguous(c) => Ok(ActionOutcome::Clarification {
+                    message: ambiguous_text("任务", &c),
+                    candidates: c,
+                }),
+                GroundingOutcome::NotFound(_) => {
+                    Ok(ActionOutcome::NotFound(not_found_text("任务", target)))
+                }
                 GroundingOutcome::Unsupported(m) => Ok(ActionOutcome::Unsupported(m)),
             }
         }
 
         // ---------- Series 操作（Rule Grounding + 未来投影同步） ----------
-        SemanticAction::UpdateRecurringTask { target, patch, reconcile_future } => {
+        SemanticAction::UpdateRecurringTask {
+            target,
+            patch,
+            reconcile_future,
+        } => {
             // §20：明显 update 但 patch 无字段 = ContractFailure
             if patch.is_empty() {
                 return Ok(ActionOutcome::ContractFailure(
@@ -919,10 +968,15 @@ pub fn plan_action(
                     id
                 }
                 GroundingOutcome::ResolvedMany(_) => {
-                    return Ok(ActionOutcome::Unsupported("一次只能修改一个重复任务规则。".into()))
+                    return Ok(ActionOutcome::Unsupported(
+                        "一次只能修改一个重复任务规则。".into(),
+                    ))
                 }
                 GroundingOutcome::Ambiguous(c) => {
-                    return Ok(ActionOutcome::Clarification { message: ambiguous_text("重复任务", &c), candidates: c })
+                    return Ok(ActionOutcome::Clarification {
+                        message: ambiguous_text("重复任务", &c),
+                        candidates: c,
+                    })
                 }
                 GroundingOutcome::NotFound(_) => {
                     return Ok(ActionOutcome::NotFound(not_found_text("重复任务", target)))
@@ -948,7 +1002,8 @@ pub fn plan_action(
                     after.insert("repeat_type".into(), json!(r.repeat_type()));
                     after.insert("weekdays".into(), json!(r.weekdays()));
                 } else if r.repeat_type() == "weekly" {
-                    let cur: Vec<u32> = serde_json::from_str(&existing.weekdays_json).unwrap_or_default();
+                    let cur: Vec<u32> =
+                        serde_json::from_str(&existing.weekdays_json).unwrap_or_default();
                     if r.weekdays() != cur {
                         after.insert("weekdays".into(), json!(r.weekdays()));
                     }
@@ -961,7 +1016,11 @@ pub fn plan_action(
                 }
             }
             if let Some(t) = &patch.time_of_day {
-                let want = if t.trim().is_empty() { None } else { Some(t.clone()) };
+                let want = if t.trim().is_empty() {
+                    None
+                } else {
+                    Some(t.clone())
+                };
                 if want != existing.time_of_day {
                     after.insert("time_of_day".into(), json!(t));
                 }
@@ -993,7 +1052,11 @@ pub fn plan_action(
                 {
                     let mut tafter = Map::new();
                     if let Some(t) = &patch.time_of_day {
-                        let want = if t.trim().is_empty() { None } else { Some(t.clone()) };
+                        let want = if t.trim().is_empty() {
+                            None
+                        } else {
+                            Some(t.clone())
+                        };
                         if want != ttime {
                             tafter.insert("planned_time".into(), json!(t));
                         }
@@ -1032,17 +1095,26 @@ pub fn plan_action(
                 selection_provider_called: sel_called,
             })
         }
-        SemanticAction::SetRecurringEnabled { target, enabled, cleanup_future } => {
+        SemanticAction::SetRecurringEnabled {
+            target,
+            enabled,
+            cleanup_future,
+        } => {
             let rule = match ground_rule(conn, profile_id, input.conversation_id, target, input)? {
                 GroundingOutcome::Resolved(id) => {
                     record_grounded(profile_id, input.conversation_id, "recurring_rule", id);
                     id
                 }
                 GroundingOutcome::ResolvedMany(_) => {
-                    return Ok(ActionOutcome::Unsupported("一次只能操作一个重复任务规则。".into()))
+                    return Ok(ActionOutcome::Unsupported(
+                        "一次只能操作一个重复任务规则。".into(),
+                    ))
                 }
                 GroundingOutcome::Ambiguous(c) => {
-                    return Ok(ActionOutcome::Clarification { message: ambiguous_text("重复任务", &c), candidates: c })
+                    return Ok(ActionOutcome::Clarification {
+                        message: ambiguous_text("重复任务", &c),
+                        candidates: c,
+                    })
                 }
                 GroundingOutcome::NotFound(_) => {
                     return Ok(ActionOutcome::NotFound(not_found_text("重复任务", target)))
@@ -1086,7 +1158,11 @@ pub fn plan_action(
             }
             Ok(ActionOutcome::ProposalReady {
                 ops,
-                title: if *enabled { format!("启用重复任务「{}」", existing.title) } else { format!("停用重复任务「{}」", existing.title) },
+                title: if *enabled {
+                    format!("启用重复任务「{}」", existing.title)
+                } else {
+                    format!("停用重复任务「{}」", existing.title)
+                },
                 summary: if *enabled {
                     format!("rule #{rule}")
                 } else {
@@ -1096,17 +1172,25 @@ pub fn plan_action(
                 selection_provider_called: sel_called,
             })
         }
-        SemanticAction::DeleteRecurringRule { target, cleanup_future } => {
+        SemanticAction::DeleteRecurringRule {
+            target,
+            cleanup_future,
+        } => {
             let rule = match ground_rule(conn, profile_id, input.conversation_id, target, input)? {
                 GroundingOutcome::Resolved(id) => {
                     record_grounded(profile_id, input.conversation_id, "recurring_rule", id);
                     id
                 }
                 GroundingOutcome::ResolvedMany(_) => {
-                    return Ok(ActionOutcome::Unsupported("一次只能删除一个重复任务规则。".into()))
+                    return Ok(ActionOutcome::Unsupported(
+                        "一次只能删除一个重复任务规则。".into(),
+                    ))
                 }
                 GroundingOutcome::Ambiguous(c) => {
-                    return Ok(ActionOutcome::Clarification { message: ambiguous_text("重复任务", &c), candidates: c })
+                    return Ok(ActionOutcome::Clarification {
+                        message: ambiguous_text("重复任务", &c),
+                        candidates: c,
+                    })
                 }
                 GroundingOutcome::NotFound(_) => {
                     return Ok(ActionOutcome::NotFound(not_found_text("重复任务", target)))
@@ -1172,7 +1256,11 @@ pub fn plan_action(
                     .unwrap_or_default();
                 return Ok(ActionOutcome::NotFound(format!(
                     "没有找到符合条件的任务（{}）。正式数据没有变化。",
-                    if d.is_empty() { "按你描述的筛选范围".to_string() } else { format!("日期 {d}") }
+                    if d.is_empty() {
+                        "按你描述的筛选范围".to_string()
+                    } else {
+                        format!("日期 {d}")
+                    }
                 )));
             }
             let mut ops = Vec::new();
@@ -1186,7 +1274,11 @@ pub fn plan_action(
                 let (after, changed) = task_update_after(&row, patch, env)?;
                 if changed {
                     changed_n += 1;
-                    ops.push(task_update_op(*id, after, "AI 批量更新任务（结构匹配集合）"));
+                    ops.push(task_update_op(
+                        *id,
+                        after,
+                        "AI 批量更新任务（结构匹配集合）",
+                    ));
                 }
             }
             if ops.is_empty() {
@@ -1224,10 +1316,23 @@ pub fn compile_action(
 ) -> Result<CompiledAction, String> {
     let input = PlanInput::default();
     match plan_action(conn, profile_id, env, &input, action)? {
-        ActionOutcome::ProposalReady { ops, title, summary, .. } => Ok(CompiledAction { ops, title, summary }),
+        ActionOutcome::ProposalReady {
+            ops,
+            title,
+            summary,
+            ..
+        } => Ok(CompiledAction {
+            ops,
+            title,
+            summary,
+        }),
         ActionOutcome::Clarification { .. } => Err(format!(
             "AMBIGUOUS_{}:multi",
-            if matches!(action.primary_reference(), Some(("recurring_rule", _))) { "RULE" } else { "TASK" }
+            if matches!(action.primary_reference(), Some(("recurring_rule", _))) {
+                "RULE"
+            } else {
+                "TASK"
+            }
         )),
         ActionOutcome::NotFound(m)
         | ActionOutcome::NothingToChange(m)
@@ -1282,9 +1387,13 @@ pub fn validate_ops(
     action: &SemanticAction,
     ops: &[ProposedOp],
 ) -> Result<(), String> {
-    validate_action(env, action, &CompiledAction {
-        ops: ops.to_vec(),
-        title: String::new(),
-        summary: String::new(),
-    })
+    validate_action(
+        env,
+        action,
+        &CompiledAction {
+            ops: ops.to_vec(),
+            title: String::new(),
+            summary: String::new(),
+        },
+    )
 }

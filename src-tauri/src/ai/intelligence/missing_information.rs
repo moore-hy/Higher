@@ -33,7 +33,11 @@ pub fn from_goal(goal: &GoalUnderstanding) -> Vec<MissingInformation> {
         .iter()
         .map(|r| MissingInformation {
             field: r.key.clone(),
-            reason: if r.why_needed.is_empty() { r.description.clone() } else { r.why_needed.clone() },
+            reason: if r.why_needed.is_empty() {
+                r.description.clone()
+            } else {
+                r.why_needed.clone()
+            },
             source_kind: r.source_kind.clone(),
         })
         .collect()
@@ -88,9 +92,7 @@ pub fn build_requirements(goal: &GoalUnderstanding) -> Vec<InformationRequiremen
 /// Phase 2 gate：所有 `required=true` 字段 `completed=true` → Complete。
 /// 空清单（无必填项）同样 Complete。可选字段（required=false）未完成不阻塞。
 pub fn information_gate(requirements: &[InformationRequirement]) -> InformationStatus {
-    let all_required_done = requirements
-        .iter()
-        .all(|r| !r.required || r.completed);
+    let all_required_done = requirements.iter().all(|r| !r.required || r.completed);
     if all_required_done {
         InformationStatus::Complete
     } else {

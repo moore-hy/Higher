@@ -34,13 +34,19 @@ fn checksum(rel: &str) -> Option<(u64, u64)> {
 #[test]
 fn art_tc001_android_frontend_meta_writer() {
     let mjs = repo("../scripts/build-android-frontend.mjs");
-    assert!(mjs.contains("TAURI_ENV_PLATFORM") && mjs.contains("\"android\""),
-        "ART-TC001: 构建脚本强制 TAURI_ENV_PLATFORM=android");
-    assert!(mjs.contains("HIGHER_RELEASE_BUILD") && mjs.contains("higher-build-meta.json"),
-        "ART-TC001: 写入 dist/higher-build-meta.json");
+    assert!(
+        mjs.contains("TAURI_ENV_PLATFORM") && mjs.contains("\"android\""),
+        "ART-TC001: 构建脚本强制 TAURI_ENV_PLATFORM=android"
+    );
+    assert!(
+        mjs.contains("HIGHER_RELEASE_BUILD") && mjs.contains("higher-build-meta.json"),
+        "ART-TC001: 写入 dist/higher-build-meta.json"
+    );
     let ps1 = repo("../scripts/Build-Higher-Android.ps1");
-    assert!(ps1.contains("ANDROID_FRONTEND_PLATFORM_MISMATCH"),
-        "ART-TC001: 主构建脚本含 platform mismatch gate");
+    assert!(
+        ps1.contains("ANDROID_FRONTEND_PLATFORM_MISMATCH"),
+        "ART-TC001: 主构建脚本含 platform mismatch gate"
+    );
 }
 
 #[test]
@@ -48,11 +54,16 @@ fn art_tc002_gen_assets_meta_android() {
     let meta = repo("gen/android/app/src/main/assets/higher-build-meta.json");
     if meta.is_empty() {
         // 尚未执行 Android 构建：仅要求 assets 目录存在（TC001 已覆盖 meta 写入逻辑）
-        assert!(exists("gen/android/app/src/main/assets"), "ART-TC002: assets 目录存在");
+        assert!(
+            exists("gen/android/app/src/main/assets"),
+            "ART-TC002: assets 目录存在"
+        );
         return;
     }
-    assert!(meta.contains("\"platform\"") && meta.contains("android"),
-        "ART-TC002: gen assets meta platform=android，实际：{meta}");
+    assert!(
+        meta.contains("\"platform\"") && meta.contains("android"),
+        "ART-TC002: gen assets meta platform=android，实际：{meta}"
+    );
 }
 
 #[test]
@@ -60,18 +71,24 @@ fn art_tc003_no_mock_in_android_assets() {
     let p = "gen/android/app/src/main/assets/mock/inject.js";
     assert!(!exists(p), "ART-TC003: Android assets 禁止包含 {p}");
     let vite = repo("../vite.config.ts");
-    assert!(vite.contains("HIGHER_RELEASE_BUILD") && vite.contains("publicDir"),
-        "ART-TC003: vite publicDir 受 HIGHER_RELEASE_BUILD 控制");
+    assert!(
+        vite.contains("HIGHER_RELEASE_BUILD") && vite.contains("publicDir"),
+        "ART-TC003: vite publicDir 受 HIGHER_RELEASE_BUILD 控制"
+    );
 }
 
 #[test]
 fn art_tc004_icon_source_synced() {
     // ICON-TC001（§六）：源图标与 gen res 逐字节一致（构建脚本同步后）
     let pairs = [
-        ("icons/android/mipmap-xxxhdpi/ic_launcher.png",
-         "gen/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"),
-        ("icons/android/mipmap-hdpi/ic_launcher_round.png",
-         "gen/android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png"),
+        (
+            "icons/android/mipmap-xxxhdpi/ic_launcher.png",
+            "gen/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+        ),
+        (
+            "icons/android/mipmap-hdpi/ic_launcher_round.png",
+            "gen/android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png",
+        ),
     ];
     for (src, dst) in pairs {
         match (checksum(src), checksum(dst)) {
@@ -79,27 +96,45 @@ fn art_tc004_icon_source_synced() {
             _ => panic!("ART-TC004: 图标缺失（{dst}）——先运行 Build-Higher-Android.ps1"),
         }
     }
-    assert!(exists("gen/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"),
-        "ART-TC004: mipmap-anydpi-v26 已同步");
+    assert!(
+        exists("gen/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"),
+        "ART-TC004: mipmap-anydpi-v26 已同步"
+    );
     let manifest = repo("gen/android/app/src/main/AndroidManifest.xml");
-    assert!(manifest.contains("android:roundIcon=\"@mipmap/ic_launcher_round\""),
-        "ART-TC004: Manifest 声明 roundIcon");
-    assert!(!exists("gen/android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml"),
-        "ART-TC004: 旧模板 launcher foreground 已清理");
+    assert!(
+        manifest.contains("android:roundIcon=\"@mipmap/ic_launcher_round\""),
+        "ART-TC004: Manifest 声明 roundIcon"
+    );
+    assert!(
+        !exists("gen/android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml"),
+        "ART-TC004: 旧模板 launcher foreground 已清理"
+    );
 }
 
 #[test]
 fn art_tc005_006_007_build_pipeline_contract() {
     let ps1 = repo("../scripts/Build-Higher-Android.ps1");
-    assert!(ps1.contains("assembleArm64Debug") && ps1.contains("arm64\\debug"),
-        "ART-TC005: 唯一产物路径契约（Debug=arm64\\debug variant）");
-    assert!(ps1.contains("android/dev"), "ART-TC005: 分支守卫 android/dev");
-    assert!(ps1.contains("Higher-Windows"), "ART-TC005: 禁止在 Higher-Windows 施工守卫");
+    assert!(
+        ps1.contains("assembleArm64Debug") && ps1.contains("arm64\\debug"),
+        "ART-TC005: 唯一产物路径契约（Debug=arm64\\debug variant）"
+    );
+    assert!(
+        ps1.contains("android/dev"),
+        "ART-TC005: 分支守卫 android/dev"
+    );
+    assert!(
+        ps1.contains("Higher-Windows"),
+        "ART-TC005: 禁止在 Higher-Windows 施工守卫"
+    );
     let gradle = repo("gen/android/app/build.gradle.kts");
-    assert!(gradle.contains("applicationId = \"com.higher.android\"") && gradle.contains(".debug"),
-        "ART-TC006: applicationId com.higher.android(.debug)");
-    assert!(exists("gen/android/app/src/main/jniLibs/arm64-v8a"),
-        "ART-TC007: jniLibs/arm64-v8a 存在（ABI=arm64-v8a）");
+    assert!(
+        gradle.contains("applicationId = \"com.higher.android\"") && gradle.contains(".debug"),
+        "ART-TC006: applicationId com.higher.android(.debug)"
+    );
+    assert!(
+        exists("gen/android/app/src/main/jniLibs/arm64-v8a"),
+        "ART-TC007: jniLibs/arm64-v8a 存在（ABI=arm64-v8a）"
+    );
 }
 
 /// ART-TC011（DEV-INTEGRATE-001 增补）· Android Release branch guard 契约：
@@ -107,24 +142,36 @@ fn art_tc005_006_007_build_pipeline_contract() {
 /// 允许 main / android/dev / integrate/*；拒绝其它一切 branch。
 #[test]
 fn art_tc011_release_branch_guard_contract() {
-    for script in ["../scripts/Build-Higher-Android.ps1", "../scripts/Promote-Higher-Android-RC.ps1"] {
+    for script in [
+        "../scripts/Build-Higher-Android.ps1",
+        "../scripts/Promote-Higher-Android-RC.ps1",
+    ] {
         let s = repo(script);
         // 允许集：三条件并存于同一 $branchAllowed 表达式
         let guard = "$branchAllowed = ($branch -eq 'main') -or ($branch -eq 'android/dev') -or ($branch -like 'integrate/*')";
         assert!(s.contains(guard),
             "ART-TC011 [{script}]: branch guard 必须为 main || android/dev || integrate/* 白名单表达式");
         // 拒绝路径：非白名单 → Fail（不得放行其它 branch）
-        assert!(s.contains("if (-not $branchAllowed) { Fail"),
-            "ART-TC011 [{script}]: 非白名单分支必须 Fail（UNRELATED_BRANCH_REJECTED）");
+        assert!(
+            s.contains("if (-not $branchAllowed) { Fail"),
+            "ART-TC011 [{script}]: 非白名单分支必须 Fail（UNRELATED_BRANCH_REJECTED）"
+        );
         // 禁止回到旧的单一 android/dev 硬拒绝
-        assert!(!s.contains("if ($branch -ne 'android/dev') { Fail"),
-            "ART-TC011 [{script}]: 不得回退为仅-android/dev 守卫（main 必须可构建）");
+        assert!(
+            !s.contains("if ($branch -ne 'android/dev') { Fail"),
+            "ART-TC011 [{script}]: 不得回退为仅-android/dev 守卫（main 必须可构建）"
+        );
     }
     // 行为级验证：模拟守卫表达式对四类分支的判定
     let allowed = |b: &str| b == "main" || b == "android/dev" || b.starts_with("integrate/");
     assert!(allowed("main"), "MAIN_ANDROID_BUILD_ALLOWED");
     assert!(allowed("android/dev"), "ANDROID_DEV_BUILD_ALLOWED");
-    assert!(allowed("integrate/higher-1.0.0"), "INTEGRATION_BUILD_ALLOWED");
-    assert!(!(allowed("feature/whatever") || allowed("release/1.0.0") || allowed("master")),
-        "UNRELATED_BRANCH_REJECTED");
+    assert!(
+        allowed("integrate/higher-1.0.0"),
+        "INTEGRATION_BUILD_ALLOWED"
+    );
+    assert!(
+        !(allowed("feature/whatever") || allowed("release/1.0.0") || allowed("master")),
+        "UNRELATED_BRANCH_REJECTED"
+    );
 }

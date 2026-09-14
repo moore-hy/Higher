@@ -22,7 +22,9 @@ fn mk_profile(conn: &Connection) -> i64 {
         .unwrap()
         .id;
     // command 层 create_study_profile 会 ensure_final（v015）；测试直接补齐
-    let _ = app_lib::repository::goal::GoalRepository::new(conn).ensure_final(p).unwrap();
+    let _ = app_lib::repository::goal::GoalRepository::new(conn)
+        .ensure_final(p)
+        .unwrap();
     p
 }
 
@@ -76,7 +78,8 @@ fn setup_v015() -> Connection {
         .unwrap();
     }
     // v019 goal_brief_json（GoalRepository GOAL_COLS 需要；本测试只关心 v016 行为）
-    conn.execute_batch("ALTER TABLE goals ADD COLUMN goal_brief_json TEXT NULL;").unwrap();
+    conn.execute_batch("ALTER TABLE goals ADD COLUMN goal_brief_json TEXT NULL;")
+        .unwrap();
     conn
 }
 
@@ -127,9 +130,16 @@ fn test_v016_migration_legacy_content() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!(doc_json.contains(r#""type":"doc""#) && doc_json.contains(r#""text":"abc""#), "纯文本转 Tiptap JSON");
+    assert!(
+        doc_json.contains(r#""type":"doc""#) && doc_json.contains(r#""text":"abc""#),
+        "纯文本转 Tiptap JSON"
+    );
     let origin: String = conn
-        .query_row("SELECT content FROM learning_items WHERE id=?1", rusqlite::params![i1], |r| r.get(0))
+        .query_row(
+            "SELECT content FROM learning_items WHERE id=?1",
+            rusqlite::params![i1],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(origin, "abc", "§23 旧 content 不清空");
 
@@ -203,8 +213,14 @@ fn test_document_crud_and_isolation() {
     let up = repo
         .update(d.id, pa, "新标题", "纯文本", Some(r#"{"type":"doc"}"#))
         .unwrap();
-    assert_eq!((up.title.as_str(), up.content_text.as_str()), ("新标题", "纯文本"));
-    assert_eq!(up.content_document_json.as_deref(), Some(r#"{"type":"doc"}"#));
+    assert_eq!(
+        (up.title.as_str(), up.content_text.as_str()),
+        ("新标题", "纯文本")
+    );
+    assert_eq!(
+        up.content_document_json.as_deref(),
+        Some(r#"{"type":"doc"}"#)
+    );
     // Rename
     let rn = repo.rename(d.id, pa, "再改名").unwrap();
     assert_eq!(rn.title, "再改名");
@@ -235,11 +251,15 @@ fn test_document_update_atomicity() {
     let repo = KnowledgeDocumentRepository::new(&conn);
     let d = repo.create(p, i, "D").unwrap();
     // 单条 UPDATE 语句本身原子；验证成功路径 text/json 一致 + 失败路径（跨档案）两者都不变
-    repo.update(d.id, p, "T1", "TEXT1", Some(r#"{"v":1}"#)).unwrap();
+    repo.update(d.id, p, "T1", "TEXT1", Some(r#"{"v":1}"#))
+        .unwrap();
     let bad = repo.update(d.id, p + 999, "T2", "TEXT2", None);
     assert!(bad.is_err());
     let after = repo.get(d.id, p).unwrap().unwrap();
-    assert_eq!((after.title.as_str(), after.content_text.as_str()), ("T1", "TEXT1"));
+    assert_eq!(
+        (after.title.as_str(), after.content_text.as_str()),
+        ("T1", "TEXT1")
+    );
     assert_eq!(after.content_document_json.as_deref(), Some(r#"{"v":1}"#));
 }
 
@@ -256,13 +276,40 @@ fn test_document_attachments_and_delete_cleanup() {
 
     // 三类 owner 附件（DB 层；文件本体由 command 层，此处验证归属与列）
     let img = att
-        .create_for_document(p, i, d.id, "image", "a.png", "1/item/a.png", Some("image/png"), "")
+        .create_for_document(
+            p,
+            i,
+            d.id,
+            "image",
+            "a.png",
+            "1/item/a.png",
+            Some("image/png"),
+            "",
+        )
         .unwrap();
     let vid = att
-        .create_for_document(p, i, d.id, "video", "b.mp4", "1/item/b.mp4", Some("video/mp4"), "")
+        .create_for_document(
+            p,
+            i,
+            d.id,
+            "video",
+            "b.mp4",
+            "1/item/b.mp4",
+            Some("video/mp4"),
+            "",
+        )
         .unwrap();
     let draw = att
-        .create_for_document(p, i, d.id, "drawing", "画图.png", "1/item/c.png", Some("image/png"), "")
+        .create_for_document(
+            p,
+            i,
+            d.id,
+            "drawing",
+            "画图.png",
+            "1/item/c.png",
+            Some("image/png"),
+            "",
+        )
         .unwrap();
     for a in [&img, &vid, &draw] {
         assert_eq!(a.document_id, Some(d.id));
@@ -273,9 +320,13 @@ fn test_document_attachments_and_delete_cleanup() {
     assert_eq!(att.list_by_document(d.id).unwrap().len(), 3);
     // 跨档案 / 错 item 拒绝
     let p2 = mk_profile(&conn);
-    assert!(att.create_for_document(p2, i, d.id, "image", "x", "x", None, "").is_err());
+    assert!(att
+        .create_for_document(p2, i, d.id, "image", "x", "x", None, "")
+        .is_err());
     let i2 = mk_item(&conn, p, "I2");
-    assert!(att.create_for_document(p, i2, d.id, "image", "x", "x", None, "").is_err());
+    assert!(att
+        .create_for_document(p, i2, d.id, "image", "x", "x", None, "")
+        .is_err());
 
     // 删除 Document → attachment DB 不残留（FK CASCADE）
     let paths = repo.attachment_paths(d.id, p).unwrap();
@@ -295,7 +346,9 @@ fn test_workspace_timeline_order_media_only_and_legacy() {
     let ws = KnowledgeWorkspaceRepository::new(&conn);
 
     // Document A updated 10:00 / Session A started 11:00 / Document B updated 12:00
-    let da = KnowledgeDocumentRepository::new(&conn).create(p, i, "DocA").unwrap();
+    let da = KnowledgeDocumentRepository::new(&conn)
+        .create(p, i, "DocA")
+        .unwrap();
     conn.execute(
         "UPDATE knowledge_documents SET updated_at='2026-08-16 10:00:00' WHERE id=?1",
         rusqlite::params![da.id],
@@ -307,7 +360,9 @@ fn test_workspace_timeline_order_media_only_and_legacy() {
         rusqlite::params![sa.id],
     )
     .unwrap();
-    let db_ = KnowledgeDocumentRepository::new(&conn).create(p, i, "DocB").unwrap();
+    let db_ = KnowledgeDocumentRepository::new(&conn)
+        .create(p, i, "DocB")
+        .unwrap();
     conn.execute(
         "UPDATE knowledge_documents SET updated_at='2026-08-16 12:00:00' WHERE id=?1",
         rusqlite::params![db_.id],
@@ -320,11 +375,19 @@ fn test_workspace_timeline_order_media_only_and_legacy() {
         .documents
         .iter()
         .map(|d| (d.updated_at.clone(), format!("doc:{}", d.title)))
-        .chain(data.sessions.iter().map(|s| (s.started_at.clone(), format!("ses:{}", s.title))))
+        .chain(
+            data.sessions
+                .iter()
+                .map(|s| (s.started_at.clone(), format!("ses:{}", s.title))),
+        )
         .collect();
     entries.sort();
     let names: Vec<&str> = entries.iter().rev().map(|(_, n)| n.as_str()).collect();
-    assert_eq!(names, vec!["doc:DocB", "ses:SessionA", "doc:DocA"], "§69 时间倒序");
+    assert_eq!(
+        names,
+        vec!["doc:DocB", "ses:SessionA", "doc:DocA"],
+        "§69 时间倒序"
+    );
 }
 
 #[test]
@@ -333,11 +396,22 @@ fn test_session_media_only_not_empty() {
     let p = mk_profile(&conn);
     let i = mk_item(&conn, p, "I");
     let s = StudySessionRepository::new(&conn).start(i, None).unwrap();
-    StudySessionRepository::new(&conn).end(s.id, Some("")).unwrap();
+    StudySessionRepository::new(&conn)
+        .end(s.id, Some(""))
+        .unwrap();
     // note 空 + 4 图片
     for n in 0..4 {
         AttachmentRepository::new(&conn)
-            .create(p, Some(i), Some(s.id), "image", &format!("p{n}.png"), &format!("1/item/p{n}.png"), None, "")
+            .create(
+                p,
+                Some(i),
+                Some(s.id),
+                "image",
+                &format!("p{n}.png"),
+                &format!("1/item/p{n}.png"),
+                None,
+                "",
+            )
             .unwrap();
     }
     let data = KnowledgeWorkspaceRepository::new(&conn).get(p, i).unwrap();
@@ -354,15 +428,52 @@ fn test_legacy_item_attachments_surface() {
     let i = mk_item(&conn, p, "I");
     let att = AttachmentRepository::new(&conn);
     // legacy：item 挂、无 session、无 document
-    att.create(p, Some(i), None, "image", "old.png", "1/item/old.png", None, "").unwrap();
-    att.create(p, Some(i), None, "video", "old.mp4", "1/item/old.mp4", None, "").unwrap();
+    att.create(
+        p,
+        Some(i),
+        None,
+        "image",
+        "old.png",
+        "1/item/old.png",
+        None,
+        "",
+    )
+    .unwrap();
+    att.create(
+        p,
+        Some(i),
+        None,
+        "video",
+        "old.mp4",
+        "1/item/old.mp4",
+        None,
+        "",
+    )
+    .unwrap();
     // 非 legacy：带 session 的
     let s = StudySessionRepository::new(&conn).start(i, None).unwrap();
-    att.create(p, Some(i), Some(s.id), "image", "s.png", "1/item/s.png", None, "").unwrap();
+    att.create(
+        p,
+        Some(i),
+        Some(s.id),
+        "image",
+        "s.png",
+        "1/item/s.png",
+        None,
+        "",
+    )
+    .unwrap();
 
     let data = KnowledgeWorkspaceRepository::new(&conn).get(p, i).unwrap();
-    assert_eq!(data.legacy_attachments.len(), 2, "§71 legacy 节点级附件单列");
-    assert!(data.legacy_attachments.iter().all(|a| a.session_id.is_none() && a.document_id.is_none()));
+    assert_eq!(
+        data.legacy_attachments.len(),
+        2,
+        "§71 legacy 节点级附件单列"
+    );
+    assert!(data
+        .legacy_attachments
+        .iter()
+        .all(|a| a.session_id.is_none() && a.document_id.is_none()));
 }
 
 // =============== §72 Safe Delete ===============
@@ -383,7 +494,11 @@ fn test_safe_delete_document_guard() {
     doc_repo.delete(d.id, p).unwrap();
     item_repo.safe_delete(i).unwrap();
     let gone: i64 = conn
-        .query_row("SELECT COUNT(*) FROM learning_items WHERE id=?1", rusqlite::params![i], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM learning_items WHERE id=?1",
+            rusqlite::params![i],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(gone, 0);
 }
@@ -398,7 +513,10 @@ fn test_ai_knowledge_context_reads_documents() {
     // learning_items.content 为空；Document 存在文字
     KnowledgeDocumentRepository::new(&conn)
         .update(
-            KnowledgeDocumentRepository::new(&conn).create(p, i, "进程文档").unwrap().id,
+            KnowledgeDocumentRepository::new(&conn)
+                .create(p, i, "进程文档")
+                .unwrap()
+                .id,
             p,
             "进程文档",
             "进程是资源分配的基本单位",
@@ -418,9 +536,15 @@ fn test_ai_knowledge_context_reads_documents() {
         },
     )
     .unwrap();
-    assert!(ctx.contains("知识文档"), "knowledge_detail 读取 knowledge_documents");
+    assert!(
+        ctx.contains("知识文档"),
+        "knowledge_detail 读取 knowledge_documents"
+    );
     assert!(ctx.contains("进程是资源分配的基本单位"));
-    assert!(!ctx.contains("legacy learning_items.content"), "有 Document 时不双注 legacy content");
+    assert!(
+        !ctx.contains("legacy learning_items.content"),
+        "有 Document 时不双注 legacy content"
+    );
 }
 
 #[test]
@@ -428,7 +552,11 @@ fn test_ai_knowledge_context_fallback_when_no_documents() {
     let conn = setup();
     let p = mk_profile(&conn);
     let i = mk_item(&conn, p, "I");
-    conn.execute("UPDATE learning_items SET content='legacy 正文' WHERE id=?1", rusqlite::params![i]).unwrap();
+    conn.execute(
+        "UPDATE learning_items SET content='legacy 正文' WHERE id=?1",
+        rusqlite::params![i],
+    )
+    .unwrap();
     let ctx = app_lib::ai::context::build_context(
         &conn,
         &app_lib::ai::context::ContextInput {
@@ -441,7 +569,10 @@ fn test_ai_knowledge_context_fallback_when_no_documents() {
         },
     )
     .unwrap();
-    assert!(ctx.contains("legacy 正文"), "无 Document → fallback learning_items.content");
+    assert!(
+        ctx.contains("legacy 正文"),
+        "无 Document → fallback learning_items.content"
+    );
 }
 
 #[test]
@@ -451,7 +582,10 @@ fn test_mastery_context_reads_documents() {
     let i = mk_item(&conn, p, "I");
     KnowledgeDocumentRepository::new(&conn)
         .update(
-            KnowledgeDocumentRepository::new(&conn).create(p, i, "极限笔记").unwrap().id,
+            KnowledgeDocumentRepository::new(&conn)
+                .create(p, i, "极限笔记")
+                .unwrap()
+                .id,
             p,
             "极限笔记",
             "等价无穷小替换是我的总结",
@@ -478,7 +612,10 @@ fn test_mastery_context_reads_documents() {
         },
     )
     .unwrap();
-    assert!(ctx.contains("等价无穷小替换是我的总结"), "§74 Mastery Context 含 Document 证据");
+    assert!(
+        ctx.contains("等价无穷小替换是我的总结"),
+        "§74 Mastery Context 含 Document 证据"
+    );
 }
 
 /// §53：AI Write Tools 仍为 0。
@@ -487,7 +624,10 @@ fn test_ai_write_tools_still_zero() {
     for name in app_lib::ai::tools::TOOL_ALLOWLIST {
         let n = name.to_lowercase();
         assert!(
-            !n.contains("create") && !n.contains("update") && !n.contains("delete") && !n.contains("write"),
+            !n.contains("create")
+                && !n.contains("update")
+                && !n.contains("delete")
+                && !n.contains("write"),
             "写工具泄漏：{name}"
         );
     }

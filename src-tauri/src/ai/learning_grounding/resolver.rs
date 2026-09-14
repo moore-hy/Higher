@@ -38,7 +38,11 @@ impl GroundingIndex {
             .map_err(|e| format!("learning_items 读取失败: {e}"))?;
         let rows = stmt
             .query_map(params![profile_id], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })
             .map_err(|e| format!("learning_items 读取失败: {e}"))?;
         let mut me = Self::default();
@@ -46,7 +50,10 @@ impl GroundingIndex {
             let (id, parent, name) = row.map_err(|e| format!("learning_items 读取失败: {e}"))?;
             me.existing.insert(id, ());
             me.index
-                .entry(GroundingKey { parent_id: parent, normalized_name: normalize_name(&name) })
+                .entry(GroundingKey {
+                    parent_id: parent,
+                    normalized_name: normalize_name(&name),
+                })
                 .or_default()
                 .push(id);
         }
@@ -56,7 +63,10 @@ impl GroundingIndex {
     /// §二十.3/§二十.6：同 Parent 精确匹配。Ok(None)=无命中（Create）；
     /// Ok(Some(id))=唯一命中（Reuse）；Err=Ambiguous（≥2 历史重复，不猜）。
     pub fn exact_match(&self, parent_id: Option<i64>, name: &str) -> Result<Option<i64>, String> {
-        let key = GroundingKey { parent_id, normalized_name: normalize_name(name) };
+        let key = GroundingKey {
+            parent_id,
+            normalized_name: normalize_name(name),
+        };
         match self.index.get(&key).map(|v| v.as_slice()) {
             None | Some([]) => Ok(None),
             Some([only]) => Ok(Some(*only)),
@@ -114,9 +124,9 @@ pub fn topological_order(units: &[LearningUnitDraft]) -> Result<Vec<usize>, Stri
                 }
                 None => {
                     return Err(format!(
-                        "learning_unit「{}」的 parent_ref「{parent_ref}」不存在于本 Draft（dangling）",
-                        units[i].ref_key
-                    ))
+                    "learning_unit「{}」的 parent_ref「{parent_ref}」不存在于本 Draft（dangling）",
+                    units[i].ref_key
+                ))
                 }
             }
         }
@@ -200,9 +210,7 @@ pub fn resolve_grounding(
         if let Some(prev) = pending.get(&draft_key) {
             return Err(format!(
                 "learning_units 草稿内重复：「{}」与「{}」在同级同名（{}）",
-                prev,
-                u.ref_key,
-                u.name
+                prev, u.ref_key, u.name
             ));
         }
         match idx.exact_match(parent_for_key, &u.name) {

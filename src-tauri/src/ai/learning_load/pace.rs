@@ -77,7 +77,11 @@ pub fn median(values: &[f64]) -> Option<f64> {
     let mut v = values.to_vec();
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = v.len();
-    Some(if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 })
+    Some(if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    })
 }
 
 pub fn mean(values: &[f64]) -> Option<f64> {
@@ -107,8 +111,8 @@ pub fn build_pace_evidence(samples: &[PaceSample]) -> PaceEvidence {
     let mn = mean(&ratios);
     let estimated_total: i64 = samples.iter().map(|s| s.estimated_minutes).sum();
     let actual_total: i64 = samples.iter().map(|s| s.actual_minutes).sum();
-    let confidence =
-        PaceConfidence::from_samples(sample_count).downgrade_by_outliers(sample_count, outlier_count);
+    let confidence = PaceConfidence::from_samples(sample_count)
+        .downgrade_by_outliers(sample_count, outlier_count);
     PaceEvidence {
         sample_count,
         estimated_minutes_total: estimated_total,

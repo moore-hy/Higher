@@ -44,7 +44,11 @@ pub struct EvidenceWindows {
 
 impl Default for EvidenceWindows {
     fn default() -> Self {
-        Self { short_days: 7, medium_days: 14, long_days: 30 }
+        Self {
+            short_days: 7,
+            medium_days: 14,
+            long_days: 30,
+        }
     }
 }
 

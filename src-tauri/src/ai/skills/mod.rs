@@ -49,32 +49,152 @@ pub const CAPABILITY_REGISTRY: &[&str] = &[
 
 /// Tool Registry：与 ai::tools::TOOL_ALLOWLIST / tool_definitions 同源集合（T40-T45 锁定一致）。
 pub const TOOL_REGISTRY: &[ToolSpec] = &[
-    ToolSpec { name: "get_profile_summary", permission: ToolPermission::Read, category: "read", affinity: "personal" },
-    ToolSpec { name: "get_current_goal", permission: ToolPermission::Read, category: "read", affinity: "personal" },
-    ToolSpec { name: "get_current_stage", permission: ToolPermission::Read, category: "read", affinity: "legacy" },
-    ToolSpec { name: "list_plans", permission: ToolPermission::Read, category: "read", affinity: "legacy" },
-    ToolSpec { name: "list_knowledge_tree", permission: ToolPermission::Read, category: "read", affinity: "knowledge" },
-    ToolSpec { name: "read_knowledge_item", permission: ToolPermission::Read, category: "read", affinity: "knowledge" },
-    ToolSpec { name: "list_recent_sessions", permission: ToolPermission::Read, category: "read", affinity: "personal" },
-    ToolSpec { name: "read_session", permission: ToolPermission::Read, category: "read", affinity: "personal" },
-    ToolSpec { name: "list_recent_evaluations", permission: ToolPermission::Read, category: "read", affinity: "knowledge" },
-    ToolSpec { name: "list_tasks", permission: ToolPermission::Read, category: "read", affinity: "task" },
-    ToolSpec { name: "get_progress_summary", permission: ToolPermission::Read, category: "read", affinity: "personal" },
-    ToolSpec { name: "search_higher", permission: ToolPermission::Read, category: "read", affinity: "read" },
-    ToolSpec { name: "search_memory", permission: ToolPermission::Read, category: "read", affinity: "personal" },
-    ToolSpec { name: "read_personalization", permission: ToolPermission::Read, category: "read", affinity: "personal" },
+    ToolSpec {
+        name: "get_profile_summary",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "personal",
+    },
+    ToolSpec {
+        name: "get_current_goal",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "personal",
+    },
+    ToolSpec {
+        name: "get_current_stage",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "legacy",
+    },
+    ToolSpec {
+        name: "list_plans",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "legacy",
+    },
+    ToolSpec {
+        name: "list_knowledge_tree",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "knowledge",
+    },
+    ToolSpec {
+        name: "read_knowledge_item",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "knowledge",
+    },
+    ToolSpec {
+        name: "list_recent_sessions",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "personal",
+    },
+    ToolSpec {
+        name: "read_session",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "personal",
+    },
+    ToolSpec {
+        name: "list_recent_evaluations",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "knowledge",
+    },
+    ToolSpec {
+        name: "list_tasks",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "task",
+    },
+    ToolSpec {
+        name: "get_progress_summary",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "personal",
+    },
+    ToolSpec {
+        name: "search_higher",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "read",
+    },
+    ToolSpec {
+        name: "search_memory",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "personal",
+    },
+    ToolSpec {
+        name: "read_personalization",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "personal",
+    },
     // DEV-0066 §10 Phase B：Global Agent 全量读能力（overview 优先 + 私人资料 source 分页读；
     // affinity="read" → Agent scopes（含 read）与 higher_read route 均可见）
-    ToolSpec { name: "get_higher_overview", permission: ToolPermission::Read, category: "read", affinity: "read" },
-    ToolSpec { name: "list_personalization_sources", permission: ToolPermission::Read, category: "read", affinity: "read" },
-    ToolSpec { name: "read_personalization_source", permission: ToolPermission::Read, category: "read", affinity: "read" },
-    ToolSpec { name: "list_planning_sources", permission: ToolPermission::Read, category: "planning", affinity: "planning" },
-    ToolSpec { name: "read_planning_source", permission: ToolPermission::Read, category: "planning", affinity: "planning" },
-    ToolSpec { name: "list_active_goal_targets", permission: ToolPermission::Read, category: "planning", affinity: "planning" },
-    ToolSpec { name: "read_active_planning_blueprint", permission: ToolPermission::Read, category: "planning", affinity: "planning" },
-    ToolSpec { name: "web_search", permission: ToolPermission::Web, category: "web", affinity: "web" },
-    ToolSpec { name: "web_open", permission: ToolPermission::Web, category: "web", affinity: "web" },
-    ToolSpec { name: "propose_change_set", permission: ToolPermission::Proposal, category: "proposal", affinity: "assistant" },
+    ToolSpec {
+        name: "get_higher_overview",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "read",
+    },
+    ToolSpec {
+        name: "list_personalization_sources",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "read",
+    },
+    ToolSpec {
+        name: "read_personalization_source",
+        permission: ToolPermission::Read,
+        category: "read",
+        affinity: "read",
+    },
+    ToolSpec {
+        name: "list_planning_sources",
+        permission: ToolPermission::Read,
+        category: "planning",
+        affinity: "planning",
+    },
+    ToolSpec {
+        name: "read_planning_source",
+        permission: ToolPermission::Read,
+        category: "planning",
+        affinity: "planning",
+    },
+    ToolSpec {
+        name: "list_active_goal_targets",
+        permission: ToolPermission::Read,
+        category: "planning",
+        affinity: "planning",
+    },
+    ToolSpec {
+        name: "read_active_planning_blueprint",
+        permission: ToolPermission::Read,
+        category: "planning",
+        affinity: "planning",
+    },
+    ToolSpec {
+        name: "web_search",
+        permission: ToolPermission::Web,
+        category: "web",
+        affinity: "web",
+    },
+    ToolSpec {
+        name: "web_open",
+        permission: ToolPermission::Web,
+        category: "web",
+        affinity: "web",
+    },
+    ToolSpec {
+        name: "propose_change_set",
+        permission: ToolPermission::Proposal,
+        category: "proposal",
+        affinity: "assistant",
+    },
 ];
 
 /// SkillSpec（§7.3）：机器可验证 contract。
@@ -162,12 +282,18 @@ pub fn validate_registry() -> Vec<String> {
         }
         for c in s.required_capabilities {
             if !caps.contains(c) {
-                errs.push(format!("SKILL_CONTRACT_STALE：{} 引用不存在的 capability {}", s.id, c));
+                errs.push(format!(
+                    "SKILL_CONTRACT_STALE：{} 引用不存在的 capability {}",
+                    s.id, c
+                ));
             }
         }
         for t in s.optional_tools {
             if !tools.contains(t) {
-                errs.push(format!("SKILL_CONTRACT_STALE：{} 引用不存在的 tool {}", s.id, t));
+                errs.push(format!(
+                    "SKILL_CONTRACT_STALE：{} 引用不存在的 tool {}",
+                    s.id, t
+                ));
             }
         }
     }
@@ -178,7 +304,15 @@ pub fn validate_registry() -> Vec<String> {
 pub fn registry_summary() -> String {
     registry()
         .iter()
-        .map(|s| format!("- {} v{}：{}（intents: {}）", s.id, s.version, s.description, s.supported_intents.join("/")))
+        .map(|s| {
+            format!(
+                "- {} v{}：{}（intents: {}）",
+                s.id,
+                s.version,
+                s.description,
+                s.supported_intents.join("/")
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

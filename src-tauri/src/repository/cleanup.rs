@@ -60,26 +60,51 @@ impl CleanupScope {
 /// keep 语义 = NOT(filter)。
 fn date_filters(scope: CleanupScope, today: &str) -> [(String, &'static str); 5] {
     let (prefix, keep) = match scope {
-        CleanupScope::ClearToday | CleanupScope::KeepToday => (today.to_string(), matches!(scope, CleanupScope::KeepToday)),
-        CleanupScope::ClearMonth | CleanupScope::KeepMonth => {
-            (format!("{}%", &today[..7.min(today.len())]), matches!(scope, CleanupScope::KeepMonth))
+        CleanupScope::ClearToday | CleanupScope::KeepToday => {
+            (today.to_string(), matches!(scope, CleanupScope::KeepToday))
         }
-        CleanupScope::ClearYear | CleanupScope::KeepYear => {
-            (format!("{}%", &today[..4.min(today.len())]), matches!(scope, CleanupScope::KeepYear))
-        }
+        CleanupScope::ClearMonth | CleanupScope::KeepMonth => (
+            format!("{}%", &today[..7.min(today.len())]),
+            matches!(scope, CleanupScope::KeepMonth),
+        ),
+        CleanupScope::ClearYear | CleanupScope::KeepYear => (
+            format!("{}%", &today[..4.min(today.len())]),
+            matches!(scope, CleanupScope::KeepYear),
+        ),
         CleanupScope::FullReset => (String::new(), false),
     };
     if prefix.is_empty() {
         let empty = (String::new(), "");
-        return [empty.clone(), empty.clone(), empty.clone(), empty.clone(), empty];
+        return [
+            empty.clone(),
+            empty.clone(),
+            empty.clone(),
+            empty.clone(),
+            empty,
+        ];
     }
     let neg = if keep { "NOT" } else { "" };
     [
-        (format!("t.planned_date {} LIKE '{}'", neg, prefix), "t.planned_date"),
-        (format!("date(ss.started_at, '+8 hours') {} LIKE '{}'", neg, prefix), "ss.started_at(+8h)"),
-        (format!("date(e.occurred_at, '+8 hours') {} LIKE '{}'", neg, prefix), "e.occurred_at(+8h)"),
-        (format!("date(f.created_at) {} LIKE '{}'", neg, prefix), "date(f.created_at)"),
-        (format!("date(a.created_at) {} LIKE '{}'", neg, prefix), "date(a.created_at)"),
+        (
+            format!("t.planned_date {} LIKE '{}'", neg, prefix),
+            "t.planned_date",
+        ),
+        (
+            format!("date(ss.started_at, '+8 hours') {} LIKE '{}'", neg, prefix),
+            "ss.started_at(+8h)",
+        ),
+        (
+            format!("date(e.occurred_at, '+8 hours') {} LIKE '{}'", neg, prefix),
+            "e.occurred_at(+8h)",
+        ),
+        (
+            format!("date(f.created_at) {} LIKE '{}'", neg, prefix),
+            "date(f.created_at)",
+        ),
+        (
+            format!("date(a.created_at) {} LIKE '{}'", neg, prefix),
+            "date(a.created_at)",
+        ),
     ]
 }
 
@@ -95,10 +120,18 @@ impl<'a> CleanupRepository<'a> {
     const GOALS_OF_PROFILE: &'static str = "SELECT id FROM goals WHERE profile_id = ?1";
 
     /// 预览将删除的数量（只读；不执行任何删除）。
-    pub fn preview(&self, profile_id: i64, scope: CleanupScope, today: &str) -> Result<CleanupPreview, String> {
+    pub fn preview(
+        &self,
+        profile_id: i64,
+        scope: CleanupScope,
+        today: &str,
+    ) -> Result<CleanupPreview, String> {
         let mut p = CleanupPreview::default();
         if scope == CleanupScope::FullReset {
-            p.goals = self.count(&format!("SELECT COUNT(*) FROM goals WHERE profile_id = ?1"), params![profile_id])?;
+            p.goals = self.count(
+                &format!("SELECT COUNT(*) FROM goals WHERE profile_id = ?1"),
+                params![profile_id],
+            )?;
             p.knowledge = self.count(
                 &format!("SELECT COUNT(*) FROM learning_items WHERE profile_id = ?1"),
                 params![profile_id],
@@ -145,15 +178,24 @@ impl<'a> CleanupRepository<'a> {
 
         let f = date_filters(scope, today);
         p.tasks = self.count(
-            &format!("SELECT COUNT(*) FROM tasks t WHERE t.profile_id = ?1 AND {}", f[0].0),
+            &format!(
+                "SELECT COUNT(*) FROM tasks t WHERE t.profile_id = ?1 AND {}",
+                f[0].0
+            ),
             params![profile_id],
         )?;
         p.sessions = self.count(
-            &format!("SELECT COUNT(*) FROM study_sessions ss WHERE ss.profile_id = ?1 AND {}", f[1].0),
+            &format!(
+                "SELECT COUNT(*) FROM study_sessions ss WHERE ss.profile_id = ?1 AND {}",
+                f[1].0
+            ),
             params![profile_id],
         )?;
         p.evaluations = self.count(
-            &format!("SELECT COUNT(*) FROM evaluations e WHERE e.profile_id = ?1 AND {}", f[2].0),
+            &format!(
+                "SELECT COUNT(*) FROM evaluations e WHERE e.profile_id = ?1 AND {}",
+                f[2].0
+            ),
             params![profile_id],
         )?;
         p.feedbacks = self.count(
@@ -178,7 +220,9 @@ impl<'a> CleanupRepository<'a> {
     }
 
     fn count(&self, sql: &str, p: impl rusqlite::Params) -> Result<i64, String> {
-        self.conn.query_row(sql, p, |r| r.get(0)).map_err(|e| e.to_string())
+        self.conn
+            .query_row(sql, p, |r| r.get(0))
+            .map_err(|e| e.to_string())
     }
 
     /// 执行清理（单事务；返回将被删除的附件 relative_path 列表供文件层处理）。
@@ -210,21 +254,35 @@ impl<'a> CleanupRepository<'a> {
             }
             // 按表逐个删除（v013 后六表直挂 profile_id；plans/stages/feedbacks/adjustments
             // 仍属 Goal 经 goal_id 定位；evaluations 先于 learning_items 删以满足 RESTRICT）
-            tx.execute("PRAGMA foreign_keys = ON;", []).map_err(|e| e.to_string())?;
+            tx.execute("PRAGMA foreign_keys = ON;", [])
+                .map_err(|e| e.to_string())?;
             for sql in [
                 "DELETE FROM learning_attachments WHERE profile_id = ?1",
                 "DELETE FROM study_sessions WHERE profile_id = ?1",
                 "DELETE FROM tasks WHERE profile_id = ?1",
                 "DELETE FROM evaluations WHERE profile_id = ?1",
-                &format!("DELETE FROM feedbacks WHERE goal_id IN ({})", Self::GOALS_OF_PROFILE),
-                &format!("DELETE FROM adjustments WHERE goal_id IN ({})", Self::GOALS_OF_PROFILE),
+                &format!(
+                    "DELETE FROM feedbacks WHERE goal_id IN ({})",
+                    Self::GOALS_OF_PROFILE
+                ),
+                &format!(
+                    "DELETE FROM adjustments WHERE goal_id IN ({})",
+                    Self::GOALS_OF_PROFILE
+                ),
                 "DELETE FROM recurring_task_rules WHERE profile_id = ?1",
-                &format!("DELETE FROM plans WHERE goal_id IN ({})", Self::GOALS_OF_PROFILE),
-                &format!("DELETE FROM study_stages WHERE goal_id IN ({})", Self::GOALS_OF_PROFILE),
+                &format!(
+                    "DELETE FROM plans WHERE goal_id IN ({})",
+                    Self::GOALS_OF_PROFILE
+                ),
+                &format!(
+                    "DELETE FROM study_stages WHERE goal_id IN ({})",
+                    Self::GOALS_OF_PROFILE
+                ),
                 "DELETE FROM learning_items WHERE profile_id = ?1",
                 "DELETE FROM goals WHERE profile_id = ?1",
             ] {
-                tx.execute(sql, params![profile_id]).map_err(|e| e.to_string())?;
+                tx.execute(sql, params![profile_id])
+                    .map_err(|e| e.to_string())?;
             }
         }
 
@@ -259,24 +317,29 @@ impl<'a> CleanupRepository<'a> {
             tx.execute(
                 &format!(
                     "DELETE FROM adjustments WHERE goal_id IN ({}) AND date(created_at) {} LIKE ?",
-                    Self::GOALS_OF_PROFILE, neg_a
+                    Self::GOALS_OF_PROFILE,
+                    neg_a
                 ),
                 params![profile_id, like_a],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
             tx.execute(
                 &format!(
                     "DELETE FROM feedbacks WHERE goal_id IN ({}) AND date(created_at) {} LIKE ?",
-                    Self::GOALS_OF_PROFILE, neg_f
+                    Self::GOALS_OF_PROFILE,
+                    neg_f
                 ),
                 params![profile_id, like_f],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
             tx.execute(
                 &format!(
                     "DELETE FROM evaluations WHERE profile_id = ? AND date(occurred_at) {} LIKE ?",
                     neg_e
                 ),
                 params![profile_id, like_e],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
             // Session 附件（session_id 指向将删除的 session）
             tx.execute(
                 &format!(
@@ -287,7 +350,8 @@ impl<'a> CleanupRepository<'a> {
                     neg_s
                 ),
                 params![profile_id, profile_id, like_s],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
             // 会话（tasks.task_id → sessions ON DELETE SET NULL，先删 session 安全）
             tx.execute(
                 &format!(
@@ -303,7 +367,8 @@ impl<'a> CleanupRepository<'a> {
                     neg_t
                 ),
                 params![profile_id, like_t],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         tx.commit().map_err(|e| e.to_string())?;
@@ -315,6 +380,9 @@ impl<'a> CleanupRepository<'a> {
 fn like_parts(filter: &str) -> (&'static str, String) {
     let neg = if filter.contains(" NOT ") { "NOT" } else { "" };
     let start = filter.find("LIKE '").map(|i| i + 6).unwrap_or(0);
-    let end = filter[start..].find('\'').map(|i| start + i).unwrap_or(filter.len());
+    let end = filter[start..]
+        .find('\'')
+        .map(|i| start + i)
+        .unwrap_or(filter.len());
     (neg, filter[start..end].to_string())
 }

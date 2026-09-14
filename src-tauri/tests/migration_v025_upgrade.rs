@@ -46,12 +46,27 @@ fn build_v024(conn: &Connection) {
         (17, "personal_intelligence", v017_personal_intelligence::up),
         (18, "daily_dual_tree_loop", v018_daily_dual_tree_loop::up),
         (19, "goal_brief", v019_goal_brief::up),
-        (20, "goal_truth_convergence", v020_goal_truth_convergence::up),
-        (21, "personal_planning_truth", v021_personal_planning_truth::up),
+        (
+            20,
+            "goal_truth_convergence",
+            v020_goal_truth_convergence::up,
+        ),
+        (
+            21,
+            "personal_planning_truth",
+            v021_personal_planning_truth::up,
+        ),
         (22, "personal_xlsx", v022_personal_xlsx::up),
-        (23, "recurring_task_semantics", v023_recurring_task_semantics::up),
-        (24, "ai_provider_profiles_and_action_continuation",
-            v024_ai_provider_profiles_and_action_continuation::up),
+        (
+            23,
+            "recurring_task_semantics",
+            v023_recurring_task_semantics::up,
+        ),
+        (
+            24,
+            "ai_provider_profiles_and_action_continuation",
+            v024_ai_provider_profiles_and_action_continuation::up,
+        ),
     ];
     for (v, name, up) in ups {
         up(conn).unwrap_or_else(|e| panic!("v{v:03} {name} 执行失败：{e}"));
@@ -129,9 +144,14 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
     app_lib::migrations::run_migrations(&conn).unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     let ver: u32 = conn
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
         .unwrap();
-    assert_eq!(ver, 29, "升级后 schema = v029（v025→v029 连跑，v025 语义仍被完整验证）");
+    assert_eq!(
+        ver, 29,
+        "升级后 schema = v029（v025→v029 连跑，v025 语义仍被完整验证）"
+    );
 
     // ---- ① 数据完整：全字段值逐一比对（run-old-1）----
     let row = conn
@@ -160,10 +180,18 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
         .unwrap();
     assert_eq!(row.0, profile_id, "profile_id 完整");
     assert_eq!(row.1, Some(conversation_id), "conversation_id 完整");
-    assert_eq!((row.2.as_str(), row.3.as_str()), ("assistant", "global_agent"), "mode/action 完整");
+    assert_eq!(
+        (row.2.as_str(), row.3.as_str()),
+        ("assistant", "global_agent"),
+        "mode/action 完整"
+    );
     assert_eq!(row.4, "completed", "原 status 全保留（completed）");
     assert_eq!(row.5, "", "error 完整");
-    assert_eq!((row.6, row.7, row.8), (Some(100), Some(200), Some(300)), "token 三列完整");
+    assert_eq!(
+        (row.6, row.7, row.8),
+        (Some(100), Some(200), Some(300)),
+        "token 三列完整"
+    );
     assert_eq!(
         (row.9.as_deref(), row.10.as_deref()),
         (Some("global_agent"), Some("completed")),
@@ -174,16 +202,35 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
         "workflow_json 完整：{:?}",
         row.11
     );
-    assert_eq!((row.12, row.13.as_deref()), (Some(7), Some("主力模型")), "primary provider 快照完整");
-    assert_eq!((row.14.as_deref(), row.15.as_deref()), (Some("openai_compatible"), Some("gpt-test")));
-    assert_eq!((row.16, row.17.as_deref()), (Some(8), Some("控制模型")), "control provider 快照完整");
-    assert_eq!((row.18.as_deref(), row.19.as_deref()), (Some("deepseek"), Some("ds-test")));
+    assert_eq!(
+        (row.12, row.13.as_deref()),
+        (Some(7), Some("主力模型")),
+        "primary provider 快照完整"
+    );
+    assert_eq!(
+        (row.14.as_deref(), row.15.as_deref()),
+        (Some("openai_compatible"), Some("gpt-test"))
+    );
+    assert_eq!(
+        (row.16, row.17.as_deref()),
+        (Some(8), Some("控制模型")),
+        "control provider 快照完整"
+    );
+    assert_eq!(
+        (row.18.as_deref(), row.19.as_deref()),
+        (Some("deepseek"), Some("ds-test"))
+    );
 
     // 第二条历史 run：原 status（waiting_approval）保留
     let s2: String = conn
-        .query_row("SELECT status FROM ai_runs WHERE id='run-old-2'", [], |r| r.get(0))
+        .query_row("SELECT status FROM ai_runs WHERE id='run-old-2'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
-    assert_eq!(s2, "waiting_approval", "原 status 全保留（waiting_approval）");
+    assert_eq!(
+        s2, "waiting_approval",
+        "原 status 全保留（waiting_approval）"
+    );
 
     // ---- ② 字段完整：列集合与顺序 = v017 建表 + v021 三列 + v024 八列 ----
     let cols: Vec<String> = {
@@ -194,13 +241,35 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
             .collect()
     };
     let expected = [
-        "id", "profile_id", "conversation_id", "mode", "action", "status", "error",
-        "prompt_tokens", "completion_tokens", "total_tokens", "created_at", "updated_at",
-        "workflow_type", "workflow_state", "workflow_json",
-        "primary_ai_profile_id", "primary_profile_name", "primary_adapter_kind", "primary_model",
-        "control_ai_profile_id", "control_profile_name", "control_adapter_kind", "control_model",
+        "id",
+        "profile_id",
+        "conversation_id",
+        "mode",
+        "action",
+        "status",
+        "error",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "created_at",
+        "updated_at",
+        "workflow_type",
+        "workflow_state",
+        "workflow_json",
+        "primary_ai_profile_id",
+        "primary_profile_name",
+        "primary_adapter_kind",
+        "primary_model",
+        "control_ai_profile_id",
+        "control_profile_name",
+        "control_adapter_kind",
+        "control_model",
     ];
-    assert_eq!(cols, expected.to_vec(), "列集合与顺序完整（v017+v021+v024 演变序）");
+    assert_eq!(
+        cols,
+        expected.to_vec(),
+        "列集合与顺序完整（v017+v021+v024 演变序）"
+    );
 
     // ---- ③ FK 完整：关联数据行数与关联值不变 ----
     let (n_events, n_pending, pending_run): (i64, i64, Option<String>) = conn
@@ -225,7 +294,10 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
             .collect()
     };
     for want in ["idx_airun_profile", "idx_airun_workflow"] {
-        assert!(idx.contains(&want.to_string()), "索引 {want} 必须存在：{idx:?}");
+        assert!(
+            idx.contains(&want.to_string()),
+            "索引 {want} 必须存在：{idx:?}"
+        );
     }
 
     // ---- ⑤ foreign_key_check 无结果 ----

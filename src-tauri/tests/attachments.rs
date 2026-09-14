@@ -9,11 +9,8 @@
 //! 6. 删除 attachment metadata（+ 文件由 command 层处理，此处验证 DB）
 
 use app_lib::repository::{
-    attachment::AttachmentRepository,
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
+    attachment::AttachmentRepository, goal::GoalRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, study_session::StudySessionRepository,
 };
 use rusqlite::Connection;
 
@@ -60,21 +57,37 @@ fn test_migration_v009_applied_and_idempotent() {
     // v024（ai_provider_profiles / action continuation）已追加（DEV-0066 Gate 修正：预存断言停在 23）
     assert_eq!(
         versions,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
     );
 
     let columns: Vec<String> = {
-        let mut stmt = conn.prepare("PRAGMA table_info(learning_attachments)").unwrap();
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(learning_attachments)")
+            .unwrap();
         stmt.query_map([], |r| r.get::<_, String>(1))
             .unwrap()
             .filter_map(|v| v.ok())
             .collect()
     };
     for expected in [
-        "id", "learning_item_id", "session_id", "attachment_type", "file_name",
-        "relative_path", "mime_type", "caption", "created_at",
+        "id",
+        "learning_item_id",
+        "session_id",
+        "attachment_type",
+        "file_name",
+        "relative_path",
+        "mime_type",
+        "caption",
+        "created_at",
     ] {
-        assert!(columns.contains(&expected.to_string()), "缺少列 {}", expected);
+        assert!(
+            columns.contains(&expected.to_string()),
+            "缺少列 {}",
+            expected
+        );
     }
 
     // 幂等
@@ -113,7 +126,8 @@ fn test_v008_to_v009_upgrade_preserves_old_data() {
         )
         .unwrap();
     }
-    conn.execute("INSERT INTO study_profiles (name) VALUES ('旧档案')", []).unwrap();
+    conn.execute("INSERT INTO study_profiles (name) VALUES ('旧档案')", [])
+        .unwrap();
     let pid = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO goals (name, profile_id) VALUES ('G', ?1)",
@@ -151,16 +165,28 @@ fn test_v008_to_v009_upgrade_preserves_old_data() {
 fn test_attachment_create_and_relative_path() {
     let conn = setup();
     let profile_id = create_default_profile(&conn);
-    let goal = GoalRepository::new(&conn).create(profile_id, "G", None).unwrap();
+    let goal = GoalRepository::new(&conn)
+        .create(profile_id, "G", None)
+        .unwrap();
     let item = LearningItemRepository::new(&conn)
         .create_root(goal.id, "极限", None)
         .unwrap();
-    let s = StudySessionRepository::new(&conn).start(item.id, None).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start(item.id, None)
+        .unwrap();
 
     let repo = AttachmentRepository::new(&conn);
     let att = repo
-        .create(profile_id, Some(item.id), Some(s.id), "image", "截图.png",
-                "1/1/42/abc123.png", Some("image/png"), "等价无穷小图示")
+        .create(
+            profile_id,
+            Some(item.id),
+            Some(s.id),
+            "image",
+            "截图.png",
+            "1/1/42/abc123.png",
+            Some("image/png"),
+            "等价无穷小图示",
+        )
         .unwrap();
 
     assert_eq!(att.learning_item_id, Some(item.id));
@@ -174,8 +200,16 @@ fn test_attachment_create_and_relative_path() {
 
     // 知识独立附件（session_id = NULL）
     let att2 = repo
-        .create(profile_id, Some(item.id), None, "drawing", "画图.png",
-                "1/1/42/def456.png", Some("image/png"), "")
+        .create(
+            profile_id,
+            Some(item.id),
+            None,
+            "drawing",
+            "画图.png",
+            "1/1/42/def456.png",
+            Some("image/png"),
+            "",
+        )
         .unwrap();
     assert_eq!(att2.session_id, None);
 
@@ -192,14 +226,27 @@ fn test_cross_profile_item_rejected() {
     let item_repo = LearningItemRepository::new(&conn);
     let repo = AttachmentRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "IA", None).unwrap();
     let _item_b = item_repo.create_root(goal_b.id, "IB", None).unwrap();
 
-    let result = repo.create(pb.id, Some(item_a.id), None, "image", "x.png", "x.png", None, "");
+    let result = repo.create(
+        pb.id,
+        Some(item_a.id),
+        None,
+        "image",
+        "x.png",
+        "x.png",
+        None,
+        "",
+    );
     assert!(result.is_err(), "跨 Profile 知识节点的附件必须被拒绝");
 }
 
@@ -218,29 +265,63 @@ fn test_session_item_mismatch_rejected() {
     // Session 属于 item1，附件却挂 item2
     let s = session_repo.start(item1.id, None).unwrap();
 
-    let result = repo.create(profile_id, Some(item2.id), Some(s.id), "image", "x.png", "x.png", None, "");
+    let result = repo.create(
+        profile_id,
+        Some(item2.id),
+        Some(s.id),
+        "image",
+        "x.png",
+        "x.png",
+        None,
+        "",
+    );
     assert!(result.is_err(), "session 与 item 不一致必须被拒绝");
 
     // 一致则成功
-    assert!(repo.create(profile_id, Some(item1.id), Some(s.id), "image", "y.png", "y.png", None, "").is_ok());
+    assert!(repo
+        .create(
+            profile_id,
+            Some(item1.id),
+            Some(s.id),
+            "image",
+            "y.png",
+            "y.png",
+            None,
+            ""
+        )
+        .is_ok());
 }
 
 #[test]
 fn test_delete_attachment_metadata() {
     let conn = setup();
     let profile_id = create_default_profile(&conn);
-    let goal = GoalRepository::new(&conn).create(profile_id, "G", None).unwrap();
+    let goal = GoalRepository::new(&conn)
+        .create(profile_id, "G", None)
+        .unwrap();
     let item = LearningItemRepository::new(&conn)
         .create_root(goal.id, "I", None)
         .unwrap();
     let repo = AttachmentRepository::new(&conn);
     let att = repo
-        .create(profile_id, Some(item.id), None, "video", "讲解.mp4",
-                "1/1/9/v.mp4", Some("video/mp4"), "")
+        .create(
+            profile_id,
+            Some(item.id),
+            None,
+            "video",
+            "讲解.mp4",
+            "1/1/9/v.mp4",
+            Some("video/mp4"),
+            "",
+        )
         .unwrap();
 
     let rel = repo.delete(att.id).unwrap();
-    assert_eq!(rel.as_deref(), Some("1/1/9/v.mp4"), "删除返回 relative_path 供 command 删文件");
+    assert_eq!(
+        rel.as_deref(),
+        Some("1/1/9/v.mp4"),
+        "删除返回 relative_path 供 command 删文件"
+    );
     assert!(repo.get(att.id).unwrap().is_none(), "DB 记录已删除");
     assert_eq!(repo.list_by_learning_item(item.id).unwrap().len(), 0);
     // 再删返回 None（幂等）
@@ -251,13 +332,27 @@ fn test_delete_attachment_metadata() {
 fn test_safe_delete_blocked_by_attachments() {
     let conn = setup();
     let profile_id = create_default_profile(&conn);
-    let goal = GoalRepository::new(&conn).create(profile_id, "G", None).unwrap();
+    let goal = GoalRepository::new(&conn)
+        .create(profile_id, "G", None)
+        .unwrap();
     let item_repo = LearningItemRepository::new(&conn);
     let item = item_repo.create_root(goal.id, "I", None).unwrap();
     AttachmentRepository::new(&conn)
-        .create(profile_id, Some(item.id), None, "image", "x.png", "x.png", None, "")
+        .create(
+            profile_id,
+            Some(item.id),
+            None,
+            "image",
+            "x.png",
+            "x.png",
+            None,
+            "",
+        )
         .unwrap();
 
     let result = item_repo.safe_delete(item.id);
-    assert!(result.is_err(), "含附件节点需先删除附件（明确策略，防孤儿文件）");
+    assert!(
+        result.is_err(),
+        "含附件节点需先删除附件（明确策略，防孤儿文件）"
+    );
 }

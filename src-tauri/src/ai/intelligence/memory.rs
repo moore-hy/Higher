@@ -60,7 +60,9 @@ pub async fn extract_memories(
     collected: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<ExtractedMemory>, String> {
     let mut prompt = String::new();
-    prompt.push_str("你是 Higher AI 的个人记忆提取器。只输出一个 JSON 对象，不要 markdown 代码块，不要解释。\n");
+    prompt.push_str(
+        "你是 Higher AI 的个人记忆提取器。只输出一个 JSON 对象，不要 markdown 代码块，不要解释。\n",
+    );
     prompt.push_str("输出 schema：\n{\"memories\":[{\"kind\":\"explicit\"|\"derived\",\"memory_type\":\"user_fact|user_opinion|user_preference|user_constraint|goal_context\",\"category\":\"\",\"key\":\"\",\"value\":\"\",\"excerpt\":\"\",\"importance\":3,\"confidence\":\"low|medium|high\"}]}\n");
     prompt.push_str("规则：\n");
     prompt.push_str("1. explicit = 用户本轮原话中的明确自我陈述/偏好/约束/目标（excerpt 必须是用户原话片段，禁止改写）。\n");
@@ -71,7 +73,10 @@ pub async fn extract_memories(
     prompt.push_str("6. 【临时操作意图禁提】当前命令/当前请求/当前 UI 操作不是长期用户事实，禁止提取，例如「用户需要我生成计划」「用户让我查看档案」「用户请求做某事」。只有长期成立的陈述才可提取（如「用户计划参加2028考研」「目标院校为华中科技大学」）。\n\n");
     prompt.push_str(&format!("【用户本轮消息】\n{}\n\n", user_message));
     if !profile_summary.trim().is_empty() {
-        prompt.push_str(&format!("【已有用户档案摘要（勿重复提取）】\n{}\n\n", profile_summary));
+        prompt.push_str(&format!(
+            "【已有用户档案摘要（勿重复提取）】\n{}\n\n",
+            profile_summary
+        ));
     }
     if !collected.is_empty() {
         let lines: Vec<String> = collected
@@ -82,7 +87,11 @@ pub async fn extract_memories(
     }
 
     let comp = responder
-        .chat(vec![crate::ai::client::ChatMessage::user(prompt)], None, Some(2048))
+        .chat(
+            vec![crate::ai::client::ChatMessage::user(prompt)],
+            None,
+            Some(2048),
+        )
         .await?;
     let raw = comp.content.unwrap_or_default().trim().to_string();
     let stripped = raw
@@ -96,8 +105,8 @@ pub async fn extract_memories(
         #[serde(default)]
         memories: Vec<ExtractedMemory>,
     }
-    let parsed: Raw = serde_json::from_str(stripped)
-        .map_err(|e| format!("memory 提取结果非法 JSON：{e}"))?;
+    let parsed: Raw =
+        serde_json::from_str(stripped).map_err(|e| format!("memory 提取结果非法 JSON：{e}"))?;
     Ok(parsed.memories)
 }
 
@@ -106,15 +115,19 @@ pub async fn extract_memories(
 /// 不是长期用户事实——提示词规则 6 是软闸门，此处代码级兜底（模型误提取
 /// 也不得进入 pending_confirmation）。
 fn is_temporary_operation_intent(item: &ExtractedMemory) -> bool {
-    let text = format!(
-        "{}{}{}",
-        item.key, item.value, item.excerpt
-    );
+    let text = format!("{}{}{}", item.key, item.value, item.excerpt);
     let lower = text.to_lowercase();
     // 「需要我…」「让我…」「请求…」类操作意图表述（value/excerpt/key 任一命中即拒）
     const PATTERNS: [&str; 9] = [
-        "需要我", "需要生成", "让我生成", "让我查看", "让我做",
-        "请求查看", "请求生成", "帮我生成", "用户需要做",
+        "需要我",
+        "需要生成",
+        "让我生成",
+        "让我查看",
+        "让我做",
+        "请求查看",
+        "请求生成",
+        "帮我生成",
+        "用户需要做",
     ];
     PATTERNS.iter().any(|p| lower.contains(p))
 }

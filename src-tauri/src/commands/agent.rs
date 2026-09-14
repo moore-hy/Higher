@@ -187,7 +187,12 @@ pub fn set_active_ai_profiles(
         repo.set_active_profiles_atomic(primary_id, control_id)?;
     }
     // §37.2 Settings / Panel 同步：单一 Canonical active id；切换即广播
-    ai::run::emit(Some(&app), "higher:ai-profiles-changed", "", serde_json::json!({}));
+    ai::run::emit(
+        Some(&app),
+        "higher:ai-profiles-changed",
+        "",
+        serde_json::json!({}),
+    );
     Ok(())
 }
 
@@ -296,14 +301,16 @@ pub async fn test_ai_provider_compatibility(
     }))
 }
 
-
 // =============== Personal Intelligence（DEV-0052）+ AI 记忆中心（DEV-0076；Section 6 increment 12） ===============
 // =============== DEV-0052 · Personal Intelligence ===============
 
 // ---------- Mode（PHASE A） ----------
 
 #[tauri::command]
-pub fn get_ai_mode(state: tauri::State<'_, db::DbState>, profile_id: i64) -> Result<String, String> {
+pub fn get_ai_mode(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<String, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let v = SettingRepository::new(&conn)
         .get(&format!("ai.mode.{}", profile_id))
@@ -312,8 +319,16 @@ pub fn get_ai_mode(state: tauri::State<'_, db::DbState>, profile_id: i64) -> Res
 }
 
 #[tauri::command]
-pub fn set_ai_mode(state: tauri::State<'_, db::DbState>, profile_id: i64, mode: String) -> Result<(), String> {
-    let m = if mode == "assistant" { "assistant" } else { "readonly" };
+pub fn set_ai_mode(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    mode: String,
+) -> Result<(), String> {
+    let m = if mode == "assistant" {
+        "assistant"
+    } else {
+        "readonly"
+    };
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     SettingRepository::new(&conn)
         .set(&format!("ai.mode.{}", profile_id), m)
@@ -330,8 +345,11 @@ pub fn create_ai_conversation(
     title: Option<String>,
 ) -> Result<repository::conversation::AiConversation, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::conversation::ConversationRepository::new(&conn)
-        .create(profile_id, mode.as_deref().unwrap_or("readonly"), title.as_deref().unwrap_or("新对话"))
+    repository::conversation::ConversationRepository::new(&conn).create(
+        profile_id,
+        mode.as_deref().unwrap_or("readonly"),
+        title.as_deref().unwrap_or("新对话"),
+    )
 }
 
 #[tauri::command]
@@ -342,8 +360,11 @@ pub fn list_ai_conversations(
     before_id: Option<i64>,
 ) -> Result<Vec<repository::conversation::AiConversation>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::conversation::ConversationRepository::new(&conn)
-        .list_recent(profile_id, limit.unwrap_or(20), before_id)
+    repository::conversation::ConversationRepository::new(&conn).list_recent(
+        profile_id,
+        limit.unwrap_or(20),
+        before_id,
+    )
 }
 
 #[tauri::command]
@@ -355,12 +376,20 @@ pub fn list_ai_messages(
     offset: Option<i64>,
 ) -> Result<Vec<repository::conversation::AiMessage>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::conversation::ConversationRepository::new(&conn)
-        .list_messages(conversation_id, profile_id, limit.unwrap_or(50), offset.unwrap_or(0))
+    repository::conversation::ConversationRepository::new(&conn).list_messages(
+        conversation_id,
+        profile_id,
+        limit.unwrap_or(50),
+        offset.unwrap_or(0),
+    )
 }
 
 #[tauri::command]
-pub fn archive_ai_conversation(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
+pub fn archive_ai_conversation(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::conversation::ConversationRepository::new(&conn).archive(id, profile_id)
 }
@@ -387,8 +416,12 @@ pub fn search_higher(
     limit: Option<i64>,
 ) -> Result<Vec<repository::search::SearchHit>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::search::SearchRepository::new(&conn)
-        .search(profile_id, &query, entity_types.as_deref(), limit.unwrap_or(20))
+    repository::search::SearchRepository::new(&conn).search(
+        profile_id,
+        &query,
+        entity_types.as_deref(),
+        limit.unwrap_or(20),
+    )
 }
 
 // ---------- Memory（PHASE D） ----------
@@ -403,7 +436,11 @@ pub fn list_memory_records(
 }
 
 #[tauri::command]
-pub fn dismiss_memory_record(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
+pub fn dismiss_memory_record(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::memory::MemoryRepository::new(&conn).dismiss(id, profile_id)
 }
@@ -427,7 +464,8 @@ pub fn list_ai_change_set_operations(
     change_set_id: i64,
 ) -> Result<Vec<repository::changeset::ChangeOperation>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::changeset::ChangeSetRepository::new(&conn).list_operations(change_set_id, profile_id)
+    repository::changeset::ChangeSetRepository::new(&conn)
+        .list_operations(change_set_id, profile_id)
 }
 
 #[tauri::command]
@@ -460,12 +498,22 @@ pub fn apply_ai_change_set(
     //（apply_change_set_with_side_effects：事务 + grounding + workflow + vault 审计 +
     // 快照 + ai://applied 广播），ChangeSet = Transaction + Audit + Undo 边界。
     ai::commands::apply_change_set_with_side_effects(
-        Some(&app), &conn, &vault, profile_id, id, only_selected, "user",
+        Some(&app),
+        &conn,
+        &vault,
+        profile_id,
+        id,
+        only_selected,
+        "user",
     )
 }
 
 #[tauri::command]
-pub fn reject_ai_change_set(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
+pub fn reject_ai_change_set(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::changeset::ChangeSetRepository::new(&conn).reject(id, profile_id)
 }
@@ -507,7 +555,12 @@ pub fn dismiss_adaptation_proposal(
     proposal_run_id: String,
 ) -> Result<bool, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    ai::adaptation::proposal::dismiss_proposal(&conn, profile_id, conversation_id, &proposal_run_id)?;
+    ai::adaptation::proposal::dismiss_proposal(
+        &conn,
+        profile_id,
+        conversation_id,
+        &proposal_run_id,
+    )?;
     Ok(true)
 }
 
@@ -536,7 +589,11 @@ pub async fn import_personalization_files(
     use sha2::{Digest, Sha256};
     // ---- 阶段 A（锁内短临界区）：文件解析 + 提取 + 持久化 source ----
     // F21-01：原资料导入与本轮 AI 分析解耦——AI 失败绝不使上传失败。
-    let root = adir.0.join("personalization").join(profile_id.to_string()).join("sources");
+    let root = adir
+        .0
+        .join("personalization")
+        .join(profile_id.to_string())
+        .join("sources");
     let mut created: Vec<ai::intelligence::ImportAnalysisOutcome> = Vec::new();
     // (source_id, 提取文本, 归档目录) —— 阶段 C 逐个送 AI Analyzer
     let mut to_analyze: Vec<(i64, String, std::path::PathBuf)> = Vec::new();
@@ -549,8 +606,16 @@ pub async fn import_personalization_files(
         let repo = repository::personalization::PersonalizationRepository::new(&conn);
         for p in paths {
             let src = sandbox::resolve_import_source(&p)?;
-            let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("source").to_string();
-            let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+            let name = src
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("source")
+                .to_string();
+            let ext = src
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
             let ftype = match ext.as_str() {
                 "txt" => "txt",
                 "md" | "markdown" => "md",
@@ -558,16 +623,26 @@ pub async fn import_personalization_files(
                 "pdf" => "pdf",
                 "xlsx" => "xlsx",
                 "doc" => {
-                    return Err(format!("「{}」是旧版 .doc 格式，请转换为 .docx / .pdf / .txt 后重新导入。", name));
+                    return Err(format!(
+                        "「{}」是旧版 .doc 格式，请转换为 .docx / .pdf / .txt 后重新导入。",
+                        name
+                    ));
                 }
-                _ => return Err(format!("「{}」格式不支持（仅 txt / md / docx / pdf / xlsx）", name)),
+                _ => {
+                    return Err(format!(
+                        "「{}」格式不支持（仅 txt / md / docx / pdf / xlsx）",
+                        name
+                    ))
+                }
             };
             // 提取（流式 → 文本）
             let text = match ftype {
                 "txt" | "md" => {
                     let mut bytes = Vec::new();
-                    std::fs::File::open(&src).map_err(|e| e.to_string())?
-                        .read_to_end_mut(&mut bytes).map_err(|e| e.to_string())?;
+                    std::fs::File::open(&src)
+                        .map_err(|e| e.to_string())?
+                        .read_to_end_mut(&mut bytes)
+                        .map_err(|e| e.to_string())?;
                     repository::personalization::decode_text(bytes)?
                 }
                 "docx" => repository::personalization::extract_docx(&src)?,
@@ -641,25 +716,33 @@ pub async fn import_personalization_files(
                 Err(_) => ai::intelligence::ANALYSIS_FAILED,
             };
             for d in state_dirs.iter().skip(1) {
-                ai::intelligence::apply_analysis_state_only(d, st, res.as_ref().err().map(|e| e.as_str()));
+                ai::intelligence::apply_analysis_state_only(
+                    d,
+                    st,
+                    res.as_ref().err().map(|e| e.as_str()),
+                );
             }
             st.to_string()
         }
         (true, Err(e)) => {
             // 任一 source 读取失败：禁止残缺分析，全批 failed，旧值不动
             for d in &state_dirs {
-                ai::intelligence::apply_analysis_state_only(d, ai::intelligence::ANALYSIS_FAILED, Some(&e));
+                ai::intelligence::apply_analysis_state_only(
+                    d,
+                    ai::intelligence::ANALYSIS_FAILED,
+                    Some(&e),
+                );
             }
             ai::intelligence::ANALYSIS_FAILED.to_string()
         }
-        (false, _) => ai::intelligence::mark_analysis_pending(
-            state_dirs.first().map(|p| p.as_path()),
-        ),
+        (false, _) => {
+            ai::intelligence::mark_analysis_pending(state_dirs.first().map(|p| p.as_path()))
+        }
     };
     for (sid, _text, _dir) in to_analyze {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        if let Some(s) =
-            repository::personalization::PersonalizationRepository::new(&conn).get_source(sid, profile_id)?
+        if let Some(s) = repository::personalization::PersonalizationRepository::new(&conn)
+            .get_source(sid, profile_id)?
         {
             created.push(ai::intelligence::ImportAnalysisOutcome {
                 source: s,
@@ -789,7 +872,13 @@ pub fn update_ai_memory(
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     ai::intelligence::memory_confirmation::update_memory(
-        &conn, profile_id, memory_id, &memory_type, &category, &memory_key, &memory_value,
+        &conn,
+        profile_id,
+        memory_id,
+        &memory_type,
+        &category,
+        &memory_key,
+        &memory_value,
         &source_excerpt,
     )
 }
@@ -829,7 +918,11 @@ pub fn save_ai_profile(
 }
 
 #[tauri::command]
-pub fn delete_personalization_source(state: tauri::State<'_, db::DbState>, profile_id: i64, id: i64) -> Result<(), String> {
+pub fn delete_personalization_source(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::personalization::PersonalizationRepository::new(&conn).delete_source(id, profile_id)
 }
@@ -863,7 +956,9 @@ pub async fn compile_personalization(
         return Err(ai::provider::primary_json_error(&primary_caps.display_name));
     }
     if chunks.is_empty() {
-        return Err("还没有导入任何资料。请先在「添加资料」导入 txt / md / docx / pdf。".to_string());
+        return Err(
+            "还没有导入任何资料。请先在「添加资料」导入 txt / md / docx / pdf。".to_string(),
+        );
     }
     let client = primary_client(&state)?;
     // 2) Map：每 source 提取结构化要点
@@ -875,13 +970,18 @@ pub async fn compile_personalization(
     let mut source_names: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        for s in repository::personalization::PersonalizationRepository::new(&conn).list_sources(profile_id)? {
+        for s in repository::personalization::PersonalizationRepository::new(&conn)
+            .list_sources(profile_id)?
+        {
             source_names.insert(s.id, s.file_name);
         }
     }
     for (sid, content) in &by_source {
         let brief: String = content.chars().take(30_000).collect();
-        let name = source_names.get(sid).cloned().unwrap_or_else(|| format!("source#{}", sid));
+        let name = source_names
+            .get(sid)
+            .cloned()
+            .unwrap_or_else(|| format!("source#{}", sid));
         let prompt = format!(
             "从下面这份用户资料（文件名：{}）中提取关于用户的结构化信息。只输出 JSON（不要 markdown 代码块）：\n{{\"facts\":[{{\"section\":\"基本情况|学历与专业背景|当前状态|最终学习目标|当前能力基础|优势|明显短板|学习习惯|时间条件|学习偏好|既往学习经历|当前学习进度|重要限制条件|用户明确要求\",\"kind\":\"fact|opinion\",\"text\":\"一句话\"}}]}}\n规则：只提取资料中明确写的；不确定不编造；原文观点标 opinion。\n\n资料内容：\n{}",
             name, brief
@@ -895,7 +995,12 @@ pub async fn compile_personalization(
             )
             .await?;
         let raw = c.content.unwrap_or_default();
-        let trimmed = raw.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+        let trimmed = raw
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
             if let Some(arr) = v.get("facts").and_then(|f| f.as_array()) {
                 for mut f in arr.clone() {
@@ -929,7 +1034,16 @@ pub async fn compile_personalization(
                 if let Some(_) = dup {
                     conflicts.push(format!("来源《{}》：{}", src, text));
                 } else {
-                    lines.push(format!("- {}（{}；来源《{}》）", text, if kind == "opinion" { "用户观点" } else { "事实" }, src));
+                    lines.push(format!(
+                        "- {}（{}；来源《{}》）",
+                        text,
+                        if kind == "opinion" {
+                            "用户观点"
+                        } else {
+                            "事实"
+                        },
+                        src
+                    ));
                 }
             }
         }
@@ -949,7 +1063,9 @@ pub async fn compile_personalization(
             md.push('\n');
         }
     }
-    md.push_str("## 15. Higher 客观观察\n（由 Higher 系统在 Consolidation 时补充：近期学习统计等）\n\n");
+    md.push_str(
+        "## 15. Higher 客观观察\n（由 Higher 系统在 Consolidation 时补充：近期学习统计等）\n\n",
+    );
     md.push_str("## 16. AI 推断\n");
     for f in &facts {
         if f.get("kind").and_then(|x| x.as_str()) == Some("opinion") {
@@ -971,14 +1087,23 @@ pub async fn compile_personalization(
     for (sid, name) in &source_names {
         md.push_str(&format!("- 《{}》（source#{}）\n", name, sid));
     }
-    md.push_str(&format!("\n## 19. 更新历史\n- {}：首次 Compile 生成 Draft（{} 份资料）\n", chrono_now(), by_source.len()));
+    md.push_str(&format!(
+        "\n## 19. 更新历史\n- {}：首次 Compile 生成 Draft（{} 份资料）\n",
+        chrono_now(),
+        by_source.len()
+    ));
     // 5) Draft 落库（DEV-0059.1 §6/§7：版本-来源 snapshot + structured_json contract；
     //    conflicts 进 unresolved，不猜值）
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let source_ids: Vec<i64> = by_source.keys().cloned().collect();
-    let structured_json = repository::personalization::build_personal_structured(&facts, &conflicts);
-    repository::personalization::PersonalizationRepository::new(&conn)
-        .save_draft_with_sources(profile_id, &md, Some(&structured_json), &source_ids)?;
+    let structured_json =
+        repository::personalization::build_personal_structured(&facts, &conflicts);
+    repository::personalization::PersonalizationRepository::new(&conn).save_draft_with_sources(
+        profile_id,
+        &md,
+        Some(&structured_json),
+        &source_ids,
+    )?;
     repository::personalization::PersonalizationRepository::new(&conn)
         .get_profile(profile_id)?
         .ok_or("生成失败".to_string())
@@ -1005,7 +1130,10 @@ pub fn chrono_now() -> String {
 }
 
 #[tauri::command]
-pub fn confirm_personalization_profile(state: tauri::State<'_, db::DbState>, profile_id: i64) -> Result<(), String> {
+pub fn confirm_personalization_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let repo = repository::personalization::PersonalizationRepository::new(&conn);
     repo.confirm(profile_id)?;
@@ -1015,7 +1143,11 @@ pub fn confirm_personalization_profile(state: tauri::State<'_, db::DbState>, pro
 }
 
 #[tauri::command]
-pub fn edit_personalization_profile(state: tauri::State<'_, db::DbState>, profile_id: i64, md_content: String) -> Result<(), String> {
+pub fn edit_personalization_profile(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    md_content: String,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let repo = repository::personalization::PersonalizationRepository::new(&conn);
     repo.user_edit(profile_id, &md_content)?;
@@ -1028,7 +1160,6 @@ pub fn edit_personalization_profile(state: tauri::State<'_, db::DbState>, profil
 pub fn get_requirement_template() -> Result<String, String> {
     Ok(repository::personalization::REQUIREMENT_TEMPLATE_MD.to_string())
 }
-
 
 // =============== AI 分析（DEV-0019/0020/0021/0022 统一入口；Section 6 increment 17） ===============
 // =============== AI 分析（DEV-0019/0020/0021/0022 统一入口） ===============
@@ -1110,8 +1241,8 @@ pub async fn ai_analyze(
     date: Option<String>,
 ) -> Result<ai::AiResult, String> {
     let started = std::time::Instant::now();
-    let act = ai::AiAction::from_str(&action)
-        .ok_or_else(|| format!("未知的 AI 功能：{}", action))?;
+    let act =
+        ai::AiAction::from_str(&action).ok_or_else(|| format!("未知的 AI 功能：{}", action))?;
 
     let (context, page_labels, primary_cfg) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -1141,9 +1272,7 @@ pub async fn ai_analyze(
     };
 
     let client = ai::client::AiClient::new(primary_cfg);
-    let mut messages = vec![
-        ai::client::ChatMessage::system(ai::prompts::SYSTEM_PROMPT),
-    ];
+    let mut messages = vec![ai::client::ChatMessage::system(ai::prompts::SYSTEM_PROMPT)];
     // Panel 对话历史（role, content；仅 user/assistant；后端不信任其他 role）
     if let Some(hist) = &history {
         for (role, content) in hist.iter() {
@@ -1174,8 +1303,14 @@ pub async fn ai_analyze(
     // 所有 action 均要求 JSON；一次结构修复重试（最多一次；禁止无限重试）
     for attempt in 0..2 {
         let (content, usage, trace, rounds) = if act.allow_tools() {
-            ai::tools::run_with_tools(&state, &client, profile_id, messages.clone(), act.require_json())
-                .await?
+            ai::tools::run_with_tools(
+                &state,
+                &client,
+                profile_id,
+                messages.clone(),
+                act.require_json(),
+            )
+            .await?
         } else {
             let c = client
                 .chat(messages.clone(), act.require_json(), None, Some(4096))
@@ -1185,7 +1320,12 @@ pub async fn ai_analyze(
         };
 
         // JSON 校验（assistant_chat 额外校验协议类型）
-        let trimmed = content.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+        let trimmed = content
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
         let ok = serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
             && (act != ai::AiAction::AssistantChat
                 || ai::AssistantChatResponse::parse(trimmed).is_ok());
@@ -1217,6 +1357,9 @@ pub async fn ai_analyze(
 }
 
 pub fn nonzero(v: i64) -> Option<i64> {
-    if v > 0 { Some(v) } else { None }
+    if v > 0 {
+        Some(v)
+    } else {
+        None
+    }
 }
-

@@ -166,16 +166,58 @@ impl VaultState {
         Ok(())
     }
 
-    pub fn record_user(&self, action: &str, entity_type: &str, entity_id: Option<i64>, detail: &str) {
-        let _ = self.record("USER", "", action, entity_type, entity_id, None, Some(detail), None, None);
+    pub fn record_user(
+        &self,
+        action: &str,
+        entity_type: &str,
+        entity_id: Option<i64>,
+        detail: &str,
+    ) {
+        let _ = self.record(
+            "USER",
+            "",
+            action,
+            entity_type,
+            entity_id,
+            None,
+            Some(detail),
+            None,
+            None,
+        );
     }
 
     pub fn record_ai(&self, action: &str, run_id: &str, detail: &str) {
-        let _ = self.record("AI", "", action, "ai", None, None, Some(detail), Some(run_id), None);
+        let _ = self.record(
+            "AI",
+            "",
+            action,
+            "ai",
+            None,
+            None,
+            Some(detail),
+            Some(run_id),
+            None,
+        );
     }
 
-    pub fn record_system(&self, action: &str, entity_type: &str, entity_id: Option<i64>, detail: &str) {
-        let _ = self.record("SYSTEM", "", action, entity_type, entity_id, None, Some(detail), None, None);
+    pub fn record_system(
+        &self,
+        action: &str,
+        entity_type: &str,
+        entity_id: Option<i64>,
+        detail: &str,
+    ) {
+        let _ = self.record(
+            "SYSTEM",
+            "",
+            action,
+            entity_type,
+            entity_id,
+            None,
+            Some(detail),
+            None,
+            None,
+        );
     }
 
     /// 读取审计（需解锁）。
@@ -206,7 +248,8 @@ impl VaultState {
                 })
             })
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     // ---------- Blob（§169-170：SHA-256 去重 + 1MB chunk 顺序写） ----------
@@ -229,13 +272,20 @@ impl VaultState {
         let sha = format!("{:x}", hasher.finalize());
         let conn = self.open_conn()?;
         let exists: i64 = conn
-            .query_row("SELECT COUNT(*) FROM vault_blobs WHERE sha256=?1", params![sha], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM vault_blobs WHERE sha256=?1",
+                params![sha],
+                |r| r.get(0),
+            )
             .map_err(|e| e.to_string())?;
         if exists > 0 {
             return Ok(sha); // 去重
         }
-        conn.execute("INSERT INTO vault_blobs (sha256, size) VALUES (?1,?2)", params![sha, total as i64])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO vault_blobs (sha256, size) VALUES (?1,?2)",
+            params![sha, total as i64],
+        )
+        .map_err(|e| e.to_string())?;
         use std::io::Seek as _;
         f.rewind().map_err(|e| e.to_string())?;
         let mut idx = 0i64;
@@ -300,7 +350,9 @@ impl VaultState {
                     .as_millis();
                 let target = snap_dir.join(format!("higher-{}-{}.db", k, stamp));
                 std::fs::copy(db, &target).map_err(|e| format!("备份 higher.db 失败：{e}"))?;
-                size = std::fs::metadata(&target).map(|m| m.len() as i64).unwrap_or(0);
+                size = std::fs::metadata(&target)
+                    .map(|m| m.len() as i64)
+                    .unwrap_or(0);
                 manifest = serde_json::json!({ "db_file": target.file_name().and_then(|n| n.to_str()), "db_size": size });
             }
         }
@@ -325,7 +377,8 @@ impl VaultState {
         let rows = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn stats(&self) -> Result<(i64, i64, i64), String> {

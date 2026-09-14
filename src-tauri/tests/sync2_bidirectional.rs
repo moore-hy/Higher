@@ -31,8 +31,11 @@ fn temp_db(tag: &str) -> Connection {
 }
 
 fn insert_profile(conn: &Connection, name: &str) -> i64 {
-    conn.execute("INSERT INTO study_profiles (name) VALUES (?1)", params![name])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO study_profiles (name) VALUES (?1)",
+        params![name],
+    )
+    .unwrap();
     conn.last_insert_rowid()
 }
 
@@ -72,11 +75,16 @@ fn task_count(conn: &Connection, title: &str) -> i64 {
 }
 
 fn profile_count(conn: &Connection, name: &str) -> i64 {
-    count(conn, "SELECT COUNT(*) FROM study_profiles WHERE name = ?1", name)
+    count(
+        conn,
+        "SELECT COUNT(*) FROM study_profiles WHERE name = ?1",
+        name,
+    )
 }
 
 fn outbox_total(conn: &Connection) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0)).unwrap()
+    conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0))
+        .unwrap()
 }
 
 struct TestConnProvider(Arc<Mutex<Connection>>);
@@ -97,21 +105,33 @@ struct Endpoints {
     a_device: String,
 }
 
-fn endpoints(tag: &str, seed_a: impl FnOnce(&Connection), seed_b: impl FnOnce(&Connection)) -> Endpoints {
+fn endpoints(
+    tag: &str,
+    seed_a: impl FnOnce(&Connection),
+    seed_b: impl FnOnce(&Connection),
+) -> Endpoints {
     let a = temp_db(&format!("{tag}a"));
     let b = temp_db(&format!("{tag}b"));
     seed_a(&a);
     seed_b(&b);
     let a_device = a
-        .query_row("SELECT device_id FROM sync_local_device WHERE id=1", [], |r| r.get(0))
+        .query_row(
+            "SELECT device_id FROM sync_local_device WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
 
     let shared_a = Arc::new(Mutex::new(a));
     let shared_b = Arc::new(Mutex::new(b));
     let ha = SyncServerHandle::new();
     let hb = SyncServerHandle::new();
-    let a_port = ha.start(Arc::new(TestConnProvider(shared_a.clone()))).unwrap();
-    let b_port = hb.start(Arc::new(TestConnProvider(shared_b.clone()))).unwrap();
+    let a_port = ha
+        .start(Arc::new(TestConnProvider(shared_a.clone())))
+        .unwrap();
+    let b_port = hb
+        .start(Arc::new(TestConnProvider(shared_b.clone())))
+        .unwrap();
 
     // DEV-SYNC-003：一次性高熵 token（替代 6 位码）
     let code = ha.new_pairing_session().0;
@@ -121,7 +141,13 @@ fn endpoints(tag: &str, seed_a: impl FnOnce(&Connection), seed_b: impl FnOnce(&C
         pair_with_server(&b_guard, "127.0.0.1", a_port, &code, Some(&b_listen)).unwrap();
     }
 
-    Endpoints { a: shared_a, b: shared_b, ha, hb, a_device }
+    Endpoints {
+        a: shared_a,
+        b: shared_b,
+        ha,
+        hb,
+        a_device,
+    }
 }
 
 fn a_conn(e: &Endpoints, f: impl FnOnce(&Connection)) {
@@ -160,17 +186,33 @@ fn tc001_both_sides_gain_each_others_profile() {
     );
 
     // 配对 bootstrap（全量）：B 立即拥有 A 的档案；A 尚无 B 的档案
-    assert_eq!(profile_count(&e.b.lock().unwrap(), "2028考研"), 1, "配对后 B 已有 A 档案");
+    assert_eq!(
+        profile_count(&e.b.lock().unwrap(), "2028考研"),
+        1,
+        "配对后 B 已有 A 档案"
+    );
     assert_eq!(profile_count(&e.a.lock().unwrap(), "2028测试"), 0);
 
     // B 点击一次「立即同步」：B 存量档案（v029 补 outbox）推到 A
     let s = sync_from_b(&e);
     assert_eq!(s.deferred, 0);
 
-    assert_eq!(profile_count(&e.a.lock().unwrap(), "2028测试"), 1, "A 收到 B 档案");
-    assert_eq!(profile_count(&e.b.lock().unwrap(), "2028测试"), 1, "B 本机档案保留");
+    assert_eq!(
+        profile_count(&e.a.lock().unwrap(), "2028测试"),
+        1,
+        "A 收到 B 档案"
+    );
+    assert_eq!(
+        profile_count(&e.b.lock().unwrap(), "2028测试"),
+        1,
+        "B 本机档案保留"
+    );
     assert_eq!(profile_count(&e.a.lock().unwrap(), "2028考研"), 1);
-    assert_eq!(profile_count(&e.b.lock().unwrap(), "2028考研"), 1, "双方最终都拥有两个 Profile");
+    assert_eq!(
+        profile_count(&e.b.lock().unwrap(), "2028考研"),
+        1,
+        "双方最终都拥有两个 Profile"
+    );
     e.ha.stop();
     e.hb.stop();
 }
@@ -204,10 +246,16 @@ fn tc002_a_task_reaches_b() {
         println!("[tc002] B profiles={profiles} tasks={tasks}");
     });
     a_conn(&e, |a| {
-        let outbox: i64 = a.query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0)).unwrap();
+        let outbox: i64 = a
+            .query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0))
+            .unwrap();
         println!("[tc002] A outbox={outbox}");
     });
-    assert_eq!(task_count(&e.b.lock().unwrap(), "WINDOWS-SYNC-001"), 1, "B 必须拥有 A 的 Task");
+    assert_eq!(
+        task_count(&e.b.lock().unwrap(), "WINDOWS-SYNC-001"),
+        1,
+        "B 必须拥有 A 的 Task"
+    );
     e.ha.stop();
     e.hb.stop();
 }
@@ -228,7 +276,11 @@ fn tc003_b_task_reaches_a_via_b_click() {
     let s = sync_from_b(&e);
     assert!(s.pushed >= 1);
     assert_eq!(s.deferred, 0, "不得静默 deferred");
-    assert_eq!(task_count(&e.a.lock().unwrap(), "ANDROID-SYNC-001"), 1, "A 收到 B 的 Task");
+    assert_eq!(
+        task_count(&e.a.lock().unwrap(), "ANDROID-SYNC-001"),
+        1,
+        "A 收到 B 的 Task"
+    );
     e.ha.stop();
     e.hb.stop();
 }
@@ -250,8 +302,16 @@ fn tc004_both_create_then_one_click_converges() {
     let s = sync_from_b(&e);
     assert_eq!(s.deferred, 0);
     assert_eq!(task_count(&e.a.lock().unwrap(), "A-TASK"), 1);
-    assert_eq!(task_count(&e.a.lock().unwrap(), "B-TASK"), 1, "A 收到 B-TASK");
-    assert_eq!(task_count(&e.b.lock().unwrap(), "A-TASK"), 1, "B 收到 A-TASK");
+    assert_eq!(
+        task_count(&e.a.lock().unwrap(), "B-TASK"),
+        1,
+        "A 收到 B-TASK"
+    );
+    assert_eq!(
+        task_count(&e.b.lock().unwrap(), "A-TASK"),
+        1,
+        "B 收到 A-TASK"
+    );
     assert_eq!(task_count(&e.b.lock().unwrap(), "B-TASK"), 1);
     e.ha.stop();
     e.hb.stop();
@@ -272,7 +332,8 @@ fn tc005_a_update_propagates_to_b() {
     sync_from_b(&e);
     // A 改名
     a_conn(&e, |a| {
-        a.execute("UPDATE tasks SET title='改名后' WHERE title='改名前'", []).unwrap();
+        a.execute("UPDATE tasks SET title='改名后' WHERE title='改名前'", [])
+            .unwrap();
     });
     sync_from_b(&e);
     assert_eq!(task_count(&e.b.lock().unwrap(), "改名后"), 1);
@@ -294,7 +355,8 @@ fn tc006_b_complete_reaches_a_via_a_click() {
     );
     sync_from_b(&e); // 任务先到 B
     b_conn(&e, |b| {
-        b.execute("UPDATE tasks SET status='completed' WHERE title='T'", []).unwrap();
+        b.execute("UPDATE tasks SET status='completed' WHERE title='T'", [])
+            .unwrap();
     });
     // A 主动点击（连接 B listener；§七两端平等）
     let s = sync_from_a(&e);
@@ -324,7 +386,8 @@ fn tc007_a_delete_propagates_to_b() {
     sync_from_b(&e);
     assert_eq!(task_count(&e.b.lock().unwrap(), "D-TASK"), 1);
     a_conn(&e, |a| {
-        a.execute("DELETE FROM tasks WHERE title='D-TASK'", []).unwrap();
+        a.execute("DELETE FROM tasks WHERE title='D-TASK'", [])
+            .unwrap();
     });
     sync_from_b(&e);
     assert_eq!(task_count(&e.b.lock().unwrap(), "D-TASK"), 0, "B 侧删除");
@@ -345,7 +408,8 @@ fn tc008_b_delete_propagates_to_a() {
     );
     sync_from_b(&e);
     b_conn(&e, |b| {
-        b.execute("DELETE FROM tasks WHERE title='D2-TASK'", []).unwrap();
+        b.execute("DELETE FROM tasks WHERE title='D2-TASK'", [])
+            .unwrap();
     });
     sync_from_a(&e);
     assert_eq!(task_count(&e.a.lock().unwrap(), "D2-TASK"), 0, "A 侧删除");
@@ -374,7 +438,11 @@ fn tc009_pending_count_zero_after_ack() {
     let s = sync_from_b(&e);
     assert_eq!(s.deferred, 0);
     let after = pending_outbox_count_for(&e.b.lock().unwrap(), Some(&peer_a)).unwrap();
-    assert_eq!(after, 0, "成功发送并 ACK 后 pending 必须归零（summary.pending_after={}）", s.pending_after);
+    assert_eq!(
+        after, 0,
+        "成功发送并 ACK 后 pending 必须归零（summary.pending_after={}）",
+        s.pending_after
+    );
     e.ha.stop();
     e.hb.stop();
 }
@@ -421,9 +489,20 @@ fn tc011_divergent_local_ids_map_by_sync_id() {
     );
     sync_from_b(&e);
     // 双方各有 6 个档案（3 本机 + 3 对端），同名不合并（按 sync_id 区分）
-    let a_profiles: i64 = { let g = e.a.lock().unwrap(); g.query_row("SELECT COUNT(*) FROM study_profiles", [], |r| r.get(0)).unwrap() };
-    let b_profiles: i64 = { let g = e.b.lock().unwrap(); g.query_row("SELECT COUNT(*) FROM study_profiles", [], |r| r.get(0)).unwrap() };
-    assert_eq!(a_profiles, 6, "A 拥有全部 6 档案（含 B 的 3 个，绝不按 name 合并）");
+    let a_profiles: i64 = {
+        let g = e.a.lock().unwrap();
+        g.query_row("SELECT COUNT(*) FROM study_profiles", [], |r| r.get(0))
+            .unwrap()
+    };
+    let b_profiles: i64 = {
+        let g = e.b.lock().unwrap();
+        g.query_row("SELECT COUNT(*) FROM study_profiles", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(
+        a_profiles, 6,
+        "A 拥有全部 6 档案（含 B 的 3 个，绝不按 name 合并）"
+    );
     assert_eq!(b_profiles, 6);
     // 任务同理映射
     assert_eq!(task_count(&e.a.lock().unwrap(), "B-噪音-1"), 1);
@@ -442,8 +521,11 @@ fn tc012_dependency_order_fk_chain() {
             let g = insert_goal(a, p, "G");
             let i = insert_item(a, p, "I");
             let t = insert_task(a, p, "链T");
-            a.execute("UPDATE tasks SET goal_id=?1, learning_item_id=?2 WHERE id=?3", params![g, i, t])
-                .unwrap();
+            a.execute(
+                "UPDATE tasks SET goal_id=?1, learning_item_id=?2 WHERE id=?3",
+                params![g, i, t],
+            )
+            .unwrap();
         },
         |_| {},
     );
@@ -459,15 +541,31 @@ fn tc012_dependency_order_fk_chain() {
         assert!(goal_id.is_some(), "goal FK 已映射");
         assert!(item_id.is_some(), "item FK 已映射");
         let goal_ok: i64 = b
-            .query_row("SELECT COUNT(*) FROM goals WHERE id=?1", params![goal_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM goals WHERE id=?1",
+                params![goal_id],
+                |r| r.get(0),
+            )
             .unwrap();
         let item_ok: i64 = b
-            .query_row("SELECT COUNT(*) FROM learning_items WHERE id=?1", params![item_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM learning_items WHERE id=?1",
+                params![item_id],
+                |r| r.get(0),
+            )
             .unwrap();
         let profile_ok: i64 = b
-            .query_row("SELECT COUNT(*) FROM study_profiles WHERE id=?1", params![profile_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM study_profiles WHERE id=?1",
+                params![profile_id],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!((goal_ok, item_ok, profile_ok), (1, 1, 1), "FK 全部指向 B 本机存在行");
+        assert_eq!(
+            (goal_ok, item_ok, profile_ok),
+            (1, 1, 1),
+            "FK 全部指向 B 本机存在行"
+        );
     });
     e.ha.stop();
     e.hb.stop();
@@ -485,20 +583,34 @@ fn tc013_concurrent_edit_conflicts_without_overwrite() {
         |_| {},
     );
     sync_from_b(&e); // 任务到 B
-    // 双方各改一次
+                     // 双方各改一次
     a_conn(&e, |a| {
-        a.execute("UPDATE tasks SET title='电脑版' WHERE title='C-TASK'", []).unwrap();
+        a.execute("UPDATE tasks SET title='电脑版' WHERE title='C-TASK'", [])
+            .unwrap();
     });
     b_conn(&e, |b| {
-        b.execute("UPDATE tasks SET title='手机版' WHERE title='C-TASK'", []).unwrap();
+        b.execute("UPDATE tasks SET title='手机版' WHERE title='C-TASK'", [])
+            .unwrap();
     });
     let s = sync_from_b(&e);
-    assert!(s.conflicts >= 1, "同一 sync_id 双端未确认变更 → 冲突（实际 {}）", s.conflicts);
-    assert_eq!(task_count(&e.a.lock().unwrap(), "电脑版"), 1, "A 本机版本不被覆盖");
+    assert!(
+        s.conflicts >= 1,
+        "同一 sync_id 双端未确认变更 → 冲突（实际 {}）",
+        s.conflicts
+    );
+    assert_eq!(
+        task_count(&e.a.lock().unwrap(), "电脑版"),
+        1,
+        "A 本机版本不被覆盖"
+    );
     let conflicts: i64 = {
         let g = e.a.lock().unwrap();
-        g.query_row("SELECT COUNT(*) FROM sync_conflicts WHERE status='pending'", [], |r| r.get(0))
-            .unwrap()
+        g.query_row(
+            "SELECT COUNT(*) FROM sync_conflicts WHERE status='pending'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
     };
     assert!(conflicts >= 1);
     e.ha.stop();
@@ -518,10 +630,12 @@ fn tc013b_conflict_bulk_resolution() {
     );
     sync_from_b(&e);
     a_conn(&e, |a| {
-        a.execute("UPDATE tasks SET title='电脑版R' WHERE title='R-TASK'", []).unwrap();
+        a.execute("UPDATE tasks SET title='电脑版R' WHERE title='R-TASK'", [])
+            .unwrap();
     });
     b_conn(&e, |b| {
-        b.execute("UPDATE tasks SET title='手机版R' WHERE title='R-TASK'", []).unwrap();
+        b.execute("UPDATE tasks SET title='手机版R' WHERE title='R-TASK'", [])
+            .unwrap();
     });
     sync_from_b(&e); // A 记录冲突
 
@@ -531,11 +645,19 @@ fn tc013b_conflict_bulk_resolution() {
         let n = resolve_conflicts(&guard, "remote").unwrap();
         assert_eq!(n, 1);
     }
-    assert_eq!(task_count(&e.a.lock().unwrap(), "手机版R"), 1, "remote 解决后 A 采用对端版本");
+    assert_eq!(
+        task_count(&e.a.lock().unwrap(), "手机版R"),
+        1,
+        "remote 解决后 A 采用对端版本"
+    );
     let pending: i64 = {
         let g = e.a.lock().unwrap();
-        g.query_row("SELECT COUNT(*) FROM sync_conflicts WHERE status='pending'", [], |r| r.get(0))
-            .unwrap()
+        g.query_row(
+            "SELECT COUNT(*) FROM sync_conflicts WHERE status='pending'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
     };
     assert_eq!(pending, 0);
     e.ha.stop();
@@ -558,11 +680,15 @@ fn tc014_single_click_bidirectional() {
     );
     // 配对后（bootstrap 已交换空集）双方各自新增 → 全部为增量
     a_conn(&e, |a| {
-        let p: i64 = a.query_row("SELECT MAX(id) FROM study_profiles", [], |r| r.get(0)).unwrap();
+        let p: i64 = a
+            .query_row("SELECT MAX(id) FROM study_profiles", [], |r| r.get(0))
+            .unwrap();
         insert_task(a, p, "A→B");
     });
     b_conn(&e, |b| {
-        let p: i64 = b.query_row("SELECT MAX(id) FROM study_profiles", [], |r| r.get(0)).unwrap();
+        let p: i64 = b
+            .query_row("SELECT MAX(id) FROM study_profiles", [], |r| r.get(0))
+            .unwrap();
         insert_task(b, p, "B→A");
     });
     // 单次 B 点击：B push（B→A）与 pull（A→B）同一次连接内完成
@@ -604,7 +730,9 @@ fn tc015_secrets_and_settings_never_in_packet() {
     assert!(!json.contains("S2-INDEX-MARKER"));
     assert!(!json.contains("search_index"));
     // 附带：sync_id 映射辅助函数仍按 sync_id（非 local id）工作
-    let t = a.query_row("SELECT MAX(id) FROM tasks", [], |r| r.get::<_, i64>(0)).unwrap();
+    let t = a
+        .query_row("SELECT MAX(id) FROM tasks", [], |r| r.get::<_, i64>(0))
+        .unwrap();
     let sid = sync_id_for(&a, "task", t).unwrap().unwrap();
     assert_eq!(local_id_for(&a, "task", &sid).unwrap(), Some(t));
 }

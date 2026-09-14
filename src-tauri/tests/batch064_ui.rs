@@ -54,7 +54,10 @@ fn u03_accept_only_png_jpeg_webp() {
         store.contains("image/png") && store.contains("image/jpeg") && store.contains("image/webp"),
         "U03: MIME 白名单 = png/jpeg/webp"
     );
-    assert!(!store.contains("image/gif") && !store.contains("image/svg"), "U03: GIF/SVG 禁止");
+    assert!(
+        !store.contains("image/gif") && !store.contains("image/svg"),
+        "U03: GIF/SVG 禁止"
+    );
     let s = read_src("../src/pages/Settings.tsx");
     assert!(
         s.contains("accept=\"image/png,image/jpeg,image/webp\""),
@@ -66,10 +69,7 @@ fn u03_accept_only_png_jpeg_webp() {
 #[test]
 fn u04_20mb_validation_exists() {
     let store = read_src("../src/appearance/wallpaperStore.ts");
-    assert!(
-        store.contains("20 * 1024 * 1024"),
-        "U04: 20MB 上限常量"
-    );
+    assert!(store.contains("20 * 1024 * 1024"), "U04: 20MB 上限常量");
     assert!(
         store.contains("图片超过 20 MB"),
         "U04: 超限人话提示（不导入）"
@@ -79,7 +79,10 @@ fn u04_20mb_validation_exists() {
 #[test]
 fn u05_indexeddb_higher_appearance_exists() {
     let store = read_src("../src/appearance/wallpaperStore.ts");
-    assert!(store.contains("higher-appearance"), "U05: IndexedDB 库名 higher-appearance");
+    assert!(
+        store.contains("higher-appearance"),
+        "U05: IndexedDB 库名 higher-appearance"
+    );
     assert!(store.contains("indexedDB.open"), "U05: 真实 IndexedDB 打开");
 }
 
@@ -149,9 +152,15 @@ fn u10_overlay_pref_defaults_58() {
 #[test]
 fn u11_wallpaper_delete_reset_path_exists() {
     let store = read_src("../src/appearance/wallpaperStore.ts");
-    assert!(store.contains("export async function removeWallpaper"), "U11: 删除路径");
+    assert!(
+        store.contains("export async function removeWallpaper"),
+        "U11: 删除路径"
+    );
     let s = read_src("../src/pages/Settings.tsx");
-    assert!(s.contains("removeWallpaper"), "U11: Settings 删除壁纸 handler");
+    assert!(
+        s.contains("removeWallpaper"),
+        "U11: Settings 删除壁纸 handler"
+    );
     assert!(s.contains("恢复默认"), "U11: 恢复默认入口");
     assert!(s.contains("DEFAULT_PREFS"), "U11: 恢复默认走 DEFAULT_PREFS");
 }
@@ -191,8 +200,14 @@ fn u13_filter_only_on_wallpaper_layer() {
     assert!(!layout.contains("filter:"), "U13: Layout 无 filter");
     // wallpaper layer 组件挂载于 App 根且 aria-hidden（§40）
     let wl = read_src("../src/components/WallpaperLayers.tsx");
-    assert!(app.contains("WallpaperLayers"), "U13: WallpaperLayers 挂载在应用根");
-    assert!(wl.contains("aria-hidden"), "U13: 壁纸层不可聚焦/不进 a11y 树");
+    assert!(
+        app.contains("WallpaperLayers"),
+        "U13: WallpaperLayers 挂载在应用根"
+    );
+    assert!(
+        wl.contains("aria-hidden"),
+        "U13: 壁纸层不可聚焦/不进 a11y 树"
+    );
 }
 
 #[test]
@@ -207,7 +222,9 @@ fn u14_six_color_atmosphere_presets() {
     );
     // 语义色永不随氛围改变（§13）
     let css = read_src("../src/styles.css");
-    assert!(css.contains("--h-danger") && css.contains("--h-success") && css.contains("--h-warning"));
+    assert!(
+        css.contains("--h-danger") && css.contains("--h-success") && css.contains("--h-warning")
+    );
 }
 
 // ==================== U15-U18 · Planning Week/Month View ====================
@@ -215,8 +232,14 @@ fn u14_six_color_atmosphere_presets() {
 #[test]
 fn u15_week_month_switch_exists() {
     let p = read_src("../src/pages/Planning.tsx");
-    assert!(p.contains("\"week\"") && p.contains("\"month\""), "U15: 周/月两态");
-    assert!(p.contains("higher.planning.view"), "U15: localStorage higher.planning.view");
+    assert!(
+        p.contains("\"week\"") && p.contains("\"month\""),
+        "U15: 周/月两态"
+    );
+    assert!(
+        p.contains("higher.planning.view"),
+        "U15: localStorage higher.planning.view"
+    );
     assert!(p.contains("seg__item"), "U15: [周][月] Segmented Switch");
 }
 
@@ -228,8 +251,14 @@ fn u16_week_view_monday_sunday() {
         "U16: 周一→周日 7 列"
     );
     assert!(w.contains("function mondayOf"), "U16: 周一为一周起点");
-    assert!(w.contains("addDaysISO(weekStart, 6)"), "U16: 周日 = 周一 + 6 天");
-    assert!(w.contains("上一周逻辑：shiftWeek(-1)") || w.contains("shiftWeek(-1)"), "U16: 上一周");
+    assert!(
+        w.contains("addDaysISO(weekStart, 6)"),
+        "U16: 周日 = 周一 + 6 天"
+    );
+    assert!(
+        w.contains("上一周逻辑：shiftWeek(-1)") || w.contains("shiftWeek(-1)"),
+        "U16: 上一周"
+    );
     assert!(w.contains("本周"), "U16: 本周按钮");
 }
 
@@ -237,14 +266,25 @@ fn u16_week_view_monday_sunday() {
 fn u17_week_view_reuses_task_modal_handler() {
     let w = read_src("../src/components/PlanningWeekBoard.tsx");
     // Create/Edit 复用现有 TaskModal（禁止第二套 Modal）
-    assert!(w.contains("import TaskModal from \"./TaskModal\""), "U17: 复用现有 TaskModal");
-    assert!(w.contains("defaultDate={createFor}"), "U17: 新建自动带该日期");
+    assert!(
+        w.contains("import TaskModal from \"./TaskModal\""),
+        "U17: 复用现有 TaskModal"
+    );
+    assert!(
+        w.contains("defaultDate={createFor}"),
+        "U17: 新建自动带该日期"
+    );
     assert!(w.contains("mode=\"edit\""), "U17: 编辑走 TaskModal edit");
     // Start 复用 Planning 页 handleStartTask；Delete 走 deleteTask→archive 原链
     assert!(w.contains("onStartTask"), "U17: Start 复用页面级 handler");
-    assert!(w.contains("deleteTask") && w.contains("archiveTask"), "U17: Delete 原有 API 链");
+    assert!(
+        w.contains("deleteTask") && w.contains("archiveTask"),
+        "U17: Delete 原有 API 链"
+    );
     // 数据与月历同源同 API（§18：同一批 Task/Session/Recurring）
-    assert!(w.contains("listTasksByRangeByProfile") && w.contains("materializeRecurringTasksRange"));
+    assert!(
+        w.contains("listTasksByRangeByProfile") && w.contains("materializeRecurringTasksRange")
+    );
     let p = read_src("../src/pages/Planning.tsx");
     assert!(
         p.contains("onStartTask={(t) => void handleStartTask(t)}"),
@@ -257,8 +297,14 @@ fn u18_no_week_data_model() {
     // 绝对禁止 WeekGoal / WeekTask / Weekly DB / Weekly Plan Entity（§18）
     let types = read_src("../src/types.ts");
     let api = read_src("../src/api.ts");
-    assert!(!types.contains("WeekGoal") && !types.contains("WeekTask"), "U18: types 无 Week 实体");
-    assert!(!api.contains("week_goal") && !api.contains("week_task"), "U18: api 无 Week 命令");
+    assert!(
+        !types.contains("WeekGoal") && !types.contains("WeekTask"),
+        "U18: types 无 Week 实体"
+    );
+    assert!(
+        !api.contains("week_goal") && !api.contains("week_task"),
+        "U18: api 无 Week 命令"
+    );
 }
 
 // ==================== U19-U20 · Knowledge UI v2 ====================
@@ -267,19 +313,31 @@ fn u18_no_week_data_model() {
 fn u19_knowledge_empty_state_cta() {
     let k = read_src("../src/pages/Knowledge.tsx");
     assert!(k.contains("选择一个知识开始整理"), "U19: 空态标题");
-    assert!(k.contains("在左侧选择知识，或创建新的知识节点。"), "U19: 空态说明");
+    assert!(
+        k.contains("在左侧选择知识，或创建新的知识节点。"),
+        "U19: 空态说明"
+    );
     assert!(k.contains("+ 新建知识"), "U19: Primary CTA");
     assert!(k.contains("查看知识图"), "U19: Secondary CTA");
     // 复用现有 handler：setCreatingRoot（左树同一入口）+ setViewMode（tab 同一状态）
-    assert!(k.contains("setCreatingRoot(true)"), "U19: 新建复用 handleCreateRoot 入口状态");
-    assert!(k.contains("setViewMode(\"graph\")"), "U19: 查看知识图复用 viewMode 切换");
+    assert!(
+        k.contains("setCreatingRoot(true)"),
+        "U19: 新建复用 handleCreateRoot 入口状态"
+    );
+    assert!(
+        k.contains("setViewMode(\"graph\")"),
+        "U19: 查看知识图复用 viewMode 切换"
+    );
 }
 
 #[test]
 fn u20_knowledge_data_logic_untouched() {
     let k = read_src("../src/pages/Knowledge.tsx");
     // 视图值不变（workspace | graph；§27 Tabs 只统一视觉）
-    assert!(k.contains("\"workspace\"") && k.contains("\"graph\""), "U20: viewMode 值不变");
+    assert!(
+        k.contains("\"workspace\"") && k.contains("\"graph\""),
+        "U20: viewMode 值不变"
+    );
     assert!(k.contains("handleCreateRoot"), "U20: 原有 handler 仍在");
     // Tree CRUD 原命令仍在使用（冻结面零改动）
     for api_name in [
@@ -304,8 +362,14 @@ fn u21_ai_panel_collapsed_mode() {
     // 新真值 = 两态（无 Closed/FAB/X），唯一偏好 higher.aiPanel.mode
     let p = read_src("../src/components/ai/AiPanel.tsx");
     assert!(p.contains("aipanel--rail"), "U21: Collapsed Rail 存在");
-    assert!(p.contains("higher.aiPanel.mode"), "U21: localStorage higher.aiPanel.mode");
-    assert!(p.contains("\"expanded\"") && p.contains("\"collapsed\""), "U21: expanded|collapsed 两值");
+    assert!(
+        p.contains("higher.aiPanel.mode"),
+        "U21: localStorage higher.aiPanel.mode"
+    );
+    assert!(
+        p.contains("\"expanded\"") && p.contains("\"collapsed\""),
+        "U21: expanded|collapsed 两值"
+    );
     // 无 Closed 态：FAB/X/open 分支全部不存在
     assert!(!p.contains("aipanel-fab"), "U21: FAB 不存在");
     assert!(!p.contains("title=\"关闭\""), "U21: 关闭按钮不存在");
@@ -332,10 +396,16 @@ fn u22_ai_runtime_event_strings_preserved() {
         assert!(p.contains(ev), "U22: 事件串保留 {ev}");
     }
     // Enter 发送 / Shift+Enter 换行
-    assert!(p.contains("e.key === \"Enter\" && !e.shiftKey"), "U22: Enter 发送");
+    assert!(
+        p.contains("e.key === \"Enter\" && !e.shiftKey"),
+        "U22: Enter 发送"
+    );
     assert!(p.contains("Shift+Enter 换行"), "U22: Shift+Enter 提示保留");
     // Runtime 冻结面：核心调用仍在
-    assert!(p.contains("aiStartRun") && p.contains("aiCancelRun"), "U22: run API 保留");
+    assert!(
+        p.contains("aiStartRun") && p.contains("aiCancelRun"),
+        "U22: run API 保留"
+    );
 }
 
 #[test]
@@ -347,7 +417,10 @@ fn u23_proposal_changeset_preserved() {
     );
     // DEV-0063 Patch Truth 回归锁（update 候选 = keys(after_json)）
     let csr = read_src("../src/components/ChangeSetReview.tsx");
-    assert!(csr.contains("Object.keys(after)"), "U23: Update Diff Truth 保留");
+    assert!(
+        csr.contains("Object.keys(after)"),
+        "U23: Update Diff Truth 保留"
+    );
 }
 
 // ==================== U24-U25 · 既有交互回归锁 ====================
@@ -357,13 +430,19 @@ fn u24_task_menu_remains_edit_delete() {
     let sec = read_src("../src/components/DailyTasksSection.tsx");
     let pop = sec.split("taskmenu__pop").nth(1).unwrap_or_default();
     let pop = pop.split("</div>").next().unwrap_or_default();
-    assert!(pop.contains("编辑") && pop.contains("删除"), "U24: Task 菜单 = 编辑+删除");
+    assert!(
+        pop.contains("编辑") && pop.contains("删除"),
+        "U24: Task 菜单 = 编辑+删除"
+    );
     assert!(pop.contains("taskmenu__sep"), "U24: 分隔线");
     // Week Board 内 Task 菜单同样收敛
     let w = read_src("../src/components/PlanningWeekBoard.tsx");
     let wpop = w.split("taskmenu__pop").nth(1).unwrap_or_default();
     let wpop = wpop.split("</div>").next().unwrap_or_default();
-    assert!(wpop.contains("编辑") && wpop.contains("删除"), "U24: Week 菜单 = 编辑+删除");
+    assert!(
+        wpop.contains("编辑") && wpop.contains("删除"),
+        "U24: Week 菜单 = 编辑+删除"
+    );
 }
 
 #[test]
@@ -401,10 +480,8 @@ fn u27_no_dependency_changes() {
         String::from_utf8_lossy(&out.stdout).to_string()
     }
     fn read_p(rel: &str) -> String {
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel),
-        )
-        .unwrap_or_default()
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel))
+            .unwrap_or_default()
     }
     fn npm_deps(text: &str) -> Vec<String> {
         let v: serde_json::Value = serde_json::from_str(text).expect("package.json 解析失败");
@@ -448,11 +525,25 @@ fn u27_no_dependency_changes() {
             .filter(|d| !head.contains(d) && !allowed.contains(&d.as_str()))
             .cloned()
             .collect();
-        assert!(extra.is_empty(), "U27: {label} 依赖新增超出 DEV-SYNC-003 授权（{extra:?}）");
-        let removed: Vec<String> = head.iter().filter(|d| !current.contains(d)).cloned().collect();
-        assert!(removed.is_empty(), "U27: {label} 依赖不得移除（{removed:?}）");
+        assert!(
+            extra.is_empty(),
+            "U27: {label} 依赖新增超出 DEV-SYNC-003 授权（{extra:?}）"
+        );
+        let removed: Vec<String> = head
+            .iter()
+            .filter(|d| !current.contains(d))
+            .cloned()
+            .collect();
+        assert!(
+            removed.is_empty(),
+            "U27: {label} 依赖不得移除（{removed:?}）"
+        );
     }
-    const QR_NPM: [&str; 3] = ["qrcode", "@types/qrcode", "@tauri-apps/plugin-barcode-scanner"];
+    const QR_NPM: [&str; 3] = [
+        "qrcode",
+        "@types/qrcode",
+        "@tauri-apps/plugin-barcode-scanner",
+    ];
     const QR_CARGO: [&str; 1] = ["tauri-plugin-barcode-scanner"];
     assert_dep_delta(
         npm_deps(&read_p("..\\package.json")),
@@ -817,7 +908,14 @@ fn u28_no_src_tauri_src_diff() {
     // 前端契约文件同样冻结（§44 Forbidden Diff）。
     // DEV-0070 §10 授权：src/api.ts 新增 getUserProfileTemplate（用户档案模板下载）。
     let out2 = std::process::Command::new("git")
-        .args(["diff", "--name-only", "HEAD", "--", "../src/api.ts", "../src/types.ts"])
+        .args([
+            "diff",
+            "--name-only",
+            "HEAD",
+            "--",
+            "../src/api.ts",
+            "../src/types.ts",
+        ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("git diff 失败");

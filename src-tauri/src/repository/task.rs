@@ -131,7 +131,15 @@ impl<'a> TaskRepository<'a> {
         planned_date: Option<&str>,
         learning_item_id: Option<i64>,
     ) -> rusqlite::Result<Task> {
-        self.create_for_profile(profile_id, None, title, planned_date, None, learning_item_id, None)
+        self.create_for_profile(
+            profile_id,
+            None,
+            title,
+            planned_date,
+            None,
+            learning_item_id,
+            None,
+        )
     }
 
     /// DEV-0053 §15-23：V1 全字段创建（Today/ChangeSet 共用）。
@@ -184,11 +192,23 @@ impl<'a> TaskRepository<'a> {
                  (profile_id, goal_id, learning_item_id, title, planned_date, planned_time,
                   estimated_minutes, task_kind, priority, status)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending')",
-                params![profile_id, goal_id, learning_item_id, title, planned_date, planned_time, estimated_minutes, kind, pri],
+                params![
+                    profile_id,
+                    goal_id,
+                    learning_item_id,
+                    title,
+                    planned_date,
+                    planned_time,
+                    estimated_minutes,
+                    kind,
+                    pri
+                ],
             )
             .map_err(|e| e.to_string())?;
         let id = self.conn.last_insert_rowid();
-        self.get(id).map_err(|e| e.to_string())?.ok_or_else(|| "创建失败".to_string())
+        self.get(id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "创建失败".to_string())
     }
 
     /// DEV-0053 §23：全字段编辑（title/date/time/kind/priority/estimated/goal/item）。
@@ -220,7 +240,11 @@ impl<'a> TaskRepository<'a> {
         }
         let profile_id: i64 = self
             .conn
-            .query_row("SELECT profile_id FROM tasks WHERE id = ?1", params![id], |r| r.get(0))
+            .query_row(
+                "SELECT profile_id FROM tasks WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
             .map_err(|_| "任务不存在".to_string())?;
         if let Some(item) = learning_item_id {
             let item_profile: Option<i64> = self
@@ -240,7 +264,9 @@ impl<'a> TaskRepository<'a> {
         }
         let origin: Option<String> = self
             .conn
-            .query_row("SELECT origin FROM tasks WHERE id = ?1", params![id], |r| r.get(0))
+            .query_row("SELECT origin FROM tasks WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
             .ok()
             .flatten();
         // DEV-0059.1 §4：用户主动编辑 Blueprint 任务内容 → 标记 user_modified_at（保护不被重投影覆盖）
@@ -270,7 +296,15 @@ impl<'a> TaskRepository<'a> {
         planned_date: Option<&str>,
     ) -> rusqlite::Result<Task> {
         let (profile_id, goal_id) = self.profile_of_item(learning_item_id)?;
-        self.create_for_profile(profile_id, goal_id, title, planned_date, None, Some(learning_item_id), None)
+        self.create_for_profile(
+            profile_id,
+            goal_id,
+            title,
+            planned_date,
+            None,
+            Some(learning_item_id),
+            None,
+        )
     }
 
     /// 兼容旧调用：create_with_plan(item_id, title, date, plan_id)。
@@ -282,7 +316,15 @@ impl<'a> TaskRepository<'a> {
         plan_id: Option<i64>,
     ) -> rusqlite::Result<Task> {
         let (profile_id, goal_id) = self.profile_of_item(learning_item_id)?;
-        self.create_for_profile(profile_id, goal_id, title, planned_date, None, Some(learning_item_id), plan_id)
+        self.create_for_profile(
+            profile_id,
+            goal_id,
+            title,
+            planned_date,
+            None,
+            Some(learning_item_id),
+            plan_id,
+        )
     }
 
     fn profile_of_item(&self, learning_item_id: i64) -> rusqlite::Result<(i64, Option<i64>)> {
@@ -306,8 +348,16 @@ impl<'a> TaskRepository<'a> {
         recurring_rule_id: i64,
     ) -> rusqlite::Result<Task> {
         self.create_from_rule_v2(
-            profile_id, goal_id, learning_item_id, title, planned_date, planned_time,
-            recurring_rule_id, None, "structured", "normal",
+            profile_id,
+            goal_id,
+            learning_item_id,
+            title,
+            planned_date,
+            planned_time,
+            recurring_rule_id,
+            None,
+            "structured",
+            "normal",
         )
     }
 
@@ -355,7 +405,11 @@ impl<'a> TaskRepository<'a> {
 
     /// 今天的任务（活跃；Profile 直查；"今天" = UTC+8 学习日，与全项目一致）。
     pub fn list_today_by_profile(&self, profile_id: i64) -> rusqlite::Result<Vec<Task>> {
-        self.by_date_range(profile_id, "date('now', '+8 hours')", "date('now', '+8 hours')")
+        self.by_date_range(
+            profile_id,
+            "date('now', '+8 hours')",
+            "date('now', '+8 hours')",
+        )
     }
 
     /// 指定日期范围（活跃）。
@@ -429,9 +483,10 @@ impl<'a> TaskRepository<'a> {
 
     /// 兼容：全库全部（旧测试用）。
     pub fn list_all(&self) -> rusqlite::Result<Vec<Task>> {
-        let mut stmt = self
-            .conn
-            .prepare(&format!("SELECT {} FROM tasks ORDER BY id DESC", TASK_COLUMNS))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {} FROM tasks ORDER BY id DESC",
+            TASK_COLUMNS
+        ))?;
         let rows = stmt.query_map([], parse_task)?;
         rows.collect()
     }

@@ -28,7 +28,11 @@ pub fn create_memory_proposal(
         if item.excerpt.trim().is_empty() {
             return Err("explicit 提案缺少用户原话（excerpt）".to_string());
         }
-        (item.memory_type.clone(), "user_message", item.excerpt.trim().to_string())
+        (
+            item.memory_type.clone(),
+            "user_message",
+            item.excerpt.trim().to_string(),
+        )
     } else {
         ("ai_inference".to_string(), "ai_inference", String::new())
     };
@@ -82,7 +86,13 @@ pub fn update_memory(
     source_excerpt: &str,
 ) -> Result<(), String> {
     MemoryRepository::new(conn).update_memory(
-        memory_id, profile_id, memory_type, category, memory_key, memory_value, source_excerpt,
+        memory_id,
+        profile_id,
+        memory_type,
+        category,
+        memory_key,
+        memory_value,
+        source_excerpt,
     )
 }
 
@@ -104,7 +114,11 @@ pub fn proposal_cards(conn: &Connection, profile_id: i64, ids: &[i64]) -> Vec<Me
             if m.status != "pending_confirmation" {
                 continue;
             }
-            let kind = if m.memory_type == "ai_inference" { "derived" } else { "explicit" };
+            let kind = if m.memory_type == "ai_inference" {
+                "derived"
+            } else {
+                "explicit"
+            };
             let question = if m.memory_value.trim().is_empty() {
                 m.memory_key.clone()
             } else {

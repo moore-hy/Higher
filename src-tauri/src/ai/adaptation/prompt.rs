@@ -88,8 +88,8 @@ pub fn parse_analyzer_output(raw: &str) -> Result<AnalyzerOutput, String> {
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim();
-    let v: serde_json::Value = serde_json::from_str(t)
-        .map_err(|e| format!("Adaptation 输出不是合法 JSON：{e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(t).map_err(|e| format!("Adaptation 输出不是合法 JSON：{e}"))?;
     let decision = v
         .get("decision")
         .and_then(|x| x.as_str())
@@ -120,7 +120,9 @@ pub fn parse_analyzer_output(raw: &str) -> Result<AnalyzerOutput, String> {
                 return Err(format!("adjustment_intents.kind 非法：{}", parsed.kind));
             }
             // SuggestGoalTreeAdjustment 必须携带建议文本
-            if parsed.kind == "SuggestGoalTreeAdjustment" && parsed.suggestion.as_deref().unwrap_or("").trim().is_empty() {
+            if parsed.kind == "SuggestGoalTreeAdjustment"
+                && parsed.suggestion.as_deref().unwrap_or("").trim().is_empty()
+            {
                 parsed.suggestion = Some(parsed.reason.clone().unwrap_or_default());
             }
             intents.push(parsed);
@@ -138,22 +140,41 @@ pub fn parse_analyzer_output(raw: &str) -> Result<AnalyzerOutput, String> {
         .unwrap_or(EvidenceQuality::Partial);
     Ok(AnalyzerOutput {
         decision,
-        reason: v.get("reason").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        confidence: v.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0) as f32,
-        summary: v.get("summary").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        reason: v
+            .get("reason")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        confidence: v
+            .get("confidence")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0) as f32,
+        summary: v
+            .get("summary")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         deviations,
         evidence_quality: eq,
         questions: v
             .get("questions")
             .and_then(|x| x.as_array())
-            .map(|a| a.iter().filter_map(|q| q.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|q| q.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         adjustment_intents: intents,
     })
 }
 
 fn parse_deviation(d: &serde_json::Value) -> Result<super::decision::PlanningDeviation, String> {
-    let dt = d.get("deviation_type").and_then(|x| x.as_str()).ok_or("deviation_type 缺失")?;
+    let dt = d
+        .get("deviation_type")
+        .and_then(|x| x.as_str())
+        .ok_or("deviation_type 缺失")?;
     let deviation_type = match dt {
         "TimeMismatch" => DeviationType::TimeMismatch,
         "TaskBacklog" => DeviationType::TaskBacklog,
@@ -175,9 +196,17 @@ fn parse_deviation(d: &serde_json::Value) -> Result<super::decision::PlanningDev
         evidence: d
             .get("evidence")
             .and_then(|x| x.as_array())
-            .map(|a| a.iter().filter_map(|e| e.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| e.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         severity,
-        explanation: d.get("explanation").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        explanation: d
+            .get("explanation")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }

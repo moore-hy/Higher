@@ -64,7 +64,9 @@ impl<'a> PlanningReviewRepository<'a> {
                              change_set_id, user_decision, resulting_blueprint_id, created_at, updated_at, completed_at
                       FROM planning_reviews WHERE id=?1 AND profile_id=?2")
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query_map(params![id, profile_id], parse_rev).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![id, profile_id], parse_rev)
+            .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
@@ -76,8 +78,11 @@ impl<'a> PlanningReviewRepository<'a> {
                              change_set_id, user_decision, resulting_blueprint_id, created_at, updated_at, completed_at
                       FROM planning_reviews WHERE profile_id=?1 ORDER BY id DESC")
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![profile_id], parse_rev).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![profile_id], parse_rev)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn set_status(&self, id: i64, profile_id: i64, status: &str) -> Result<(), String> {
@@ -170,13 +175,24 @@ impl<'a> PlanningReviewRepository<'a> {
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        self.create_due(profile_id, Some(bp.id), &period_start, &today, "reality_change")?;
+        self.create_due(
+            profile_id,
+            Some(bp.id),
+            &period_start,
+            &today,
+            "reality_change",
+        )?;
         Ok(())
     }
 
     /// §3 step 2：置 running + 写入 evidence snapshot（不调 Provider）。
     /// 只允许 due / running / failed 进入 running（已完成/待审批的复盘不允许重跑）。
-    pub fn prepare_running(&self, id: i64, profile_id: i64, snapshot_json: &str) -> Result<(), String> {
+    pub fn prepare_running(
+        &self,
+        id: i64,
+        profile_id: i64,
+        snapshot_json: &str,
+    ) -> Result<(), String> {
         let n = self
             .conn
             .execute(
@@ -233,7 +249,13 @@ impl<'a> PlanningReviewRepository<'a> {
                 if rev.status == "waiting_approval" {
                     return Ok((rid, rev.status, rev.change_set_id, String::new()));
                 }
-                let snapshot = Self::build_snapshot(self.conn, profile_id, Some(bp.id), &period_start, &today)?;
+                let snapshot = Self::build_snapshot(
+                    self.conn,
+                    profile_id,
+                    Some(bp.id),
+                    &period_start,
+                    &today,
+                )?;
                 self.prepare_running(rid, profile_id, &snapshot)?;
                 let _ = self
                     .conn
@@ -246,8 +268,15 @@ impl<'a> PlanningReviewRepository<'a> {
                 Ok((rid, "running".to_string(), rev.change_set_id, snapshot))
             }
             None => {
-                let rid = self.create_due(profile_id, Some(bp.id), &period_start, &today, trigger_type)?;
-                let snapshot = Self::build_snapshot(self.conn, profile_id, Some(bp.id), &period_start, &today)?;
+                let rid =
+                    self.create_due(profile_id, Some(bp.id), &period_start, &today, trigger_type)?;
+                let snapshot = Self::build_snapshot(
+                    self.conn,
+                    profile_id,
+                    Some(bp.id),
+                    &period_start,
+                    &today,
+                )?;
                 self.prepare_running(rid, profile_id, &snapshot)?;
                 Ok((rid, "running".to_string(), None, snapshot))
             }
@@ -268,20 +297,23 @@ impl<'a> PlanningReviewRepository<'a> {
         let bp = match blueprint_id {
             Some(bid) => {
                 let mut stmt = conn
-                    .prepare("SELECT id, title, version, scenario_type, content_md, structured_json
-                              FROM planning_blueprints WHERE id=?1 AND profile_id=?2")
+                    .prepare(
+                        "SELECT id, title, version, scenario_type, content_md, structured_json
+                              FROM planning_blueprints WHERE id=?1 AND profile_id=?2",
+                    )
                     .map_err(|e| e.to_string())?;
-                let mut rows = stmt.query_map(params![bid, profile_id], |r| {
-                    Ok(serde_json::json!({
-                        "id": r.get::<_, i64>(0)?,
-                        "title": r.get::<_, String>(1)?,
-                        "version": r.get::<_, i64>(2)?,
-                        "scenario_type": r.get::<_, String>(3)?,
-                        "content_md": r.get::<_, String>(4)?,
-                        "structured_json": r.get::<_, Option<String>>(5)?,
-                    }))
-                })
-                .map_err(|e| e.to_string())?;
+                let mut rows = stmt
+                    .query_map(params![bid, profile_id], |r| {
+                        Ok(serde_json::json!({
+                            "id": r.get::<_, i64>(0)?,
+                            "title": r.get::<_, String>(1)?,
+                            "version": r.get::<_, i64>(2)?,
+                            "scenario_type": r.get::<_, String>(3)?,
+                            "content_md": r.get::<_, String>(4)?,
+                            "structured_json": r.get::<_, Option<String>>(5)?,
+                        }))
+                    })
+                    .map_err(|e| e.to_string())?;
                 rows.next().transpose().map_err(|e| e.to_string())
             }
             None => {
@@ -289,17 +321,18 @@ impl<'a> PlanningReviewRepository<'a> {
                     .prepare("SELECT id, title, version, scenario_type, content_md, structured_json
                               FROM planning_blueprints WHERE profile_id=?1 AND status='active' ORDER BY version DESC LIMIT 1")
                     .map_err(|e| e.to_string())?;
-                let mut rows = stmt.query_map(params![profile_id], |r| {
-                    Ok(serde_json::json!({
-                        "id": r.get::<_, i64>(0)?,
-                        "title": r.get::<_, String>(1)?,
-                        "version": r.get::<_, i64>(2)?,
-                        "scenario_type": r.get::<_, String>(3)?,
-                        "content_md": r.get::<_, String>(4)?,
-                        "structured_json": r.get::<_, Option<String>>(5)?,
-                    }))
-                })
-                .map_err(|e| e.to_string())?;
+                let mut rows = stmt
+                    .query_map(params![profile_id], |r| {
+                        Ok(serde_json::json!({
+                            "id": r.get::<_, i64>(0)?,
+                            "title": r.get::<_, String>(1)?,
+                            "version": r.get::<_, i64>(2)?,
+                            "scenario_type": r.get::<_, String>(3)?,
+                            "content_md": r.get::<_, String>(4)?,
+                            "structured_json": r.get::<_, Option<String>>(5)?,
+                        }))
+                    })
+                    .map_err(|e| e.to_string())?;
                 rows.next().transpose().map_err(|e| e.to_string())
             }
         };
@@ -309,8 +342,10 @@ impl<'a> PlanningReviewRepository<'a> {
         if let Ok(Some(ref bpv)) = bp {
             let bp_id = bpv.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
             let mut ps = conn
-                .prepare("SELECT phase_key, title, start_date, end_date, objective_md
-                          FROM planning_phases WHERE blueprint_id=?1 ORDER BY sort_order")
+                .prepare(
+                    "SELECT phase_key, title, start_date, end_date, objective_md
+                          FROM planning_phases WHERE blueprint_id=?1 ORDER BY sort_order",
+                )
                 .map_err(|e| e.to_string())?;
             let p_rows = ps
                 .query_map(params![bp_id], |r| {
@@ -323,10 +358,14 @@ impl<'a> PlanningReviewRepository<'a> {
                     }))
                 })
                 .map_err(|e| e.to_string())?;
-            phases = p_rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+            phases = p_rows
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
             let mut ms = conn
-                .prepare("SELECT milestone_key, title, start_date, end_date, date_precision, date_status
-                          FROM planning_milestones WHERE blueprint_id=?1 ORDER BY id")
+                .prepare(
+                    "SELECT milestone_key, title, start_date, end_date, date_precision, date_status
+                          FROM planning_milestones WHERE blueprint_id=?1 ORDER BY id",
+                )
                 .map_err(|e| e.to_string())?;
             let m_rows = ms
                 .query_map(params![bp_id], |r| {
@@ -340,7 +379,9 @@ impl<'a> PlanningReviewRepository<'a> {
                     }))
                 })
                 .map_err(|e| e.to_string())?;
-            milestones = m_rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+            milestones = m_rows
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
         }
         // period Tasks（未归档；含手动与蓝图任务）
         let mut stmt = conn
@@ -358,7 +399,9 @@ impl<'a> PlanningReviewRepository<'a> {
                 }))
             })
             .map_err(|e| e.to_string())?;
-        let period_tasks = tasks.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let period_tasks = tasks
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
         // trusted StudySessions（trusted_study_sessions VIEW 已排除 duration_review_state='needs_review'）
         let mut stmt = conn
             .prepare("SELECT started_at, duration_seconds, COALESCE(note,'') FROM trusted_study_sessions
@@ -373,7 +416,9 @@ impl<'a> PlanningReviewRepository<'a> {
                 }))
             })
             .map_err(|e| e.to_string())?;
-        let trusted_sessions = sess.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let trusted_sessions = sess
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
         // trusted Evaluations（trust_state != 'needs_review' 才进 Evidence）
         let mut stmt = conn
             .prepare("SELECT title, evaluation_type, outcome, correct_items, total_items, created_at FROM evaluations
@@ -393,28 +438,33 @@ impl<'a> PlanningReviewRepository<'a> {
                 }))
             })
             .map_err(|e| e.to_string())?;
-        let trusted_evaluations = evs.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let trusted_evaluations = evs
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
         // confirmed PersonalProfile（最新 confirmed version）
         let personal_profile = {
             let mut stmt = conn
                 .prepare("SELECT version, md_content, structured_json, confirmed_at
                           FROM personalization_profiles WHERE profile_id=?1 AND status='confirmed' ORDER BY version DESC LIMIT 1")
                 .map_err(|e| e.to_string())?;
-            let mut rows = stmt.query_map(params![profile_id], |r| {
-                Ok(serde_json::json!({
-                    "version": r.get::<_, i64>(0)?,
-                    "md_content": r.get::<_, String>(1)?,
-                    "structured_json": r.get::<_, Option<String>>(2)?,
-                    "confirmed_at": r.get::<_, Option<String>>(3)?,
-                }))
-            })
-            .map_err(|e| e.to_string())?;
+            let mut rows = stmt
+                .query_map(params![profile_id], |r| {
+                    Ok(serde_json::json!({
+                        "version": r.get::<_, i64>(0)?,
+                        "md_content": r.get::<_, String>(1)?,
+                        "structured_json": r.get::<_, Option<String>>(2)?,
+                        "confirmed_at": r.get::<_, Option<String>>(3)?,
+                    }))
+                })
+                .map_err(|e| e.to_string())?;
             rows.next().transpose().map_err(|e| e.to_string())?
         };
         // active GoalTargets（正式目标主源）
         let mut stmt = conn
-            .prepare("SELECT role, title, status, target_date, data_json FROM goal_targets
-                      WHERE profile_id=?1 AND status='active' ORDER BY id")
+            .prepare(
+                "SELECT role, title, status, target_date, data_json FROM goal_targets
+                      WHERE profile_id=?1 AND status='active' ORDER BY id",
+            )
             .map_err(|e| e.to_string())?;
         let gts = stmt
             .query_map(params![profile_id], |r| {
@@ -427,7 +477,9 @@ impl<'a> PlanningReviewRepository<'a> {
                 }))
             })
             .map_err(|e| e.to_string())?;
-        let active_goal_targets = gts.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let active_goal_targets = gts
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
         let snapshot = serde_json::json!({
             "built_at": crate::repository::planning::today_utc8(),
             "period": { "start": period_start, "end": period_end },
@@ -452,7 +504,10 @@ impl<'a> PlanningReviewRepository<'a> {
         assessment_md: &str,
         risk_state: &str,
     ) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         let n = tx
             .execute(
                 "UPDATE planning_reviews SET status='completed', user_decision='no_change',
@@ -506,7 +561,6 @@ impl<'a> PlanningReviewRepository<'a> {
         Ok(())
     }
 
-
     /// 最新已确认 Review 的 risk_state（§30：Today 风险 Banner 数据源；启动只读）。
     pub fn latest_risk_state(&self, profile_id: i64) -> Result<String, String> {
         Ok(self
@@ -522,8 +576,16 @@ impl<'a> PlanningReviewRepository<'a> {
     }
 
     /// §39 step 5/7：无修改 → review completed 并刷新 Blueprint last/next_review_at。
-    pub fn complete_no_change(&self, id: i64, profile_id: i64, blueprint_id: i64) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    pub fn complete_no_change(
+        &self,
+        id: i64,
+        profile_id: i64,
+        blueprint_id: i64,
+    ) -> Result<(), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         tx.execute(
             "UPDATE planning_reviews SET status='completed', user_decision='no_change',
                completed_at=datetime('now'), updated_at=datetime('now')

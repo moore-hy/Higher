@@ -19,10 +19,16 @@ pub fn assess_unit_quality(
     let mut reasons: Vec<String> = Vec::new();
     reasons.push(format!("pace 样本 {} 个", pace.sample_count));
     if pace.outlier_count > 0 {
-        reasons.push(format!("其中 outlier {} 个（已从校准排除，事实保留）", pace.outlier_count));
+        reasons.push(format!(
+            "其中 outlier {} 个（已从校准排除，事实保留）",
+            pace.outlier_count
+        ));
     }
     if evaluation.count > 0 {
-        reasons.push(format!("Evaluation {} 条（已评定 {}）", evaluation.count, evaluation.rated_count));
+        reasons.push(format!(
+            "Evaluation {} 条（已评定 {}）",
+            evaluation.count, evaluation.rated_count
+        ));
     } else {
         reasons.push("无 Evaluation 证据".to_string());
     }

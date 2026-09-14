@@ -20,15 +20,33 @@ pub struct GoalExecutor<'a> {
 impl ActionExecutor for GoalExecutor<'_> {
     fn execute(&self, action: HigherAction) -> Result<(), String> {
         if action.action_type != HigherActionType::CreateGoal {
-            return Err(format!("GoalExecutor 不处理 {}", action.action_type.as_str()));
+            return Err(format!(
+                "GoalExecutor 不处理 {}",
+                action.action_type.as_str()
+            ));
         }
         let p = &action.payload;
-        let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let name = p
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if name.is_empty() {
             return Err("CreateGoal 缺少 name".to_string());
         }
-        let description = p.get("description").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-        let deadline = p.get("deadline").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let description = p
+            .get("description")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let deadline = p
+            .get("deadline")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let desc = if deadline.is_empty() {
             description
         } else if description.is_empty() {
@@ -37,14 +55,22 @@ impl ActionExecutor for GoalExecutor<'_> {
             format!("{description}（期限 {deadline}）")
         };
         GoalRepository::new(self.conn)
-            .create(self.profile_id, &name, if desc.is_empty() { None } else { Some(&desc) })
+            .create(
+                self.profile_id,
+                &name,
+                if desc.is_empty() { None } else { Some(&desc) },
+            )
             .map(|_| ())
             .map_err(|e| format!("CreateGoal 失败（repository）：{e}"))
     }
 }
 
 /// §八函数形态入口（薄封装，供 higher_action.rs 分发 / 测试直调）。
-pub fn create_goal(conn: &Connection, profile_id: i64, payload: &serde_json::Value) -> Result<(), String> {
+pub fn create_goal(
+    conn: &Connection,
+    profile_id: i64,
+    payload: &serde_json::Value,
+) -> Result<(), String> {
     GoalExecutor { conn, profile_id }.execute(HigherAction {
         action_type: HigherActionType::CreateGoal,
         payload: payload.clone(),

@@ -32,7 +32,13 @@ fn mk_profile(conn: &Connection) -> i64 {
 }
 
 /// 直接按给定 UTC 时间插入一条已完成 Session（绕过 datetime('now')，稳定复现）。
-fn insert_session_utc(conn: &Connection, profile_id: i64, started_utc: &str, dur: i64, title: &str) -> i64 {
+fn insert_session_utc(
+    conn: &Connection,
+    profile_id: i64,
+    started_utc: &str,
+    dur: i64,
+    title: &str,
+) -> i64 {
     conn.execute(
         "INSERT INTO study_sessions (profile_id, title, started_at, ended_at, duration_seconds, status)
          VALUES (?1, ?2, ?3, datetime(?3, '+' || ?4 || ' seconds'), ?4, 'completed')",
@@ -149,7 +155,10 @@ fn test_day_detail_task_counts_and_summary_source() {
 
     let d = app_lib::repository::build_day_detail(&conn, p, "2026-08-16").unwrap();
     assert_eq!(d.tasks.len(), 2);
-    assert_eq!(d.tasks.iter().filter(|t| t.status == "completed").count(), 1);
+    assert_eq!(
+        d.tasks.iter().filter(|t| t.status == "completed").count(),
+        1
+    );
     assert_eq!(d.sessions.len(), 1);
     assert_eq!(d.total_seconds, 268);
 }
@@ -194,7 +203,11 @@ fn test_v014_migration_adds_document_column_and_keeps_note() {
         .unwrap();
     }
     // v013 旧数据
-    conn.execute("INSERT INTO study_profiles (id, name) VALUES (7, '旧档案')", []).unwrap();
+    conn.execute(
+        "INSERT INTO study_profiles (id, name) VALUES (7, '旧档案')",
+        [],
+    )
+    .unwrap();
     conn.execute(
         "INSERT INTO study_sessions (id, profile_id, title, started_at, status, note)
          VALUES (8000, 7, '旧学习', datetime('now'), 'completed', '{\"v\":2,\"blocks\":[{\"t\":\"text\",\"c\":\"旧笔记内容\"}]}')",
@@ -209,11 +222,16 @@ fn test_v014_migration_adds_document_column_and_keeps_note() {
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
 
     let (note, doc): (String, Option<String>) = conn
-        .query_row("SELECT note, note_document_json FROM study_sessions WHERE id = 8000", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            "SELECT note, note_document_json FROM study_sessions WHERE id = 8000",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .unwrap();
-    assert_eq!(note, "{\"v\":2,\"blocks\":[{\"t\":\"text\",\"c\":\"旧笔记内容\"}]}");
+    assert_eq!(
+        note,
+        "{\"v\":2,\"blocks\":[{\"t\":\"text\",\"c\":\"旧笔记内容\"}]}"
+    );
     assert!(doc.is_none(), "v014 后旧 Session document 必须为 NULL");
 }
 
@@ -222,7 +240,9 @@ fn test_v014_migration_adds_document_column_and_keeps_note() {
 fn test_update_session_document_atomic_and_guards() {
     let conn = setup();
     let p = mk_profile(&conn);
-    let s = StudySessionRepository::new(&conn).start_quick(p, None).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start_quick(p, None)
+        .unwrap();
 
     // 成功保存
     StudySessionRepository::new(&conn)
@@ -232,7 +252,10 @@ fn test_update_session_document_atomic_and_guards() {
             Some(r#"{"type":"doc","content":[{"type":"paragraph"}]}"#),
         )
         .unwrap();
-    let after = StudySessionRepository::new(&conn).get(s.id).unwrap().unwrap();
+    let after = StudySessionRepository::new(&conn)
+        .get(s.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(after.note.as_deref(), Some("纯文本投影"));
     assert!(after.note_document_json.is_some());
 
@@ -258,7 +281,9 @@ fn test_update_session_document_atomic_and_guards() {
 fn test_fresh_db_reaches_v014() {
     let conn = setup();
     let ver: u32 = conn
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     // DEV-0076 §四：v027（memory_confirmation_lifecycle）已追加
     // DEV-SYNC-001：v028（local_sync_foundation）已追加
@@ -271,7 +296,9 @@ fn test_fresh_db_reaches_v014() {
 fn test_document_session_note_still_feeds_plain_text() {
     let conn = setup();
     let p = mk_profile(&conn);
-    let s = StudySessionRepository::new(&conn).start_quick(p, None).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start_quick(p, None)
+        .unwrap();
     StudySessionRepository::new(&conn)
         .update_document(
             s.id,
@@ -279,7 +306,10 @@ fn test_document_session_note_still_feeds_plain_text() {
             Some(r#"{"type":"doc"}"#),
         )
         .unwrap();
-    let after = StudySessionRepository::new(&conn).get(s.id).unwrap().unwrap();
+    let after = StudySessionRepository::new(&conn)
+        .get(s.id)
+        .unwrap()
+        .unwrap();
     assert!(after.note.as_deref().unwrap().contains("[图片: 截图.png]"));
 }
 

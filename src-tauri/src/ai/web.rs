@@ -47,9 +47,18 @@ pub async fn brave_search(
         .header("Accept-Encoding", "gzip")
         .send()
         .await
-        .map_err(|e| if e.is_timeout() { "搜索请求超时".to_string() } else { "网络请求失败".to_string() })?;
+        .map_err(|e| {
+            if e.is_timeout() {
+                "搜索请求超时".to_string()
+            } else {
+                "网络请求失败".to_string()
+            }
+        })?;
     let status = resp.status();
-    let text = resp.text().await.map_err(|_| "读取搜索响应失败".to_string())?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|_| "读取搜索响应失败".to_string())?;
     match status.as_u16() {
         401 | 403 => return Err("Brave API Key 无效或未授权".to_string()),
         429 => return Err("Brave 搜索请求过多（限流），请稍后重试".to_string()),
@@ -57,13 +66,30 @@ pub async fn brave_search(
         s if s >= 500 => return Err("Brave 搜索服务暂不可用".to_string()),
         _ => {}
     }
-    let v: J = serde_json::from_str(&text).map_err(|_| "Brave 响应格式异常（无法解析 JSON）".to_string())?;
+    let v: J = serde_json::from_str(&text)
+        .map_err(|_| "Brave 响应格式异常（无法解析 JSON）".to_string())?;
     let mut out = Vec::new();
-    if let Some(results) = v.get("web").and_then(|w| w.get("results")).and_then(|r| r.as_array()) {
+    if let Some(results) = v
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array())
+    {
         for r in results {
-            let title = r.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
-            let u = r.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
-            let snippet = r.get("description").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let title = r
+                .get("title")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let u = r
+                .get("url")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let snippet = r
+                .get("description")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             let age = r.get("age").and_then(|x| x.as_str()).map(|s| s.to_string());
             if !u.is_empty() {
                 out.push((title, u, snippet, age));
@@ -75,7 +101,8 @@ pub async fn brave_search(
 
 /// §101-102 SSRF Guard（含字符串与 host 检查）。
 pub fn ssrf_check(url_str: &str) -> Result<reqwest::Url, String> {
-    let url = reqwest::Url::parse(url_str).map_err(|_| format!("URL 无效：{}", truncate(url_str, 60)))?;
+    let url =
+        reqwest::Url::parse(url_str).map_err(|_| format!("URL 无效：{}", truncate(url_str, 60)))?;
     let scheme = url.scheme();
     if scheme != "http" && scheme != "https" {
         return Err("只允许 http/https URL（file:// 等被拒绝）".to_string());
@@ -85,10 +112,19 @@ pub fn ssrf_check(url_str: &str) -> Result<reqwest::Url, String> {
         return Err("URL 缺少主机名".to_string());
     }
     let blocked_hosts = [
-        "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "ip6-localhost",
-        "metadata.google.internal", "169.254.169.254",
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "[::1]",
+        "ip6-localhost",
+        "metadata.google.internal",
+        "169.254.169.254",
     ];
-    if blocked_hosts.iter().any(|h| host == *h || host.ends_with(&format!(".{}", h))) {
+    if blocked_hosts
+        .iter()
+        .any(|h| host == *h || host.ends_with(&format!(".{}", h)))
+    {
         return Err("禁止访问本机 / 内部服务地址".to_string());
     }
     // 私有 IPv4 段（直接 IP 访问）
@@ -141,10 +177,19 @@ pub async fn web_open(url_str: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     let mut resp = http
         .get(url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Higher/1.0")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Higher/1.0",
+        )
         .send()
         .await
-        .map_err(|e| if e.is_timeout() { "网页请求超时".to_string() } else { format!("网页请求失败：{}", short_err(&e)) })?;
+        .map_err(|e| {
+            if e.is_timeout() {
+                "网页请求超时".to_string()
+            } else {
+                format!("网页请求失败：{}", short_err(&e))
+            }
+        })?;
     let final_url = resp.url().clone();
     redirect_check(final_url.as_str())?;
     let status = resp.status();
@@ -173,11 +218,18 @@ pub async fn web_open(url_str: &str) -> Result<String, String> {
         }
     }
     if !content_type.contains("html") && !content_type.contains("text") {
-        return Err(format!("不支持的网页内容类型：{}", truncate(&content_type, 40)));
+        return Err(format!(
+            "不支持的网页内容类型：{}",
+            truncate(&content_type, 40)
+        ));
     }
     let body = String::from_utf8_lossy(&limited);
     let text = extract_html_text(&body);
-    let text = if text.is_empty() { body.to_string() } else { text };
+    let text = if text.is_empty() {
+        body.to_string()
+    } else {
+        text
+    };
     let cut: String = text.chars().take(1024 * 1024).collect();
     Ok(cut)
 }
@@ -230,7 +282,21 @@ pub fn extract_html_text(html: &str) -> String {
                 k += 1;
             }
             // 块级标签换行
-            if matches!(ln.as_str(), "p" | "div" | "br" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "section" | "article") {
+            if matches!(
+                ln.as_str(),
+                "p" | "div"
+                    | "br"
+                    | "li"
+                    | "tr"
+                    | "h1"
+                    | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "section"
+                    | "article"
+            ) {
                 out.push('\n');
             }
             i = (k + 1).min(b.len());
@@ -251,9 +317,7 @@ pub fn extract_html_text(html: &str) -> String {
         i = e;
     }
     // 实体 + 空白规整
-    let s = html_entities(&out)
-        .replace("\r\n", "\n")
-        .replace('\t', " ");
+    let s = html_entities(&out).replace("\r\n", "\n").replace('\t', " ");
     let mut cleaned = String::with_capacity(s.len());
     let mut last_nl = false;
     let mut last_sp = false;
@@ -308,7 +372,9 @@ fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             b' ' => out.push_str("%20"),
             _ => out.push_str(&format!("%{:02X}", b)),
         }

@@ -56,8 +56,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0066f_{}_{}", name, std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0066f_{}_{}", name, std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -147,7 +151,11 @@ impl FakeWeb {
 }
 
 impl WebFake for FakeWeb {
-    fn search(&self, _query: &str, _count: u32) -> Result<Vec<(String, String, String, Option<String>)>, String> {
+    fn search(
+        &self,
+        _query: &str,
+        _count: u32,
+    ) -> Result<Vec<(String, String, String, Option<String>)>, String> {
         self.search_calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.results.clone())
     }
@@ -201,11 +209,18 @@ fn run_turn(
 }
 
 fn count(conn: &Connection, table: &str) -> i64 {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
 }
 
 fn assert_zero_mutation(conn: &Connection) {
-    for t in ["goals", "goal_targets", "planning_blueprints", "tasks", "ai_change_sets"] {
+    for t in [
+        "goals",
+        "goal_targets",
+        "planning_blueprints",
+        "tasks",
+        "ai_change_sets",
+    ] {
         assert_eq!(count(conn, t), 0, "{t} 必须 0 mutation");
     }
 }
@@ -224,14 +239,19 @@ fn last_assistant(conn: &Connection, c: i64, p: i64) -> String {
 fn researching_events(conn: &Connection, run_id: &str) -> i64 {
     conn.query_row(
         "SELECT COUNT(*) FROM ai_run_events WHERE run_id=?1 AND event_type='workflow_researching'",
-        params![run_id], |r| r.get(0),
+        params![run_id],
+        |r| r.get(0),
     )
     .unwrap()
 }
 
 fn run_json(conn: &Connection, run_id: &str) -> AgentWorkflowPayload {
     let j: String = conn
-        .query_row("SELECT workflow_json FROM ai_runs WHERE id=?1", params![run_id], |r| r.get(0))
+        .query_row(
+            "SELECT workflow_json FROM ai_runs WHERE id=?1",
+            params![run_id],
+            |r| r.get(0),
+        )
         .unwrap();
     serde_json::from_str(&j).unwrap()
 }
@@ -248,9 +268,24 @@ fn run_state(conn: &Connection, run_id: &str) -> (String, Option<String>) {
 /// 标准考研搜索结果：官网 + 知乎 + 博客。
 fn default_results() -> Vec<(String, String, String, Option<String>)> {
     vec![
-        ("华中科技大学2027硕士招生简章".into(), OFFICIAL.into(), "官方简章：考试科目…".into(), None),
-        ("知乎：华科计算机考研经验".into(), ZHIHU.into(), "经验帖…".into(), None),
-        ("个人博客：我的考研之路".into(), BLOG.into(), "博客…".into(), None),
+        (
+            "华中科技大学2027硕士招生简章".into(),
+            OFFICIAL.into(),
+            "官方简章：考试科目…".into(),
+            None,
+        ),
+        (
+            "知乎：华科计算机考研经验".into(),
+            ZHIHU.into(),
+            "经验帖…".into(),
+            None,
+        ),
+        (
+            "个人博客：我的考研之路".into(),
+            BLOG.into(),
+            "博客…".into(),
+            None,
+        ),
     ]
 }
 
@@ -261,24 +296,50 @@ fn f01_external_fact_uses_web_not_user() {
     let (state, vault) = setup("f01");
     let fake = FakeWeb::new(
         default_results(),
-        vec![(OFFICIAL, Some("计算机学院 2027 硕士招生：初试科目为政治、英语一、数学一、408。"))],
+        vec![(
+            OFFICIAL,
+            Some("计算机学院 2027 硕士招生：初试科目为政治、英语一、数学一、408。"),
+        )],
     );
     set_web_fake_for_tests(&state, Some(fake.clone()));
     let (p, c, m) = {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "华中科技大学计算机考研考试科目是什么？")
     };
-    let out = run_turn(&state, &vault, p, c, m, "华中科技大学计算机考研考试科目是什么？", "f01-run", true, vec![
-        tool_call("web_search", json!({ "query": "华中科技大学 计算机 考研 科目" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-        final_answer("根据华中科技大学研究生院官方简章：初试科目为政治、英语一、数学一、408。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "华中科技大学计算机考研考试科目是什么？",
+        "f01-run",
+        true,
+        vec![
+            tool_call(
+                "web_search",
+                json!({ "query": "华中科技大学 计算机 考研 科目" }),
+            ),
+            tool_call("web_open", json!({ "sid": "S1" })),
+            final_answer("根据华中科技大学研究生院官方简章：初试科目为政治、英语一、数学一、408。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     assert_eq!(fake.search_calls.load(Ordering::SeqCst), 1, "必须先搜索");
-    assert!(fake.open_urls.lock().unwrap().contains(&OFFICIAL.to_string()), "必须打开官网");
+    assert!(
+        fake.open_urls
+            .lock()
+            .unwrap()
+            .contains(&OFFICIAL.to_string()),
+        "必须打开官网"
+    );
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f01-run");
-    assert!(payload.evidence_sources.contains(&OFFICIAL.to_string()), "证据=官网：{:?}", payload.evidence_sources);
+    assert!(
+        payload.evidence_sources.contains(&OFFICIAL.to_string()),
+        "证据=官网：{:?}",
+        payload.evidence_sources
+    );
     assert!(payload.pending_questions.is_empty(), "不得问用户考试科目");
     assert_eq!(researching_events(&conn, "f01-run"), 1, "researching 事件");
     assert_zero_mutation(&conn);
@@ -295,14 +356,29 @@ fn f02_user_fact_asks_user_not_web() {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "帮我做考研规划")
     };
-    let out = run_turn(&state, &vault, p, c, m, "帮我做考研规划", "f02-run", true, vec![
-        tool_call("request_user_input", json!({
-            "reason": "规划前需要确认真实可用时间",
-            "questions": [ { "key": "weekday_study_hours", "question": "工作日每天能学多久？" } ]
-        })),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "帮我做考研规划",
+        "f02-run",
+        true,
+        vec![tool_call(
+            "request_user_input",
+            json!({
+                "reason": "规划前需要确认真实可用时间",
+                "questions": [ { "key": "weekday_study_hours", "question": "工作日每天能学多久？" } ]
+            }),
+        )],
+    );
     assert_eq!(out, Ok("needs_user_input"), "{out:?}");
-    assert_eq!(fake.search_calls.load(Ordering::SeqCst), 0, "用户私人事实不得 Web");
+    assert_eq!(
+        fake.search_calls.load(Ordering::SeqCst),
+        0,
+        "用户私人事实不得 Web"
+    );
     let conn = state.0.lock().unwrap();
     let (status, wf) = run_state(&conn, "f02-run");
     assert_eq!(status, "waiting_user");
@@ -328,16 +404,34 @@ fn f03_internal_fact_reads_higher_not_web() {
         .unwrap();
         f
     };
-    let out = run_turn(&state, &vault, p, c, m, "我现在的 REACH 是什么？", "f03-run", true, vec![
-        tool_call("list_active_goal_targets", json!({})),
-        final_answer("你当前的 REACH 目标：华中科技大学 · 计算机。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "我现在的 REACH 是什么？",
+        "f03-run",
+        true,
+        vec![
+            tool_call("list_active_goal_targets", json!({})),
+            final_answer("你当前的 REACH 目标：华中科技大学 · 计算机。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
-    assert_eq!(fake.search_calls.load(Ordering::SeqCst), 0, "Higher 内部事实不得 Web");
+    assert_eq!(
+        fake.search_calls.load(Ordering::SeqCst),
+        0,
+        "Higher 内部事实不得 Web"
+    );
     let conn = state.0.lock().unwrap();
     let text = last_assistant(&conn, c, p);
     assert!(text.contains("华中科技大学"), "回答来自 Higher：{text}");
-    assert_eq!(researching_events(&conn, "f03-run"), 0, "未进入 researching");
+    assert_eq!(
+        researching_events(&conn, "f03-run"),
+        0,
+        "未进入 researching"
+    );
 }
 
 // =============== F04 · Search ≠ Evidence ===============
@@ -345,36 +439,70 @@ fn f03_internal_fact_reads_higher_not_web() {
 #[test]
 fn f04_search_snippet_is_not_evidence_until_opened() {
     let (state, vault) = setup("f04");
-    let fake = FakeWeb::new(default_results(), vec![(OFFICIAL, Some("官方正文：考试科目 408。"))]);
+    let fake = FakeWeb::new(
+        default_results(),
+        vec![(OFFICIAL, Some("官方正文：考试科目 408。"))],
+    );
     set_web_fake_for_tests(&state, Some(fake));
     let (p, c, m1) = {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "华科考研科目？")
     };
     // 第一轮：只 search，未 open → evidence 必须为空
-    let out1 = run_turn(&state, &vault, p, c, m1, "华科考研科目？", "f04-run1", true, vec![
-        tool_call("web_search", json!({ "query": "华科 考研 科目" })),
-        final_answer("我找到了候选来源，稍后阅读。"),
-    ]);
+    let out1 = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m1,
+        "华科考研科目？",
+        "f04-run1",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 考研 科目" })),
+            final_answer("我找到了候选来源，稍后阅读。"),
+        ],
+    );
     assert_eq!(out1, Ok("completed"), "{out1:?}");
     {
         let conn = state.0.lock().unwrap();
         let payload = run_json(&conn, "f04-run1");
-        assert!(payload.evidence_sources.is_empty(), "Search snippet 不得成为 Evidence：{:?}", payload.evidence_sources);
+        assert!(
+            payload.evidence_sources.is_empty(),
+            "Search snippet 不得成为 Evidence：{:?}",
+            payload.evidence_sources
+        );
     }
     // 第二轮：web_open 成功 → 才进入 Evidence
     let m2 = {
         let conn = state.0.lock().unwrap();
-        ConversationRepository::new(&conn).add_message(c, p, "user", "继续看官网", None).unwrap().id
+        ConversationRepository::new(&conn)
+            .add_message(c, p, "user", "继续看官网", None)
+            .unwrap()
+            .id
     };
-    let out2 = run_turn(&state, &vault, p, c, m2, "继续看官网", "f04-run2", true, vec![
-        tool_call("web_open", json!({ "url": OFFICIAL })),
-        final_answer("官网确认：考试科目 408。"),
-    ]);
+    let out2 = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m2,
+        "继续看官网",
+        "f04-run2",
+        true,
+        vec![
+            tool_call("web_open", json!({ "url": OFFICIAL })),
+            final_answer("官网确认：考试科目 408。"),
+        ],
+    );
     assert_eq!(out2, Ok("completed"), "{out2:?}");
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f04-run2");
-    assert!(payload.evidence_sources.contains(&OFFICIAL.to_string()), "open 成功后才入 Evidence：{:?}", payload.evidence_sources);
+    assert!(
+        payload.evidence_sources.contains(&OFFICIAL.to_string()),
+        "open 成功后才入 Evidence：{:?}",
+        payload.evidence_sources
+    );
 }
 
 // =============== F05 · Official Source 优先 ===============
@@ -382,25 +510,42 @@ fn f04_search_snippet_is_not_evidence_until_opened() {
 #[test]
 fn f05_official_source_preferred() {
     let (state, vault) = setup("f05");
-    let fake = FakeWeb::new(default_results(), vec![
-        (OFFICIAL, Some("官方：考试科目 A。")),
-        (ZHIHU, Some("知乎：考试科目 B。")),
-        (BLOG, Some("博客：考试科目 C。")),
-    ]);
+    let fake = FakeWeb::new(
+        default_results(),
+        vec![
+            (OFFICIAL, Some("官方：考试科目 A。")),
+            (ZHIHU, Some("知乎：考试科目 B。")),
+            (BLOG, Some("博客：考试科目 C。")),
+        ],
+    );
     set_web_fake_for_tests(&state, Some(fake));
     let (p, c, m) = {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "华科计算机考研科目？")
     };
-    let out = run_turn(&state, &vault, p, c, m, "华科计算机考研科目？", "f05-run", true, vec![
-        tool_call("web_search", json!({ "query": "华科 计算机 考研 科目" })),
-        tool_call("web_open", json!({ "sid": "S1" })), // 官网排第一
-        final_answer("依据学校官方简章：考试科目 A。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "华科计算机考研科目？",
+        "f05-run",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 计算机 考研 科目" })),
+            tool_call("web_open", json!({ "sid": "S1" })), // 官网排第一
+            final_answer("依据学校官方简章：考试科目 A。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f05-run");
-    assert_eq!(payload.evidence_sources, vec![OFFICIAL.to_string()], "正式 Evidence 必须指向官网");
+    assert_eq!(
+        payload.evidence_sources,
+        vec![OFFICIAL.to_string()],
+        "正式 Evidence 必须指向官网"
+    );
 }
 
 // =============== F06 · Source Conflict ===============
@@ -411,8 +556,18 @@ fn f06_source_conflict_keeps_both_and_unresolved() {
     let official_b = "https://gs.xidian.edu.cn/cat";
     let fake = FakeWeb::new(
         vec![
-            ("西电官方目录（2027）".into(), official_b.into(), "官方：科目 B".into(), None),
-            ("华科官方目录（2027）".into(), OFFICIAL.into(), "官方：科目 A".into(), None),
+            (
+                "西电官方目录（2027）".into(),
+                official_b.into(),
+                "官方：科目 B".into(),
+                None,
+            ),
+            (
+                "华科官方目录（2027）".into(),
+                OFFICIAL.into(),
+                "官方：科目 A".into(),
+                None,
+            ),
         ],
         vec![
             (OFFICIAL, Some("官方简章：考试科目 = A 方案。")),
@@ -434,18 +589,31 @@ fn f06_source_conflict_keeps_both_and_unresolved() {
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f06-run");
-    assert_eq!(payload.evidence_sources.len(), 2, "保留两条来源：{:?}", payload.evidence_sources);
+    assert_eq!(
+        payload.evidence_sources.len(),
+        2,
+        "保留两条来源：{:?}",
+        payload.evidence_sources
+    );
     assert!(payload.evidence_sources.contains(&OFFICIAL.to_string()));
     assert!(payload.evidence_sources.contains(&official_b.to_string()));
-    assert_eq!(payload.unresolved.len(), 1, "冲突标记 unresolved：{:?}", payload.unresolved);
+    assert_eq!(
+        payload.unresolved.len(),
+        1,
+        "冲突标记 unresolved：{:?}",
+        payload.unresolved
+    );
     let text = last_assistant(&conn, c, p);
     assert!(text.contains("官方"), "回答优先官方来源：{text}");
 }
 
 fn record_unresolved_call() -> Completion {
-    tool_call("record_unresolved", json!({
-        "items": [ "华科/西电考试科目口径存在差异，需以各自官方为准，无法合并为单一结论" ]
-    }))
+    tool_call(
+        "record_unresolved",
+        json!({
+            "items": [ "华科/西电考试科目口径存在差异，需以各自官方为准，无法合并为单一结论" ]
+        }),
+    )
 }
 
 // =============== F07 · Evidence Persistence ===============
@@ -459,11 +627,21 @@ fn f07_evidence_persisted_in_ai_sources_and_workflow() {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "查华科简章")
     };
-    let out = run_turn(&state, &vault, p, c, m, "查华科简章", "f07-run", true, vec![
-        tool_call("web_search", json!({ "query": "华科 简章" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-        final_answer("已读取官网简章。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "查华科简章",
+        "f07-run",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 简章" })),
+            tool_call("web_open", json!({ "sid": "S1" })),
+            final_answer("已读取官网简章。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     // ai_sources：run_id + URL 正确（open 的证据行）
@@ -477,7 +655,11 @@ fn f07_evidence_persisted_in_ai_sources_and_workflow() {
     assert!(n >= 1, "ai_sources 必须有打开来源的记录（run_id+URL）");
     // workflow_json.evidence_sources
     let payload = run_json(&conn, "f07-run");
-    assert_eq!(payload.evidence_sources, vec![OFFICIAL.to_string()], "ref 进入 evidence 链");
+    assert_eq!(
+        payload.evidence_sources,
+        vec![OFFICIAL.to_string()],
+        "ref 进入 evidence 链"
+    );
 }
 
 // =============== F08 · 同 Run URL 去重 ===============
@@ -486,26 +668,48 @@ fn f07_evidence_persisted_in_ai_sources_and_workflow() {
 fn f08_same_run_url_dedup() {
     let (state, vault) = setup("f08");
     let variant = "https://GS.HUST.EDU.CN/admission/"; // 大小写 host + 尾斜杠
-    let fake = FakeWeb::new(default_results(), vec![
-        (OFFICIAL, Some("官方正文。")),
-        (variant, Some("官方正文（同页变体 URL）。")),
-    ]);
+    let fake = FakeWeb::new(
+        default_results(),
+        vec![
+            (OFFICIAL, Some("官方正文。")),
+            (variant, Some("官方正文（同页变体 URL）。")),
+        ],
+    );
     set_web_fake_for_tests(&state, Some(fake));
     let (p, c, m) = {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "查华科简章两次")
     };
-    let out = run_turn(&state, &vault, p, c, m, "查华科简章两次", "f08-run", true, vec![
-        tool_call("web_search", json!({ "query": "华科 简章" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-        tool_call("web_open", json!({ "url": variant })), // 同页不同写法
-        final_answer("已阅读官网简章。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "查华科简章两次",
+        "f08-run",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 简章" })),
+            tool_call("web_open", json!({ "sid": "S1" })),
+            tool_call("web_open", json!({ "url": variant })), // 同页不同写法
+            final_answer("已阅读官网简章。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f08-run");
-    assert_eq!(payload.evidence_sources.len(), 1, "同 Run 同 canonical URL 只算一个 Evidence：{:?}", payload.evidence_sources);
-    assert_eq!(payload.evidence_sources[0], OFFICIAL.to_string(), "归一为 canonical 形式");
+    assert_eq!(
+        payload.evidence_sources.len(),
+        1,
+        "同 Run 同 canonical URL 只算一个 Evidence：{:?}",
+        payload.evidence_sources
+    );
+    assert_eq!(
+        payload.evidence_sources[0],
+        OFFICIAL.to_string(),
+        "归一为 canonical 形式"
+    );
 }
 
 // =============== F09 · Web Disabled ===============
@@ -514,24 +718,44 @@ fn f08_same_run_url_dedup() {
 fn f09_web_disabled_not_exposed_and_no_fake_research() {
     // 工具面：web 关闭不暴露
     let off = agent_tool_names(false);
-    assert!(!off.contains(&"web_search".to_string()) && !off.contains(&"web_open".to_string()), "{off:?}");
+    assert!(
+        !off.contains(&"web_search".to_string()) && !off.contains(&"web_open".to_string()),
+        "{off:?}"
+    );
     let on = agent_tool_names(true);
-    assert!(on.contains(&"web_search".to_string()) && on.contains(&"web_open".to_string()), "{on:?}");
+    assert!(
+        on.contains(&"web_search".to_string()) && on.contains(&"web_open".to_string()),
+        "{on:?}"
+    );
     // 行为：模型尝试调用 → 人话错误；AI 明确无法联网（不伪造）
     let (state, vault) = setup("f09");
     let (p, c, m) = {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "帮我联网查华科简章")
     };
-    let out = run_turn(&state, &vault, p, c, m, "帮我联网查华科简章", "f09-run", false, vec![
-        tool_call("web_search", json!({ "query": "华科 简章" })),
-        final_answer("当前联网研究不可用，因此无法验证这个外部事实；该信息标记为未确认。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "帮我联网查华科简章",
+        "f09-run",
+        false,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 简章" })),
+            final_answer("当前联网研究不可用，因此无法验证这个外部事实；该信息标记为未确认。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let text = last_assistant(&conn, c, p);
     assert!(text.contains("无法"), "必须明确无法联网：{text}");
-    assert_eq!(researching_events(&conn, "f09-run"), 0, "web 关闭不得进入 researching");
+    assert_eq!(
+        researching_events(&conn, "f09-run"),
+        0,
+        "web 关闭不得进入 researching"
+    );
     let payload = run_json(&conn, "f09-run");
     assert!(payload.evidence_sources.is_empty(), "无证据");
 }
@@ -544,26 +768,57 @@ fn f10_recoverable_web_failure_continues() {
     let alt = "https://admission.hust.edu.cn/2027";
     let fake = FakeWeb::new(
         vec![
-            ("华科简章（主站）".into(), OFFICIAL.into(), "官方".into(), None),
-            ("华科简章（备用）".into(), alt.into(), "官方镜像".into(), None),
+            (
+                "华科简章（主站）".into(),
+                OFFICIAL.into(),
+                "官方".into(),
+                None,
+            ),
+            (
+                "华科简章（备用）".into(),
+                alt.into(),
+                "官方镜像".into(),
+                None,
+            ),
         ],
-        vec![(OFFICIAL, None), (alt, Some("官方镜像正文：考试科目 408。"))], // 主站 timeout
+        vec![
+            (OFFICIAL, None),
+            (alt, Some("官方镜像正文：考试科目 408。")),
+        ], // 主站 timeout
     );
     set_web_fake_for_tests(&state, Some(fake));
     let (p, c, m) = {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "查华科简章")
     };
-    let out = run_turn(&state, &vault, p, c, m, "查华科简章", "f10-run", true, vec![
-        tool_call("web_search", json!({ "query": "华科 简章" })),
-        tool_call("web_open", json!({ "sid": "S1" })),   // 超时
-        tool_call("web_open", json!({ "sid": "S2" })),   // 换第二来源成功
-        final_answer("已从备用官方镜像读取：考试科目 408。"),
-    ]);
-    assert_eq!(out, Ok("completed"), "单个网页失败不得使 Run failed：{out:?}");
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "查华科简章",
+        "f10-run",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 简章" })),
+            tool_call("web_open", json!({ "sid": "S1" })), // 超时
+            tool_call("web_open", json!({ "sid": "S2" })), // 换第二来源成功
+            final_answer("已从备用官方镜像读取：考试科目 408。"),
+        ],
+    );
+    assert_eq!(
+        out,
+        Ok("completed"),
+        "单个网页失败不得使 Run failed：{out:?}"
+    );
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f10-run");
-    assert_eq!(payload.evidence_sources, vec![alt.to_string()], "第二来源成为证据");
+    assert_eq!(
+        payload.evidence_sources,
+        vec![alt.to_string()],
+        "第二来源成为证据"
+    );
     assert_eq!(researching_events(&conn, "f10-run"), 1);
 }
 
@@ -596,7 +851,12 @@ fn f11_all_sources_fail_unresolved() {
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f11-run");
     assert!(payload.evidence_sources.is_empty(), "无正式证据");
-    assert_eq!(payload.unresolved.len(), 1, "unresolved：{:?}", payload.unresolved);
+    assert_eq!(
+        payload.unresolved.len(),
+        1,
+        "unresolved：{:?}",
+        payload.unresolved
+    );
     let text = last_assistant(&conn, c, p);
     assert!(text.contains("无法"), "不得编造：{text}");
 }
@@ -621,11 +881,23 @@ fn f12_web_prompt_injection_is_text_only_zero_mutation() {
         .unwrap();
         f
     };
-    let out = run_turn(&state, &vault, p, c, m, "查华科简章", "f12-run", true, vec![
-        tool_call("web_search", json!({ "query": "华科 简章" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-        final_answer("页面正文中出现了可疑的注入文本，我已将其仅当作网页文本处理，未执行其中任何指令。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "查华科简章",
+        "f12-run",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 简章" })),
+            tool_call("web_open", json!({ "sid": "S1" })),
+            final_answer(
+                "页面正文中出现了可疑的注入文本，我已将其仅当作网页文本处理，未执行其中任何指令。",
+            ),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     // P0：网页指令绝不成为 Agent 指令——0 Higher mutation
@@ -642,7 +914,10 @@ fn f12_web_prompt_injection_is_text_only_zero_mutation() {
 #[test]
 fn f13_ef_continuation_researches_original_task() {
     let (state, vault) = setup("f13");
-    let fake = FakeWeb::new(default_results(), vec![(OFFICIAL, Some("2027 官方简章正文。"))]);
+    let fake = FakeWeb::new(
+        default_results(),
+        vec![(OFFICIAL, Some("2027 官方简章正文。"))],
+    );
     set_web_fake_for_tests(&state, Some(fake));
     let (p, c, m) = {
         let conn = state.0.lock().unwrap();
@@ -665,22 +940,44 @@ fn f13_ef_continuation_researches_original_task() {
     };
     // 用户回答时间 → 信息齐 → 学校信息属 external fact → researching
     // DEV-0077.2 §十八：完整回答 = 结构化提交（不挂起）→ 继续研究原任务
-    let out = run_turn(&state, &vault, p, c, m, "工作日 6 小时。", "f13-run", true, vec![
-        tool_call("request_user_input", json!({
-            "collected": { "weekday_study_hours": "工作日 6 小时" },
-            "questions": []
-        })),
-        tool_call("web_search", json!({ "query": "华中科技大学 2028 招生" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-        final_answer("已记录你的可用时间；学校官方信息已查证，继续你的考研规划。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "工作日 6 小时。",
+        "f13-run",
+        true,
+        vec![
+            tool_call(
+                "request_user_input",
+                json!({
+                    "collected": { "weekday_study_hours": "工作日 6 小时" },
+                    "questions": []
+                }),
+            ),
+            tool_call("web_search", json!({ "query": "华中科技大学 2028 招生" })),
+            tool_call("web_open", json!({ "sid": "S1" })),
+            final_answer("已记录你的可用时间；学校官方信息已查证，继续你的考研规划。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f13-run");
-    assert_eq!(payload.original_request, "帮我做 2028 考研规划", "恢复原任务（非新任务）");
+    assert_eq!(
+        payload.original_request, "帮我做 2028 考研规划",
+        "恢复原任务（非新任务）"
+    );
     assert!(payload.evidence_sources.contains(&OFFICIAL.to_string()));
     assert_eq!(researching_events(&conn, "f13-run"), 1, "进入 researching");
-    assert!(payload.collected_user_information.get("weekday_study_hours").is_some_and(|v| v.contains("6")), "回答已收集");
+    assert!(
+        payload
+            .collected_user_information
+            .get("weekday_study_hours")
+            .is_some_and(|v| v.contains("6")),
+        "回答已收集"
+    );
 }
 
 // =============== F14 · new_task Evidence Isolation ===============
@@ -695,12 +992,22 @@ fn f14_new_task_does_not_inherit_evidence() {
         mk_fixture(&conn, "研究华科考研要求")
     };
     // Task A：研究并留下证据
-    let out1 = run_turn(&state, &vault, p, c, m1, "研究华科考研要求", "f14-run1", true, vec![
-        tool_call("web_search", json!({ "query": "华科 考研" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-        record_unresolved_call(),
-        final_answer("Task A 研究完成。"),
-    ]);
+    let out1 = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m1,
+        "研究华科考研要求",
+        "f14-run1",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 考研" })),
+            tool_call("web_open", json!({ "sid": "S1" })),
+            record_unresolved_call(),
+            final_answer("Task A 研究完成。"),
+        ],
+    );
     assert_eq!(out1, Ok("completed"), "{out1:?}");
     {
         let conn = state.0.lock().unwrap();
@@ -711,18 +1018,44 @@ fn f14_new_task_does_not_inherit_evidence() {
     // 用户转向新任务（Phase E hard-switch）
     let m2 = {
         let conn = state.0.lock().unwrap();
-        ConversationRepository::new(&conn).add_message(c, p, "user", "不研究考研了，帮我研究英语证书。", None).unwrap().id
+        ConversationRepository::new(&conn)
+            .add_message(c, p, "user", "不研究考研了，帮我研究英语证书。", None)
+            .unwrap()
+            .id
     };
-    let out2 = run_turn(&state, &vault, p, c, m2, "不研究考研了，帮我研究英语证书。", "f14-run2", true, vec![
-        tool_call("cancel_current_task", json!({ "reason": "转向英语证书研究", "new_task": true })),
-        final_answer("好的，开始研究英语证书。"),
-    ]);
+    let out2 = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m2,
+        "不研究考研了，帮我研究英语证书。",
+        "f14-run2",
+        true,
+        vec![
+            tool_call(
+                "cancel_current_task",
+                json!({ "reason": "转向英语证书研究", "new_task": true }),
+            ),
+            final_answer("好的，开始研究英语证书。"),
+        ],
+    );
     assert_eq!(out2, Ok("completed"), "{out2:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload_b) = read_workflow_payload(&conn, p, c).unwrap();
-    assert!(payload_b.evidence_sources.is_empty(), "Task B 不继承 Task A evidence：{:?}", payload_b.evidence_sources);
-    assert!(payload_b.unresolved.is_empty(), "Task B 不继承 Task A unresolved");
-    assert_eq!(payload_b.original_request, "不研究考研了，帮我研究英语证书。");
+    assert!(
+        payload_b.evidence_sources.is_empty(),
+        "Task B 不继承 Task A evidence：{:?}",
+        payload_b.evidence_sources
+    );
+    assert!(
+        payload_b.unresolved.is_empty(),
+        "Task B 不继承 Task A unresolved"
+    );
+    assert_eq!(
+        payload_b.original_request,
+        "不研究考研了，帮我研究英语证书。"
+    );
     // Task A 历史 run 的证据保留（不破坏历史 §40）
     let payload_a = run_json(&conn, "f14-run1");
     assert_eq!(payload_a.evidence_sources.len(), 1, "历史 Run 证据保留");
@@ -740,38 +1073,79 @@ fn f15_evidence_isolation_across_profiles_and_conversations() {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "查华科简章")
     };
-    let out = run_turn(&state, &vault, pa, ca, ma, "查华科简章", "f15-runA", true, vec![
-        tool_call("web_search", json!({ "query": "华科 简章" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-        final_answer("已读取。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        pa,
+        ca,
+        ma,
+        "查华科简章",
+        "f15-runA",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 简章" })),
+            tool_call("web_open", json!({ "sid": "S1" })),
+            final_answer("已读取。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     // 同 Profile 不同 Conversation：不得串证据
     let (c2, m2) = {
         let conn = state.0.lock().unwrap();
-        let conv = ConversationRepository::new(&conn).create(pa, "assistant", "F15-2").unwrap();
-        let msg = ConversationRepository::new(&conn).add_message(conv.id, pa, "user", "帮我安排明天学习", None).unwrap();
+        let conv = ConversationRepository::new(&conn)
+            .create(pa, "assistant", "F15-2")
+            .unwrap();
+        let msg = ConversationRepository::new(&conn)
+            .add_message(conv.id, pa, "user", "帮我安排明天学习", None)
+            .unwrap();
         (conv.id, msg.id)
     };
-    let out2 = run_turn(&state, &vault, pa, c2, m2, "帮我安排明天学习", "f15-runB", true, vec![
-        final_answer("明天以数学为主。"),
-    ]);
+    let out2 = run_turn(
+        &state,
+        &vault,
+        pa,
+        c2,
+        m2,
+        "帮我安排明天学习",
+        "f15-runB",
+        true,
+        vec![final_answer("明天以数学为主。")],
+    );
     assert_eq!(out2, Ok("completed"), "{out2:?}");
     // Profile B：不得恢复 A
     let (pb, cb, mb) = {
         let conn = state.0.lock().unwrap();
-        let pid = StudyProfileRepository::new(&conn).create("PF-B", None, None, None, None, None).unwrap().id;
-        let conv = ConversationRepository::new(&conn).create(pid, "assistant", "F15-B").unwrap();
-        let msg = ConversationRepository::new(&conn).add_message(conv.id, pid, "user", "今天学什么", None).unwrap();
+        let pid = StudyProfileRepository::new(&conn)
+            .create("PF-B", None, None, None, None, None)
+            .unwrap()
+            .id;
+        let conv = ConversationRepository::new(&conn)
+            .create(pid, "assistant", "F15-B")
+            .unwrap();
+        let msg = ConversationRepository::new(&conn)
+            .add_message(conv.id, pid, "user", "今天学什么", None)
+            .unwrap();
         (pid, conv.id, msg.id)
     };
-    let out3 = run_turn(&state, &vault, pb, cb, mb, "今天学什么", "f15-runC", true, vec![
-        final_answer("先复习英语。"),
-    ]);
+    let out3 = run_turn(
+        &state,
+        &vault,
+        pb,
+        cb,
+        mb,
+        "今天学什么",
+        "f15-runC",
+        true,
+        vec![final_answer("先复习英语。")],
+    );
     assert_eq!(out3, Ok("completed"), "{out3:?}");
     let conn = state.0.lock().unwrap();
     let (_, p2) = read_workflow_payload(&conn, pa, c2).unwrap();
-    assert!(p2.evidence_sources.is_empty(), "Conversation B 不串 A 证据：{:?}", p2.evidence_sources);
+    assert!(
+        p2.evidence_sources.is_empty(),
+        "Conversation B 不串 A 证据：{:?}",
+        p2.evidence_sources
+    );
     let (_, pbp) = read_workflow_payload(&conn, pb, cb).unwrap();
     assert!(pbp.evidence_sources.is_empty(), "Profile B 不串 A 证据");
     // A 原证据保留
@@ -790,14 +1164,32 @@ fn f16_research_only_zero_mutation() {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "查一下华科考试要求")
     };
-    let out = run_turn(&state, &vault, p, c, m, "查一下华科考试要求", "f16-run", true, vec![
-        tool_call("web_search", json!({ "query": "华科 考试要求" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-        final_answer("华科要求如上（来自官网）。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "查一下华科考试要求",
+        "f16-run",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 考试要求" })),
+            tool_call("web_open", json!({ "sid": "S1" })),
+            final_answer("华科要求如上（来自官网）。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
-    for t in ["goals", "goal_targets", "planning_blueprints", "planning_phases", "planning_milestones", "tasks", "ai_change_sets"] {
+    for t in [
+        "goals",
+        "goal_targets",
+        "planning_blueprints",
+        "planning_phases",
+        "planning_milestones",
+        "tasks",
+        "ai_change_sets",
+    ] {
         assert_eq!(count(&conn, t), 0, "{t} 研究 0 mutation");
     }
     assert!(count(&conn, "ai_sources") >= 1, "仅 ai_sources 允许写入");
@@ -809,8 +1201,16 @@ fn f16_research_only_zero_mutation() {
 fn f17_time_sensitive_fact_not_faked_as_2028() {
     let (state, vault) = setup("f17");
     let fake = FakeWeb::new(
-        vec![("华中科技大学2027年硕士招生简章".into(), OFFICIAL.into(), "2027 版".into(), None)],
-        vec![(OFFICIAL, Some("2027 年硕士招生简章：考试科目……（适用 2027 级）"))],
+        vec![(
+            "华中科技大学2027年硕士招生简章".into(),
+            OFFICIAL.into(),
+            "2027 版".into(),
+            None,
+        )],
+        vec![(
+            OFFICIAL,
+            Some("2027 年硕士招生简章：考试科目……（适用 2027 级）"),
+        )],
     );
     set_web_fake_for_tests(&state, Some(fake));
     let (p, c, m) = {
@@ -825,7 +1225,10 @@ fn f17_time_sensitive_fact_not_faked_as_2028() {
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let text = last_assistant(&conn, c, p);
-    assert!(text.contains("2028 尚无"), "不得把 2027 包装成 2028 确定规则：{text}");
+    assert!(
+        text.contains("2028 尚无"),
+        "不得把 2027 包装成 2028 确定规则：{text}"
+    );
     assert!(text.contains("2027"), "明确当前最新版本：{text}");
     let payload = run_json(&conn, "f17-run");
     assert!(payload.evidence_sources.contains(&OFFICIAL.to_string()));
@@ -842,17 +1245,39 @@ fn f18_direct_url_opens_without_search() {
         let conn = state.0.lock().unwrap();
         mk_fixture(&conn, "看一下这个招生页面 https://gs.hust.edu.cn/admission")
     };
-    let out = run_turn(&state, &vault, p, c, m, "看一下这个招生页面", "f18-run", true, vec![
-        tool_call("web_open", json!({ "url": OFFICIAL })), // 直接 open，无需 search
-        final_answer("已读取该官方页面。"),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "看一下这个招生页面",
+        "f18-run",
+        true,
+        vec![
+            tool_call("web_open", json!({ "url": OFFICIAL })), // 直接 open，无需 search
+            final_answer("已读取该官方页面。"),
+        ],
+    );
     assert_eq!(out, Ok("completed"), "{out:?}");
-    assert_eq!(fake.search_calls.load(Ordering::SeqCst), 0, "用户已给 URL，无需 search");
-    assert!(fake.open_urls.lock().unwrap().contains(&OFFICIAL.to_string()));
+    assert_eq!(
+        fake.search_calls.load(Ordering::SeqCst),
+        0,
+        "用户已给 URL，无需 search"
+    );
+    assert!(fake
+        .open_urls
+        .lock()
+        .unwrap()
+        .contains(&OFFICIAL.to_string()));
     let conn = state.0.lock().unwrap();
     let payload = run_json(&conn, "f18-run");
     assert_eq!(payload.evidence_sources, vec![OFFICIAL.to_string()]);
-    assert_eq!(researching_events(&conn, "f18-run"), 1, "open 也触发 researching");
+    assert_eq!(
+        researching_events(&conn, "f18-run"),
+        1,
+        "open 也触发 researching"
+    );
 }
 
 // =============== F19 · Unsafe URL（SSRF 层拒绝） ===============
@@ -873,8 +1298,14 @@ fn f19_unsafe_urls_rejected_by_ssrf_layer() {
     ] {
         assert!(ssrf_check(banned).is_err(), "SSRF 层必须拒绝 {banned}");
     }
-    assert!(ssrf_check("https://example.edu/admission").is_ok(), "合法 https 必须放行");
-    assert!(ssrf_check("http://example.edu/admission").is_ok(), "合法 http 必须放行");
+    assert!(
+        ssrf_check("https://example.edu/admission").is_ok(),
+        "合法 https 必须放行"
+    );
+    assert!(
+        ssrf_check("http://example.edu/admission").is_ok(),
+        "合法 http 必须放行"
+    );
 }
 
 // =============== F20 · Provider Failure During Research ===============
@@ -889,16 +1320,34 @@ fn f20_provider_failure_during_research_closes_failed() {
         mk_fixture(&conn, "查华科简章")
     };
     // search → open → 下一次 Provider 队列耗尽 = Runtime 故障
-    let out = run_turn(&state, &vault, p, c, m, "查华科简章", "f20-run", true, vec![
-        tool_call("web_search", json!({ "query": "华科 简章" })),
-        tool_call("web_open", json!({ "sid": "S1" })),
-    ]);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "查华科简章",
+        "f20-run",
+        true,
+        vec![
+            tool_call("web_search", json!({ "query": "华科 简章" })),
+            tool_call("web_open", json!({ "sid": "S1" })),
+        ],
+    );
     assert!(out.is_err(), "Provider 故障必须冒泡：{out:?}");
     let conn = state.0.lock().unwrap();
     let (status, wf) = run_state(&conn, "f20-run");
     assert_eq!(status, "failed", "run status=failed：{status}");
-    assert_eq!(wf.as_deref(), Some("failed"), "workflow_state=failed：{wf:?}");
-    assert_eq!(researching_events(&conn, "f20-run"), 1, "researching 历史事件留存");
+    assert_eq!(
+        wf.as_deref(),
+        Some("failed"),
+        "workflow_state=failed：{wf:?}"
+    );
+    assert_eq!(
+        researching_events(&conn, "f20-run"),
+        1,
+        "researching 历史事件留存"
+    );
     // 无脏挂起
     let dirty: i64 = conn
         .query_row(

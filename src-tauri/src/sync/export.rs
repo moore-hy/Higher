@@ -13,7 +13,10 @@ use super::types::*;
 
 /// outbox 增量导出：同一 (entity_type, sync_id) 取最新操作。
 /// 发送顺序按最终操作的 outbox id 升序（插入序 ≈ 创建序，父先子后）。
-pub fn export_outbox_changes(conn: &Connection, since_change_id: i64) -> rusqlite::Result<Vec<SyncChange>> {
+pub fn export_outbox_changes(
+    conn: &Connection,
+    since_change_id: i64,
+) -> rusqlite::Result<Vec<SyncChange>> {
     let mut stmt = conn.prepare(
         "SELECT id, entity_type, sync_id, operation, changed_at
          FROM sync_outbox WHERE id > ?1 ORDER BY id",
@@ -30,7 +33,8 @@ pub fn export_outbox_changes(conn: &Connection, since_change_id: i64) -> rusqlit
 
     // (entity_type, sync_id) → 最新 outbox 行
     let mut latest: Vec<(i64, String, String, String, String)> = Vec::new();
-    let mut index: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    let mut index: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
     for row in rows {
         let (id, entity_type, sync_id, operation, changed_at) = row?;
         let key = (entity_type.clone(), sync_id.clone());
@@ -133,7 +137,11 @@ fn push_entity(
 
 /// 读取业务行 → payload（FK → sync_id）。行不存在返回 None。
 #[allow(clippy::too_many_lines)]
-pub fn build_payload(conn: &Connection, entity_type: &str, local_id: i64) -> rusqlite::Result<Option<SyncEntityPayload>> {
+pub fn build_payload(
+    conn: &Connection,
+    entity_type: &str,
+    local_id: i64,
+) -> rusqlite::Result<Option<SyncEntityPayload>> {
     let fk = |entity: &str, id: Option<i64>| -> rusqlite::Result<Option<String>> {
         match id {
             None => Ok(None),
@@ -295,7 +303,11 @@ pub fn build_payload(conn: &Connection, entity_type: &str, local_id: i64) -> rus
 }
 
 /// 本地行当前状态 JSON（冲突记录用 local_change_json）。
-pub fn local_row_json(conn: &Connection, entity_type: &str, local_id: i64) -> rusqlite::Result<String> {
+pub fn local_row_json(
+    conn: &Connection,
+    entity_type: &str,
+    local_id: i64,
+) -> rusqlite::Result<String> {
     match build_payload(conn, entity_type, local_id)? {
         Some(p) => Ok(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into())),
         None => Ok(Json::Null.to_string()),

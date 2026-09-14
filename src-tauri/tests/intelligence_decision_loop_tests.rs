@@ -19,7 +19,9 @@ use std::collections::VecDeque;
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{ChatMessage, Completion, Usage};
 use app_lib::ai::intelligence::{self, decision::AiDecision, goal_understanding, user_context};
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
 use app_lib::repository::conversation::ConversationRepository;
@@ -35,8 +37,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0073_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0073_{name}_{}", std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -110,7 +116,10 @@ fn run_turn_capture(
     user_message: &str,
     intel_scripted: Vec<Completion>,
     main_scripted: Vec<Completion>,
-) -> (Result<&'static str, String>, std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>) {
+) -> (
+    Result<&'static str, String>,
+    std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>,
+) {
     let token = tokio_util::sync::CancellationToken::new();
     let cfg = runtime_cfg(profile_id);
     let cap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -182,7 +191,11 @@ fn test1_new_goal_without_profile_asks_user() {
     .unwrap();
     let missing = intelligence::missing_information::from_goal(&g);
     let result = intelligence::decision::evaluate(&g, &missing);
-    assert_eq!(result.decision, AiDecision::AskUser, "Test1：缺 user 信息必须 AskUser");
+    assert_eq!(
+        result.decision,
+        AiDecision::AskUser,
+        "Test1：缺 user 信息必须 AskUser"
+    );
     assert_eq!(result.missing_fields.len(), 2);
 
     // Agent 集成层：EMPTY UserContext 仍进入分析（F22-01）→ AskUser 渠道
@@ -193,17 +206,31 @@ fn test1_new_goal_without_profile_asks_user() {
         mk_fixture(&conn, "我要准备2028考研")
     };
     let (out, _cap) = run_turn_capture(
-        &state, &vault, "g73-t1-run", profile_id, conv, msg, "我要准备2028考研",
-        vec![text_completion(r#"{"goal":"2028考研","goal_type":"education","deadline":"2028","priority":"high","planning_required":true,"confidence":0.9,"required_information":[{"key":"target_school","description":"目标院校","why_needed":"影响复习路线","source_kind":"user"}]}"#)],
-        vec![tool_call("request_user_input", json!({
-            "questions": [{ "key": "target_school", "question": "你的目标院校是哪所？", "why_needed": "影响复习路线" }]
-        }))],
+        &state,
+        &vault,
+        "g73-t1-run",
+        profile_id,
+        conv,
+        msg,
+        "我要准备2028考研",
+        vec![text_completion(
+            r#"{"goal":"2028考研","goal_type":"education","deadline":"2028","priority":"high","planning_required":true,"confidence":0.9,"required_information":[{"key":"target_school","description":"目标院校","why_needed":"影响复习路线","source_kind":"user"}]}"#,
+        )],
+        vec![tool_call(
+            "request_user_input",
+            json!({
+                "questions": [{ "key": "target_school", "question": "你的目标院校是哪所？", "why_needed": "影响复习路线" }]
+            }),
+        )],
     );
     assert_eq!(out.unwrap(), "needs_user_input");
     let conn = state.0.lock().unwrap();
     let (state_str, payload) = read_workflow(&conn, profile_id, conv);
     assert_eq!(state_str, "waiting_user");
-    assert!(payload.pending_questions.iter().any(|q| q.key == "target_school"));
+    assert!(payload
+        .pending_questions
+        .iter()
+        .any(|q| q.key == "target_school"));
 }
 
 // =============== Test2 · 信息齐备 → ReadyForPlanning + 自动规划 ===============
@@ -221,7 +248,11 @@ fn test2_complete_information_auto_plans() {
     .unwrap();
     let missing = intelligence::missing_information::from_goal(&g);
     let result = intelligence::decision::evaluate(&g, &missing);
-    assert_eq!(result.decision, AiDecision::ReadyForPlanning, "Test2：信息齐备必须 ReadyForPlanning");
+    assert_eq!(
+        result.decision,
+        AiDecision::ReadyForPlanning,
+        "Test2：信息齐备必须 ReadyForPlanning"
+    );
     assert!(result.missing_fields.is_empty());
     assert_eq!(
         intelligence::missing_information::goal_information_status(&g),
@@ -236,11 +267,22 @@ fn test2_complete_information_auto_plans() {
     };
     // 轮1：缺 target_school → AskUser → waiting_user
     let (out1, _c1) = run_turn_capture(
-        &state, &vault, "g73-t2-r1", profile_id, conv, msg1, "我要准备2028考研",
-        vec![text_completion(r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[{"key":"target_school","description":"目标院校","why_needed":"定校","source_kind":"user"}]}"#)],
-        vec![tool_call("request_user_input", json!({
-            "questions": [{ "key": "target_school", "question": "你的目标院校是哪所？", "why_needed": "定校" }]
-        }))],
+        &state,
+        &vault,
+        "g73-t2-r1",
+        profile_id,
+        conv,
+        msg1,
+        "我要准备2028考研",
+        vec![text_completion(
+            r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[{"key":"target_school","description":"目标院校","why_needed":"定校","source_kind":"user"}]}"#,
+        )],
+        vec![tool_call(
+            "request_user_input",
+            json!({
+                "questions": [{ "key": "target_school", "question": "你的目标院校是哪所？", "why_needed": "定校" }]
+            }),
+        )],
     );
     assert_eq!(out1.unwrap(), "needs_user_input");
 
@@ -283,7 +325,13 @@ fn test2_complete_information_auto_plans() {
         }
     });
     let (out2, cap2) = run_turn_capture(
-        &state, &vault, "g73-t2-r2", profile_id, conv, msg2.id, supplement,
+        &state,
+        &vault,
+        "g73-t2-r2",
+        profile_id,
+        conv,
+        msg2.id,
+        supplement,
         vec![text_completion(
             r#"{"goal":"2028考研","goal_type":"education","deadline":"2028","priority":"high","planning_required":true,"confidence":0.95,"required_information":[]}"#,
         )],
@@ -298,7 +346,10 @@ fn test2_complete_information_auto_plans() {
             .iter()
             .flat_map(|c| c.iter())
             .any(|m| m.role == "system" && m.content.contains("进入正式规划"));
-        assert!(has_planner_instruction, "ReadyForPlanning 轮必须注入 Dedicated Planner 指令");
+        assert!(
+            has_planner_instruction,
+            "ReadyForPlanning 轮必须注入 Dedicated Planner 指令"
+        );
     }
 
     let conn = state.0.lock().unwrap();
@@ -310,21 +361,33 @@ fn test2_complete_information_auto_plans() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("Test2：必须生成计划 ChangeSet");
-    assert_eq!(cs.1, "waiting_approval", "提案等待用户审查（批准前 0 落库）");
+    assert_eq!(
+        cs.1, "waiting_approval",
+        "提案等待用户审查（批准前 0 落库）"
+    );
 
     // 回复形态（任务书最终验收）：目标理解 + 下一步 + 提案提示；停止询问
     let reply = last_assistant_text(&conn, conv, profile_id);
     assert!(reply.contains("你的目标理解如下"), "回复形态：{reply}");
     assert!(reply.contains("2028考研"), "回复含目标：{reply}");
-    assert!(reply.contains("下一步：制定年度/月/日计划"), "回复含下一步：{reply}");
-    assert!(reply.contains("已生成学习计划提案"), "回复含提案提示：{reply}");
+    assert!(
+        reply.contains("下一步：制定年度/月/日计划"),
+        "回复含下一步：{reply}"
+    );
+    assert!(
+        reply.contains("已生成学习计划提案"),
+        "回复含提案提示：{reply}"
+    );
     assert!(!reply.contains("还需要你确认"), "信息齐备必须停止询问");
 
     // workflow：规划提案已交付（ChangeSet 待审）→ run completed；
     // intel_ready 保持 ready_for_planning 收口（F21-03：信息完整 + 提案待审）
     let (state_str, payload) = read_workflow(&conn, profile_id, conv);
     assert_eq!(state_str, "ready_for_planning");
-    assert!(payload.pending_questions.is_empty(), "停止询问：pending 清空");
+    assert!(
+        payload.pending_questions.is_empty(),
+        "停止询问：pending 清空"
+    );
 }
 
 // =============== Test3 · 模板档案进入 Decision Context ===============
@@ -354,9 +417,19 @@ fn test3_template_context_enters_decision_context() {
         f
     };
     let (out, cap) = run_turn_capture(
-        &state, &vault, "g73-t3-run", profile_id, conv, msg, "帮我规划复习",
-        vec![text_completion(r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#)],
-        vec![text_completion(r#"{"type":"handoff_chat","message":"已了解你的情况，我们可以开始规划。"}"#)],
+        &state,
+        &vault,
+        "g73-t3-run",
+        profile_id,
+        conv,
+        msg,
+        "帮我规划复习",
+        vec![text_completion(
+            r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#,
+        )],
+        vec![text_completion(
+            r#"{"type":"handoff_chat","message":"已了解你的情况，我们可以开始规划。"}"#,
+        )],
     );
     assert_eq!(out.unwrap(), "completed");
 
@@ -369,9 +442,18 @@ fn test3_template_context_enters_decision_context() {
             .map(|m| m.content.clone())
             .unwrap_or_default()
     };
-    assert!(intel_prompt.contains("华中科技大学"), "档案 goal 必须进入决策上下文：{intel_prompt}");
-    assert!(intel_prompt.contains("计算机专业"), "档案 background 必须进入决策上下文：{intel_prompt}");
-    assert!(intel_prompt.contains("上午学习"), "档案 preference 必须进入决策上下文：{intel_prompt}");
+    assert!(
+        intel_prompt.contains("华中科技大学"),
+        "档案 goal 必须进入决策上下文：{intel_prompt}"
+    );
+    assert!(
+        intel_prompt.contains("计算机专业"),
+        "档案 background 必须进入决策上下文：{intel_prompt}"
+    );
+    assert!(
+        intel_prompt.contains("上午学习"),
+        "档案 preference 必须进入决策上下文：{intel_prompt}"
+    );
 }
 
 // =============== Test4 · 闲聊不进规划链 ===============
@@ -386,8 +468,16 @@ fn test4_chitchat_never_enters_planning() {
         mk_fixture(&conn, "1+1等于多少")
     };
     let (out, cap) = run_turn_capture(
-        &state, &vault, "g73-t4-run", profile_id, conv, msg, "1+1等于多少",
-        vec![text_completion(r#"{"goal":"","goal_type":"other","planning_required":false,"confidence":1.0,"required_information":[]}"#)],
+        &state,
+        &vault,
+        "g73-t4-run",
+        profile_id,
+        conv,
+        msg,
+        "1+1等于多少",
+        vec![text_completion(
+            r#"{"goal":"","goal_type":"other","planning_required":false,"confidence":1.0,"required_information":[]}"#,
+        )],
         vec![text_completion("1+1 等于 2。")],
     );
     assert_eq!(out.unwrap(), "completed");
@@ -404,7 +494,11 @@ fn test4_chitchat_never_enters_planning() {
     let conn = state.0.lock().unwrap();
     // 无 ChangeSet / workflow completed
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE run_id='g73-t4-run'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE run_id='g73-t4-run'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 0, "闲聊不得生成计划提案");
     let (state_str, payload) = read_workflow(&conn, profile_id, conv);
@@ -426,13 +520,26 @@ fn planner_clarification_divergence_falls_back_to_collecting() {
         mk_fixture(&conn, "帮我规划考研复习")
     };
     let (out, _cap) = run_turn_capture(
-        &state, &vault, "g73-t5-run", profile_id, conv, msg, "帮我规划考研复习",
-        vec![text_completion(r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#)],
-        vec![text_completion(r#"{"type":"clarification","questions":[{"key":"target_school","question":"你的目标院校是哪所？"}]}"#)],
+        &state,
+        &vault,
+        "g73-t5-run",
+        profile_id,
+        conv,
+        msg,
+        "帮我规划考研复习",
+        vec![text_completion(
+            r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#,
+        )],
+        vec![text_completion(
+            r#"{"type":"clarification","questions":[{"key":"target_school","question":"你的目标院校是哪所？"}]}"#,
+        )],
     );
     assert_eq!(out.unwrap(), "needs_user_input");
     let conn = state.0.lock().unwrap();
     let (state_str, payload) = read_workflow(&conn, profile_id, conv);
     assert_eq!(state_str, "waiting_user");
-    assert!(payload.pending_questions.iter().any(|q| q.key == "target_school"));
+    assert!(payload
+        .pending_questions
+        .iter()
+        .any(|q| q.key == "target_school"));
 }

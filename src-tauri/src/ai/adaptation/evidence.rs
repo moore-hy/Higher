@@ -172,7 +172,11 @@ fn add_days(date: &str, days: i64) -> String {
 /// §十一 build_adaptation_evidence：一次读 30 天数据，内存聚合三层窗口。
 /// 只读；任何 repository 读取失败静默降级为空指标（复盘分析不被局部数据缺失阻断，
 /// analyzer 侧以 evidence_quality 呈现）。
-pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str) -> AdaptationEvidence {
+pub fn build_adaptation_evidence(
+    conn: &Connection,
+    profile_id: i64,
+    today: &str,
+) -> AdaptationEvidence {
     let win30_start = add_days(today, -29);
     let tasks30 = TaskRepository::new(conn)
         .list_by_range_by_profile(profile_id, &win30_start, today)
@@ -184,9 +188,21 @@ pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str
     let start14 = add_days(today, -13);
 
     let windows = vec![
-        EvidenceWindow { days: 7, start_date: start7.clone(), end_date: today.to_string() },
-        EvidenceWindow { days: 14, start_date: start14.clone(), end_date: today.to_string() },
-        EvidenceWindow { days: 30, start_date: win30_start.clone(), end_date: today.to_string() },
+        EvidenceWindow {
+            days: 7,
+            start_date: start7.clone(),
+            end_date: today.to_string(),
+        },
+        EvidenceWindow {
+            days: 14,
+            start_date: start14.clone(),
+            end_date: today.to_string(),
+        },
+        EvidenceWindow {
+            days: 30,
+            start_date: win30_start.clone(),
+            end_date: today.to_string(),
+        },
     ];
 
     let mut task_metrics = Vec::with_capacity(3);
@@ -204,7 +220,10 @@ pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str
             .filter(|t| {
                 t.status != "completed"
                     && t.status != "skipped"
-                    && t.planned_date.as_deref().map(|d| d < today).unwrap_or(false)
+                    && t.planned_date
+                        .as_deref()
+                        .map(|d| d < today)
+                        .unwrap_or(false)
             })
             .count() as u64;
         let unfinished = planned - completed;
@@ -213,8 +232,16 @@ pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str
             .iter()
             .filter(|s| s.started_at.as_str().get(..10).map(in_win).unwrap_or(false))
             .collect();
-        let actual_minutes = ss.iter().map(|s| s.duration_seconds.unwrap_or(0) / 60).sum::<i64>().max(0);
-        let completion_rate = if planned > 0 { completed as f32 / planned as f32 } else { 0.0 };
+        let actual_minutes = ss
+            .iter()
+            .map(|s| s.duration_seconds.unwrap_or(0) / 60)
+            .sum::<i64>()
+            .max(0);
+        let completion_rate = if planned > 0 {
+            completed as f32 / planned as f32
+        } else {
+            0.0
+        };
         let estimate_error = if planned_minutes > 0 {
             (planned_minutes - actual_minutes) as f32 / planned_minutes as f32
         } else {
@@ -234,7 +261,11 @@ pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str
         study_metrics.push(StudyExecutionMetrics {
             session_count,
             actual_study_minutes: actual_minutes,
-            average_session_minutes: if session_count > 0 { actual_minutes / session_count as i64 } else { 0 },
+            average_session_minutes: if session_count > 0 {
+                actual_minutes / session_count as i64
+            } else {
+                0
+            },
             last_session_at: sessions30.last().map(|s| s.started_at.clone()),
         });
         let _ = i;
@@ -246,7 +277,10 @@ pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str
         .filter(|t| {
             t.status != "completed"
                 && t.status != "skipped"
-                && t.planned_date.as_deref().map(|d| d <= today).unwrap_or(false)
+                && t.planned_date
+                    .as_deref()
+                    .map(|d| d <= today)
+                    .unwrap_or(false)
         })
         .map(|t| TaskEvidence {
             id: t.id,
@@ -272,7 +306,11 @@ pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str
         let mut levels = levels;
         levels.sort();
         levels.dedup();
-        GoalAdaptationContext { final_goal, final_deadline: None, goal_levels_present: levels }
+        GoalAdaptationContext {
+            final_goal,
+            final_deadline: None,
+            goal_levels_present: levels,
+        }
     };
 
     // Planning 上下文（§九：当前 active Blueprint / Phase / Milestone / 未来任务）
@@ -283,12 +321,18 @@ pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str
                 let phases = prepo.list_phases(bp.id).unwrap_or_default();
                 let milestones = prepo.list_milestones(bp.id).unwrap_or_default();
                 let phase_key_of = |pid: Option<i64>| -> Option<String> {
-                    phases.iter().find(|p| Some(p.id) == pid).map(|p| p.phase_key.clone())
+                    phases
+                        .iter()
+                        .find(|p| Some(p.id) == pid)
+                        .map(|p| p.phase_key.clone())
                 };
                 let future_task_count_30d = tasks30
                     .iter()
                     .filter(|t| {
-                        t.planned_date.as_deref().map(|d| d > today).unwrap_or(false)
+                        t.planned_date
+                            .as_deref()
+                            .map(|d| d > today)
+                            .unwrap_or(false)
                             && t.status != "completed"
                     })
                     .count() as u64;
@@ -334,7 +378,10 @@ pub fn build_adaptation_evidence(conn: &Connection, profile_id: i64, today: &str
         .map(|f| FeedbackEvidence {
             id: f.id,
             kind: f.feedback_type.clone(),
-            content: format!("{}：{}", f.title, f.description).chars().take(120).collect(),
+            content: format!("{}：{}", f.title, f.description)
+                .chars()
+                .take(120)
+                .collect(),
             status: f.status.clone(),
         })
         .collect();
@@ -430,7 +477,10 @@ pub fn evidence_prompt_summary(ev: &AdaptationEvidence) -> String {
         ));
     }
     for f in ev.feedback_context.iter() {
-        s.push_str(&format!("FEEDBACK #{} [{}|{}] {}\n", f.id, f.kind, f.status, f.content));
+        s.push_str(&format!(
+            "FEEDBACK #{} [{}|{}] {}\n",
+            f.id, f.kind, f.status, f.content
+        ));
     }
     s
 }

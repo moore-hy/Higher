@@ -84,7 +84,11 @@ pub fn record_user_answers(payload: &mut AgentWorkflowPayload, reply: &str) {
     payload
         .collected_user_information
         .insert("_latest_reply".to_string(), reply.to_string());
-    let keys: Vec<String> = payload.pending_questions.iter().map(|q| q.key.clone()).collect();
+    let keys: Vec<String> = payload
+        .pending_questions
+        .iter()
+        .map(|q| q.key.clone())
+        .collect();
     if keys.is_empty() {
         payload
             .collected_user_information
@@ -133,7 +137,14 @@ pub fn set_workflow_payload(
     payload: &AgentWorkflowPayload,
 ) {
     let json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
-    set_workflow_state(conn, run_id, profile_id, conversation_id, state, Some(&json));
+    set_workflow_state(
+        conn,
+        run_id,
+        profile_id,
+        conversation_id,
+        state,
+        Some(&json),
+    );
 }
 
 /// E-R4.1：R4 hard-switch 专用 checked 版本——真实 SQL 成功/失败必须上抛

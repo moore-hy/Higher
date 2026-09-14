@@ -116,9 +116,16 @@ pub fn evaluate(goal: &GoalUnderstanding, missing: &[MissingInformation]) -> Dec
                 AiDecision::AskUser => "仍存在仅用户本人能补充的必要信息".to_string(),
                 AiDecision::Research => "仍存在外部公开事实需联网查证".to_string(),
                 AiDecision::Execute => "缺失信息可由 Agent 读取 Higher 数据自取".to_string(),
-                AiDecision::ReadyForPlanning => unreachable!("Incomplete 不会产生 ReadyForPlanning"),
+                AiDecision::ReadyForPlanning => {
+                    unreachable!("Incomplete 不会产生 ReadyForPlanning")
+                }
             };
-            DecisionResult { decision, reason, confidence, missing_fields }
+            DecisionResult {
+                decision,
+                reason,
+                confidence,
+                missing_fields,
+            }
         }
     }
 }

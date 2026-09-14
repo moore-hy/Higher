@@ -49,11 +49,7 @@ impl<'a> KnowledgeWorkspaceRepository<'a> {
     }
 
     /// 一次聚合（§49：item summary + documents + sessions + legacy attachments + evaluations）。
-    pub fn get(
-        &self,
-        profile_id: i64,
-        item_id: i64,
-    ) -> Result<KnowledgeWorkspaceData, String> {
+    pub fn get(&self, profile_id: i64, item_id: i64) -> Result<KnowledgeWorkspaceData, String> {
         // item 归属
         let (name, mastery): (String, String) = self
             .conn
@@ -87,8 +83,7 @@ impl<'a> KnowledgeWorkspaceRepository<'a> {
         let sessions: Vec<WorkspaceSessionEntry> = stmt
             .query_map(params![item_id, profile_id], |r| {
                 let note: String = r.get(5)?;
-                let note_plain =
-                    crate::repository::note::plain_text(Some(&note));
+                let note_plain = crate::repository::note::plain_text(Some(&note));
                 Ok(WorkspaceSessionEntry {
                     id: r.get(0)?,
                     title: r.get(1)?,

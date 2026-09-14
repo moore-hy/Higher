@@ -11,7 +11,9 @@ use std::collections::VecDeque;
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{Completion, Usage};
 use app_lib::ai::intelligence::user_context::UserContext;
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
 use app_lib::repository::conversation::ConversationRepository;
@@ -30,7 +32,10 @@ fn setup(name: &str) -> (DbState, VaultState) {
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
     let vault_dir = std::env::temp_dir().join(format!("higher_f1_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -98,15 +103,18 @@ fn run_turn(
         event_sink: None,
     };
     let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(vec![text_completion(&json!({
-            "goal": "2028考研上岸华中科技大学408",
-            "goal_type": "education",
-            "deadline": "2028-12",
-            "priority": "high",
-            "planning_required": true,
-            "confidence": 0.95,
-            "required_information": intel_required,
-        }).to_string())])),
+        intel: std::sync::Mutex::new(VecDeque::from(vec![text_completion(
+            &json!({
+                "goal": "2028考研上岸华中科技大学408",
+                "goal_type": "education",
+                "deadline": "2028-12",
+                "priority": "high",
+                "planning_required": true,
+                "confidence": 0.95,
+                "required_information": intel_required,
+            })
+            .to_string(),
+        )])),
         main: std::sync::Mutex::new(VecDeque::from(vec![text_completion(
             &plan_draft_json().to_string(),
         )])),
@@ -130,7 +138,10 @@ fn mk_profile(conn: &Connection, tag: &str) -> i64 {
 }
 
 fn new_conv(conn: &Connection, pid: i64) -> i64 {
-    ConversationRepository::new(conn).create(pid, "assistant", "F1").unwrap().id
+    ConversationRepository::new(conn)
+        .create(pid, "assistant", "F1")
+        .unwrap()
+        .id
 }
 
 fn seed_personal_profile(conn: &Connection, pid: i64) {
@@ -255,14 +266,21 @@ fn count(conn: &Connection, sql: &str, pid: i64) -> i64 {
 fn f1_tc001_explicit_one_changeset() {
     let (state, _vault, pid, _cid) = explicit_applied("tc001");
     let conn = state.0.lock().unwrap();
-    let n = count(&conn, "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", pid);
+    let n = count(
+        &conn,
+        "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
+        pid,
+    );
     assert_eq!(n, 1, "F1-TC001：Explicit → 恰 ONE ChangeSet（全层次同包）");
     let ops = count(
         &conn,
         "SELECT COUNT(*) FROM ai_change_operations o JOIN ai_change_sets c ON o.change_set_id=c.id WHERE c.profile_id=?1",
         pid,
     );
-    assert!(ops >= 8, "F1-TC001：同包含 final/brief/blueprint/phase/milestone/year/tasks（{ops} ops）");
+    assert!(
+        ops >= 8,
+        "F1-TC001：同包含 final/brief/blueprint/phase/milestone/year/tasks（{ops} ops）"
+    );
 }
 
 // =============== F1-TC002 · 最终 status = applied ===============
@@ -272,7 +290,10 @@ fn f1_tc002_changeset_applied() {
     let (state, _vault, pid, _cid) = explicit_applied("tc002");
     let conn = state.0.lock().unwrap();
     let (_id, status) = cs_row(&conn, pid);
-    assert_eq!(status, "applied", "F1-TC002：Production Agent 已 Auto Apply");
+    assert_eq!(
+        status, "applied",
+        "F1-TC002：Production Agent 已 Auto Apply"
+    );
 }
 
 // =============== F1-TC003 · 无需第二次 user approval ===============
@@ -302,13 +323,21 @@ fn f1_tc003_no_second_approval() {
     let (state, _vault, pid, cid) = explicit_applied("tc003");
     let conn = state.0.lock().unwrap();
     let run_status: String = conn
-        .query_row("SELECT status FROM ai_runs WHERE id='f1-run'", [], |r| r.get(0))
+        .query_row("SELECT status FROM ai_runs WHERE id='f1-run'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
-    assert_eq!(run_status, "completed", "F1-TC003：run 完成（无第二次审批动作）");
+    assert_eq!(
+        run_status, "completed",
+        "F1-TC003：run 完成（无第二次审批动作）"
+    );
     let (_id, status) = cs_row(&conn, pid);
     assert_eq!(status, "applied");
     let reply = last_assistant(&conn, cid, pid);
-    assert!(!reply.contains("请在审查面板确认后应用"), "F1-TC003：不得再要求用户确认：{reply}");
+    assert!(
+        !reply.contains("请在审查面板确认后应用"),
+        "F1-TC003：不得再要求用户确认：{reply}"
+    );
 }
 
 // =============== F1-TC004 · ReadBack success ===============
@@ -358,8 +387,14 @@ fn f1_tc005_final_text() {
         !reply.contains("请在审查面板确认后应用"),
         "F1-TC005：禁用二次审批话术：{reply}"
     );
-    assert!(reply.contains("已应用"), "F1-TC005：必须含「已应用」：{reply}");
-    assert!(reply.contains("已创建") || reply.contains("实际创建"), "F1-TC005：必须含实际创建清单：{reply}");
+    assert!(
+        reply.contains("已应用"),
+        "F1-TC005：必须含「已应用」：{reply}"
+    );
+    assert!(
+        reply.contains("已创建") || reply.contains("实际创建"),
+        "F1-TC005：必须含实际创建清单：{reply}"
+    );
     // §六模板要素：Final Goal / REACH / SAFETY / 未来7天任务（ReadBack 清单行）
     for must in ["Final Goal：", "REACH：", "SAFETY：", "未来7天任务："] {
         assert!(reply.contains(must), "F1-TC005：清单缺「{must}」：{reply}");
@@ -382,13 +417,35 @@ fn f1_tc006_proactive_proposal_only() {
     assert_eq!(out, "completed");
     let conn = state.0.lock().unwrap();
     let (_id, status) = cs_row(&conn, pid);
-    assert_eq!(status, "waiting_approval", "F1-TC006：Proactive 保持提案（不自动 Apply）");
+    assert_eq!(
+        status, "waiting_approval",
+        "F1-TC006：Proactive 保持提案（不自动 Apply）"
+    );
     // 0 mutation：正式数据零变化
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM goals WHERE profile_id=?1", pid), 0, "goals 0");
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM tasks WHERE profile_id=?1", pid), 0, "tasks 0");
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM planning_blueprints WHERE profile_id=?1", pid), 0, "blueprints 0");
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM goals WHERE profile_id=?1", pid),
+        0,
+        "goals 0"
+    );
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM tasks WHERE profile_id=?1", pid),
+        0,
+        "tasks 0"
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM planning_blueprints WHERE profile_id=?1",
+            pid
+        ),
+        0,
+        "blueprints 0"
+    );
     let reply = last_assistant(&conn, cid, pid);
-    assert!(reply.contains("审查面板"), "F1-TC006：提案话术交用户决定：{reply}");
+    assert!(
+        reply.contains("审查面板"),
+        "F1-TC006：提案话术交用户决定：{reply}"
+    );
 }
 
 // =============== F1-TC007 · Apply failure → 不得 success ===============
@@ -419,7 +476,10 @@ fn f1_tc007_apply_failure_not_success() {
         (pid, new_conv(&conn, pid))
     };
     let out = run_turn(&state, &vault, "f1-fail", pid, cid, EXPLICIT_MSG, json!([]));
-    assert!(out.is_err(), "F1-TC007：Apply 失败必须上抛（run failed）：{out:?}");
+    assert!(
+        out.is_err(),
+        "F1-TC007：Apply 失败必须上抛（run failed）：{out:?}"
+    );
     let conn = state.0.lock().unwrap();
     let run_err: String = conn
         .query_row(
@@ -429,22 +489,39 @@ fn f1_tc007_apply_failure_not_success() {
         )
         .unwrap();
     assert!(!run_err.is_empty(), "F1-TC007：run error 记录失败原因");
-    assert!(run_err.contains("失败") || run_err.contains("未通过"), "F1-TC007：error 文案如实：{run_err}");
+    assert!(
+        run_err.contains("失败") || run_err.contains("未通过"),
+        "F1-TC007：error 文案如实：{run_err}"
+    );
     let reply = last_assistant(&conn, cid, pid);
     assert!(
         !reply.contains("已应用") && !reply.contains("完成规划并写入"),
         "F1-TC007：失败时不得声称完成：{reply}"
     );
-    assert!(reply.contains("失败") || reply.contains("未通过"), "F1-TC007：失败可见：{reply}");
+    assert!(
+        reply.contains("失败") || reply.contains("未通过"),
+        "F1-TC007：失败可见：{reply}"
+    );
     // business mutation 原子性：draft 全部 ops 回滚（0 新任务；既有 year 仍 1）
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM tasks WHERE profile_id=?1", pid), 0, "0 mutation");
     assert_eq!(
-        count(&conn, "SELECT COUNT(*) FROM goals WHERE profile_id=?1 AND goal_level='year'", pid),
+        count(&conn, "SELECT COUNT(*) FROM tasks WHERE profile_id=?1", pid),
+        0,
+        "0 mutation"
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM goals WHERE profile_id=?1 AND goal_level='year'",
+            pid
+        ),
         1,
         "既有数据未被破坏"
     );
     let (_id, status) = cs_row(&conn, pid);
-    assert_eq!(status, "waiting_approval", "F1-TC007：ChangeSet 保持可人工处置（原子性）");
+    assert_eq!(
+        status, "waiting_approval",
+        "F1-TC007：ChangeSet 保持可人工处置（原子性）"
+    );
 }
 
 // =============== F1-TC008 · Undo 仍可用 ===============

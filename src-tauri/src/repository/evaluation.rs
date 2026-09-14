@@ -1,7 +1,14 @@
 use rusqlite::{params, Connection};
 
 /// DEV-0059 §6.7：Evaluation 类型唯一 Canonical 值域。
-pub const EVALUATION_TYPES: [&str; 6] = ["practice", "test", "recall", "application", "project", "other"];
+pub const EVALUATION_TYPES: [&str; 6] = [
+    "practice",
+    "test",
+    "recall",
+    "application",
+    "project",
+    "other",
+];
 
 /// §6.7 兼容映射：quiz→test / exercise→practice / interview→application / review→recall / 未知旧值→other。
 /// 返回值为 Canonical 集合内的 &'static str。
@@ -165,16 +172,19 @@ impl<'a> EvaluationRepository<'a> {
     ) -> rusqlite::Result<Evaluation> {
         // 跨档案防护：learning_item 若存在，其 profile 必须一致
         if let Some(item_id) = learning_item_id {
-            let item_profile: i64 = self.conn.query_row(
-                "SELECT profile_id FROM learning_items WHERE id = ?1",
-                params![item_id],
-                |row| row.get(0),
-            ).map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => rusqlite::Error::InvalidParameterName(
-                    format!("learning_item_id {} 不存在", item_id)
-                ),
-                other => other,
-            })?;
+            let item_profile: i64 = self
+                .conn
+                .query_row(
+                    "SELECT profile_id FROM learning_items WHERE id = ?1",
+                    params![item_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => rusqlite::Error::InvalidParameterName(
+                        format!("learning_item_id {} 不存在", item_id),
+                    ),
+                    other => other,
+                })?;
             if item_profile != profile_id {
                 return Err(rusqlite::Error::InvalidParameterName(
                     "跨档案验证被拒绝：所选知识不属于当前学习档案".to_string(),
@@ -183,7 +193,11 @@ impl<'a> EvaluationRepository<'a> {
         }
 
         Self::validate_counts_and_scores(
-            total_items, correct_items, incorrect_items, score, max_score,
+            total_items,
+            correct_items,
+            incorrect_items,
+            score,
+            max_score,
         )?;
 
         let outcome = outcome.unwrap_or("unrated");
@@ -342,7 +356,10 @@ impl<'a> EvaluationRepository<'a> {
                 by_outcome.push(r?);
             }
         }
-        Ok(EvaluationStats { by_type, by_outcome })
+        Ok(EvaluationStats {
+            by_type,
+            by_outcome,
+        })
     }
 
     /// 按 Goal 列出 Evaluation（occurred_at DESC）。
@@ -359,7 +376,10 @@ impl<'a> EvaluationRepository<'a> {
     }
 
     /// 按 Learning Item 列出 Evaluation（occurred_at DESC）。
-    pub fn list_by_learning_item(&self, learning_item_id: i64) -> rusqlite::Result<Vec<Evaluation>> {
+    pub fn list_by_learning_item(
+        &self,
+        learning_item_id: i64,
+    ) -> rusqlite::Result<Vec<Evaluation>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, profile_id, goal_id, learning_item_id, title, evaluation_type, source,
                     occurred_at, total_items, correct_items, incorrect_items,
@@ -392,7 +412,11 @@ impl<'a> EvaluationRepository<'a> {
         note: Option<&str>,
     ) -> rusqlite::Result<()> {
         Self::validate_counts_and_scores(
-            total_items, correct_items, incorrect_items, score, max_score,
+            total_items,
+            correct_items,
+            incorrect_items,
+            score,
+            max_score,
         )?;
 
         self.conn.execute(
@@ -404,9 +428,18 @@ impl<'a> EvaluationRepository<'a> {
                 updated_at = datetime('now')
              WHERE id = ?12",
             params![
-                title, evaluation_type, source, occurred_at,
-                total_items, correct_items, incorrect_items,
-                score, max_score, outcome, note, id
+                title,
+                evaluation_type,
+                source,
+                occurred_at,
+                total_items,
+                correct_items,
+                incorrect_items,
+                score,
+                max_score,
+                outcome,
+                note,
+                id
             ],
         )?;
         Ok(())
@@ -414,10 +447,8 @@ impl<'a> EvaluationRepository<'a> {
 
     /// 删除 Evaluation（仅用户明确操作）。
     pub fn delete(&self, id: i64) -> rusqlite::Result<()> {
-        self.conn.execute(
-            "DELETE FROM evaluations WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM evaluations WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -435,19 +466,22 @@ impl<'a> EvaluationRepository<'a> {
         if let Some(t) = total_items {
             if t < 0 {
                 return Err(rusqlite::Error::InvalidParameterName(format!(
-                    "total_items 不能为负数（当前 {}）", t
+                    "total_items 不能为负数（当前 {}）",
+                    t
                 )));
             }
             let c = correct_items.unwrap_or(0);
             let i = incorrect_items.unwrap_or(0);
             if c < 0 {
                 return Err(rusqlite::Error::InvalidParameterName(format!(
-                    "correct_items 不能为负数（当前 {}）", c
+                    "correct_items 不能为负数（当前 {}）",
+                    c
                 )));
             }
             if i < 0 {
                 return Err(rusqlite::Error::InvalidParameterName(format!(
-                    "incorrect_items 不能为负数（当前 {}）", i
+                    "incorrect_items 不能为负数（当前 {}）",
+                    i
                 )));
             }
             if c + i > t {
@@ -461,14 +495,16 @@ impl<'a> EvaluationRepository<'a> {
             if let Some(c) = correct_items {
                 if c < 0 {
                     return Err(rusqlite::Error::InvalidParameterName(format!(
-                        "correct_items 不能为负数（当前 {}）", c
+                        "correct_items 不能为负数（当前 {}）",
+                        c
                     )));
                 }
             }
             if let Some(i) = incorrect_items {
                 if i < 0 {
                     return Err(rusqlite::Error::InvalidParameterName(format!(
-                        "incorrect_items 不能为负数（当前 {}）", i
+                        "incorrect_items 不能为负数（当前 {}）",
+                        i
                     )));
                 }
             }
@@ -478,25 +514,29 @@ impl<'a> EvaluationRepository<'a> {
         if let Some(s) = score {
             if s < 0.0 {
                 return Err(rusqlite::Error::InvalidParameterName(format!(
-                    "score 不能为负数（当前 {}）", s
+                    "score 不能为负数（当前 {}）",
+                    s
                 )));
             }
             if let Some(m) = max_score {
                 if m <= 0.0 {
                     return Err(rusqlite::Error::InvalidParameterName(format!(
-                        "max_score 必须大于 0（当前 {}）", m
+                        "max_score 必须大于 0（当前 {}）",
+                        m
                     )));
                 }
                 if s > m {
                     return Err(rusqlite::Error::InvalidParameterName(format!(
-                        "分数校验失败：score({}) > max_score({})", s, m
+                        "分数校验失败：score({}) > max_score({})",
+                        s, m
                     )));
                 }
             }
         } else if let Some(m) = max_score {
             if m <= 0.0 {
                 return Err(rusqlite::Error::InvalidParameterName(format!(
-                    "max_score 必须大于 0（当前 {}）", m
+                    "max_score 必须大于 0（当前 {}）",
+                    m
                 )));
             }
         }

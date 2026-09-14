@@ -12,18 +12,15 @@ pub fn build_main_window(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
     {
         use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-        let mut builder = WebviewWindowBuilder::new(
-            app,
-            "main",
-            WebviewUrl::App("index.html".into()),
-        )
-        .title("Higher")
-        .inner_size(1024.0, 720.0)
-        .resizable(true)
-        // DEV-0065.1 §13：移除 Windows 原生标题栏（白条根因）；
-        // 前端 .titlebar（34px 自绘）接管 拖拽/双击最大化/最小化/关闭。
-        // 禁止 transparent/fullscreen 等（§14）——壁纸是 WebView 背景，非 OS 透明。
-        .decorations(false);
+        let mut builder =
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .title("Higher")
+                .inner_size(1024.0, 720.0)
+                .resizable(true)
+                // DEV-0065.1 §13：移除 Windows 原生标题栏（白条根因）；
+                // 前端 .titlebar（34px 自绘）接管 拖拽/双击最大化/最小化/关闭。
+                // 禁止 transparent/fullscreen 等（§14）——壁纸是 WebView 背景，非 OS 透明。
+                .decorations(false);
 
         #[cfg(debug_assertions)]
         {

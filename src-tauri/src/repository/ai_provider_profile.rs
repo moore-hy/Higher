@@ -58,9 +58,9 @@ impl<'a> AiProviderProfileRepository<'a> {
     }
 
     pub fn list(&self) -> rusqlite::Result<Vec<AiProviderProfile>> {
-        let mut stmt = self
-            .conn
-            .prepare(&format!("SELECT {COLS} FROM ai_provider_profiles ORDER BY id ASC"))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLS} FROM ai_provider_profiles ORDER BY id ASC"
+        ))?;
         let rows = stmt.query_map([], parse_row)?;
         rows.collect()
     }
@@ -74,9 +74,9 @@ impl<'a> AiProviderProfileRepository<'a> {
     }
 
     pub fn get(&self, id: i64) -> rusqlite::Result<Option<AiProviderProfile>> {
-        let mut stmt = self
-            .conn
-            .prepare(&format!("SELECT {COLS} FROM ai_provider_profiles WHERE id = ?1"))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLS} FROM ai_provider_profiles WHERE id = ?1"
+        ))?;
         let mut rows = stmt.query_map(params![id], parse_row)?;
         Ok(rows.next().transpose()?)
     }
@@ -129,9 +129,7 @@ impl<'a> AiProviderProfileRepository<'a> {
             .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
         if old.enabled && !enabled {
             if self.active_primary_id() == Some(id) {
-                return Err(
-                    "该连接是当前主要 AI，请先切换主要 AI 后再停用。".to_string(),
-                );
+                return Err("该连接是当前主要 AI，请先切换主要 AI 后再停用。".to_string());
             }
             if self.active_control_id() == Some(id) {
                 return Err(
@@ -254,17 +252,22 @@ impl<'a> AiProviderProfileRepository<'a> {
     /// 维持（requested id == current active primary），切到**新的** untested 必须先 Probe
     /// （DEV-0062R §3.13/§17.1：实现修正为注释声明的真实语义）。
     pub fn set_active_primary(&self, id: i64) -> Result<(), String> {
-        let p = self.get(id).map_err(|e| e.to_string())?
+        let p = self
+            .get(id)
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
         if !p.enabled {
             return Err("该 AI 连接已被停用，不能设为主要 AI。".to_string());
         }
         if p.compatibility_status == "incompatible" {
-            return Err("该 AI 连接未通过 Higher 兼容检测（不兼容），不能设为主要 AI。".to_string());
+            return Err(
+                "该 AI 连接未通过 Higher 兼容检测（不兼容），不能设为主要 AI。".to_string(),
+            );
         }
         if p.compatibility_status == "untested" && self.active_primary_id() != Some(id) {
             return Err(
-                "该 AI 连接尚未检测 Higher 兼容性。请先在连接上运行「检测 Higher 兼容性」。".to_string(),
+                "该 AI 连接尚未检测 Higher 兼容性。请先在连接上运行「检测 Higher 兼容性」。"
+                    .to_string(),
             );
         }
         self.write_active_id(KEY_ACTIVE_PRIMARY, Some(id))
@@ -275,9 +278,13 @@ impl<'a> AiProviderProfileRepository<'a> {
     /// temperature_zero 全 true）且 enabled；None = Follow Primary。
     pub fn set_active_control(&self, id: Option<i64>) -> Result<(), String> {
         match id {
-            None => self.write_active_id(KEY_ACTIVE_CONTROL, None).map_err(|e| e.to_string()),
+            None => self
+                .write_active_id(KEY_ACTIVE_CONTROL, None)
+                .map_err(|e| e.to_string()),
             Some(cid) => {
-                let p = self.get(cid).map_err(|e| e.to_string())?
+                let p = self
+                    .get(cid)
+                    .map_err(|e| e.to_string())?
                     .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
                 if !p.enabled {
                     return Err("该 AI 连接已被停用，不能设为动作理解 AI。".to_string());
@@ -302,22 +309,29 @@ impl<'a> AiProviderProfileRepository<'a> {
         control_id: Option<i64>,
     ) -> Result<(), String> {
         // Validate Primary（§17.1：含 untested 同 id 保持豁免）
-        let p = self.get(primary_id).map_err(|e| e.to_string())?
+        let p = self
+            .get(primary_id)
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
         if !p.enabled {
             return Err("该 AI 连接已被停用，不能设为主要 AI。".to_string());
         }
         if p.compatibility_status == "incompatible" {
-            return Err("该 AI 连接未通过 Higher 兼容检测（不兼容），不能设为主要 AI。".to_string());
+            return Err(
+                "该 AI 连接未通过 Higher 兼容检测（不兼容），不能设为主要 AI。".to_string(),
+            );
         }
         if p.compatibility_status == "untested" && self.active_primary_id() != Some(primary_id) {
             return Err(
-                "该 AI 连接尚未检测 Higher 兼容性。请先在连接上运行「检测 Higher 兼容性」。".to_string(),
+                "该 AI 连接尚未检测 Higher 兼容性。请先在连接上运行「检测 Higher 兼容性」。"
+                    .to_string(),
             );
         }
         // Validate Control（§17.2）
         if let Some(cid) = control_id {
-            let c = self.get(cid).map_err(|e| e.to_string())?
+            let c = self
+                .get(cid)
+                .map_err(|e| e.to_string())?
                 .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
             if !c.enabled {
                 return Err("该 AI 连接已被停用，不能设为动作理解 AI。".to_string());
@@ -340,7 +354,9 @@ impl<'a> AiProviderProfileRepository<'a> {
         })();
         match write {
             Ok(()) => {
-                self.conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+                self.conn
+                    .execute_batch("COMMIT")
+                    .map_err(|e| e.to_string())?;
                 Ok(())
             }
             Err(e) => {
@@ -367,7 +383,9 @@ impl<'a> AiProviderProfileRepository<'a> {
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let target = self.get(id).map_err(|e| e.to_string())?
+        let target = self
+            .get(id)
+            .map_err(|e| e.to_string())?
             .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
         if target.enabled && total_enabled == 0 {
             return Err("至少保留一个可用的 AI 连接。".to_string());

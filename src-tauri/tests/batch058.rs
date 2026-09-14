@@ -58,21 +58,51 @@ fn test_migration_latest_is_v021_and_idempotent() {
 #[test]
 fn test_v021_new_tables_and_columns_exist() {
     let conn = setup();
-    for t in ["goal_targets", "planning_sources", "planning_source_chunks", "planning_blueprints",
-              "planning_phases", "planning_milestones", "planning_reviews", "personalization_profile_sources"] {
+    for t in [
+        "goal_targets",
+        "planning_sources",
+        "planning_source_chunks",
+        "planning_blueprints",
+        "planning_phases",
+        "planning_milestones",
+        "planning_reviews",
+        "personalization_profile_sources",
+    ] {
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1", rusqlite::params![t], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                rusqlite::params![t],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 1, "缺少表 {t}");
     }
     // view + 列
     let v: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='trusted_study_sessions'", [], |r| r.get(0)).unwrap();
     assert_eq!(v, 1);
-    let wf: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('ai_runs') WHERE name='workflow_state'", [], |r| r.get(0)).unwrap();
+    let wf: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('ai_runs') WHERE name='workflow_state'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(wf, 1);
-    let origin: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='origin'", [], |r| r.get(0)).unwrap();
+    let origin: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='origin'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(origin, 1);
-    let trust: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('evaluations') WHERE name='trust_state'", [], |r| r.get(0)).unwrap();
+    let trust: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('evaluations') WHERE name='trust_state'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(trust, 1);
 }
 
@@ -89,7 +119,10 @@ fn test_v021_personalization_legacy_confirmed_to_v1() {
         .save_draft(p, "# 我的情况\n每天 3 小时", Some("{}"))
         .unwrap();
     PersonalizationRepository::new(&conn).confirm(p).unwrap();
-    let confirmed = PersonalizationRepository::new(&conn).get_confirmed_profile(p).unwrap().unwrap();
+    let confirmed = PersonalizationRepository::new(&conn)
+        .get_confirmed_profile(p)
+        .unwrap()
+        .unwrap();
     assert_eq!(confirmed.status, "confirmed");
     assert_eq!(confirmed.version, 1);
     assert!(confirmed.confirmed_at.is_some());
@@ -116,7 +149,10 @@ fn test_personal_profile_one_confirmed_one_draft() {
     assert_eq!(confirmed.version, 2);
     assert_eq!(confirmed.status, "confirmed");
     let versions = repo.list_profile_versions(p).unwrap();
-    assert_eq!(versions.iter().filter(|v| v.status == "superseded").count(), 1);
+    assert_eq!(
+        versions.iter().filter(|v| v.status == "superseded").count(),
+        1
+    );
 }
 
 // =============== §43-4/§48：GoalTarget ===============
@@ -127,30 +163,77 @@ fn test_goal_target_postgraduate_reach_safety_replace() {
     let p = mk_profile(&conn);
     let repo = GoalTargetRepository::new(&conn);
     // 建两个 candidate reach
-    let a = repo.create(p, "postgraduate", "reach", "华中科技大学", Some("2027-12-25"),
-        r#"{"institution_name":"华中科技大学","program_name":"计算机技术"}"#, "{}", "candidate").unwrap();
-    let b = repo.create(p, "postgraduate", "reach", "清华大学", Some("2027-12-25"),
-        r#"{"institution_name":"清华大学","program_name":"计算机科学与技术"}"#, "{}", "candidate").unwrap();
+    let a = repo
+        .create(
+            p,
+            "postgraduate",
+            "reach",
+            "华中科技大学",
+            Some("2027-12-25"),
+            r#"{"institution_name":"华中科技大学","program_name":"计算机技术"}"#,
+            "{}",
+            "candidate",
+        )
+        .unwrap();
+    let b = repo
+        .create(
+            p,
+            "postgraduate",
+            "reach",
+            "清华大学",
+            Some("2027-12-25"),
+            r#"{"institution_name":"清华大学","program_name":"计算机科学与技术"}"#,
+            "{}",
+            "candidate",
+        )
+        .unwrap();
     // 激活 A → active
     repo.activate(p, a.id).unwrap();
-    let actives = repo.list_active(p, Some("postgraduate"), Some("reach")).unwrap();
+    let actives = repo
+        .list_active(p, Some("postgraduate"), Some("reach"))
+        .unwrap();
     assert_eq!(actives.len(), 1);
     assert_eq!(actives[0].id, a.id);
     // 激活 B → A historical，B active（不产生两个 active reach）
     repo.activate(p, b.id).unwrap();
-    let actives = repo.list_active(p, Some("postgraduate"), Some("reach")).unwrap();
+    let actives = repo
+        .list_active(p, Some("postgraduate"), Some("reach"))
+        .unwrap();
     assert_eq!(actives.len(), 1);
     assert_eq!(actives[0].id, b.id);
     let a_now = repo.get(a.id, p).unwrap().unwrap();
     assert_eq!(a_now.status, "historical");
     // safety 独立槽位
-    let s1 = repo.create(p, "postgraduate", "safety", "武汉理工大学", None,
-        r#"{"institution_name":"武汉理工大学","program_name":"软件工程"}"#, "{}", "candidate").unwrap();
+    let s1 = repo
+        .create(
+            p,
+            "postgraduate",
+            "safety",
+            "武汉理工大学",
+            None,
+            r#"{"institution_name":"武汉理工大学","program_name":"软件工程"}"#,
+            "{}",
+            "candidate",
+        )
+        .unwrap();
     repo.activate(p, s1.id).unwrap();
-    let safety = repo.list_active(p, Some("postgraduate"), Some("safety")).unwrap();
+    let safety = repo
+        .list_active(p, Some("postgraduate"), Some("safety"))
+        .unwrap();
     assert_eq!(safety.len(), 1);
     // 通用 scenario 不被考研规则影响
-    let g = repo.create(p, "generic", "primary", "学英语", None, "{}", "{}", "candidate").unwrap();
+    let g = repo
+        .create(
+            p,
+            "generic",
+            "primary",
+            "学英语",
+            None,
+            "{}",
+            "{}",
+            "candidate",
+        )
+        .unwrap();
     repo.activate(p, g.id).unwrap();
     assert_eq!(repo.list_active(p, Some("generic"), None).unwrap().len(), 1);
 }
@@ -161,11 +244,28 @@ fn test_goal_target_postgraduate_json_validation() {
     let p = mk_profile(&conn);
     let repo = GoalTargetRepository::new(&conn);
     // 缺 institution_name/program_name → 拒绝
-    let r = repo.create(p, "postgraduate", "reach", "无院校", None, r#"{}"#, "{}", "draft");
+    let r = repo.create(
+        p,
+        "postgraduate",
+        "reach",
+        "无院校",
+        None,
+        r#"{}"#,
+        "{}",
+        "draft",
+    );
     assert!(r.is_err(), "postgraduate data_json 必须含院校与专业");
     // 合法通过
-    let ok = repo.create(p, "postgraduate", "reach", "清华", None,
-        r#"{"institution_name":"清华大学","program_name":"计算机"}"#, "{}", "draft");
+    let ok = repo.create(
+        p,
+        "postgraduate",
+        "reach",
+        "清华",
+        None,
+        r#"{"institution_name":"清华大学","program_name":"计算机"}"#,
+        "{}",
+        "draft",
+    );
     assert!(ok.is_ok());
 }
 
@@ -179,7 +279,13 @@ fn test_goal_target_legacy_candidates_no_auto_active() {
         "INSERT INTO goals (profile_id, name, goal_level, status) VALUES (?1,'2027 考研','final','active')",
         rusqlite::params![p],
     ).unwrap();
-    let gid: i64 = conn.query_row("SELECT id FROM goals WHERE profile_id=?1 AND goal_level='final'", rusqlite::params![p], |r| r.get(0)).unwrap();
+    let gid: i64 = conn
+        .query_row(
+            "SELECT id FROM goals WHERE profile_id=?1 AND goal_level='final'",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
+        .unwrap();
     conn.execute(
         "UPDATE goals SET goal_brief_json=?1 WHERE id=?2",
         rusqlite::params![json!({"title":"2027 考研","outcome":"上岸","deadline":"2027-12-25","success_criteria":["过线"],"scope":[],"constraints":[],"unresolved":[]}).to_string(), gid],
@@ -198,9 +304,20 @@ fn test_goal_target_legacy_candidates_no_auto_active() {
 fn test_task_origin_defaults_manual() {
     let conn = setup();
     let p = mk_profile(&conn);
-    let item = LearningItemRepository::new(&conn).create_root_for_profile(p, None, "数学", None).unwrap();
-    let tid = TaskRepository::new(&conn).create_for_profile(p, None, "手工任务", None, None, None, None).unwrap().id;
-    let origin: String = conn.query_row("SELECT origin FROM tasks WHERE id=?1", rusqlite::params![tid], |r| r.get(0)).unwrap();
+    let item = LearningItemRepository::new(&conn)
+        .create_root_for_profile(p, None, "数学", None)
+        .unwrap();
+    let tid = TaskRepository::new(&conn)
+        .create_for_profile(p, None, "手工任务", None, None, None, None)
+        .unwrap()
+        .id;
+    let origin: String = conn
+        .query_row(
+            "SELECT origin FROM tasks WHERE id=?1",
+            rusqlite::params![tid],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(origin, "manual", "历史/手工任务默认 manual");
 }
 
@@ -211,7 +328,18 @@ fn test_blueprint_activation_projection_protects_manual_tasks() {
     let today = app_lib::repository::planning::today_utc8();
     let repo = PlanningRepository::new(&conn);
     // 一个手工未来任务（受保护）
-    let _manual = TaskRepository::new(&conn).create_for_profile(p, None, "手工未来任务", Some("9999-01-01"), None, None, None).unwrap().id;
+    let _manual = TaskRepository::new(&conn)
+        .create_for_profile(
+            p,
+            None,
+            "手工未来任务",
+            Some("9999-01-01"),
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .id;
     // 创建 blueprint（structured_json 含 future_tasks）
     let structured = json!({
         "phases": [{"phase_key":"基础期","title":"基础期","start_date":today,"end_date":null,"objective_md":"打基础"}],
@@ -221,7 +349,18 @@ fn test_blueprint_activation_projection_protects_manual_tasks() {
             {"title":"超出窗口","planned_date":"9999-12-31","estimated_minutes":60}
         ]
     }).to_string();
-    let bp = repo.create_blueprint(p, "generic", "14 天计划", "# 计划", Some(&structured), "{}", "{}", 14).unwrap();
+    let bp = repo
+        .create_blueprint(
+            p,
+            "generic",
+            "14 天计划",
+            "# 计划",
+            Some(&structured),
+            "{}",
+            "{}",
+            14,
+        )
+        .unwrap();
     // draft 状态下无 active
     assert!(repo.get_active(p).unwrap().is_none());
     // 激活 → active + 投影（horizon 内 2 条；超出窗口不投影）
@@ -232,9 +371,13 @@ fn test_blueprint_activation_projection_protects_manual_tasks() {
         rusqlite::params![bp.id], |r| r.get(0)).unwrap();
     assert_eq!(blueprint_tasks, 2, "只投影 horizon 内的任务");
     // 手工任务保留
-    let manual_cnt: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE origin='manual' AND archived_at IS NULL",
-        [], |r| r.get(0)).unwrap();
+    let manual_cnt: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE origin='manual' AND archived_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(manual_cnt, 1);
     // 幂等：重复投影不产生重复
     let _ = repo.activate(p, bp.id, &today, 14);
@@ -243,8 +386,22 @@ fn test_blueprint_activation_projection_protects_manual_tasks() {
         rusqlite::params![bp.id], |r| r.get(0)).unwrap();
     assert_eq!(blueprint_tasks2, 2, "projection_key 幂等，不得重复生成");
     // phases/milestones 可写
-    let phid = repo.add_phase(bp.id, "基础期", "基础期", Some(&today), None, "打基础", 1).unwrap();
-    let _mid = repo.add_milestone(bp.id, Some(phid), "m1", "一轮结束", None, None, "unknown", "estimated", "{}").unwrap();
+    let phid = repo
+        .add_phase(bp.id, "基础期", "基础期", Some(&today), None, "打基础", 1)
+        .unwrap();
+    let _mid = repo
+        .add_milestone(
+            bp.id,
+            Some(phid),
+            "m1",
+            "一轮结束",
+            None,
+            None,
+            "unknown",
+            "estimated",
+            "{}",
+        )
+        .unwrap();
     assert_eq!(repo.list_phases(bp.id).unwrap().len(), 1);
     assert_eq!(repo.list_milestones(bp.id).unwrap().len(), 1);
 }
@@ -255,9 +412,13 @@ fn test_blueprint_one_active() {
     let p = mk_profile(&conn);
     let repo = PlanningRepository::new(&conn);
     let today = app_lib::repository::planning::today_utc8();
-    let b1 = repo.create_blueprint(p, "generic", "A", "", Some("{}"), "{}", "{}", 14).unwrap();
+    let b1 = repo
+        .create_blueprint(p, "generic", "A", "", Some("{}"), "{}", "{}", 14)
+        .unwrap();
     repo.activate(p, b1.id, &today, 14).unwrap();
-    let b2 = repo.create_blueprint(p, "generic", "B", "", Some("{}"), "{}", "{}", 14).unwrap();
+    let b2 = repo
+        .create_blueprint(p, "generic", "B", "", Some("{}"), "{}", "{}", 14)
+        .unwrap();
     repo.activate(p, b2.id, &today, 14).unwrap();
     let active = repo.get_active(p).unwrap().unwrap();
     assert_eq!(active.id, b2.id);
@@ -273,7 +434,9 @@ fn test_trusted_study_sessions_view_excludes_needs_review() {
     let p = mk_profile(&conn);
     // 建 4 条 session：normal 1h / needs_review 20h / confirmed 2h / corrected 3h
     let repo = StudySessionRepository::new(&conn);
-    let item = LearningItemRepository::new(&conn).create_root_for_profile(p, None, "数学", None).unwrap();
+    let item = LearningItemRepository::new(&conn)
+        .create_root_for_profile(p, None, "数学", None)
+        .unwrap();
     let mk = |state: &str, dur: i64| {
         let s = repo.start_for_item(item.id, None).unwrap();
         conn.execute(
@@ -291,7 +454,13 @@ fn test_trusted_study_sessions_view_excludes_needs_review() {
         rusqlite::params![p], |r| r.get(0)).unwrap();
     assert_eq!(trusted, 3600 + 7200 + 10800, "trusted 统计 = 6h（§44）");
     // raw 行仍可列出（4 条都在）
-    let all: i64 = conn.query_row("SELECT COUNT(*) FROM study_sessions WHERE profile_id=?1", rusqlite::params![p], |r| r.get(0)).unwrap();
+    let all: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM study_sessions WHERE profile_id=?1",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(all, 4);
 }
 
@@ -300,14 +469,22 @@ fn test_time_of_day_uses_trusted_and_interval_math() {
     let conn = setup();
     let p = mk_profile(&conn);
     let repo = StudySessionRepository::new(&conn);
-    let item = LearningItemRepository::new(&conn).create_root_for_profile(p, None, "数学", None).unwrap();
+    let item = LearningItemRepository::new(&conn)
+        .create_root_for_profile(p, None, "数学", None)
+        .unwrap();
     // 15:30Z(+8=23:30) 2h → 21-24 30m + 00-06 90m；needs_review 的一条不计入
     let s = repo.start_for_item(item.id, None).unwrap();
     conn.execute("UPDATE study_sessions SET started_at='2026-08-15 15:30:00', ended_at='2026-08-15 17:30:00', duration_seconds=7200, status='completed' WHERE id=?1", rusqlite::params![s.id]).unwrap();
     let s2 = repo.start_for_item(item.id, None).unwrap();
     conn.execute("UPDATE study_sessions SET started_at='2026-08-15 15:30:00', ended_at='2026-08-15 17:30:00', duration_seconds=7200, status='completed', duration_review_state='needs_review' WHERE id=?1", rusqlite::params![s2.id]).unwrap();
     let buckets = app_lib::ai::planner::time_of_day_distribution(&conn, p);
-    let find = |n: &str| buckets.iter().find(|(b, _)| b == n).map(|(_, s)| *s).unwrap_or(0);
+    let find = |n: &str| {
+        buckets
+            .iter()
+            .find(|(b, _)| b == n)
+            .map(|(_, s)| *s)
+            .unwrap_or(0)
+    };
     assert_eq!(find("21-24"), 1800);
     assert_eq!(find("00-06"), 5400);
     assert_eq!(find("06-09"), 0);
@@ -329,15 +506,26 @@ fn test_workflow_state_machine_helpers() {
 fn test_workflow_state_persisted_and_read() {
     let conn = setup();
     let p = mk_profile(&conn);
-    let conv: i64 = conn.query_row(
-        "INSERT INTO ai_conversations (profile_id, mode) VALUES (?1,'assistant') RETURNING id",
-        rusqlite::params![p], |r| r.get(0)).unwrap();
+    let conv: i64 = conn
+        .query_row(
+            "INSERT INTO ai_conversations (profile_id, mode) VALUES (?1,'assistant') RETURNING id",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
+        .unwrap();
     let run_id = "run-test-1";
     set_workflow_state(&conn, run_id, p, conv, WORKFLOW_STATE_CLARIFYING, None);
     let st = read_workflow_state(&conn, p, conv).unwrap();
     assert_eq!(st, WORKFLOW_STATE_CLARIFYING);
     // 用户回答"每天3小时"（无关键词）→ 依赖显式状态继续（workflow_active=true）
-    set_workflow_state(&conn, run_id, p, conv, WORKFLOW_STATE_WAITING_APPROVAL, None);
+    set_workflow_state(
+        &conn,
+        run_id,
+        p,
+        conv,
+        WORKFLOW_STATE_WAITING_APPROVAL,
+        None,
+    );
     let st2 = read_workflow_state(&conn, p, conv).unwrap();
     assert_eq!(st2, WORKFLOW_STATE_WAITING_APPROVAL);
     assert!(!workflow_active(&st2));
@@ -353,14 +541,23 @@ fn test_knowledge_goal_optional_full_loop() {
     // 无 Goal：Quick Study / 建 root / 建 child 全可用
     let root = repo.create_root_for_profile(p, None, "数学", None).unwrap();
     assert!(root.goal_id.is_none());
-    let child = repo.create_child_for_profile(p, None, root.id, "极限", None).unwrap();
-    assert!(child.goal_id.is_none(), "child 继承 parent.goal_id（null → null）");
+    let child = repo
+        .create_child_for_profile(p, None, root.id, "极限", None)
+        .unwrap();
+    assert!(
+        child.goal_id.is_none(),
+        "child 继承 parent.goal_id（null → null）"
+    );
     // 有 Goal 的 parent → child 继承 goal_id
     let gid: i64 = conn.query_row(
         "INSERT INTO goals (profile_id, name, goal_level, status) VALUES (?1,'G','final','active') RETURNING id",
         rusqlite::params![p], |r| r.get(0)).unwrap();
-    let root2 = repo.create_root_for_profile(p, Some(gid), "英语", None).unwrap();
-    let child2 = repo.create_child_for_profile(p, None, root2.id, "词汇", None).unwrap();
+    let root2 = repo
+        .create_root_for_profile(p, Some(gid), "英语", None)
+        .unwrap();
+    let child2 = repo
+        .create_child_for_profile(p, None, root2.id, "词汇", None)
+        .unwrap();
     assert_eq!(child2.goal_id, Some(gid), "parent 有 goal → child 继承");
 }
 
@@ -386,9 +583,28 @@ fn test_evaluation_enum_canonical_mapping() {
 fn test_evaluation_repo_maps_legacy_type() {
     let conn = setup();
     let p = mk_profile(&conn);
-    let item = LearningItemRepository::new(&conn).create_root_for_profile(p, None, "数学", None).unwrap();
+    let item = LearningItemRepository::new(&conn)
+        .create_root_for_profile(p, None, "数学", None)
+        .unwrap();
     let repo = app_lib::repository::evaluation::EvaluationRepository::new(&conn);
-    let e = repo.create(p, None, Some(item.id), "小测", "quiz", None, None, None, None, None, None, None, Some("passed"), None).unwrap();
+    let e = repo
+        .create(
+            p,
+            None,
+            Some(item.id),
+            "小测",
+            "quiz",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("passed"),
+            None,
+        )
+        .unwrap();
     assert_eq!(e.evaluation_type, "test", "quiz → test");
 }
 
@@ -420,7 +636,9 @@ fn test_changeset_goal_target_create_and_status_change() {
     ];
     let csid = repo.create(p, None, None, "测试目标", "", &ops).unwrap();
     repo.apply(csid, p, false).unwrap();
-    let actives = GoalTargetRepository::new(&conn).list_active(p, Some("postgraduate"), Some("reach")).unwrap();
+    let actives = GoalTargetRepository::new(&conn)
+        .list_active(p, Some("postgraduate"), Some("reach"))
+        .unwrap();
     assert_eq!(actives.len(), 1);
     assert_eq!(actives[0].title, "清华大学");
 }
@@ -431,15 +649,37 @@ fn test_changeset_goal_target_create_and_status_change() {
 fn test_v021_no_data_loss() {
     let conn = setup();
     let p = mk_profile(&conn);
-    let item = LearningItemRepository::new(&conn).create_root_for_profile(p, None, "数学", None).unwrap();
-    let _ = TaskRepository::new(&conn).create_for_profile(p, None, "任务", None, None, None, None).unwrap();
+    let item = LearningItemRepository::new(&conn)
+        .create_root_for_profile(p, None, "数学", None)
+        .unwrap();
+    let _ = TaskRepository::new(&conn)
+        .create_for_profile(p, None, "任务", None, None, None, None)
+        .unwrap();
     let srepo = StudySessionRepository::new(&conn);
     let s = srepo.start_for_item(item.id, None).unwrap();
     conn.execute("UPDATE study_sessions SET ended_at=datetime('now'), duration_seconds=1800, status='completed' WHERE id=?1", rusqlite::params![s.id]).unwrap();
     // 数据仍在
-    let n_s: i64 = conn.query_row("SELECT COUNT(*) FROM study_sessions WHERE profile_id=?1", rusqlite::params![p], |r| r.get(0)).unwrap();
-    let n_t: i64 = conn.query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1", rusqlite::params![p], |r| r.get(0)).unwrap();
-    let n_i: i64 = conn.query_row("SELECT COUNT(*) FROM learning_items WHERE profile_id=?1", rusqlite::params![p], |r| r.get(0)).unwrap();
+    let n_s: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM study_sessions WHERE profile_id=?1",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let n_t: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let n_i: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM learning_items WHERE profile_id=?1",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(n_s, 1);
     assert_eq!(n_t, 1);
     assert_eq!(n_i, 1);
@@ -457,14 +697,23 @@ fn test_planning_review_due_only_reminds() {
     let rv = PlanningReviewRepository::new(&conn);
     assert!(!rv.is_review_due(p, &today).unwrap());
     // 有 active blueprint 且 next_review_at 已到 → due
-    let bp = bp_repo.create_blueprint(p, "generic", "计划", "", Some("{}"), "{}", "{}", 7).unwrap();
+    let bp = bp_repo
+        .create_blueprint(p, "generic", "计划", "", Some("{}"), "{}", "{}", 7)
+        .unwrap();
     bp_repo.activate(p, bp.id, &today, 14).unwrap();
-    conn.execute("UPDATE planning_blueprints SET next_review_at=datetime('now','-1 day') WHERE id=?1", rusqlite::params![bp.id]).unwrap();
+    conn.execute(
+        "UPDATE planning_blueprints SET next_review_at=datetime('now','-1 day') WHERE id=?1",
+        rusqlite::params![bp.id],
+    )
+    .unwrap();
     assert!(rv.is_review_due(p, &today).unwrap());
     // review 状态机：running → waiting_approval
-    let rid = rv.create_due(p, Some(bp.id), &today, &today, "scheduled").unwrap();
+    let rid = rv
+        .create_due(p, Some(bp.id), &today, &today, "scheduled")
+        .unwrap();
     rv.set_status(rid, p, "running").unwrap();
-    rv.save_assessment(rid, p, "一切正常", "{}", "normal").unwrap();
+    rv.save_assessment(rid, p, "一切正常", "{}", "normal")
+        .unwrap();
     let r = rv.get(rid, p).unwrap().unwrap();
     assert_eq!(r.status, "waiting_approval");
     assert_eq!(r.risk_state, "normal");
@@ -573,26 +822,43 @@ fn bp_mk_blueprint(today: &str) -> BlueprintDraft {
 #[test]
 fn test_bp_compile_blueprint_ops_structure() {
     let today = app_lib::repository::planning::today_utc8();
-    let draft = PlanDraft { blueprint: Some(bp_mk_blueprint(&today)), ..Default::default() };
+    let draft = PlanDraft {
+        blueprint: Some(bp_mk_blueprint(&today)),
+        ..Default::default()
+    };
     let ops = compile_to_changeset_ops(None, true, &draft);
     // DEV-0077.2 §二十四/§三十四：blueprint 分支不再提前 return——
     // future_tasks 同包编译为 task create ops（Execution Planning Contract）。
     // ops = blueprint(1) + phases(2) + milestones(2) + future_tasks(2) = 7。
-    assert_eq!(ops.len(), 7, "蓝图编译 ops 数量：blueprint+phases+milestones+future_tasks");
+    assert_eq!(
+        ops.len(),
+        7,
+        "蓝图编译 ops 数量：blueprint+phases+milestones+future_tasks"
+    );
     assert_eq!(ops[0].entity_type, "planning_blueprint");
     assert_eq!(ops[0].action, "create");
     assert_eq!(ops[0].operation_ref.as_deref(), Some("BP1"));
     assert_eq!(ops[0].after["status"], "active");
-    assert!(ops[0].after["structured_json"].is_string(), "structured_json 必须是 JSON 字符串");
-    let sj: serde_json::Value = serde_json::from_str(ops[0].after["structured_json"].as_str().unwrap()).unwrap();
-    assert!(sj.get("future_tasks").is_some(), "structured_json 含 future_tasks（§22 投影数据源）");
+    assert!(
+        ops[0].after["structured_json"].is_string(),
+        "structured_json 必须是 JSON 字符串"
+    );
+    let sj: serde_json::Value =
+        serde_json::from_str(ops[0].after["structured_json"].as_str().unwrap()).unwrap();
+    assert!(
+        sj.get("future_tasks").is_some(),
+        "structured_json 含 future_tasks（§22 投影数据源）"
+    );
     assert!(sj.get("external_facts").is_some());
     assert_eq!(ops[1].entity_type, "planning_phase");
     assert_eq!(ops[1].after["blueprint_ref"], "BP1");
     assert_eq!(ops[2].after["blueprint_ref"], "BP1");
     assert_eq!(ops[3].entity_type, "planning_milestone");
     assert_eq!(ops[3].after["date_precision"], "day");
-    assert_eq!(ops[4].after["date_precision"], "month", "month 精度保留，不伪造某一天");
+    assert_eq!(
+        ops[4].after["date_precision"], "month",
+        "month 精度保留，不伪造某一天"
+    );
     // §三十四：future_tasks → task create ops（FT 序号；蓝图近期任务入执行层）
     assert_eq!(ops[5].entity_type, "task");
     assert_eq!(ops[5].action, "create");
@@ -615,9 +881,15 @@ fn test_bp_compile_blueprint_does_not_touch_goal_targets() {
         reason: "模考排名提升".into(),
         evidence: "近三次模考".into(),
     }];
-    let draft = PlanDraft { blueprint: Some(bp), ..Default::default() };
+    let draft = PlanDraft {
+        blueprint: Some(bp),
+        ..Default::default()
+    };
     let ops = compile_to_changeset_ops(None, true, &draft);
-    assert!(!ops.iter().any(|o| o.entity_type == "goal_target"), "suggested changes 不得自动改正式目标");
+    assert!(
+        !ops.iter().any(|o| o.entity_type == "goal_target"),
+        "suggested changes 不得自动改正式目标"
+    );
     let md = ops[0].after["content_md"].as_str().unwrap();
     assert!(md.contains("建议的目标调整"));
     assert!(md.contains("清华大学"));
@@ -651,7 +923,10 @@ fn test_bp_validate_blueprint_draft_ok() {
     let conn = setup();
     let p = mk_profile(&conn);
     let today = app_lib::repository::planning::today_utc8();
-    let draft = PlanDraft { blueprint: Some(bp_mk_blueprint(&today)), ..Default::default() };
+    let draft = PlanDraft {
+        blueprint: Some(bp_mk_blueprint(&today)),
+        ..Default::default()
+    };
     let v = validate_plan_draft(&conn, p, &draft);
     assert!(v.errors.is_empty(), "合法蓝图应通过：{:?}", v.errors);
 }
@@ -672,7 +947,10 @@ fn test_bp_validate_blueprint_draft_errors() {
         estimated_minutes: Some(2000),
         grounding: None,
     });
-    let draft = PlanDraft { blueprint: Some(bp), ..Default::default() };
+    let draft = PlanDraft {
+        blueprint: Some(bp),
+        ..Default::default()
+    };
     let v = validate_plan_draft(&conn, p, &draft);
     assert!(v.errors.iter().any(|e| e.contains("标题为空")));
     assert!(v.errors.iter().any(|e| e.contains("date_precision 非法")));
@@ -692,9 +970,16 @@ fn test_bp_validate_blueprint_rejects_over_window() {
         estimated_minutes: Some(60),
         grounding: None,
     });
-    let draft = PlanDraft { blueprint: Some(bp), ..Default::default() };
+    let draft = PlanDraft {
+        blueprint: Some(bp),
+        ..Default::default()
+    };
     let v = validate_plan_draft(&conn, p, &draft);
-    assert!(v.errors.iter().any(|e| e.contains("超出滚动窗口")), "{:?}", v.errors);
+    assert!(
+        v.errors.iter().any(|e| e.contains("超出滚动窗口")),
+        "{:?}",
+        v.errors
+    );
 }
 
 #[test]
@@ -702,12 +987,19 @@ fn test_bp_changeset_apply_blueprint_full_chain() {
     let conn = setup();
     let p = mk_profile(&conn);
     let today = app_lib::repository::planning::today_utc8();
-    let draft = PlanDraft { blueprint: Some(bp_mk_blueprint(&today)), ..Default::default() };
+    let draft = PlanDraft {
+        blueprint: Some(bp_mk_blueprint(&today)),
+        ..Default::default()
+    };
     let ops = compile_to_changeset_ops(None, true, &draft);
     assert!(app_lib::ai::planner::ops_within_limit(&ops));
 
-    let csid = ChangeSetRepository::new(&conn).create(p, None, None, "AI 蓝图规划", "用户批准", &ops).unwrap();
-    ChangeSetRepository::new(&conn).apply(csid, p, false).unwrap();
+    let csid = ChangeSetRepository::new(&conn)
+        .create(p, None, None, "AI 蓝图规划", "用户批准", &ops)
+        .unwrap();
+    ChangeSetRepository::new(&conn)
+        .apply(csid, p, false)
+        .unwrap();
 
     let repo = PlanningRepository::new(&conn);
     let active = repo.get_active(p).unwrap().expect("蓝图应已 active");
@@ -715,8 +1007,12 @@ fn test_bp_changeset_apply_blueprint_full_chain() {
     assert_eq!(active.status, "active");
     assert!(active.next_review_at.is_some(), "激活后应设置下次复盘时间");
     assert!(active.structured_json.is_some(), "structured_json 应被写入");
-    let sjv: serde_json::Value = serde_json::from_str(active.structured_json.as_deref().unwrap()).unwrap();
-    assert!(sjv.get("future_tasks").is_some(), "structured_json 应含 future_tasks：{sjv}");
+    let sjv: serde_json::Value =
+        serde_json::from_str(active.structured_json.as_deref().unwrap()).unwrap();
+    assert!(
+        sjv.get("future_tasks").is_some(),
+        "structured_json 应含 future_tasks：{sjv}"
+    );
     let phases = repo.list_phases(active.id).unwrap();
     assert_eq!(phases.len(), 2);
     assert_eq!(phases[0].phase_key, "base");
@@ -733,18 +1029,27 @@ fn test_bp_changeset_apply_blueprint_full_chain() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(projected, 2, "future_tasks 应编译为本包 task ops（正式任务）");
+    assert_eq!(
+        projected, 2,
+        "future_tasks 应编译为本包 task ops（正式任务）"
+    );
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM tasks WHERE origin='blueprint'",
-            [], |r| r.get::<_, i64>(0),
-        ).unwrap(),
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap(),
         0,
         "F1：AI 路径不得产生投影行（双写禁止）"
     );
     // 重放：新 ChangeSet = 新 ops（ChangeSet 各自审计/Undo；ops 通道无投影幂等语义）
-    let csid2 = ChangeSetRepository::new(&conn).create(p, None, None, "AI 蓝图规划(重放)", "重放", &ops).unwrap();
-    ChangeSetRepository::new(&conn).apply(csid2, p, false).unwrap();
+    let csid2 = ChangeSetRepository::new(&conn)
+        .create(p, None, None, "AI 蓝图规划(重放)", "重放", &ops)
+        .unwrap();
+    ChangeSetRepository::new(&conn)
+        .apply(csid2, p, false)
+        .unwrap();
     let projected2: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NULL",
@@ -760,22 +1065,43 @@ fn test_bp_changeset_apply_blueprint_replaces_previous_active() {
     let conn = setup();
     let p = mk_profile(&conn);
     let today = app_lib::repository::planning::today_utc8();
-    let draft_a = PlanDraft { blueprint: Some(bp_mk_blueprint(&today)), ..Default::default() };
+    let draft_a = PlanDraft {
+        blueprint: Some(bp_mk_blueprint(&today)),
+        ..Default::default()
+    };
     let ops_a = compile_to_changeset_ops(None, true, &draft_a);
-    let csa = ChangeSetRepository::new(&conn).create(p, None, None, "蓝图 A", "a", &ops_a).unwrap();
-    ChangeSetRepository::new(&conn).apply(csa, p, false).unwrap();
-    let bp_a = PlanningRepository::new(&conn).get_active(p).unwrap().unwrap();
+    let csa = ChangeSetRepository::new(&conn)
+        .create(p, None, None, "蓝图 A", "a", &ops_a)
+        .unwrap();
+    ChangeSetRepository::new(&conn)
+        .apply(csa, p, false)
+        .unwrap();
+    let bp_a = PlanningRepository::new(&conn)
+        .get_active(p)
+        .unwrap()
+        .unwrap();
 
     let mut bp = bp_mk_blueprint(&today);
     bp.title = "2027 考研全程规划 V2".into();
-    let draft_b = PlanDraft { blueprint: Some(bp), ..Default::default() };
+    let draft_b = PlanDraft {
+        blueprint: Some(bp),
+        ..Default::default()
+    };
     let ops_b = compile_to_changeset_ops(None, true, &draft_b);
-    let csb = ChangeSetRepository::new(&conn).create(p, None, None, "蓝图 B", "b", &ops_b).unwrap();
-    ChangeSetRepository::new(&conn).apply(csb, p, false).unwrap();
+    let csb = ChangeSetRepository::new(&conn)
+        .create(p, None, None, "蓝图 B", "b", &ops_b)
+        .unwrap();
+    ChangeSetRepository::new(&conn)
+        .apply(csb, p, false)
+        .unwrap();
 
     let repo = PlanningRepository::new(&conn);
     let old: Option<String> = conn
-        .query_row("SELECT status FROM planning_blueprints WHERE id=?1", rusqlite::params![bp_a.id], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM planning_blueprints WHERE id=?1",
+            rusqlite::params![bp_a.id],
+            |r| r.get(0),
+        )
         .ok();
     assert_eq!(old.unwrap(), "superseded");
     let active = repo.get_active(p).unwrap().expect("V2 应 active");
@@ -788,5 +1114,8 @@ fn test_bp_changeset_apply_blueprint_replaces_previous_active() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(n_active_bp_tasks, 4, "A/B 两包 task ops 各 2 条（B 生效，A 待其自身 Undo）");
+    assert_eq!(
+        n_active_bp_tasks, 4,
+        "A/B 两包 task ops 各 2 条（B 生效，A 待其自身 Undo）"
+    );
 }

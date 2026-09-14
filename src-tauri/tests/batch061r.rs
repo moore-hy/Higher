@@ -23,12 +23,13 @@ use app_lib::ai::action::{
     TaskUpdatePayload, TemporalIntentSerde,
 };
 use app_lib::ai::context_builder::{detect_context_purpose, ContextPurpose, PageContext};
-use app_lib::ai::grounding::{
-    load_recent_from_applied, record_apply, resolve_recent,
-    GroundingOutcome,
-};
 use app_lib::ai::grounding::BulkFilter;
-use app_lib::ai::planner::{planning_gate, planning_write_intent, PlanningGate, WORKFLOW_STATE_CANCELLED, workflow_active};
+use app_lib::ai::grounding::{
+    load_recent_from_applied, record_apply, resolve_recent, GroundingOutcome,
+};
+use app_lib::ai::planner::{
+    planning_gate, planning_write_intent, workflow_active, PlanningGate, WORKFLOW_STATE_CANCELLED,
+};
 use app_lib::ai::runtime::{
     fast_chat_shortcut, parse_turn_decision, turn_interpreter_prompt, AiRuntimeEnvelope,
     TemporalIntent, TurnDecision,
@@ -38,8 +39,8 @@ use app_lib::ai::semantic_contract::{
 };
 use app_lib::repository::changeset::{ChangeSetRepository, ProposedOp};
 use app_lib::repository::recurring_rule::{
-    materialize_recurring_tasks_range, materialize_rolling_horizon,
-    RecurringRuleRepository, RuleSemantics, ROLLING_HORIZON_DAYS,
+    materialize_recurring_tasks_range, materialize_rolling_horizon, RecurringRuleRepository,
+    RuleSemantics, ROLLING_HORIZON_DAYS,
 };
 use app_lib::repository::study_profile::StudyProfileRepository;
 use app_lib::repository::task::TaskRepository;
@@ -82,26 +83,51 @@ fn count(conn: &Connection, table: &str) -> i64 {
 /// 固定 Runtime：local_date=2026-08-21（周五），tz=+08:00。
 fn env() -> AiRuntimeEnvelope {
     AiRuntimeEnvelope::validated(
-        "2026-08-21", "2026-08-21 10:30", 480, "Today", None, 1, CONV, "assistant",
+        "2026-08-21",
+        "2026-08-21 10:30",
+        480,
+        "Today",
+        None,
+        1,
+        CONV,
+        "assistant",
     )
     .unwrap()
 }
 
 fn plan(msg: &str) -> PlanInput<'_> {
-    PlanInput { user_message: msg, conversation_id: CONV, ..Default::default() }
+    PlanInput {
+        user_message: msg,
+        conversation_id: CONV,
+        ..Default::default()
+    }
 }
 
-
 /// 统一建任务 helper（estimated_minutes 经 UPDATE 设置；create_for_profile 无此参数）。
-fn mk_task(conn: &Connection, p: i64, title: &str, date: &str, minutes: Option<i64>, rule_id: Option<i64>) -> i64 {
+fn mk_task(
+    conn: &Connection,
+    p: i64,
+    title: &str,
+    date: &str,
+    minutes: Option<i64>,
+    rule_id: Option<i64>,
+) -> i64 {
     let t = TaskRepository::new(conn)
         .create_for_profile(p, None, title, Some(date), None, None, None)
         .unwrap();
     if let Some(m) = minutes {
-        conn.execute("UPDATE tasks SET estimated_minutes=?1 WHERE id=?2", params![m, t.id]).unwrap();
+        conn.execute(
+            "UPDATE tasks SET estimated_minutes=?1 WHERE id=?2",
+            params![m, t.id],
+        )
+        .unwrap();
     }
     if let Some(r) = rule_id {
-        conn.execute("UPDATE tasks SET recurring_rule_id=?1 WHERE id=?2", params![r, t.id]).unwrap();
+        conn.execute(
+            "UPDATE tasks SET recurring_rule_id=?1 WHERE id=?2",
+            params![r, t.id],
+        )
+        .unwrap();
     }
     t.id
 }
@@ -139,7 +165,11 @@ fn r01_canonical_update_task_parse() {
     .expect("R01: Canonical UpdateTask 必须 parse");
     match act {
         SemanticAction::UpdateTask { patch, .. } => {
-            assert_eq!(patch.estimated_minutes, Some(30), "R01: patch.estimated_minutes=30");
+            assert_eq!(
+                patch.estimated_minutes,
+                Some(30),
+                "R01: patch.estimated_minutes=30"
+            );
         }
         other => panic!("R01: 应 UpdateTask，得到 {other:?}"),
     }
@@ -152,7 +182,11 @@ fn r02_recurring_update_contract() {
     )
     .expect("R02");
     match act {
-        SemanticAction::UpdateRecurringTask { patch, reconcile_future, .. } => {
+        SemanticAction::UpdateRecurringTask {
+            patch,
+            reconcile_future,
+            ..
+        } => {
             assert_eq!(patch.time_of_day.as_deref(), Some("21:00"), "R02: 21:00");
             assert_eq!(patch.estimated_minutes, Some(45), "R02: 45min");
             assert!(reconcile_future, "R02: reconcile_future 默认可显式 true");
@@ -169,7 +203,11 @@ fn r03_bulk_contract() {
     .expect("R03");
     match act {
         SemanticAction::BulkUpdateTasks { filter, patch } => {
-            assert_eq!(filter.status.as_deref(), Some("not_completed"), "R03: not_completed");
+            assert_eq!(
+                filter.status.as_deref(),
+                Some("not_completed"),
+                "R03: not_completed"
+            );
             assert!(patch.planned_date.is_some(), "R03: tomorrow patch");
         }
         other => panic!("R03: 应 BulkUpdateTasks，得到 {other:?}"),
@@ -191,7 +229,10 @@ fn r04_empty_patch_is_contract_failure_not_noop() {
     match plan_action(&conn, p, &e, &plan("把那个改成30分钟"), &act).unwrap() {
         ActionOutcome::ContractFailure(msg) => {
             assert!(!msg.is_empty(), "R04: 用户友好文案");
-            assert!(!msg.contains("serde") && !msg.contains("missing field"), "R04: 无内部词");
+            assert!(
+                !msg.contains("serde") && !msg.contains("missing field"),
+                "R04: 无内部词"
+            );
         }
         other => panic!("R04: 应 ContractFailure，得到 {other:?}"),
     }
@@ -209,7 +250,10 @@ fn r04_empty_patch_is_contract_failure_not_noop() {
 
 #[test]
 fn r05_all_canonical_examples_parse() {
-    assert!(all_examples_parse(), "R05: Contract 中所有 example 都可被 Parser 读取");
+    assert!(
+        all_examples_parse(),
+        "R05: Contract 中所有 example 都可被 Parser 读取"
+    );
     assert_eq!(SEMANTIC_CONTRACT_VERSION, "2", "R05: v2");
 }
 
@@ -219,14 +263,23 @@ fn r06_runtime_uses_contract_single_source() {
     let frag = prompt_fragment();
     let interp = turn_interpreter_prompt("你好", &env(), false, &[], &[]);
     let sem = app_lib::ai::runtime::semantic_action_prompt("你好", &env(), &[]);
-    assert!(interp.contains("Semantic Contract v2"), "R06: Interpreter prompt 引用 Contract");
-    assert!(sem.contains("Semantic Contract v2"), "R06: Semantic prompt 引用 Contract");
+    assert!(
+        interp.contains("Semantic Contract v2"),
+        "R06: Interpreter prompt 引用 Contract"
+    );
+    assert!(
+        sem.contains("Semantic Contract v2"),
+        "R06: Semantic prompt 引用 Contract"
+    );
     // Canonical examples 原文出现在 prompt 中（同源证明）
     let head: String = frag.chars().take(40).collect();
     assert!(interp.contains(&head), "R06: prompt 含 Contract fragment");
     // runtime.rs 源码不再自带第二份 examples 常量
     let src = read_src("src/ai/runtime.rs");
-    assert!(!src.contains("SEMANTIC_ACTION_EXAMPLES"), "R06: runtime 无第二份 examples");
+    assert!(
+        !src.contains("SEMANTIC_ACTION_EXAMPLES"),
+        "R06: runtime 无第二份 examples"
+    );
 }
 
 // ==================== R07-R11 · Recent 隔离 / Fallback / Pending ≠ Canonical ====================
@@ -259,7 +312,9 @@ fn r07_same_conversation_recent() {
     match resolve_recent(&conn, p, CONV_R07, &h).unwrap() {
         GroundingOutcome::Resolved(id) => {
             let title: String = conn
-                .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| r.get(0))
+                .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| {
+                    r.get(0)
+                })
                 .unwrap();
             assert_eq!(title, "TEST-A", "R07: 同会话 recent 命中 TEST-A");
         }
@@ -308,32 +363,42 @@ fn r10_restart_fallback_same_conversation_only() {
     let _cs = mk_applied_changeset_with_task(&conn, p, CONV_R10, "TEST-RESTART");
     let cs_b = mk_applied_changeset_with_task(&conn, p, CONV_R10_B, "TEST-OTHER-CONV");
     let _ = cs_b;
-    assert!(load_recent_from_applied(&conn, p, CONV_R10), "R10: 同会话 fallback 恢复成功");
+    assert!(
+        load_recent_from_applied(&conn, p, CONV_R10),
+        "R10: 同会话 fallback 恢复成功"
+    );
     let mut h = EntityHint::default();
     h.entity_type = "task".into();
     h.recency_hint = Some("recent_created".into());
     match resolve_recent(&conn, p, CONV_R10, &h).unwrap() {
         GroundingOutcome::Resolved(id) => {
             let title: String = conn
-                .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| r.get(0))
+                .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| {
+                    r.get(0)
+                })
                 .unwrap();
             assert_eq!(title, "TEST-RESTART", "R10: 恢复的是同会话实体");
         }
         other => panic!("R10: 应 Resolved，得到 {other:?}"),
     }
     // 另一会话 fallback：不得拿到 CONV 的实体
-    assert!(!load_recent_from_applied(&conn, p, CONV_R10_B) || {
-        // CONV_B 自己的 applied 也可恢复，但绝不能是 TEST-RESTART
-        match resolve_recent(&conn, p, CONV_R10_B, &h).unwrap() {
-            GroundingOutcome::Resolved(id) => {
-                let title: String = conn
-                    .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| r.get(0))
-                    .unwrap();
-                title != "TEST-RESTART"
+    assert!(
+        !load_recent_from_applied(&conn, p, CONV_R10_B) || {
+            // CONV_B 自己的 applied 也可恢复，但绝不能是 TEST-RESTART
+            match resolve_recent(&conn, p, CONV_R10_B, &h).unwrap() {
+                GroundingOutcome::Resolved(id) => {
+                    let title: String = conn
+                        .query_row("SELECT title FROM tasks WHERE id=?1", params![id], |r| {
+                            r.get(0)
+                        })
+                        .unwrap();
+                    title != "TEST-RESTART"
+                }
+                _ => true,
             }
-            _ => true,
-        }
-    }, "R10: 禁止跨 Conversation 恢复");
+        },
+        "R10: 禁止跨 Conversation 恢复"
+    );
 }
 
 #[test]
@@ -372,15 +437,22 @@ fn r12_update_one_op() {
     mk_task(&conn, p, "背单词", "2026-08-21", Some(20), None);
     let act = SemanticAction::UpdateTask {
         target: hint("task", "背单词", true),
-        patch: TaskUpdatePayload { estimated_minutes: Some(30), ..Default::default() },
+        patch: TaskUpdatePayload {
+            estimated_minutes: Some(30),
+            ..Default::default()
+        },
     };
-    match plan_action(&conn, p, &e, &plan("把今天那个背单词任务改成30分钟"), &act).unwrap() {
+    match plan_action(&conn, p, &e, &plan("把今天那个背单词任务改成30分钟"), &act).unwrap()
+    {
         ActionOutcome::ProposalReady { ops, .. } => {
             assert_eq!(ops.len(), 1, "R12: ONE task.update");
             assert_eq!(ops[0].entity_type, "task");
             assert_eq!(ops[0].action, "update");
             assert_eq!(ops[0].after["estimated_minutes"], 30);
-            assert!(ops[0].after.get("title").is_none(), "R12: Patch 最小字段——title 不得顺手改");
+            assert!(
+                ops[0].after.get("title").is_none(),
+                "R12: Patch 最小字段——title 不得顺手改"
+            );
         }
         other => panic!("R12: 应 ProposalReady，得到 {other:?}"),
     }
@@ -394,11 +466,17 @@ fn r13_real_noop_nothing_to_change() {
     mk_task(&conn, p, "背单词", "2026-08-21", Some(30), None);
     let act = SemanticAction::UpdateTask {
         target: hint("task", "背单词", true),
-        patch: TaskUpdatePayload { estimated_minutes: Some(30), ..Default::default() },
+        patch: TaskUpdatePayload {
+            estimated_minutes: Some(30),
+            ..Default::default()
+        },
     };
     match plan_action(&conn, p, &e, &plan("改成30分钟"), &act).unwrap() {
         ActionOutcome::NothingToChange(msg) => {
-            assert!(msg.contains("30") || msg.contains("不需要修改"), "R13: 用户语言");
+            assert!(
+                msg.contains("30") || msg.contains("不需要修改"),
+                "R13: 用户语言"
+            );
         }
         other => panic!("R13: 真实 no-op 应 NothingToChange，得到 {other:?}"),
     }
@@ -415,7 +493,10 @@ fn r14_no_broad_keyword_preemption() {
         "每天晚上8点背单词",
         "帮我创建一个今天背单词任务",
     ] {
-        assert!(!planning_write_intent(m), "R14: 不得被 Planner preempt：{m}");
+        assert!(
+            !planning_write_intent(m),
+            "R14: 不得被 Planner preempt：{m}"
+        );
         assert_eq!(planning_gate(m, false), PlanningGate::None);
     }
     // 真正的规划蓝图仍进 Planner（§12.2）
@@ -426,7 +507,11 @@ fn r14_no_broad_keyword_preemption() {
         "生成阶段学习蓝图",
     ] {
         assert!(planning_write_intent(m), "R14: 规划蓝图应进 Planner：{m}");
-        assert_eq!(planning_gate(m, false), PlanningGate::Planning, "R14: 旧 readonly 会话不阻止（Unified）：{m}");
+        assert_eq!(
+            planning_gate(m, false),
+            PlanningGate::Planning,
+            "R14: 旧 readonly 会话不阻止（Unified）：{m}"
+        );
     }
 }
 
@@ -439,12 +524,19 @@ fn r15_planner_escape_to_action() {
     let raw = r#"{"route":"action","action":{"type":"create_task","title":"英语任务","date":{"kind":"tomorrow"},"estimated_minutes":30}}"#;
     match parse_turn_decision(raw).expect("R15") {
         TurnDecision::Action { action } => {
-            assert_eq!(action.type_name(), "create_task", "R15: escape → CreateTask");
+            assert_eq!(
+                action.type_name(),
+                "create_task",
+                "R15: escape → CreateTask"
+            );
         }
         other => panic!("R15: 应 Action，得到 {other:?}"),
     }
     // ③ cancelled 的旧 workflow 不再劫持（workflow_active=false）
-    assert!(!workflow_active(WORKFLOW_STATE_CANCELLED), "R40/R15: cancelled 不劫持");
+    assert!(
+        !workflow_active(WORKFLOW_STATE_CANCELLED),
+        "R40/R15: cancelled 不劫持"
+    );
 }
 
 // ==================== R16-R17 · ContextPurpose ====================
@@ -492,7 +584,15 @@ fn r18_bulk_completed_untouched() {
     let e = env();
     for i in 0..5 {
         TaskRepository::new(&conn)
-            .create_for_profile(p, None, &format!("pending-{i}"), Some("2026-08-21"), None, None, None)
+            .create_for_profile(
+                p,
+                None,
+                &format!("pending-{i}"),
+                Some("2026-08-21"),
+                None,
+                None,
+                None,
+            )
             .unwrap()
             .id;
     }
@@ -500,7 +600,11 @@ fn r18_bulk_completed_untouched() {
         .create_for_profile(p, None, "completed-x", Some("2026-08-21"), None, None, None)
         .unwrap()
         .id;
-    conn.execute("UPDATE tasks SET status='completed' WHERE id=?1", params![done]).unwrap();
+    conn.execute(
+        "UPDATE tasks SET status='completed' WHERE id=?1",
+        params![done],
+    )
+    .unwrap();
     let act = SemanticAction::BulkUpdateTasks {
         filter: BulkFilter {
             date: Some(TemporalIntentSerde(TemporalIntent::Today)),
@@ -513,10 +617,14 @@ fn r18_bulk_completed_untouched() {
             ..Default::default()
         },
     };
-    match plan_action(&conn, p, &e, &plan("把今天所有没完成的任务挪到明天"), &act).unwrap() {
+    match plan_action(&conn, p, &e, &plan("把今天所有没完成的任务挪到明天"), &act).unwrap()
+    {
         ActionOutcome::ProposalReady { ops, .. } => {
             assert_eq!(ops.len(), 5, "R18: 5 operations");
-            assert!(ops.iter().all(|o| o.entity_id != Some(done)), "R18: completed 0 operations");
+            assert!(
+                ops.iter().all(|o| o.entity_id != Some(done)),
+                "R18: completed 0 operations"
+            );
         }
         other => panic!("R18: 应 ProposalReady，得到 {other:?}"),
     }
@@ -530,7 +638,10 @@ fn r19_zero_ops_never_create_changeset() {
     // 场景 1：Not found → 0 op → 0 ChangeSet
     let act = SemanticAction::UpdateTask {
         target: hint("task", "不存在的任务", true),
-        patch: TaskUpdatePayload { estimated_minutes: Some(30), ..Default::default() },
+        patch: TaskUpdatePayload {
+            estimated_minutes: Some(30),
+            ..Default::default()
+        },
     };
     assert!(matches!(
         plan_action(&conn, p, &e, &plan("改"), &act).unwrap(),
@@ -540,16 +651,26 @@ fn r19_zero_ops_never_create_changeset() {
     mk_task(&conn, p, "A", "2026-08-21", Some(30), None);
     let act2 = SemanticAction::UpdateTask {
         target: hint("task", "A", true),
-        patch: TaskUpdatePayload { estimated_minutes: Some(30), ..Default::default() },
+        patch: TaskUpdatePayload {
+            estimated_minutes: Some(30),
+            ..Default::default()
+        },
     };
     assert!(matches!(
         plan_action(&conn, p, &e, &plan("改"), &act2).unwrap(),
         ActionOutcome::NothingToChange(_)
     ));
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "R19: 0 operation 绝不创建 ChangeSet");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "R19: 0 operation 绝不创建 ChangeSet"
+    );
     // 源码防线：repository create 空守卫仍在
     let src = read_src("src/repository/changeset.rs");
-    assert!(src.contains("至少包含一个操作"), "R19: repository 内部防线存在");
+    assert!(
+        src.contains("至少包含一个操作"),
+        "R19: repository 内部防线存在"
+    );
 }
 
 // ==================== R20 · Error Boundary ====================
@@ -566,12 +687,22 @@ fn r20_internal_error_never_exposed() {
         ActionOutcome::ContractFailure(m) => m,
         other => panic!("R20: 应 ContractFailure，得到 {other:?}"),
     };
-    for banned in ["missing field", "serde", "ChangeSet", "SQL", "FOREIGN KEY", "panick"] {
+    for banned in [
+        "missing field",
+        "serde",
+        "ChangeSet",
+        "SQL",
+        "FOREIGN KEY",
+        "panick",
+    ] {
         assert!(!msg.contains(banned), "R20: 用户文案不得含 {banned}");
     }
     // lib.rs 主路径不再把 Err 原文直出（用户级文案化；源码级）
     let lib = read_src("src/lib.rs");
-    assert!(!lib.contains("needs_assistant"), "R20/R24: needs_assistant 分支已删除");
+    assert!(
+        !lib.contains("needs_assistant"),
+        "R20/R24: needs_assistant 分支已删除"
+    );
 }
 
 // ==================== R21-R23 · Trace 生命周期 ====================
@@ -583,7 +714,10 @@ fn r21_ai_runs_running_first() {
     let head = &lib[lib.find("async fn run_chat_turn").unwrap_or(0)..];
     let insert_pos = head.find("status='running'").unwrap_or(usize::MAX);
     let router_pos = head.find("turn_interpreter_prompt").unwrap_or(usize::MAX);
-    assert!(insert_pos < router_pos, "R21: ai_runs(running) 必须先于 Turn Interpreter 建立");
+    assert!(
+        insert_pos < router_pos,
+        "R21: ai_runs(running) 必须先于 Turn Interpreter 建立"
+    );
     let trace_src = read_src("src/ai/trace.rs");
     assert!(trace_src.contains("turn_started") && trace_src.contains("turn_decided"));
 }
@@ -604,7 +738,12 @@ fn r22_trace_events_persist() {
     trace.turn_decided(&conn, "action", "interpreter");
     trace.provider_request_started(&conn, 1, "secondary", 0);
     trace.provider_request_finished(&conn, 1, "secondary");
-    for ev in ["turn_started", "turn_decided", "provider_request_started", "provider_request_finished"] {
+    for ev in [
+        "turn_started",
+        "turn_decided",
+        "provider_request_started",
+        "provider_request_finished",
+    ] {
         let n: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM ai_run_events WHERE run_id='run-t22' AND event_type=?1",
@@ -642,8 +781,14 @@ fn r23_terminal_updates_same_row() {
 fn r24_no_mode_toggle_ui() {
     let panel = read_src("../src/components/ai/AiPanel.tsx");
     assert!(!panel.contains("aipanel__mode-btn"), "R24: 无 mode toggle");
-    assert!(!panel.contains("只读模式") && !panel.contains("助手模式"), "R24: 无只读/助手模式字样");
-    assert!(!panel.contains("resumeWithAssistant") && !panel.contains("切换到助手模式并继续"), "R24");
+    assert!(
+        !panel.contains("只读模式") && !panel.contains("助手模式"),
+        "R24: 无只读/助手模式字样"
+    );
+    assert!(
+        !panel.contains("resumeWithAssistant") && !panel.contains("切换到助手模式并继续"),
+        "R24"
+    );
 }
 
 #[test]
@@ -656,17 +801,29 @@ fn r25_legacy_readonly_conversation_not_blocked() {
     );
     // lib：is_assistant 恒 true（Unified）
     let lib = read_src("src/lib.rs");
-    assert!(lib.contains("let is_assistant = true;"), "R25: Unified——mode 不再决定权限");
+    assert!(
+        lib.contains("let is_assistant = true;"),
+        "R25: Unified——mode 不再决定权限"
+    );
 }
 
 #[test]
 fn r26_one_nl_entry_no_ai_analyze_chat() {
     let ctx = read_src("../src/components/ai/AiPanelContext.tsx");
     let start = ctx.find("const sendChat").unwrap_or(0);
-    let window_end = ctx[start..].find("const runAction").map(|i| start + i).unwrap_or((start + 1200).min(ctx.len()));
+    let window_end = ctx[start..]
+        .find("const runAction")
+        .map(|i| start + i)
+        .unwrap_or((start + 1200).min(ctx.len()));
     let body = &ctx[start..window_end];
-    assert!(body.contains("pendingSendRef.current"), "R26: sendChat → 统一 aiStartRun 入口");
-    assert!(!body.contains("aiAnalyze"), "R26: 不得经 aiAnalyze assistant_chat");
+    assert!(
+        body.contains("pendingSendRef.current"),
+        "R26: sendChat → 统一 aiStartRun 入口"
+    );
+    assert!(
+        !body.contains("aiAnalyze"),
+        "R26: 不得经 aiAnalyze assistant_chat"
+    );
 }
 
 // ==================== R27 · DirectWrite=0 ====================
@@ -684,7 +841,11 @@ fn r27_direct_write_zero() {
     )
     .unwrap();
     let _ = plan_action(&conn, p, &e, &plan("把今天那个背单词任务改成30分钟"), &act).unwrap();
-    assert_eq!(count(&conn, "tasks"), before_tasks, "R27: parse/ground/compile 0 mutation");
+    assert_eq!(
+        count(&conn, "tasks"),
+        before_tasks,
+        "R27: parse/ground/compile 0 mutation"
+    );
     assert_eq!(count(&conn, "recurring_task_rules"), before_rules, "R27");
 }
 
@@ -709,7 +870,10 @@ fn r28_menu_above_backdrop() {
         .and_then(|s| s.trim().split(';').next())
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(-1);
-    assert!(zmenu > zback, "R28: menu({zmenu}) 必须高于 backdrop({zback})");
+    assert!(
+        zmenu > zback,
+        "R28: menu({zmenu}) 必须高于 backdrop({zback})"
+    );
 }
 
 #[test]
@@ -719,12 +883,18 @@ fn r29_six_menu_handlers_exist() {
     assert!(sec.contains("编辑"), "R29: 菜单项存在：编辑");
     assert!(sec.contains("删除"), "R29: 菜单项存在：删除");
     assert!(
-        !sec.contains("调整日期") && !sec.contains("调整目标") && !sec.contains("调整知识") && !sec.contains("修改类型"),
+        !sec.contains("调整日期")
+            && !sec.contains("调整目标")
+            && !sec.contains("调整知识")
+            && !sec.contains("修改类型"),
         "R29: 旧快捷入口不再作为独立 visible menu item"
     );
     assert!(sec.contains("taskmenu__sep"), "R29: 分组分隔线存在");
     // 编辑/删除 handler 真实存在（同一 TaskFormModal / 原删除确认流）
-    assert!(sec.contains("setEditing(t)") && sec.contains("setDeleting(t)"), "R29: 真实 handler");
+    assert!(
+        sec.contains("setEditing(t)") && sec.contains("setDeleting(t)"),
+        "R29: 真实 handler"
+    );
 }
 
 // ==================== R30-R32 · Bounded Materialization ====================
@@ -741,7 +911,11 @@ fn mk_daily_rule(conn: &Connection, p: i64) -> i64 {
             None,
             "2026-08-21",
             None,
-            &RuleSemantics { estimated_minutes: Some(20), task_kind: None, priority: None },
+            &RuleSemantics {
+                estimated_minutes: Some(20),
+                task_kind: None,
+                priority: None,
+            },
         )
         .unwrap()
         .id
@@ -798,10 +972,17 @@ fn r32_calendar_visible_month() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(oct, 31, "R32: 可见月每天 occurrence（超 rolling 也按月有界物化）");
+    assert_eq!(
+        oct, 31,
+        "R32: 可见月每天 occurrence（超 rolling 也按月有界物化）"
+    );
     // 不越界生成 11 月
     let nov: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE planned_date LIKE '2026-11%'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE planned_date LIKE '2026-11%'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(nov, 0, "R32: 不无限延伸");
 }
@@ -824,19 +1005,36 @@ fn mk_series(conn: &Connection, p: i64) -> SeriesFx {
     let today = mk_task(&conn, p, "S", "2026-08-21", Some(20), Some(rule_id));
     let tomorrow = mk_task(&conn, p, "S", "2026-08-22", Some(20), Some(rule_id));
     let day_after = mk_task(&conn, p, "S", "2026-08-23", Some(20), Some(rule_id));
-    SeriesFx { rule_id, yesterday, today, tomorrow, day_after }
+    SeriesFx {
+        rule_id,
+        yesterday,
+        today,
+        tomorrow,
+        day_after,
+    }
 }
 
 fn series_update_action() -> SemanticAction {
     SemanticAction::UpdateRecurringTask {
         target: hint("recurring_rule", "背单词", false),
-        patch: RuleUpdatePayload { estimated_minutes: Some(45), ..Default::default() },
+        patch: RuleUpdatePayload {
+            estimated_minutes: Some(45),
+            ..Default::default()
+        },
         reconcile_future: true,
     }
 }
 
 fn series_ops(conn: &Connection, p: i64, e: &AiRuntimeEnvelope) -> Vec<ProposedOp> {
-    match plan_action(conn, p, e, &plan("把每天背单词改成每次45分钟"), &series_update_action()).unwrap() {
+    match plan_action(
+        conn,
+        p,
+        e,
+        &plan("把每天背单词改成每次45分钟"),
+        &series_update_action(),
+    )
+    .unwrap()
+    {
         ActionOutcome::ProposalReady { ops, .. } => ops,
         other => panic!("应 ProposalReady，得到 {other:?}"),
     }
@@ -844,7 +1042,10 @@ fn series_ops(conn: &Connection, p: i64, e: &AiRuntimeEnvelope) -> Vec<ProposedO
 
 /// occurrence 保护断言只看 task ops（rule op 的 entity_id 属 rules 表自增，可能与 task id 撞号）。
 fn task_op_ids(ops: &[ProposedOp]) -> Vec<i64> {
-    ops.iter().filter(|o| o.entity_type == "task").filter_map(|o| o.entity_id).collect()
+    ops.iter()
+        .filter(|o| o.entity_type == "task")
+        .filter_map(|o| o.entity_id)
+        .collect()
 }
 
 #[test]
@@ -869,7 +1070,10 @@ fn r34_completed_occurrence_protected() {
     .unwrap();
     let ops = series_ops(&conn, p, &env());
     let ids = task_op_ids(&ops);
-    assert!(!ids.contains(&fx.tomorrow), "R34: completed occurrence 不动");
+    assert!(
+        !ids.contains(&fx.tomorrow),
+        "R34: completed occurrence 不动"
+    );
 }
 
 #[test]
@@ -884,7 +1088,10 @@ fn r35_user_modified_occurrence_protected() {
     .unwrap();
     let ops = series_ops(&conn, p, &env());
     let ids = task_op_ids(&ops);
-    assert!(!ids.contains(&fx.tomorrow), "R35: user_modified_at != NULL 不动");
+    assert!(
+        !ids.contains(&fx.tomorrow),
+        "R35: user_modified_at != NULL 不动"
+    );
 }
 
 #[test]
@@ -900,7 +1107,10 @@ fn r36_session_occurrence_protected() {
     .unwrap();
     let ops = series_ops(&conn, p, &env());
     let ids = task_op_ids(&ops);
-    assert!(!ids.contains(&fx.tomorrow), "R36: 已有 StudySession 的 occurrence 不动");
+    assert!(
+        !ids.contains(&fx.tomorrow),
+        "R36: 已有 StudySession 的 occurrence 不动"
+    );
 }
 
 #[test]
@@ -910,7 +1120,11 @@ fn r37_disable_cleans_only_legal_future() {
     let e = env();
     let fx = mk_series(&conn, p);
     // 明天加保护（completed）；后天保持纯净（应被清理）；昨天/今天保留
-    conn.execute("UPDATE tasks SET status='completed' WHERE id=?1", params![fx.tomorrow]).unwrap();
+    conn.execute(
+        "UPDATE tasks SET status='completed' WHERE id=?1",
+        params![fx.tomorrow],
+    )
+    .unwrap();
     let act = SemanticAction::SetRecurringEnabled {
         target: hint("recurring_rule", "背单词", false),
         enabled: false,
@@ -923,7 +1137,10 @@ fn r37_disable_cleans_only_legal_future() {
                 .filter(|o| o.action == "delete")
                 .filter_map(|o| o.entity_id)
                 .collect();
-            assert!(del_ids.contains(&fx.day_after), "R37: 纯净未来 derived 被清理");
+            assert!(
+                del_ids.contains(&fx.day_after),
+                "R37: 纯净未来 derived 被清理"
+            );
             assert!(!del_ids.contains(&fx.tomorrow), "R37: completed 未来不动");
             assert!(!del_ids.contains(&fx.today), "R37: 今天保留");
             assert!(!del_ids.contains(&fx.yesterday), "R37: 历史保留");
@@ -949,10 +1166,16 @@ fn r38_irrelevant_prose_does_not_change_decision() {
     // Mock Provider：同一意图 → 决策 class 相同（parse 纯函数 = Mock）
     let raw = r#"{"route":"action","action":{"type":"create_task","title":"英语任务","date":{"kind":"tomorrow"},"estimated_minutes":30}}"#;
     for _ in 0..2 {
-        assert!(matches!(parse_turn_decision(raw).unwrap(), TurnDecision::Action { .. }));
+        assert!(matches!(
+            parse_turn_decision(raw).unwrap(),
+            TurnDecision::Action { .. }
+        ));
     }
     // 无关 assistant prose 不在 Interpreter 输入中（prompt 不含 assistant 消息通道）
-    assert!(!p1.contains("assistant prose") && !p2.contains("旧错误"), "R38");
+    assert!(
+        !p1.contains("assistant prose") && !p2.contains("旧错误"),
+        "R38"
+    );
     // recent messages 只有 user（函数签名只收 user messages）
     let _ = (p1, p2);
 }
@@ -962,18 +1185,30 @@ fn r39_prior_error_does_not_change_decision() {
     // 之前出现过 Error：错误 prose 属于 assistant 历史 → 不进控制输入（同 R38 机制）；
     // 且决策 JSON 相同 → TurnDecision class 不变
     let raw = r#"{"route":"fast_chat"}"#;
-    assert!(matches!(parse_turn_decision(raw).unwrap(), TurnDecision::FastChat));
-    let raw2 = r#"{"route":"action","action":{"type":"create_task","title":"X","date":{"kind":"today"}}}"#;
-    assert!(matches!(parse_turn_decision(raw2).unwrap(), TurnDecision::Action { .. }));
+    assert!(matches!(
+        parse_turn_decision(raw).unwrap(),
+        TurnDecision::FastChat
+    ));
+    let raw2 =
+        r#"{"route":"action","action":{"type":"create_task","title":"X","date":{"kind":"today"}}}"#;
+    assert!(matches!(
+        parse_turn_decision(raw2).unwrap(),
+        TurnDecision::Action { .. }
+    ));
 }
 
 #[test]
 fn r40_cancelled_planner_no_hijack() {
     // cancelled workflow 不再 active → 不劫持后续轮次
     assert!(!workflow_active(WORKFLOW_STATE_CANCELLED));
-    assert!(workflow_active(app_lib::ai::planner::WORKFLOW_STATE_CLARIFYING), "对照：进行中仍 active");
+    assert!(
+        workflow_active(app_lib::ai::planner::WORKFLOW_STATE_CLARIFYING),
+        "对照：进行中仍 active"
+    );
     // Escape 消息不被规划词表截走
-    assert!(!planning_write_intent("先不规划了，给明天创建一个30分钟英语任务"));
+    assert!(!planning_write_intent(
+        "先不规划了，给明天创建一个30分钟英语任务"
+    ));
 }
 
 // ==================== R41-R42 · 控制层 deterministic / 预算（源码级） ====================
@@ -984,24 +1219,44 @@ fn r41_control_temperature_zero() {
     assert!(client.contains("chat_with_temperature"), "R41: 温度参数化");
     let lib = read_src("src/lib.rs");
     // Interpreter / Repair / Selection 全部 0.0（lib.rs 恰好三处显式温度调用）
-    assert!(lib.matches("chat_with_temperature").count() >= 3, "R41: 控制调用走显式温度");
-    assert!(lib.contains("Some(1400)") && lib.matches("0.0,").count() >= 3, "R41: Interpreter/Repair/Selection temp=0");
+    assert!(
+        lib.matches("chat_with_temperature").count() >= 3,
+        "R41: 控制调用走显式温度"
+    );
+    assert!(
+        lib.contains("Some(1400)") && lib.matches("0.0,").count() >= 3,
+        "R41: Interpreter/Repair/Selection temp=0"
+    );
     // Selection temp=0（grounding selection 在 lib 主循环内）
     let sel_pos = lib.find("selection_prompt").unwrap_or(0);
     let seg = &lib[sel_pos..sel_pos + 2000.min(lib.len() - sel_pos)];
-    assert!(seg.contains("chat_with_temperature"), "R41: Candidate Selection 显式温度");
+    assert!(
+        seg.contains("chat_with_temperature"),
+        "R41: Candidate Selection 显式温度"
+    );
 }
 
 #[test]
 fn r42_provider_budget() {
     let lib = read_src("src/lib.rs");
     // FastChat：1 main streaming（chat_stream 单次 + fallback）
-    assert!(lib.contains("chat_stream(msgs.clone()"), "R42: FastChat 1 main");
+    assert!(
+        lib.contains("chat_stream(msgs.clone()"),
+        "R42: FastChat 1 main"
+    );
     // Action：Interpreter 一次；Action 分支不再有独立 semantic_action 第二调用
-    let action_pos = lib.find("TurnDecision::Action { action: act }").unwrap_or(0);
+    let action_pos = lib
+        .find("TurnDecision::Action { action: act }")
+        .unwrap_or(0);
     let seg = &lib[action_pos..action_pos + 4000.min(lib.len() - action_pos)];
-    assert!(!seg.contains("semantic_action_prompt"), "R42: Action 不再二次调用（Interpreter 已带 action）");
-    assert!(!seg.contains("chat(msgs"), "R42: Action 分支无额外 writer/summary call");
+    assert!(
+        !seg.contains("semantic_action_prompt"),
+        "R42: Action 不再二次调用（Interpreter 已带 action）"
+    );
+    assert!(
+        !seg.contains("chat(msgs"),
+        "R42: Action 分支无额外 writer/summary call"
+    );
 }
 
 // ==================== Eval Dataset（§59 E01-E21；纯运行时分类，禁真实 DeepSeek） ====================
@@ -1009,8 +1264,15 @@ fn r42_provider_budget() {
 /// Eval 语义类别（非硬编码关键词测试：断言的是分类函数的类别行为）
 #[test]
 fn eval_e01_e03_e20_generic() {
-    for m in ["你好", "1+1等于多少？只回答数字", "请用三句话解释什么是过拟合。"] {
-        assert!(fast_chat_shortcut(m), "E01/E02/E03: 高置信通用 → FastChat：{m}");
+    for m in [
+        "你好",
+        "1+1等于多少？只回答数字",
+        "请用三句话解释什么是过拟合。",
+    ] {
+        assert!(
+            fast_chat_shortcut(m),
+            "E01/E02/E03: 高置信通用 → FastChat：{m}"
+        );
     }
     // E20：Knowledge 页面 + 1+1 → 仍 Generic（页面不劫持）
     assert_eq!(
@@ -1024,13 +1286,25 @@ fn eval_e01_e03_e20_generic() {
 fn eval_e08_not_action_confirmed_via_clarification() {
     // E08「我感觉以后每天背单词挺好的」= 陈述——Interpreter Mock 输出 clarification
     let raw = r#"{"route":"clarification","question":"需要我帮你设成每天任务吗？"}"#;
-    assert!(matches!(parse_turn_decision(raw).unwrap(), TurnDecision::Clarification { .. }), "E08");
+    assert!(
+        matches!(
+            parse_turn_decision(raw).unwrap(),
+            TurnDecision::Clarification { .. }
+        ),
+        "E08"
+    );
 }
 
 #[test]
 fn eval_e18_escape_and_e19_planner() {
-    assert!(!planning_write_intent("先不规划了，给明天创建一个30分钟英语任务"), "E18");
-    assert!(planning_write_intent("根据我的目标和最近学习情况，帮我规划未来两周"), "E19");
+    assert!(
+        !planning_write_intent("先不规划了，给明天创建一个30分钟英语任务"),
+        "E18"
+    );
+    assert!(
+        planning_write_intent("根据我的目标和最近学习情况，帮我规划未来两周"),
+        "E19"
+    );
 }
 
 #[test]
@@ -1045,5 +1319,8 @@ fn eval_e21_cross_conversation_recent() {
 fn eval_contract_covers_series_semantics() {
     let frag = prompt_fragment();
     assert!(frag.contains("set_recurring_enabled"), "E13: disable 形态");
-    assert!(frag.contains("reconcile_future"), "E14/E15: series update 形态");
+    assert!(
+        frag.contains("reconcile_future"),
+        "E14/E15: series update 形态"
+    );
 }

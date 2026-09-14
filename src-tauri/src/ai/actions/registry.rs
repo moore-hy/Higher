@@ -63,7 +63,12 @@ pub trait ActionExecutor {
 /// 并在 payload 注入 `plan_op:"create"|"update"` 供 executor 分流
 ///（enum 严格保持任务书六成员，不新增变体）。
 pub fn parse_action(v: &J) -> Result<HigherAction, String> {
-    let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let t = v
+        .get("type")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if t.is_empty() {
         return Err("action 缺少 type 字段".to_string());
     }
@@ -86,7 +91,10 @@ pub fn parse_action(v: &J) -> Result<HigherAction, String> {
             .as_object_mut()
             .map(|o| o.insert("plan_op".to_string(), J::String(op.to_string())));
     }
-    Ok(HigherAction { action_type, payload })
+    Ok(HigherAction {
+        action_type,
+        payload,
+    })
 }
 
 /// 解析 ActionPlan 顶层：`{"actions":[{...},{...}]}`。

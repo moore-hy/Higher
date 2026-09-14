@@ -88,14 +88,27 @@ pub fn filter_candidates<S: AsRef<str>>(ips: Vec<S>) -> Vec<String> {
         }
     }
     scored.sort_by_key(|(p, _)| *p);
-    scored.into_iter().map(|(_, ip)| ip).take(MAX_CANDIDATES).collect()
+    scored
+        .into_iter()
+        .map(|(_, ip)| ip)
+        .take(MAX_CANDIDATES)
+        .collect()
 }
 
 /// 常见虚拟/隧道网卡关键字（粗滤，§五：不做大型工程）。
 pub fn looks_like_virtual_adapter(desc: &str) -> bool {
     const KEYS: [&str; 11] = [
-        "tun", "tap", "vpn", "vmware", "virtualbox", "virtual box", "hyper-v", "hns",
-        "wsl", "docker", "loopback",
+        "tun",
+        "tap",
+        "vpn",
+        "vmware",
+        "virtualbox",
+        "virtual box",
+        "hyper-v",
+        "hns",
+        "wsl",
+        "docker",
+        "loopback",
     ];
     let lower = desc.to_ascii_lowercase();
     KEYS.iter().any(|k| lower.contains(k))
@@ -130,12 +143,10 @@ pub fn enumerate_candidate_ips() -> Vec<String> {
     // 兜底：UDP connect（不发包）取路由出口地址
     let mut fallback: Vec<String> = Vec::new();
     for target in ["8.8.8.8:80", "1.1.1.1:80", "192.168.1.1:80"] {
-        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0")
-            .and_then(|s| {
-                s.connect(target)?;
-                Ok(s)
-            })
-        {
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0").and_then(|s| {
+            s.connect(target)?;
+            Ok(s)
+        }) {
             if let Ok(addr) = sock.local_addr() {
                 fallback.push(addr.ip().to_string());
             }
@@ -169,13 +180,16 @@ pub fn build_payload_json(
 
 /// 校验扫码得到的 payload（§六/§十三：分类错误消息，禁止卡死）。
 pub fn parse_payload(json: &str) -> Result<QrPairingPayload, String> {
-    let p: QrPairingPayload =
-        serde_json::from_str(json).map_err(|_| "二维码格式错误：不是有效的 Higher 配对码".to_string())?;
+    let p: QrPairingPayload = serde_json::from_str(json)
+        .map_err(|_| "二维码格式错误：不是有效的 Higher 配对码".to_string())?;
     if p.protocol != QR_PROTOCOL {
         return Err("非 Higher 二维码：请扫描电脑 Higher「同步 → 添加手机」显示的二维码".into());
     }
     if p.version != QR_VERSION {
-        return Err(format!("协议版本不兼容（二维码 v{}，本机支持 v{QR_VERSION}）", p.version));
+        return Err(format!(
+            "协议版本不兼容（二维码 v{}，本机支持 v{QR_VERSION}）",
+            p.version
+        ));
     }
     if p.expires_at <= now_unix() {
         return Err("二维码已过期：请在电脑上刷新二维码后重新扫描".into());

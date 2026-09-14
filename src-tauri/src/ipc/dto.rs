@@ -64,10 +64,7 @@ mod tests {
     fn cfg() -> Config {
         Config::new()
             .with_large_int("number")
-            .with_out_dir(format!(
-                "{}/../src/generated",
-                env!("CARGO_MANIFEST_DIR")
-            ))
+            .with_out_dir(format!("{}/../src/generated", env!("CARGO_MANIFEST_DIR")))
     }
 
     /// §7 generation entry point.

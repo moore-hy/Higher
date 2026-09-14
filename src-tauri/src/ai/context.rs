@@ -73,7 +73,12 @@ pub fn build_context(conn: &Connection, input: &ContextInput) -> Result<String, 
     let mut parts: Vec<String> = Vec::new();
 
     // 统一归属校验（所有 action；包括 Panel 自由对话附带的可选 ID）
-    validate_optional_ids(conn, input.profile_id, input.session_id, input.learning_item_id)?;
+    validate_optional_ids(
+        conn,
+        input.profile_id,
+        input.session_id,
+        input.learning_item_id,
+    )?;
 
     // ---- 统一 Builder（L1 当前上下文 / L2 私人化 / L3 Higher 检索 / L4 Memory+历史）----
     let action_label = match input.action {
@@ -119,9 +124,7 @@ pub fn build_context(conn: &Connection, input: &ContextInput) -> Result<String, 
 
     match input.action {
         AiAction::SessionAnalysis => {
-            let sid = input
-                .session_id
-                .ok_or("session_analysis 需要 session_id")?;
+            let sid = input.session_id.ok_or("session_analysis 需要 session_id")?;
             parts.push(session_detail_block(conn, input.profile_id, sid)?);
         }
         AiAction::KnowledgeAnalysis | AiAction::KnowledgeOrganize => {
@@ -269,7 +272,11 @@ fn mastery_block(
     parts.push(format!(
         "## 周期任务（{} 条）\n{}",
         tasks.len(),
-        if task_lines.is_empty() { "（无）".to_string() } else { task_lines.join("\n") }
+        if task_lines.is_empty() {
+            "（无）".to_string()
+        } else {
+            task_lines.join("\n")
+        }
     ));
 
     // 3. 周期内 Sessions（标题/时长/状态/note 纯文本前 600 字/附件元数据）
@@ -327,13 +334,21 @@ fn mastery_block(
             status,
             if kname.is_empty() { "（无）" } else { kname },
             esc(&plain.chars().take(600).collect::<String>()),
-            if atts.is_empty() { "（无）".to_string() } else { atts.join("；") },
+            if atts.is_empty() {
+                "（无）".to_string()
+            } else {
+                atts.join("；")
+            },
         ));
     }
     parts.push(format!(
         "## 周期学习记录（{} 条）\n{}",
         sess.len(),
-        if sess_lines.is_empty() { "（无）".to_string() } else { sess_lines.join("\n") }
+        if sess_lines.is_empty() {
+            "（无）".to_string()
+        } else {
+            sess_lines.join("\n")
+        }
     ));
 
     // 4. 周期内 Evaluations
@@ -359,7 +374,11 @@ fn mastery_block(
     parts.push(format!(
         "## 周期验证记录（{} 条）\n{}",
         evals.len(),
-        if eval_lines.is_empty() { "（无）".to_string() } else { eval_lines.join("\n") }
+        if eval_lines.is_empty() {
+            "（无）".to_string()
+        } else {
+            eval_lines.join("\n")
+        }
     ));
 
     // 5. 关联 Knowledge（§52 只注入 Session/Task 关联到的节点；§55 优先 Document 正文，无文档 fallback legacy content，不双注）
@@ -413,7 +432,11 @@ fn mastery_block(
     parts.push(format!(
         "## 关联知识正文（{} 个）\n{}",
         krows.len(),
-        if k_lines.is_empty() { "（无）".to_string() } else { k_lines.join("\n") }
+        if k_lines.is_empty() {
+            "（无）".to_string()
+        } else {
+            k_lines.join("\n")
+        }
     ));
 
     Ok(parts.join("\n\n"))
@@ -457,10 +480,28 @@ fn goal_block(conn: &Connection, profile_id: i64) -> Result<String, String> {
         .collect();
     let body = rows
         .iter()
-        .map(|(n, s, d)| format!("- {}（{}）{}", n, s, if d.is_empty() { String::new() } else { format!("：{}", esc(d)) }))
+        .map(|(n, s, d)| {
+            format!(
+                "- {}（{}）{}",
+                n,
+                s,
+                if d.is_empty() {
+                    String::new()
+                } else {
+                    format!("：{}", esc(d))
+                }
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(format!("## 学习目标\n{}", if body.is_empty() { "当前未设置长期目标".into() } else { body }))
+    Ok(format!(
+        "## 学习目标\n{}",
+        if body.is_empty() {
+            "当前未设置长期目标".into()
+        } else {
+            body
+        }
+    ))
 }
 
 fn stage_block(conn: &Connection, profile_id: i64) -> Result<String, String> {
@@ -481,7 +522,11 @@ fn stage_block(conn: &Connection, profile_id: i64) -> Result<String, String> {
                 r.get::<_, String>(3)?,
                 {
                     let d: String = r.get(4)?;
-                    if d.is_empty() { String::new() } else { format!("：{}", esc(&d)) }
+                    if d.is_empty() {
+                        String::new()
+                    } else {
+                        format!("：{}", esc(&d))
+                    }
                 }
             ))
         })
@@ -490,7 +535,11 @@ fn stage_block(conn: &Connection, profile_id: i64) -> Result<String, String> {
         .collect();
     Ok(format!(
         "## 当前阶段\n{}",
-        if rows.is_empty() { "（暂无阶段）".to_string() } else { rows.join("\n") }
+        if rows.is_empty() {
+            "（暂无阶段）".to_string()
+        } else {
+            rows.join("\n")
+        }
     ))
 }
 
@@ -520,7 +569,11 @@ fn knowledge_tree_block(conn: &Connection, profile_id: i64) -> String {
         .unwrap_or_default();
     format!(
         "## 知识结构（仅结构与状态）\n{}",
-        if rows.is_empty() { "（暂无知识节点）".to_string() } else { rows.join("\n") }
+        if rows.is_empty() {
+            "（暂无知识节点）".to_string()
+        } else {
+            rows.join("\n")
+        }
     )
 }
 
@@ -552,11 +605,19 @@ fn recent_sessions_block(conn: &Connection, profile_id: i64) -> String {
         .unwrap_or_default();
     format!(
         "## 最近学习（最多 10 条摘要）\n{}",
-        if rows.is_empty() { "（暂无学习记录）".to_string() } else { rows.join("\n") }
+        if rows.is_empty() {
+            "（暂无学习记录）".to_string()
+        } else {
+            rows.join("\n")
+        }
     )
 }
 
-fn session_detail_block(conn: &Connection, profile_id: i64, session_id: i64) -> Result<String, String> {
+fn session_detail_block(
+    conn: &Connection,
+    profile_id: i64,
+    session_id: i64,
+) -> Result<String, String> {
     let row = conn
         .query_row(
             "SELECT ss.id, ss.started_at, COALESCE(ss.ended_at,''), COALESCE(ss.duration_seconds,0),
@@ -597,7 +658,11 @@ fn session_detail_block(conn: &Connection, profile_id: i64, session_id: i64) -> 
     ))
 }
 
-fn knowledge_detail_block(conn: &Connection, profile_id: i64, item_id: i64) -> Result<String, String> {
+fn knowledge_detail_block(
+    conn: &Connection,
+    profile_id: i64,
+    item_id: i64,
+) -> Result<String, String> {
     let row = conn
         .query_row(
             "SELECT li.name, li.mastery_status, COALESCE(li.content,''), li.parent_id
@@ -625,9 +690,10 @@ fn knowledge_detail_block(conn: &Connection, profile_id: i64, item_id: i64) -> R
         .map_err(|e| e.to_string())
         .and_then(|mut st| {
             let rows: Vec<(String, String)> = st
-                .query_map(params![item_id, profile_id], |r| -> rusqlite::Result<(String, String)> {
-                    Ok((r.get(0)?, r.get(1)?))
-                })
+                .query_map(
+                    params![item_id, profile_id],
+                    |r| -> rusqlite::Result<(String, String)> { Ok((r.get(0)?, r.get(1)?)) },
+                )
                 .map(|it| it.filter_map(|v| v.ok()).collect())
                 .unwrap_or_default();
             Ok(rows)
@@ -705,7 +771,10 @@ fn item_recent_notes_block(conn: &Connection, profile_id: i64, item_id: i64) -> 
     if rows.is_empty() {
         String::new()
     } else {
-        format!("## 该节点最近学习笔记（Session Note 摘要）\n{}", rows.join("\n"))
+        format!(
+            "## 该节点最近学习笔记（Session Note 摘要）\n{}",
+            rows.join("\n")
+        )
     }
 }
 
@@ -792,7 +861,11 @@ fn today_tasks_block(conn: &Connection, profile_id: i64) -> String {
         .unwrap_or_default();
     format!(
         "## 今日任务\n{}",
-        if rows.is_empty() { "（今天暂无任务）".to_string() } else { rows.join("\n") }
+        if rows.is_empty() {
+            "（今天暂无任务）".to_string()
+        } else {
+            rows.join("\n")
+        }
     )
 }
 
@@ -820,7 +893,11 @@ fn daily_block(conn: &Connection, profile_id: i64, date: Option<&str>) -> Result
             Ok(format!(
                 "- {}（{}，{}{}）",
                 r.get::<_, String>(0)?,
-                if time.is_empty() { "未设时间".to_string() } else { time },
+                if time.is_empty() {
+                    "未设时间".to_string()
+                } else {
+                    time
+                },
                 r.get::<_, String>(2)?,
                 if knowledge.is_empty() {
                     String::new()
@@ -894,14 +971,26 @@ fn daily_block(conn: &Connection, profile_id: i64, date: Option<&str>) -> Result
                 "- 「{}」{} 分钟（{}{}）\n  笔记：{}\n  附件：{}",
                 title,
                 dur / 60,
-                if status == "active" { "进行中" } else { "已完成" },
+                if status == "active" {
+                    "进行中"
+                } else {
+                    "已完成"
+                },
                 if item_name.is_empty() {
                     String::new()
                 } else {
                     format!("，关联知识：{}", item_name)
                 },
-                if brief.trim().is_empty() { "（无）".to_string() } else { brief },
-                if atts.is_empty() { "无".to_string() } else { atts.join("、") },
+                if brief.trim().is_empty() {
+                    "（无）".to_string()
+                } else {
+                    brief
+                },
+                if atts.is_empty() {
+                    "无".to_string()
+                } else {
+                    atts.join("、")
+                },
             )
         })
         .collect();
@@ -935,7 +1024,11 @@ fn daily_block(conn: &Connection, profile_id: i64, date: Option<&str>) -> Result
         .filter_map(|v| v.ok())
         .collect();
 
-    let date_label = if d == "now" { "今天".to_string() } else { d.to_string() };
+    let date_label = if d == "now" {
+        "今天".to_string()
+    } else {
+        d.to_string()
+    };
     Ok(format!(
         "## 当日复盘数据（{}）\n### 当日任务\n{}\n\n### 当日学习记录\n{}\n\n### 当日验证\n{}\n\n### 当日涉及的知识\n{}",
         date_label,
@@ -974,10 +1067,15 @@ fn recent_evaluations_block(conn: &Connection, profile_id: i64) -> String {
             Ok(format!(
                 "- {} {} {}（{}，{}）",
                 r.get::<_, String>(5)?,
-                r.get::<_, Option<String>>(4)?.unwrap_or_else(|| "综合".into()),
+                r.get::<_, Option<String>>(4)?
+                    .unwrap_or_else(|| "综合".into()),
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
-                if c >= 0 && t >= 0 { format!("{}/{}", c, t) } else { "—".into() }
+                if c >= 0 && t >= 0 {
+                    format!("{}/{}", c, t)
+                } else {
+                    "—".into()
+                }
             ))
         })
         .map(|it| it.filter_map(|v| v.ok()).collect())
@@ -1032,8 +1130,16 @@ fn feedback_adjustment_block(conn: &Connection, profile_id: i64) -> String {
 
     format!(
         "## 辅助证据：问题反馈（最多 15）\n{}\n## 辅助证据：调整记录（最多 10）\n{}",
-        if fbs.is_empty() { "（无）".to_string() } else { fbs.join("\n") },
-        if adjs.is_empty() { "（无）".to_string() } else { adjs.join("\n") }
+        if fbs.is_empty() {
+            "（无）".to_string()
+        } else {
+            fbs.join("\n")
+        },
+        if adjs.is_empty() {
+            "（无）".to_string()
+        } else {
+            adjs.join("\n")
+        }
     )
 }
 
@@ -1047,13 +1153,24 @@ fn progress_block(conn: &Connection, profile_id: i64) -> String {
         .map(|t| {
             format!(
                 "- {}：完成 {} · 学习 {} 次 · 验证 {}（过{}/部{}/败{}）· 问题 +{}/解{}",
-                t.date, t.completed_tasks, t.session_count, t.evaluation_count,
-                t.passed, t.partial, t.failed, t.feedback_created, t.feedback_resolved
+                t.date,
+                t.completed_tasks,
+                t.session_count,
+                t.evaluation_count,
+                t.passed,
+                t.partial,
+                t.failed,
+                t.feedback_created,
+                t.feedback_resolved
             )
         })
         .collect();
     format!(
         "## 最近 14 天进展（仅有活动的日期）\n{}",
-        if rows.is_empty() { "（近期无学习活动）".to_string() } else { rows.join("\n") }
+        if rows.is_empty() {
+            "（近期无学习活动）".to_string()
+        } else {
+            rows.join("\n")
+        }
     )
 }

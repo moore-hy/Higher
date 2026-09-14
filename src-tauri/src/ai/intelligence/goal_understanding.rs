@@ -74,10 +74,16 @@ pub async fn analyze(
     prompt.push_str("4. goal_type 是自由短标签（如 education/career/skill/other）。\n");
     prompt.push_str("5. deadline：用户明确给出的目标期限（如 \"2028\"），未提及填 null；priority：high/normal/low，未判断填 null。\n");
     prompt.push_str("6. planning_required：该目标是否需要制定正式计划（跨日/阶段/长期目标 true；一次性问答/闲聊 false）；confidence：目标理解的置信度 0 到 1。\n\n");
-    prompt.push_str(&format!("【用户当前请求】\n{}\n\n", truncate(user_request, 4000)));
+    prompt.push_str(&format!(
+        "【用户当前请求】\n{}\n\n",
+        truncate(user_request, 4000)
+    ));
     let understanding = uc.summary();
     if !understanding.is_empty() {
-        prompt.push_str(&format!("【当前用户理解（个人档案）】\n{}\n\n", truncate(&understanding, 4000)));
+        prompt.push_str(&format!(
+            "【当前用户理解（个人档案）】\n{}\n\n",
+            truncate(&understanding, 4000)
+        ));
     }
     if !collected.is_empty() {
         let lines: Vec<String> = collected
@@ -87,11 +93,18 @@ pub async fn analyze(
         prompt.push_str(&format!("【本工作流已收集信息】\n{}\n\n", lines.join("\n")));
     }
     if !higher_context.trim().is_empty() {
-        prompt.push_str(&format!("【Higher 当前上下文】\n{}\n", truncate(higher_context.trim(), 2000)));
+        prompt.push_str(&format!(
+            "【Higher 当前上下文】\n{}\n",
+            truncate(higher_context.trim(), 2000)
+        ));
     }
 
     let comp = responder
-        .chat(vec![crate::ai::client::ChatMessage::user(prompt)], None, Some(2048))
+        .chat(
+            vec![crate::ai::client::ChatMessage::user(prompt)],
+            None,
+            Some(2048),
+        )
         .await?;
     let raw = comp.content.unwrap_or_default().trim().to_string();
     let stripped = raw
@@ -157,14 +170,15 @@ pub async fn analyze(
     };
     // DEV-0073 Phase 3 Validator：confidence 钳制 0..=1；priority 规范化；
     // goal 为空（闲聊/无目标）时这些字段一并清空（与 required 清空对称）
-    let confidence = parsed
-        .confidence
-        .map(|c| (c.clamp(0.0, 1.0)) as f32);
+    let confidence = parsed.confidence.map(|c| (c.clamp(0.0, 1.0)) as f32);
     let priority = parsed
         .priority
         .map(|p| p.trim().to_lowercase())
         .filter(|p| ["high", "normal", "low"].contains(&p.as_str()));
-    let deadline = parsed.deadline.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+    let deadline = parsed
+        .deadline
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
     let planning_required = parsed.planning_required;
     // 逻辑一致性：无目标不得携带信息需求
     if goal.is_empty() {

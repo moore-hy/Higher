@@ -43,7 +43,11 @@ pub fn up(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             "SELECT id, name, goal_brief_json FROM goals WHERE goal_level = 'final' AND goal_brief_json IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
         })?;
         rows.filter_map(|x| x.ok()).collect()
     };

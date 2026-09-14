@@ -88,7 +88,10 @@ impl<'a> SearchRepository<'a> {
         let match_expr = match_words.join(" OR ");
         let (type_filter, type_filter_plain) = match entity_types {
             Some(ts) if !ts.is_empty() => {
-                let quoted: Vec<String> = ts.iter().map(|t| format!("'{}'", t.replace('\'', ""))).collect();
+                let quoted: Vec<String> = ts
+                    .iter()
+                    .map(|t| format!("'{}'", t.replace('\'', "")))
+                    .collect();
                 let list = quoted.join(",");
                 (
                     format!(" AND si.entity_type IN ({list})"),
@@ -151,7 +154,12 @@ impl<'a> SearchRepository<'a> {
         let mut stmt2 = self.conn.prepare(&sql2).map_err(|e| e.to_string())?;
         let rows2 = stmt2
             .query_map(params![profile_id, like, limit.clamp(1, 100)], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
             })
             .map_err(|e| e.to_string())?;
         for row in rows2 {
@@ -174,7 +182,11 @@ impl<'a> SearchRepository<'a> {
     /// DEV-0076 F.2 §三：Memory 命中二次授权——对 hits 中 entity_type="memory"
     /// 的行，仅保留 memory_records 中 status='confirmed' 的（同 profile）。
     /// Search Index = 候选；数据库真实状态 = 最终授权（脏/历史 FTS 兜底）。
-    fn filter_memory_hits(&self, mut hits: Vec<SearchHit>, profile_id: i64) -> Result<Vec<SearchHit>, String> {
+    fn filter_memory_hits(
+        &self,
+        mut hits: Vec<SearchHit>,
+        profile_id: i64,
+    ) -> Result<Vec<SearchHit>, String> {
         let needs = hits.iter().any(|h| h.entity_type == "memory");
         if !needs {
             return Ok(hits);
@@ -187,7 +199,8 @@ impl<'a> SearchRepository<'a> {
             let rows = stmt
                 .query_map(params![profile_id], |r| r.get(0))
                 .map_err(|e| e.to_string())?;
-            rows.collect::<Result<std::collections::HashSet<_>, _>>().map_err(|e| e.to_string())?
+            rows.collect::<Result<std::collections::HashSet<_>, _>>()
+                .map_err(|e| e.to_string())?
         };
         hits.retain(|h| h.entity_type != "memory" || confirmed.contains(&h.entity_id));
         Ok(hits)
@@ -205,8 +218,7 @@ impl<'a> SearchRepository<'a> {
             Vec::new()
         } else {
             let phrase = q.replace('"', "\"\"");
-            let sql =
-                "SELECT si.entity_id FROM search_fts fts
+            let sql = "SELECT si.entity_id FROM search_fts fts
                  JOIN search_index si ON si.rowid = fts.rowid
                  WHERE search_fts MATCH ?1 AND si.profile_id = ?2 AND si.entity_type = 'memory'
                  ORDER BY bm25(search_fts) LIMIT 30";
@@ -280,7 +292,11 @@ impl<'a> SearchRepository<'a> {
             .into_iter()
             .map(|(id, mtype, importance, confidence, created, is_user)| {
                 let mut s = importance as f64 * 2.0;
-                s += match confidence.as_str() { "high" => 3.0, "medium" => 1.5, _ => 0.5 };
+                s += match confidence.as_str() {
+                    "high" => 3.0,
+                    "medium" => 1.5,
+                    _ => 0.5,
+                };
                 // 类型优先级（§35）：user explicit ≈ higher_db > opinion > inference
                 s += match mtype.as_str() {
                     "user_fact" | "user_constraint" | "user_preference" | "goal_context" => 3.0,
@@ -288,7 +304,9 @@ impl<'a> SearchRepository<'a> {
                     "user_opinion" => 1.5,
                     _ => 0.5, // ai_inference
                 };
-                if is_user { s += 0.5; }
+                if is_user {
+                    s += 0.5;
+                }
                 // recency：每天衰减 0.02，下限 0.4
                 let age_days = age_days_of(&created, now);
                 s *= (1.0 - (age_days as f64) * 0.02).max(0.4);
@@ -296,7 +314,11 @@ impl<'a> SearchRepository<'a> {
             })
             .collect();
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(scored.into_iter().take(limit.clamp(1, 20) as usize).map(|(_, id)| id).collect())
+        Ok(scored
+            .into_iter()
+            .take(limit.clamp(1, 20) as usize)
+            .map(|(_, id)| id)
+            .collect())
     }
 }
 
@@ -375,11 +397,12 @@ fn kv_set(conn: &Connection, key: &str, value: &str) {
 /// 返回（重建条数）。注意 memory/conversation/personalization_chunk 也在此重建
 /// （它们本就有写路径维护；rebuild 保证一致性兜底）。
 pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, String> {
-    let tx = conn
-        .transaction()
-        .map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM search_index WHERE profile_id = ?1", params![profile_id])
-        .map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM search_index WHERE profile_id = ?1",
+        params![profile_id],
+    )
+    .map_err(|e| e.to_string())?;
 
     let mut n = 0usize;
     // goal（含 final；title=name，content=name+description）
@@ -388,12 +411,18 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
             .prepare("SELECT id, name, COALESCE(description,'') FROM goals WHERE profile_id=?1")
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, String, String)> = stmt
-            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![profile_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|v| v.ok())
             .collect();
         for (id, name, desc) in rows {
-            let content = if desc.is_empty() { name.clone() } else { format!("{name} {desc}") };
+            let content = if desc.is_empty() {
+                name.clone()
+            } else {
+                format!("{name} {desc}")
+            };
             tx.execute(
                 "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('goal',?1,?2,?3,?4)",
                 params![id, profile_id, name, content],
@@ -427,13 +456,19 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
             .prepare("SELECT id, title, COALESCE(note,'') FROM study_sessions WHERE profile_id=?1")
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, String, String)> = stmt
-            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![profile_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|v| v.ok())
             .collect();
         for (id, title, note) in rows {
             let note: String = note.chars().take(2000).collect();
-            let content = if note.is_empty() { title.clone() } else { format!("{title} {note}") };
+            let content = if note.is_empty() {
+                title.clone()
+            } else {
+                format!("{title} {note}")
+            };
             tx.execute(
                 "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('session',?1,?2,?3,?4)",
                 params![id, profile_id, title, content],
@@ -445,10 +480,14 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
     // knowledge（name；content=content 截断 2000）
     {
         let mut stmt = tx
-            .prepare("SELECT id, name, COALESCE(content,'') FROM learning_items WHERE profile_id=?1")
+            .prepare(
+                "SELECT id, name, COALESCE(content,'') FROM learning_items WHERE profile_id=?1",
+            )
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, String, String)> = stmt
-            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![profile_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|v| v.ok())
             .collect();
@@ -468,7 +507,9 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
             .prepare("SELECT id, title, COALESCE(content_text,'') FROM knowledge_documents WHERE profile_id=?1")
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, String, String)> = stmt
-            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![profile_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|v| v.ok())
             .collect();
@@ -488,13 +529,19 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
             .prepare("SELECT id, title, COALESCE(note,'') FROM evaluations WHERE profile_id=?1")
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, String, String)> = stmt
-            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![profile_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|v| v.ok())
             .collect();
         for (id, title, note) in rows {
             let note: String = note.chars().take(1000).collect();
-            let content = if note.is_empty() { title.clone() } else { format!("{title} {note}") };
+            let content = if note.is_empty() {
+                title.clone()
+            } else {
+                format!("{title} {note}")
+            };
             tx.execute(
                 "INSERT INTO search_index (entity_type, entity_id, profile_id, title, content) VALUES ('evaluation',?1,?2,?3,?4)",
                 params![id, profile_id, title, content],
@@ -512,7 +559,9 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
             .prepare("SELECT id, memory_key, memory_value FROM memory_records WHERE profile_id=?1 AND status='confirmed'")
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, String, String)> = stmt
-            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![profile_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|v| v.ok())
             .collect();
@@ -534,7 +583,9 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
             )
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, String, String)> = stmt
-            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![profile_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|v| v.ok())
             .collect();
@@ -554,7 +605,9 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
             .prepare("SELECT id, chunk_index, content FROM personalization_source_chunks WHERE profile_id=?1")
             .map_err(|e| e.to_string())?;
         let rows: Vec<(i64, i64, String)> = stmt
-            .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![profile_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(|e| e.to_string())?
             .filter_map(|v| v.ok())
             .collect();
@@ -576,7 +629,10 @@ pub fn rebuild_profile(conn: &mut Connection, profile_id: i64) -> Result<usize, 
 /// §71-72：索引版本门（不默认每次启动全重建）。
 /// 当前 profile 的版本键缺失或不等于 SEARCH_INDEX_VERSION → 执行一次 rebuild 并落版本。
 /// 返回 Some(rebuilt_count) 表示本次实际重建；None = 版本一致跳过。
-pub fn ensure_index_version(conn: &mut Connection, profile_id: i64) -> Result<Option<usize>, String> {
+pub fn ensure_index_version(
+    conn: &mut Connection,
+    profile_id: i64,
+) -> Result<Option<usize>, String> {
     let key = format!("search.index.version.{profile_id}");
     if kv_get(conn, &key).as_deref() == Some(SEARCH_INDEX_VERSION) {
         return Ok(None);
@@ -611,8 +667,13 @@ pub fn sync_goal(conn: &Connection, profile_id: i64, goal_id: i64) {
         params![goal_id, profile_id],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     ) {
-        let content = if desc.is_empty() { name.clone() } else { format!("{name} {desc}") };
-        let _ = SearchRepository::new(conn).upsert("goal", goal_id, profile_id, &name, &content, None);
+        let content = if desc.is_empty() {
+            name.clone()
+        } else {
+            format!("{name} {desc}")
+        };
+        let _ =
+            SearchRepository::new(conn).upsert("goal", goal_id, profile_id, &name, &content, None);
     }
 }
 
@@ -628,7 +689,14 @@ pub fn sync_knowledge(conn: &Connection, profile_id: i64, item_id: i64) {
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     ) {
         let content: String = content.chars().take(2000).collect();
-        let _ = SearchRepository::new(conn).upsert("knowledge", item_id, profile_id, &name, &content, None);
+        let _ = SearchRepository::new(conn).upsert(
+            "knowledge",
+            item_id,
+            profile_id,
+            &name,
+            &content,
+            None,
+        );
     }
 }
 
@@ -660,8 +728,13 @@ pub fn sync_session(conn: &Connection, profile_id: i64, session_id: i64) {
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     ) {
         let note: String = note.chars().take(2000).collect();
-        let content = if note.is_empty() { title.clone() } else { format!("{title} {note}") };
-        let _ = SearchRepository::new(conn).upsert("session", session_id, profile_id, &title, &content, None);
+        let content = if note.is_empty() {
+            title.clone()
+        } else {
+            format!("{title} {note}")
+        };
+        let _ = SearchRepository::new(conn)
+            .upsert("session", session_id, profile_id, &title, &content, None);
     }
 }
 
@@ -677,8 +750,19 @@ pub fn sync_evaluation(conn: &Connection, profile_id: i64, eval_id: i64) {
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     ) {
         let note: String = note.chars().take(1000).collect();
-        let content = if note.is_empty() { title.clone() } else { format!("{title} {note}") };
-        let _ = SearchRepository::new(conn).upsert("evaluation", eval_id, profile_id, &title, &content, None);
+        let content = if note.is_empty() {
+            title.clone()
+        } else {
+            format!("{title} {note}")
+        };
+        let _ = SearchRepository::new(conn).upsert(
+            "evaluation",
+            eval_id,
+            profile_id,
+            &title,
+            &content,
+            None,
+        );
     }
 }
 

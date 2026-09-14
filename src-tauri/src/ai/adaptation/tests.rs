@@ -34,9 +34,15 @@ fn analyzer_output_structured_parse() {
      "adjustment_intents":[{"kind":"ChangeFutureTaskEstimate","task_title_hint":"数学","new_estimated_minutes":60,"reason":"降低密度"}]}
     ```"#;
     let out = parse_analyzer_output(raw).unwrap();
-    assert_eq!(out.decision, super::decision::AdaptationDecisionType::SuggestAdjustment);
+    assert_eq!(
+        out.decision,
+        super::decision::AdaptationDecisionType::SuggestAdjustment
+    );
     assert_eq!(out.deviations.len(), 1);
-    assert_eq!(out.deviations[0].deviation_type, super::decision::DeviationType::PlanTooDense);
+    assert_eq!(
+        out.deviations[0].deviation_type,
+        super::decision::DeviationType::PlanTooDense
+    );
     assert_eq!(out.adjustment_intents.len(), 1);
     assert_eq!(out.adjustment_intents[0].kind, "ChangeFutureTaskEstimate");
 

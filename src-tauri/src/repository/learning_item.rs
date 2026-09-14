@@ -103,7 +103,13 @@ impl<'a> LearningItemRepository<'a> {
         description: Option<&str>,
     ) -> rusqlite::Result<LearningItem> {
         let profile_id = self.profile_of_goal(goal_id)?;
-        self.create_for_profile(profile_id, Some(goal_id), name, description, Some(parent_id))
+        self.create_for_profile(
+            profile_id,
+            Some(goal_id),
+            name,
+            description,
+            Some(parent_id),
+        )
     }
 
     /// DEV-0059 §6.10：Goal Optional 建根——goal_id 可空（None = 无 Goal 档案也正常建）。
@@ -228,12 +234,7 @@ impl<'a> LearningItemRepository<'a> {
     }
 
     /// 更新 Learning Item 名称 / 描述（不改变 id / goal_id / parent_id）。
-    pub fn update(
-        &self,
-        id: i64,
-        name: &str,
-        description: Option<&str>,
-    ) -> rusqlite::Result<()> {
+    pub fn update(&self, id: i64, name: &str, description: Option<&str>) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE learning_items SET name = ?1, description = ?2, updated_at = datetime('now')
              WHERE id = ?3",
@@ -381,10 +382,8 @@ impl<'a> LearningItemRepository<'a> {
             ));
         }
 
-        self.conn.execute(
-            "DELETE FROM learning_items WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM learning_items WHERE id = ?1", params![id])?;
         Ok(())
     }
 

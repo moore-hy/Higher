@@ -6,12 +6,12 @@
 
 use std::collections::VecDeque;
 
-use app_lib::ai::actions::registry::{
-    parse_action, parse_actions, HigherActionType,
-};
+use app_lib::ai::actions::registry::{parse_action, parse_actions, HigherActionType};
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{ChatMessage, Completion, Usage};
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
 use app_lib::repository::conversation::ConversationRepository;
@@ -27,8 +27,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0074a_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0074a_{name}_{}", std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn mk_profile(conn: &Connection) -> i64 {
@@ -81,7 +85,10 @@ fn run_turn_capture(
     user_message: &str,
     intel_scripted: Vec<Completion>,
     main_scripted: Vec<Completion>,
-) -> (Result<&'static str, String>, std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>) {
+) -> (
+    Result<&'static str, String>,
+    std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>,
+) {
     let token = tokio_util::sync::CancellationToken::new();
     let cfg = runtime_cfg(profile_id);
     let cap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -123,13 +130,19 @@ fn at001_registry_recognizes_actions() {
     let g = parse_action(&json!({"type": "CreateGoal", "payload": {"name": "2028考研"}})).unwrap();
     assert_eq!(g.action_type, HigherActionType::CreateGoal);
 
-    let t = parse_action(&json!({"type": "CreateTask", "payload": {"title": "高数 15题", "date": "2026-08-25"}})).unwrap();
+    let t = parse_action(
+        &json!({"type": "CreateTask", "payload": {"title": "高数 15题", "date": "2026-08-25"}}),
+    )
+    .unwrap();
     assert_eq!(t.action_type, HigherActionType::CreateTask);
 
     // §十二 Planner 示例 "CreatePlan" → 规范化为 UpdatePlan + plan_op=create
     let p = parse_action(&json!({"type": "CreatePlan", "payload": {"duration": "2年"}})).unwrap();
     assert_eq!(p.action_type, HigherActionType::UpdatePlan);
-    assert_eq!(p.payload.get("plan_op").and_then(|x| x.as_str()), Some("create"));
+    assert_eq!(
+        p.payload.get("plan_op").and_then(|x| x.as_str()),
+        Some("create")
+    );
 
     // 完整 ActionPlan 解析
     let plan = parse_actions(&json!({"actions": [
@@ -142,7 +155,14 @@ fn at001_registry_recognizes_actions() {
     // 未知类型防御性拒绝
     assert!(parse_action(&json!({"type": "DropDatabase", "payload": {}})).is_err());
     // 六成员全覆盖识别
-    for t in ["CreateGoal", "CreateTask", "UpdatePlan", "CreateSession", "WriteNote", "AdjustSchedule"] {
+    for t in [
+        "CreateGoal",
+        "CreateTask",
+        "UpdatePlan",
+        "CreateSession",
+        "WriteNote",
+        "AdjustSchedule",
+    ] {
         assert_eq!(HigherActionType::from_str(t).unwrap().as_str(), t);
     }
 }
@@ -153,7 +173,10 @@ fn at001_registry_recognizes_actions() {
 #[test]
 fn at002_create_goal_persists_to_database() {
     let (state, _vault) = setup("at002");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let action = parse_action(&json!({
         "type": "CreateGoal",
         "payload": {"name": "2028考研", "description": "计算机方向", "deadline": "2028"}
@@ -183,15 +206,23 @@ fn at002_create_goal_persists_to_database() {
 #[test]
 fn at003_failure_propagates_and_stops() {
     let (state, _vault) = setup("at003");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     // 1) 单元层：缺 name → GoalRepository create 不可达，Err 返回
-    let bad = parse_action(&json!({"type": "CreateGoal", "payload": {"description": "无名字"}})).unwrap();
+    let bad =
+        parse_action(&json!({"type": "CreateGoal", "payload": {"description": "无名字"}})).unwrap();
     {
         let conn = state.0.lock().unwrap();
         let out = app_lib::ai::higher_action::execute_action(&conn, profile_id, &bad);
         assert!(out.is_err(), "缺 name 必须 Err");
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM goals WHERE profile_id=?1", params![profile_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM goals WHERE profile_id=?1",
+                params![profile_id],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 0, "失败 Action 零写入");
     }
@@ -203,8 +234,12 @@ fn at003_failure_propagates_and_stops() {
     let (profile2, conv, msg) = {
         let conn = state2.0.lock().unwrap();
         let pid = mk_profile(&conn);
-        let conv = ConversationRepository::new(&conn).create(pid, "assistant", "DEV0074A").unwrap();
-        let m = ConversationRepository::new(&conn).add_message(conv.id, pid, "user", "我要准备2028考研", None).unwrap();
+        let conv = ConversationRepository::new(&conn)
+            .create(pid, "assistant", "DEV0074A")
+            .unwrap();
+        let m = ConversationRepository::new(&conn)
+            .add_message(conv.id, pid, "user", "我要准备2028考研", None)
+            .unwrap();
         (pid, conv.id, m.id)
     };
     let plan = json!({"actions": [
@@ -213,16 +248,32 @@ fn at003_failure_propagates_and_stops() {
         {"type": "CreateGoal", "payload": {"name": "第二个目标不应被创建"}}
     ]});
     let (out, _cap) = run_turn_capture(
-        &state2, &vault2, "at003-run", profile2, conv, msg, "我要准备2028考研",
-        vec![text_completion(r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#)],
+        &state2,
+        &vault2,
+        "at003-run",
+        profile2,
+        conv,
+        msg,
+        "我要准备2028考研",
+        vec![text_completion(
+            r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#,
+        )],
         vec![text_completion(&plan.to_string())],
     );
     // F1：阻断收口为正常 completed（不再执行任何 Action）
-    assert_eq!(out.unwrap(), "completed", "F1：ActionPlan 被阻断，run 正常收口");
+    assert_eq!(
+        out.unwrap(),
+        "completed",
+        "F1：ActionPlan 被阻断，run 正常收口"
+    );
     let conn = state2.0.lock().unwrap();
     // 0 落库：第 1 项也不执行（直执行链整体关闭）
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM goals WHERE profile_id=?1", params![profile2], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM goals WHERE profile_id=?1",
+            params![profile2],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 0, "F1：直执行 0 落库（第 1 项也不再执行）");
     // 可达性错误标记（§一一六：durable 事件；ai_runs.error 被完成态覆写）
@@ -254,9 +305,17 @@ fn at004_planner_outputs_action_plan_and_executes() {
     let (profile_id, conv, msg) = {
         let conn = state.0.lock().unwrap();
         let pid = mk_profile(&conn);
-        let conv = ConversationRepository::new(&conn).create(pid, "assistant", "DEV0074B").unwrap();
+        let conv = ConversationRepository::new(&conn)
+            .create(pid, "assistant", "DEV0074B")
+            .unwrap();
         let m = ConversationRepository::new(&conn)
-            .add_message(conv.id, pid, "user", "我要准备2028考研，当前大三，目标计算机，每天3小时", None)
+            .add_message(
+                conv.id,
+                pid,
+                "user",
+                "我要准备2028考研，当前大三，目标计算机，每天3小时",
+                None,
+            )
             .unwrap();
         (pid, conv.id, m.id)
     };
@@ -268,24 +327,43 @@ fn at004_planner_outputs_action_plan_and_executes() {
         {"type": "CreateTask", "payload": {"title": "英语：词汇复习 30min", "date": "2026-08-25"}}
     ]});
     let (out, _cap) = run_turn_capture(
-        &state, &vault, "at004-run", profile_id, conv, msg,
+        &state,
+        &vault,
+        "at004-run",
+        profile_id,
+        conv,
+        msg,
         "我要准备2028考研，当前大三，目标计算机，每天3小时",
-        vec![text_completion(r#"{"goal":"2028考研","goal_type":"education","deadline":"2028","planning_required":true,"confidence":0.95,"required_information":[]}"#)],
+        vec![text_completion(
+            r#"{"goal":"2028考研","goal_type":"education","deadline":"2028","planning_required":true,"confidence":0.95,"required_information":[]}"#,
+        )],
         vec![text_completion(&plan.to_string())],
     );
     assert_eq!(out.unwrap(), "completed", "F1：阻断后正常收口");
     let conn = state.0.lock().unwrap();
     // F1 P1-02：直执行链关闭 → 全部 0 落库
     let goals: i64 = conn
-        .query_row("SELECT COUNT(*) FROM goals WHERE profile_id=?1", params![profile_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM goals WHERE profile_id=?1",
+            params![profile_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(goals, 0, "F1：ActionPlan 直执行 0 落库（goals）");
     let bp: i64 = conn
-        .query_row("SELECT COUNT(*) FROM planning_blueprints WHERE profile_id=?1", params![profile_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM planning_blueprints WHERE profile_id=?1",
+            params![profile_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(bp, 0, "F1：ActionPlan 直执行 0 落库（blueprints）");
     let tasks: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1", params![profile_id], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1",
+            params![profile_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(tasks, 0, "F1：ActionPlan 直执行 0 落库（tasks）");
     // 回复如实告知（非执行汇总）
@@ -297,7 +375,10 @@ fn at004_planner_outputs_action_plan_and_executes() {
         .find(|m| m.role == "assistant")
         .map(|m| m.content)
         .unwrap_or_default();
-    assert!(reply.contains("已停用") && reply.contains("正式数据未变化"), "F1 阻断文案：{reply}");
+    assert!(
+        reply.contains("已停用") && reply.contains("正式数据未变化"),
+        "F1 阻断文案：{reply}"
+    );
 }
 
 // =============== Session/Note 域（§十一契约验证） ===============
@@ -305,7 +386,10 @@ fn at004_planner_outputs_action_plan_and_executes() {
 #[test]
 fn session_and_note_actions_execute() {
     let (state, _vault) = setup("sess");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let sess = parse_action(&json!({"type": "CreateSession", "payload": {}})).unwrap();
     {
         let conn = state.0.lock().unwrap();
@@ -320,7 +404,11 @@ fn session_and_note_actions_execute() {
         let note = parse_action(&json!({"type": "WriteNote", "payload": {"session_id": sid.to_string(), "note": "掌握极限计算"}})).unwrap();
         assert!(app_lib::ai::higher_action::execute_action(&conn, profile_id, &note).is_ok());
         let stored: String = conn
-            .query_row("SELECT COALESCE(note,'') FROM study_sessions WHERE id=?1", params![sid], |r| r.get(0))
+            .query_row(
+                "SELECT COALESCE(note,'') FROM study_sessions WHERE id=?1",
+                params![sid],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(stored.contains("极限计算"));
     }

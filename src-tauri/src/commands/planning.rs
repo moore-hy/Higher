@@ -2,6 +2,7 @@
 // More planning entities (Task / StudySession / Plan / Feedback / ...) are appended
 // in later increments of the same module.
 use crate::ai;
+use crate::commands::data::{backup_database, backups_dir, runtime_db_path};
 use crate::db;
 use crate::humanize_repo_err;
 use crate::notifications;
@@ -11,17 +12,16 @@ use crate::repository::evaluation::EvaluationRepository;
 use crate::repository::feedback::FeedbackRepository;
 use crate::repository::goal::{Goal, GoalRepository};
 use crate::repository::insight::InsightRepository;
+use crate::repository::learning_item::{KnowledgeNodeStats, LearningItem, LearningItemRepository};
 use crate::repository::plan::PlanRepository;
+use crate::repository::search;
 use crate::repository::study_session::StudySessionRepository;
 use crate::repository::study_stage::StudyStageRepository;
-use crate::sandbox;
-use crate::commands::data::{backup_database, backups_dir, runtime_db_path};
-use rusqlite::Connection;
-use crate::AttachmentDir;
-use crate::repository::learning_item::{KnowledgeNodeStats, LearningItem, LearningItemRepository};
 use crate::repository::task::{Task, TaskRepository};
 use crate::repository::DeleteTaskOutcome;
-use crate::repository::search;
+use crate::sandbox;
+use crate::AttachmentDir;
+use rusqlite::Connection;
 
 // =============== Goal ===============
 
@@ -43,9 +43,7 @@ pub fn create_goal(
 #[tauri::command]
 pub fn list_goals(state: tauri::State<'_, db::DbState>) -> Result<Vec<Goal>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    GoalRepository::new(&conn)
-        .list()
-        .map_err(|e| e.to_string())
+    GoalRepository::new(&conn).list().map_err(|e| e.to_string())
 }
 
 /// 列出指定档案下的全部 Goal（Profile Scope）。
@@ -73,7 +71,11 @@ pub fn update_goal(
         .update(id, &name, description.as_deref())
         .map_err(|e| e.to_string())?;
     let pid: Option<i64> = conn
-        .query_row("SELECT profile_id FROM goals WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .query_row(
+            "SELECT profile_id FROM goals WHERE id=?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
         .ok();
     if let Some(pid) = pid {
         search::sync_goal(&conn, pid, id); // DEV-0057 §66
@@ -177,7 +179,13 @@ pub fn create_child_learning_item(
 ) -> Result<LearningItem, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     LearningItemRepository::new(&conn)
-        .create_child_for_profile(profile_id, goal_id, parent_id, &name, description.as_deref())
+        .create_child_for_profile(
+            profile_id,
+            goal_id,
+            parent_id,
+            &name,
+            description.as_deref(),
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -207,7 +215,11 @@ pub fn update_learning_item(
         .update(id, &name, description.as_deref())
         .map_err(|e| e.to_string())?;
     let pid: Option<i64> = conn
-        .query_row("SELECT profile_id FROM learning_items WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .query_row(
+            "SELECT profile_id FROM learning_items WHERE id=?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
         .ok();
     if let Some(pid) = pid {
         search::sync_knowledge(&conn, pid, id); // DEV-0057 §66
@@ -217,10 +229,7 @@ pub fn update_learning_item(
 
 /// 安全删除 Learning Item（仅当无子项、无 Task、无 Session 时删除）。
 #[tauri::command]
-pub fn delete_learning_item(
-    state: tauri::State<'_, db::DbState>,
-    id: i64,
-) -> Result<(), String> {
+pub fn delete_learning_item(state: tauri::State<'_, db::DbState>, id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     LearningItemRepository::new(&conn)
         .safe_delete(id)
@@ -404,7 +413,11 @@ pub fn update_task(
             )
             .map_err(|s| s)?;
         let pid: Option<i64> = conn
-            .query_row("SELECT profile_id FROM tasks WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+            .query_row(
+                "SELECT profile_id FROM tasks WHERE id=?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
             .ok();
         if let Some(pid) = pid {
             search::sync_task(&conn, pid, id); // DEV-0057 §66（V1 更新补索引）
@@ -519,7 +532,10 @@ pub fn start_session(
         )
         .map_err(|_| "知识节点不存在".to_string())?;
     if let Some(conflict) = active_session_conflict(&conn, profile_id) {
-        return Err(format!("ActiveSessionConflict:{}", serde_json::to_string(&conflict).unwrap_or_default()));
+        return Err(format!(
+            "ActiveSessionConflict:{}",
+            serde_json::to_string(&conflict).unwrap_or_default()
+        ));
     }
     StudySessionRepository::new(&conn)
         .start(learning_item_id, task_id)
@@ -542,7 +558,10 @@ pub fn start_task_session(
         )
         .map_err(|_| "任务不存在".to_string())?;
     if let Some(conflict) = active_session_conflict(&conn, profile_id) {
-        return Err(format!("ActiveSessionConflict:{}", serde_json::to_string(&conflict).unwrap_or_default()));
+        return Err(format!(
+            "ActiveSessionConflict:{}",
+            serde_json::to_string(&conflict).unwrap_or_default()
+        ));
     }
     StudySessionRepository::new(&conn)
         .start_for_task(profile_id, task_id)
@@ -560,7 +579,10 @@ pub fn start_quick_session(
 ) -> Result<repository::study_session::StudySession, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     if let Some(conflict) = active_session_conflict(&conn, profile_id) {
-        return Err(format!("ActiveSessionConflict:{}", serde_json::to_string(&conflict).unwrap_or_default()));
+        return Err(format!(
+            "ActiveSessionConflict:{}",
+            serde_json::to_string(&conflict).unwrap_or_default()
+        ));
     }
     StudySessionRepository::new(&conn)
         .start_quick(profile_id, task_id)
@@ -578,10 +600,7 @@ struct ActiveSessionInfo {
     task_id: Option<i64>,
 }
 
-pub fn active_session_conflict(
-    conn: &Connection,
-    profile_id: i64,
-) -> Option<serde_json::Value> {
+pub fn active_session_conflict(conn: &Connection, profile_id: i64) -> Option<serde_json::Value> {
     let mut stmt = conn
         .prepare(
             "SELECT id, title, started_at, learning_item_id, task_id
@@ -644,7 +663,8 @@ pub fn list_active_sessions(
             }))
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// 结束归档（DEV-0304）：把本次学习挂到知识 / 任务（均可空=仅保留学习记录）。
@@ -719,7 +739,11 @@ pub fn update_session_title(
         .update_title(id, &title)
         .map_err(|e| e.to_string())?;
     let pid: Option<i64> = conn
-        .query_row("SELECT profile_id FROM study_sessions WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .query_row(
+            "SELECT profile_id FROM study_sessions WHERE id=?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
         .ok();
     if let Some(pid) = pid {
         repository::search::sync_session(&conn, pid, id); // DEV-0057 §66
@@ -742,7 +766,11 @@ pub fn update_session_document(
         .update_document(session_id, &note, note_document_json.as_deref())
         .map_err(|e| e.to_string())?;
     let pid: Option<i64> = tx
-        .query_row("SELECT profile_id FROM study_sessions WHERE id=?1", rusqlite::params![session_id], |r| r.get(0))
+        .query_row(
+            "SELECT profile_id FROM study_sessions WHERE id=?1",
+            rusqlite::params![session_id],
+            |r| r.get(0),
+        )
         .ok();
     tx.commit().map_err(|e| e.to_string())?;
     if let Some(pid) = pid {
@@ -823,8 +851,7 @@ pub fn delete_session(
         .list_session_attachment_paths(id)
         .map_err(|e| e.to_string())?;
     // 事务删除：附件记录（FK CASCADE 由 DB 处理）+ Session
-    conn.execute_batch("BEGIN")
-        .map_err(|e| e.to_string())?;
+    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
     let result = (|| -> rusqlite::Result<()> {
         conn.execute(
             "DELETE FROM learning_attachments WHERE session_id = ?1",
@@ -837,7 +864,7 @@ pub fn delete_session(
         Ok(()) => {
             conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
             repository::search::remove_session(&conn, id); // DEV-0057 §66
-            // commit 后清理物理文件（失败不回滚 DB：文件残留可接受，反之不可）
+                                                           // commit 后清理物理文件（失败不回滚 DB：文件残留可接受，反之不可）
             for rel in paths {
                 let _ = std::fs::remove_file(adir.0.join(&rel));
             }
@@ -908,7 +935,13 @@ pub fn create_study_stage(
 ) -> Result<repository::study_stage::StudyStage, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     StudyStageRepository::new(&conn)
-        .create(goal_id, &name, description.as_deref(), start_date.as_deref(), end_date.as_deref())
+        .create(
+            goal_id,
+            &name,
+            description.as_deref(),
+            start_date.as_deref(),
+            end_date.as_deref(),
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -934,7 +967,13 @@ pub fn update_study_stage(
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     StudyStageRepository::new(&conn)
-        .update(id, &name, description.as_deref(), start_date.as_deref(), end_date.as_deref())
+        .update(
+            id,
+            &name,
+            description.as_deref(),
+            start_date.as_deref(),
+            end_date.as_deref(),
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -976,7 +1015,15 @@ pub fn create_plan(
 ) -> Result<repository::plan::Plan, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     PlanRepository::new(&conn)
-        .create(goal_id, stage_id, learning_item_id, &title, description.as_deref(), start_date.as_deref(), end_date.as_deref())
+        .create(
+            goal_id,
+            stage_id,
+            learning_item_id,
+            &title,
+            description.as_deref(),
+            start_date.as_deref(),
+            end_date.as_deref(),
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -1015,7 +1062,15 @@ pub fn update_plan(
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     PlanRepository::new(&conn)
-        .update(id, stage_id, learning_item_id, &title, description.as_deref(), start_date.as_deref(), end_date.as_deref())
+        .update(
+            id,
+            stage_id,
+            learning_item_id,
+            &title,
+            description.as_deref(),
+            start_date.as_deref(),
+            end_date.as_deref(),
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -1059,7 +1114,14 @@ pub fn create_feedback(
 ) -> Result<repository::feedback::Feedback, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     FeedbackRepository::new(&conn)
-        .create(goal_id, learning_item_id, evaluation_id, &feedback_type, &title, &description)
+        .create(
+            goal_id,
+            learning_item_id,
+            evaluation_id,
+            &feedback_type,
+            &title,
+            &description,
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -1069,7 +1131,9 @@ pub fn get_feedback(
     id: i64,
 ) -> Result<Option<repository::feedback::Feedback>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    FeedbackRepository::new(&conn).get(id).map_err(|e| e.to_string())
+    FeedbackRepository::new(&conn)
+        .get(id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1090,14 +1154,18 @@ pub fn update_feedback(
 #[tauri::command]
 pub fn resolve_feedback(state: tauri::State<'_, db::DbState>, id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    FeedbackRepository::new(&conn).resolve(id).map_err(|e| e.to_string())
+    FeedbackRepository::new(&conn)
+        .resolve(id)
+        .map_err(|e| e.to_string())
 }
 
 /// 忽略（不显示为需要处理，历史保留）。
 #[tauri::command]
 pub fn dismiss_feedback(state: tauri::State<'_, db::DbState>, id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    FeedbackRepository::new(&conn).dismiss(id).map_err(|e| e.to_string())
+    FeedbackRepository::new(&conn)
+        .dismiss(id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1192,7 +1260,9 @@ pub fn get_adjustment(
     id: i64,
 ) -> Result<Option<repository::adjustment::Adjustment>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    AdjustmentRepository::new(&conn).get(id).map_err(|e| e.to_string())
+    AdjustmentRepository::new(&conn)
+        .get(id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1229,7 +1299,10 @@ pub fn list_pending_adjustments_by_profile(
 }
 
 #[tauri::command]
-pub fn mark_adjustment_completed(state: tauri::State<'_, db::DbState>, id: i64) -> Result<(), String> {
+pub fn mark_adjustment_completed(
+    state: tauri::State<'_, db::DbState>,
+    id: i64,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     AdjustmentRepository::new(&conn)
         .mark_completed(id)
@@ -1239,7 +1312,9 @@ pub fn mark_adjustment_completed(state: tauri::State<'_, db::DbState>, id: i64) 
 #[tauri::command]
 pub fn cancel_adjustment(state: tauri::State<'_, db::DbState>, id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    AdjustmentRepository::new(&conn).cancel(id).map_err(|e| e.to_string())
+    AdjustmentRepository::new(&conn)
+        .cancel(id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1285,7 +1360,15 @@ pub fn arrange_relearn_adjustment(
 
     // ① 创建正式 Task（真正执行对象；Profile First）
     let task = TaskRepository::new(&conn)
-        .create_for_profile(item_profile, Some(goal_id), &task_title, Some(&planned_date), None, Some(learning_item_id), None)
+        .create_for_profile(
+            item_profile,
+            Some(goal_id),
+            &task_title,
+            Some(&planned_date),
+            None,
+            Some(learning_item_id),
+            None,
+        )
         .map_err(|e| format!("创建任务失败：{}", humanize_repo_err(e)))?;
 
     // ② 创建 Adjustment（调整决策，关联 Feedback + Task）
@@ -1431,7 +1514,6 @@ pub fn get_progress_metrics(
         .progress_metrics_by_profile(profile_id, &today, &week_start)
         .map_err(|e| e.to_string())
 }
-
 
 // =============== Evaluation ===============
 // Section 6 increment 6: moved verbatim from lib.rs; only `fn` -> `pub fn` changed.
@@ -1580,7 +1662,11 @@ pub fn update_evaluation(
         )
         .map_err(|e| e.to_string())?;
     let pid: Option<i64> = conn
-        .query_row("SELECT profile_id FROM evaluations WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .query_row(
+            "SELECT profile_id FROM evaluations WHERE id=?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
         .ok();
     if let Some(pid) = pid {
         repository::search::sync_evaluation(&conn, pid, id); // DEV-0057 §66
@@ -1597,7 +1683,6 @@ pub fn delete_evaluation(state: tauri::State<'_, db::DbState>, id: i64) -> Resul
     repository::search::remove_evaluation(&conn, id); // DEV-0057 §66
     Ok(())
 }
-
 
 // =============== Goal Tree（DEV-0050 / PHASE B §16-32） ===============
 // Section 6 increment 9: moved verbatim from lib.rs.
@@ -1640,10 +1725,7 @@ pub fn create_goal_node(
 
 /// 删除目标节点（final 禁删；有子禁删；Task 保留 goal_id 置 NULL）。
 #[tauri::command]
-pub fn delete_goal_node(
-    state: tauri::State<'_, db::DbState>,
-    id: i64,
-) -> Result<(), String> {
+pub fn delete_goal_node(state: tauri::State<'_, db::DbState>, id: i64) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     GoalRepository::new(&conn).delete_tree_node(id)?;
     repository::search::remove_goal(&conn, id); // DEV-0057 §66
@@ -1661,7 +1743,6 @@ pub fn get_legacy_planning_counts(
         .legacy_planning_counts(profile_id)
         .map_err(|e| e.to_string())
 }
-
 
 // =============== Final Goal Brief（DEV-0055；Section 6 increment 14） ===============
 // =============== DEV-0055 · Final Goal Brief（PART 5-6） ===============
@@ -1686,7 +1767,6 @@ pub fn save_final_goal_brief(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::goal::GoalRepository::new(&conn).set_final_brief(profile_id, &brief)
 }
-
 
 // =============== Daily & Dual-Tree Loop（DEV-0053；Section 6 increment 15） ===============
 // =============== DEV-0053 · Daily & Dual-Tree Loop ===============
@@ -1723,16 +1803,13 @@ pub fn organize_session_into_knowledge(
     learning_item_id: i64,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::study_session::StudySessionRepository::new(&conn)
-        .set_learning_item(session_id, profile_id, Some(learning_item_id))?;
-    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
-        "session",
+    repository::study_session::StudySessionRepository::new(&conn).set_learning_item(
         session_id,
         profile_id,
-        "session",
-        "",
-        None,
-    );
+        Some(learning_item_id),
+    )?;
+    let _ = crate::repository::search::SearchRepository::new(&conn)
+        .upsert("session", session_id, profile_id, "session", "", None);
     // 刷新索引标题
     if let Ok(s) = repository::study_session::StudySessionRepository::new(&conn).get(session_id) {
         if let Some(sess) = s {
@@ -1758,8 +1835,11 @@ pub fn set_session_activity_kind(
     activity_kind: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::study_session::StudySessionRepository::new(&conn)
-        .set_activity_kind(session_id, profile_id, &activity_kind)
+    repository::study_session::StudySessionRepository::new(&conn).set_activity_kind(
+        session_id,
+        profile_id,
+        &activity_kind,
+    )
 }
 
 /// §35：修改 Session 目标关联。
@@ -1826,8 +1906,11 @@ pub fn list_sessions_by_goal(
     limit: Option<i64>,
 ) -> Result<Vec<repository::study_session::StudySession>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::study_session::StudySessionRepository::new(&conn)
-        .list_by_goal(profile_id, goal_id, limit.unwrap_or(50))
+    repository::study_session::StudySessionRepository::new(&conn).list_by_goal(
+        profile_id,
+        goal_id,
+        limit.unwrap_or(50),
+    )
 }
 
 /// §23：Task V2 全字段创建。
@@ -1857,14 +1940,8 @@ pub fn create_task_v2(
         task_kind.as_deref().unwrap_or("structured"),
         priority.as_deref().unwrap_or("normal"),
     )?;
-    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
-        "task",
-        t.id,
-        profile_id,
-        &t.title,
-        &t.title,
-        None,
-    );
+    let _ = crate::repository::search::SearchRepository::new(&conn)
+        .upsert("task", t.id, profile_id, &t.title, &t.title, None);
     Ok(t)
 }
 
@@ -1896,14 +1973,8 @@ pub fn update_task_v2(
         task_kind.as_deref().unwrap_or("structured"),
         priority.as_deref().unwrap_or("normal"),
     )?;
-    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
-        "task",
-        id,
-        profile_id,
-        &title,
-        &title,
-        None,
-    );
+    let _ = crate::repository::search::SearchRepository::new(&conn)
+        .upsert("task", id, profile_id, &title, &title, None);
     Ok(())
 }
 
@@ -1991,8 +2062,7 @@ pub fn execute_profile_cleanup(
     scope: String,
     today: String,
 ) -> Result<repository::cleanup::CleanupPreview, String> {
-    let scope = repository::cleanup::CleanupScope::from_str(&scope)
-        .ok_or("未知的清理范围")?;
+    let scope = repository::cleanup::CleanupScope::from_str(&scope).ok_or("未知的清理范围")?;
     // 1) 备份（失败 → 禁止删除）
     // DEV-MOBILE-001 §38：改经 AppHandle 真实运行路径（Android = App Sandbox）；
     // Windows 与原 db::DbState::database_path() 同指（dev = .data，prod = AppLocalData）。
@@ -2017,4 +2087,3 @@ pub fn execute_profile_cleanup(
     }
     Ok(preview)
 }
-

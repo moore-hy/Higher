@@ -13,10 +13,8 @@
 use app_lib::ai;
 use app_lib::ai::tools::{execute_read_tool, tool_label, TOOL_ALLOWLIST};
 use app_lib::repository::{
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
+    goal::GoalRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, study_session::StudySessionRepository,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -46,7 +44,9 @@ fn seed(conn: &Connection) -> (i64, i64, i64, i64) {
     let profile = StudyProfileRepository::new(conn)
         .create("A档案", None, None, None, None, None)
         .unwrap();
-    let goal = GoalRepository::new(conn).create(profile.id, "数学", None).unwrap();
+    let goal = GoalRepository::new(conn)
+        .create(profile.id, "数学", None)
+        .unwrap();
     let math = LearningItemRepository::new(conn)
         .create_root(goal.id, "高等数学", None)
         .unwrap();
@@ -77,20 +77,43 @@ fn test_action_scope_dispatch() {
     }
 
     // 工具循环：仅 profile_analysis / assistant_chat
-    assert!(ai::AiAction::from_str("profile_analysis").unwrap().allow_tools());
-    assert!(ai::AiAction::from_str("assistant_chat").unwrap().allow_tools());
-    assert!(!ai::AiAction::from_str("session_analysis").unwrap().allow_tools());
-    assert!(!ai::AiAction::from_str("knowledge_analysis").unwrap().allow_tools());
-    assert!(!ai::AiAction::from_str("knowledge_organize").unwrap().allow_tools());
-    assert!(!ai::AiAction::from_str("today_suggestion").unwrap().allow_tools());
-    assert!(!ai::AiAction::from_str("planning_analysis").unwrap().allow_tools());
+    assert!(ai::AiAction::from_str("profile_analysis")
+        .unwrap()
+        .allow_tools());
+    assert!(ai::AiAction::from_str("assistant_chat")
+        .unwrap()
+        .allow_tools());
+    assert!(!ai::AiAction::from_str("session_analysis")
+        .unwrap()
+        .allow_tools());
+    assert!(!ai::AiAction::from_str("knowledge_analysis")
+        .unwrap()
+        .allow_tools());
+    assert!(!ai::AiAction::from_str("knowledge_organize")
+        .unwrap()
+        .allow_tools());
+    assert!(!ai::AiAction::from_str("today_suggestion")
+        .unwrap()
+        .allow_tools());
+    assert!(!ai::AiAction::from_str("planning_analysis")
+        .unwrap()
+        .allow_tools());
 
     // JSON：DEV-0023 起全部要求（assistant_chat 为结构化协议 message/knowledge_proposal）
     for a in [
-        "today_suggestion", "session_analysis", "knowledge_analysis",
-        "knowledge_organize", "planning_analysis", "profile_analysis", "assistant_chat",
+        "today_suggestion",
+        "session_analysis",
+        "knowledge_analysis",
+        "knowledge_organize",
+        "planning_analysis",
+        "profile_analysis",
+        "assistant_chat",
     ] {
-        assert!(ai::AiAction::from_str(a).unwrap().require_json(), "{} 应要求 JSON", a);
+        assert!(
+            ai::AiAction::from_str(a).unwrap().require_json(),
+            "{} 应要求 JSON",
+            a
+        );
     }
 
     // 未知 action 拒绝
@@ -116,7 +139,10 @@ fn test_knowledge_scope_carries_item_context() {
         },
     )
     .unwrap();
-    assert!(ctx.contains("函数极限"), "Knowledge 上下文必须包含选中节点内容头");
+    assert!(
+        ctx.contains("函数极限"),
+        "Knowledge 上下文必须包含选中节点内容头"
+    );
     assert!(ctx.contains(&format!("（#{}）", limit)));
 }
 
@@ -124,7 +150,9 @@ fn test_knowledge_scope_carries_item_context() {
 fn test_session_scope_carries_session_context() {
     let conn = setup();
     let (pid, _g, _m, limit) = seed(&conn);
-    let s = StudySessionRepository::new(&conn).start(limit, None).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start(limit, None)
+        .unwrap();
     StudySessionRepository::new(&conn)
         .update_note(s.id, "工作区笔记内容SECRET-LW")
         .unwrap();
@@ -141,7 +169,10 @@ fn test_session_scope_carries_session_context() {
         },
     )
     .unwrap();
-    assert!(ctx.contains("工作区笔记内容SECRET-LW"), "session 上下文携带该 Session 笔记");
+    assert!(
+        ctx.contains("工作区笔记内容SECRET-LW"),
+        "session 上下文携带该 Session 笔记"
+    );
     assert!(ctx.contains(&format!("（#{}）", limit)));
 }
 
@@ -154,7 +185,9 @@ fn test_assistant_chat_cross_profile_rejected() {
     let pb = StudyProfileRepository::new(&conn)
         .create("B档案", None, None, None, None, None)
         .unwrap();
-    let s = StudySessionRepository::new(&conn).start(limit, None).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start(limit, None)
+        .unwrap();
 
     // B 用 assistant_chat 指向 A 的 session → 拒绝
     assert!(ai::context::build_context(
@@ -217,10 +250,14 @@ fn test_history_role_filtering() {
     ];
     let filtered: Vec<&(String, String)> = history
         .iter()
-        .filter(|(role, content)| (role == "user" || role == "assistant") && !content.trim().is_empty())
+        .filter(|(role, content)| {
+            (role == "user" || role == "assistant") && !content.trim().is_empty()
+        })
         .collect();
     assert_eq!(filtered.len(), 3);
-    assert!(filtered.iter().all(|(r, _)| r == "user" || r == "assistant"));
+    assert!(filtered
+        .iter()
+        .all(|(r, _)| r == "user" || r == "assistant"));
     assert!(!filtered.iter().any(|(_, c)| c.contains("SYSTEM PROMPT")));
 }
 
@@ -236,18 +273,39 @@ fn test_trace_only_real_tools_and_allowlist() {
     assert!(ok.contains("函数极限"));
 
     // 白名单工具 + 错误参数 → 报错但不 panic（trace 层记 error）
-    let bad = execute_read_tool(&conn, pid, "read_knowledge_item", &json!({"item_id": 999999}));
+    let bad = execute_read_tool(
+        &conn,
+        pid,
+        "read_knowledge_item",
+        &json!({"item_id": 999999}),
+    );
     assert!(bad.is_err());
 
     // 未知 / 危险工具一律拒绝（绝不存在 file/shell/sql/exec）
     for evil in [
-        "read_file", "write_file", "delete_file", "list_directory",
-        "run_command", "shell", "powershell", "cmd", "spawn_process",
-        "open_registry", "network_fetch", "query_sql", "execute_sql",
-        "update_knowledge", "create_task", "update_plan",
+        "read_file",
+        "write_file",
+        "delete_file",
+        "list_directory",
+        "run_command",
+        "shell",
+        "powershell",
+        "cmd",
+        "spawn_process",
+        "open_registry",
+        "network_fetch",
+        "query_sql",
+        "execute_sql",
+        "update_knowledge",
+        "create_task",
+        "update_plan",
     ] {
         assert!(!TOOL_ALLOWLIST.contains(&evil), "{} 不得进入白名单", evil);
-        assert!(execute_read_tool(&conn, pid, evil, &json!({})).is_err(), "{} 必须被拒绝", evil);
+        assert!(
+            execute_read_tool(&conn, pid, evil, &json!({})).is_err(),
+            "{} 必须被拒绝",
+            evil
+        );
     }
 
     // DEV-0060 §9.3：不硬编码数量（与 tool_definitions 集合一致；Direct Write=0 见上方 evil 断言）
@@ -277,7 +335,9 @@ fn test_proposal_apply_guard_regression() {
     let item_repo = LearningItemRepository::new(&conn);
 
     // 合法 create_child + update（模拟用户确认后的正式写入路径）
-    let child = item_repo.create_child(_g, limit, "等价无穷小", None).unwrap();
+    let child = item_repo
+        .create_child(_g, limit, "等价无穷小", None)
+        .unwrap();
     assert_eq!(child.parent_id, Some(limit));
     item_repo.update_content(child.id, "x~sinx").unwrap();
     assert_eq!(item_repo.get(child.id).unwrap().unwrap().content, "x~sinx");
@@ -286,9 +346,13 @@ fn test_proposal_apply_guard_regression() {
     let other_profile = StudyProfileRepository::new(&conn)
         .create("其他档案", None, None, None, None, None)
         .unwrap();
-    let other_goal = GoalRepository::new(&conn).create(other_profile.id, "其他目标", None).unwrap();
+    let other_goal = GoalRepository::new(&conn)
+        .create(other_profile.id, "其他目标", None)
+        .unwrap();
     let _ = math;
-    assert!(item_repo.create_child(other_goal.id, limit, "越权", None).is_err());
+    assert!(item_repo
+        .create_child(other_goal.id, limit, "越权", None)
+        .is_err());
 }
 
 // ---------- 8. UI KV 前缀限制（command 层逻辑等价） ----------

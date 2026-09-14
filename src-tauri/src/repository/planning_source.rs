@@ -82,13 +82,22 @@ impl<'a> PlanningSourceRepository<'a> {
                 })
             })
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 分块写入（复用 personalization 的分块语义）。
-    pub fn store_chunks(&self, source_id: i64, profile_id: i64, text: &str) -> Result<usize, String> {
+    pub fn store_chunks(
+        &self,
+        source_id: i64,
+        profile_id: i64,
+        text: &str,
+    ) -> Result<usize, String> {
         self.conn
-            .execute("DELETE FROM planning_source_chunks WHERE source_id=?1", params![source_id])
+            .execute(
+                "DELETE FROM planning_source_chunks WHERE source_id=?1",
+                params![source_id],
+            )
             .map_err(|e| e.to_string())?;
         let cap = 256 * 1024;
         let mut idx = 0i64;
@@ -111,8 +120,10 @@ impl<'a> PlanningSourceRepository<'a> {
     pub fn joined_text(&self, profile_id: i64, source_id: i64) -> Result<String, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT content FROM planning_source_chunks
-                      WHERE source_id=?1 AND profile_id=?2 ORDER BY chunk_index")
+            .prepare(
+                "SELECT content FROM planning_source_chunks
+                      WHERE source_id=?1 AND profile_id=?2 ORDER BY chunk_index",
+            )
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![source_id, profile_id], |r| r.get::<_, String>(0))

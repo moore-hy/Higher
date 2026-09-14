@@ -44,7 +44,8 @@ pub fn write_message(stream: &mut TcpStream, msg: &WireMessage) -> Result<(), Tr
     if bytes.len() > MAX_PACKET {
         return Err(TransportError::PacketTooLarge(bytes.len()));
     }
-    let len = u32::try_from(bytes.len()).map_err(|_| TransportError::PacketTooLarge(bytes.len()))?;
+    let len =
+        u32::try_from(bytes.len()).map_err(|_| TransportError::PacketTooLarge(bytes.len()))?;
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(&bytes)?;
     stream.flush()?;

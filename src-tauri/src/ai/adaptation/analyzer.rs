@@ -60,7 +60,8 @@ pub async fn analyze_adaptation(
     collected: &[(String, String)],
     pi_summary: &str,
 ) -> Result<AdaptationDecision, String> {
-    let msgs: Vec<ChatMessage> = build_analyzer_messages(evidence, user_message, collected, pi_summary);
+    let msgs: Vec<ChatMessage> =
+        build_analyzer_messages(evidence, user_message, collected, pi_summary);
     // tools=None → Structured Intelligence 通道（ScriptedIntel intel 队列）
     let comp = responder.chat(msgs, None, Some(2000)).await?;
     let raw = comp.content.unwrap_or_default();

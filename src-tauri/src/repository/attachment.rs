@@ -54,7 +54,9 @@ impl<'a> AttachmentRepository<'a> {
                         |row| row.get(0),
                     )
                     .map_err(|_| {
-                        rusqlite::Error::InvalidParameterName("知识节点不存在，无法关联附件".to_string())
+                        rusqlite::Error::InvalidParameterName(
+                            "知识节点不存在，无法关联附件".to_string(),
+                        )
                     })?;
                 if item_profile != profile_id {
                     return Err(rusqlite::Error::InvalidParameterName(
@@ -94,9 +96,7 @@ impl<'a> AttachmentRepository<'a> {
                     params![sid],
                     |row| row.get(0),
                 )
-                .map_err(|_| {
-                    rusqlite::Error::InvalidParameterName("学习会话不存在".to_string())
-                })?;
+                .map_err(|_| rusqlite::Error::InvalidParameterName("学习会话不存在".to_string()))?;
             if session_item != Some(item) {
                 return Err(rusqlite::Error::InvalidParameterName(
                     "附件与学习会话的知识节点不一致，已拒绝".to_string(),
@@ -202,7 +202,10 @@ impl<'a> AttachmentRepository<'a> {
     }
 
     /// 某知识节点的全部附件（Knowledge 详情 / 学习记录展开）。
-    pub fn list_by_learning_item(&self, learning_item_id: i64) -> rusqlite::Result<Vec<LearningAttachment>> {
+    pub fn list_by_learning_item(
+        &self,
+        learning_item_id: i64,
+    ) -> rusqlite::Result<Vec<LearningAttachment>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, profile_id, learning_item_id, session_id, document_id, attachment_type, file_name, relative_path,
                     mime_type, caption, created_at
@@ -236,7 +239,10 @@ impl<'a> AttachmentRepository<'a> {
     }
 
     /// v016 legacy 节点级附件（session_id NULL 且 document_id NULL）。
-    pub fn list_legacy_by_item(&self, learning_item_id: i64) -> rusqlite::Result<Vec<LearningAttachment>> {
+    pub fn list_legacy_by_item(
+        &self,
+        learning_item_id: i64,
+    ) -> rusqlite::Result<Vec<LearningAttachment>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, profile_id, learning_item_id, session_id, document_id, attachment_type, file_name, relative_path,
                     mime_type, caption, created_at
@@ -254,7 +260,10 @@ impl<'a> AttachmentRepository<'a> {
         if existing.is_none() {
             return Ok(None);
         }
-        self.conn.execute("DELETE FROM learning_attachments WHERE id = ?1", params![id])?;
+        self.conn.execute(
+            "DELETE FROM learning_attachments WHERE id = ?1",
+            params![id],
+        )?;
         Ok(existing.map(|a| a.relative_path))
     }
 

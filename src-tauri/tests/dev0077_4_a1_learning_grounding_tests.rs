@@ -28,8 +28,11 @@ fn setup() -> Connection {
 }
 
 fn mk_profile(conn: &Connection, name: &str) -> i64 {
-    conn.execute("INSERT INTO study_profiles (name) VALUES (?1)", params![name])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO study_profiles (name) VALUES (?1)",
+        params![name],
+    )
+    .unwrap();
     conn.last_insert_rowid()
 }
 
@@ -100,13 +103,19 @@ fn draft(units: Vec<LearningUnitDraft>, tasks: Vec<PlanTask>) -> PlanDraft {
 }
 
 /// 编译 + 落 ChangeSet + apply（模拟 Explicit Planning 主链）。
-fn plan_apply(conn: &Connection, p: i64, d: &PlanDraft) -> (i64, Vec<app_lib::repository::changeset::ProposedOp>) {
+fn plan_apply(
+    conn: &Connection,
+    p: i64,
+    d: &PlanDraft,
+) -> (i64, Vec<app_lib::repository::changeset::ProposedOp>) {
     let (ops, _) = compile_to_changeset_ops_grounded(conn, p, None, false, d)
         .expect("grounded compile 必须成功");
     let cs = ChangeSetRepository::new(conn)
         .create(p, None, None, "LG 测试计划", "grounding", &ops)
         .unwrap();
-    ChangeSetRepository::new(conn).apply(cs, p, false).expect("apply 必须成功");
+    ChangeSetRepository::new(conn)
+        .apply(cs, p, false)
+        .expect("apply 必须成功");
     (cs, ops)
 }
 
@@ -125,7 +134,12 @@ fn lg_tc001_exact_existing_reuse() {
         p,
         &draft(
             vec![unit("math", "数学", ""), unit("math.limit", "极限", "math")],
-            vec![task("高数：极限基础题 15题", "2026-08-28", 90, g_learning(&["math.limit"]))],
+            vec![task(
+                "高数：极限基础题 15题",
+                "2026-08-28",
+                90,
+                g_learning(&["math.limit"]),
+            )],
         ),
     );
     // Reuse：不增加 LearningItem；不产生 knowledge create op
@@ -139,8 +153,13 @@ fn lg_tc001_exact_existing_reuse() {
         .unwrap();
     assert_eq!(t_item, Some(limit), "TC001: task → 已有 极限 id");
     // ReadBack 核验（§三八）
-    let written = ChangeSetRepository::new(&conn).list_operations(cs, p).unwrap();
-    assert!(verify_written_ops(&conn, p, &written).0, "TC001: ReadBack 通过");
+    let written = ChangeSetRepository::new(&conn)
+        .list_operations(cs, p)
+        .unwrap();
+    assert!(
+        verify_written_ops(&conn, p, &written).0,
+        "TC001: ReadBack 通过"
+    );
 }
 
 // ==================== LG-TC002 · Same Name Different Parent ====================
@@ -157,26 +176,43 @@ fn lg_tc002_same_name_different_parent() {
         &conn,
         p,
         &draft(
-            vec![
-                unit("phy", "物理", ""),
-                unit("phy.limit", "极限", "phy"),
-            ],
-            vec![task("物理：极限概念梳理", "2026-08-28", 60, g_learning(&["phy.limit"]))],
+            vec![unit("phy", "物理", ""), unit("phy.limit", "极限", "phy")],
+            vec![task(
+                "物理：极限概念梳理",
+                "2026-08-28",
+                60,
+                g_learning(&["phy.limit"]),
+            )],
         ),
     );
-    assert_eq!(count(&conn, "learning_items"), before + 2, "TC002: 物理链新建 2 节点");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        before + 2,
+        "TC002: 物理链新建 2 节点"
+    );
     let t_item: i64 = conn
-        .query_row("SELECT learning_item_id FROM tasks", [], |r| r.get::<_, Option<i64>>(0))
+        .query_row("SELECT learning_item_id FROM tasks", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
         .unwrap()
         .unwrap();
     assert_ne!(t_item, math_limit, "TC002: 绝不复用 数学/极限");
     let (parent, name): (Option<i64>, String) = conn
-        .query_row("SELECT parent_id, name FROM learning_items WHERE id=?1", params![t_item], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
+        .query_row(
+            "SELECT parent_id, name FROM learning_items WHERE id=?1",
+            params![t_item],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .unwrap();
-    assert_eq!((parent.is_some(), name.as_str()), (true, "极限"), "TC002: 新 极限 挂 物理 下");
-    assert!(ops.iter().any(|o| o.entity_type == "knowledge"), "TC002: 新建产生 knowledge op");
+    assert_eq!(
+        (parent.is_some(), name.as_str()),
+        (true, "极限"),
+        "TC002: 新 极限 挂 物理 下"
+    );
+    assert!(
+        ops.iter().any(|o| o.entity_type == "knowledge"),
+        "TC002: 新建产生 knowledge op"
+    );
 }
 
 // ==================== LG-TC003 · Normalization ====================
@@ -193,10 +229,19 @@ fn lg_tc003_normalization_reuse() {
         p,
         &draft(
             vec![unit("math.limit", "  极限  ", "")],
-            vec![task("极限训练", "2026-08-28", 60, g_learning(&["math.limit"]))],
+            vec![task(
+                "极限训练",
+                "2026-08-28",
+                60,
+                g_learning(&["math.limit"]),
+            )],
         ),
     );
-    assert_eq!(count(&conn, "learning_items"), before, "TC003: normalize 后 Reuse，无重复");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        before,
+        "TC003: normalize 后 Reuse，无重复"
+    );
     let t_item: Option<i64> = conn
         .query_row("SELECT learning_item_id FROM tasks", [], |r| r.get(0))
         .unwrap();
@@ -217,12 +262,23 @@ fn lg_tc004_no_fuzzy_merge() {
         p,
         &draft(
             vec![unit("f.limit", "函数极限", "")],
-            vec![task("函数极限训练", "2026-08-28", 60, g_learning(&["f.limit"]))],
+            vec![task(
+                "函数极限训练",
+                "2026-08-28",
+                60,
+                g_learning(&["f.limit"]),
+            )],
         ),
     );
-    assert_eq!(count(&conn, "learning_items"), before + 1, "TC004: 语义近似不合并 → 新建");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        before + 1,
+        "TC004: 语义近似不合并 → 新建"
+    );
     let t_item: i64 = conn
-        .query_row("SELECT learning_item_id FROM tasks", [], |r| r.get::<_, Option<i64>>(0))
+        .query_row("SELECT learning_item_id FROM tasks", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
         .unwrap()
         .unwrap();
     assert_ne!(t_item, limit, "TC004: 不污染已有 极限 的证据");
@@ -244,20 +300,37 @@ fn lg_tc005_new_unit_parent_chain() {
                 unit("cs408.ds", "数据结构", "cs408"),
                 unit("cs408.ds.list", "线性表", "cs408.ds"),
             ],
-            vec![task("408：线性表基础练习", "2026-08-28", 60, g_learning(&["cs408.ds.list"]))],
+            vec![task(
+                "408：线性表基础练习",
+                "2026-08-28",
+                60,
+                g_learning(&["cs408.ds.list"]),
+            )],
         ),
     );
-    assert_eq!(count(&conn, "learning_items"), 3, "TC005: 必要 Parent Chain + 叶子");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        3,
+        "TC005: 必要 Parent Chain + 叶子"
+    );
     // ONE ChangeSet：knowledge×3 + task×1 全在一个 cs
-    let written = ChangeSetRepository::new(&conn).list_operations(cs, p).unwrap();
+    let written = ChangeSetRepository::new(&conn)
+        .list_operations(cs, p)
+        .unwrap();
     assert_eq!(written.len(), 4, "TC005: 4 ops 同一 ChangeSet");
     assert!(ops.iter().filter(|o| o.entity_type == "knowledge").count() == 3);
     // 树结构正确：线性表.parent=数据结构.parent=408
     let leaf: i64 = conn
-        .query_row("SELECT id FROM learning_items WHERE name='线性表'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM learning_items WHERE name='线性表'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     let t_item: i64 = conn
-        .query_row("SELECT learning_item_id FROM tasks", [], |r| r.get::<_, Option<i64>>(0))
+        .query_row("SELECT learning_item_id FROM tasks", [], |r| {
+            r.get::<_, Option<i64>>(0)
+        })
         .unwrap()
         .unwrap();
     assert_eq!(t_item, leaf);
@@ -273,7 +346,12 @@ fn lg_tc006_atomic_task_pass() {
     mk_final_goal(&conn, p);
     let d = draft(
         vec![unit("math.limit", "极限", "")],
-        vec![task("极限基础题 15题", "2026-08-28", 90, g_learning(&["math.limit"]))],
+        vec![task(
+            "极限基础题 15题",
+            "2026-08-28",
+            90,
+            g_learning(&["math.limit"]),
+        )],
     );
     let v = validate_plan_draft(&conn, p, &d);
     assert!(v.errors.is_empty(), "TC006: {:?}", v.errors);
@@ -294,7 +372,10 @@ fn lg_tc007_multi_unit_reject() {
     let before_tasks = count(&conn, "tasks");
 
     let d = draft(
-        vec![unit("math.limit", "极限", ""), unit("eng.vocab", "英语词汇", "")],
+        vec![
+            unit("math.limit", "极限", ""),
+            unit("eng.vocab", "英语词汇", ""),
+        ],
         vec![task(
             "高数极限 + 英语词汇 + 408链表",
             "2026-08-28",
@@ -310,7 +391,11 @@ fn lg_tc007_multi_unit_reject() {
     );
     // 0 mutation：compile 防御层也拒绝
     assert!(compile_to_changeset_ops_grounded(&conn, p, None, false, &d).is_err());
-    assert_eq!(count(&conn, "learning_items"), before_items, "TC007: 0 mutation");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        before_items,
+        "TC007: 0 mutation"
+    );
     assert_eq!(count(&conn, "tasks"), before_tasks, "TC007: 0 mutation");
 }
 
@@ -334,8 +419,13 @@ fn lg_tc008_meta_task_allowed_null() {
         })
         .unwrap();
     assert_eq!(item, None, "TC008: meta 合法 NULL");
-    let written = ChangeSetRepository::new(&conn).list_operations(cs, p).unwrap();
-    assert!(verify_written_ops(&conn, p, &written).0, "TC008: meta ReadBack 通过");
+    let written = ChangeSetRepository::new(&conn)
+        .list_operations(cs, p)
+        .unwrap();
+    assert!(
+        verify_written_ops(&conn, p, &written).0,
+        "TC008: meta ReadBack 通过"
+    );
 }
 
 // ==================== LG-TC009 · Missing Unit ====================
@@ -350,7 +440,9 @@ fn lg_tc009_missing_unit_invalid() {
     );
     let v = validate_plan_draft(&conn, p, &d);
     assert!(
-        v.errors.iter().any(|e| e.contains("缺少学习单元") || e.contains("unit_refs 为空")),
+        v.errors
+            .iter()
+            .any(|e| e.contains("缺少学习单元") || e.contains("unit_refs 为空")),
         "TC009: Learning+空 必须 INVALID（{:?}）",
         v.errors
     );
@@ -384,13 +476,32 @@ fn lg_tc010_one_changeset() {
                 unit("eng", "英语", ""),
             ],
             vec![
-                task("高数：极限基础题", "2026-08-28", 90, g_learning(&["math.limit"])),
-                task("英语：词汇复习 30min", "2026-08-28", 30, g_learning(&["eng"])),
-                task("数学：极限概念阅读", "2026-08-29", 40, g_learning(&["math.limit"])),
+                task(
+                    "高数：极限基础题",
+                    "2026-08-28",
+                    90,
+                    g_learning(&["math.limit"]),
+                ),
+                task(
+                    "英语：词汇复习 30min",
+                    "2026-08-28",
+                    30,
+                    g_learning(&["eng"]),
+                ),
+                task(
+                    "数学：极限概念阅读",
+                    "2026-08-29",
+                    40,
+                    g_learning(&["math.limit"]),
+                ),
             ],
         ),
     );
-    assert_eq!(count(&conn, "ai_change_sets"), 1, "TC010: 3 单元 + 3 任务 = ONE ChangeSet");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        1,
+        "TC010: 3 单元 + 3 任务 = ONE ChangeSet"
+    );
     assert_eq!(ops.len(), 6, "TC010: 6 ops（3 knowledge + 3 task）");
     assert_eq!(count(&conn, "tasks"), 3);
     assert_eq!(count(&conn, "learning_items"), 3);
@@ -424,11 +535,22 @@ fn lg_tc011_atomic_failure_zero_mutation() {
         ],
     );
     let v = validate_plan_draft(&conn, p, &d);
-    assert!(v.errors.iter().any(|e| e.contains("dangling") || e.contains("不存在于 learning_units")));
+    assert!(v
+        .errors
+        .iter()
+        .any(|e| e.contains("dangling") || e.contains("不存在于 learning_units")));
     assert!(compile_to_changeset_ops_grounded(&conn, p, None, false, &d).is_err());
-    assert_eq!(count(&conn, "learning_items"), before_items, "TC011: 0 残留");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        before_items,
+        "TC011: 0 残留"
+    );
     assert_eq!(count(&conn, "tasks"), before_tasks, "TC011: 0 残留");
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "TC011: 连 ChangeSet 都未创建");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "TC011: 连 ChangeSet 都未创建"
+    );
 }
 
 // ==================== LG-TC012 · Undo New Units ====================
@@ -442,7 +564,12 @@ fn lg_tc012_undo_new_units() {
         p,
         &draft(
             vec![unit("math.limit", "极限", "")],
-            vec![task("极限基础训练", "2026-08-28", 90, g_learning(&["math.limit"]))],
+            vec![task(
+                "极限基础训练",
+                "2026-08-28",
+                90,
+                g_learning(&["math.limit"]),
+            )],
         ),
     );
     assert_eq!(count(&conn, "tasks"), 1);
@@ -450,7 +577,11 @@ fn lg_tc012_undo_new_units() {
 
     ChangeSetRepository::new(&conn).undo(p, cs).expect("undo");
     assert_eq!(count(&conn, "tasks"), 0, "TC012: Task 撤销");
-    assert_eq!(count(&conn, "learning_items"), 0, "TC012: 本包新建 Unit 安全撤销");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        0,
+        "TC012: 本包新建 Unit 安全撤销"
+    );
 }
 
 // ==================== LG-TC013 · Undo Reused Units ====================
@@ -465,15 +596,27 @@ fn lg_tc013_undo_reused_units_preserved() {
         p,
         &draft(
             vec![unit("math.limit", "极限", "")],
-            vec![task("极限基础训练", "2026-08-28", 90, g_learning(&["math.limit"]))],
+            vec![task(
+                "极限基础训练",
+                "2026-08-28",
+                90,
+                g_learning(&["math.limit"]),
+            )],
         ),
     );
-    assert!(ops.iter().all(|o| o.entity_type != "knowledge"), "TC013: 复用无 knowledge op");
+    assert!(
+        ops.iter().all(|o| o.entity_type != "knowledge"),
+        "TC013: 复用无 knowledge op"
+    );
 
     ChangeSetRepository::new(&conn).undo(cs, p).expect("undo");
     assert_eq!(count(&conn, "tasks"), 0, "TC013: Task 撤销");
     let still: i64 = conn
-        .query_row("SELECT COUNT(*) FROM learning_items WHERE id=?1", params![limit], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM learning_items WHERE id=?1",
+            params![limit],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(still, 1, "TC013: 用户原有「极限」绝不能被 Undo 删除");
 }
@@ -489,17 +632,32 @@ fn lg_tc014_session_snapshot() {
         p,
         &draft(
             vec![unit("math.limit", "极限", "")],
-            vec![task("极限基础训练", "2026-08-28", 90, g_learning(&["math.limit"]))],
+            vec![task(
+                "极限基础训练",
+                "2026-08-28",
+                90,
+                g_learning(&["math.limit"]),
+            )],
         ),
     );
-    let task_id: i64 = conn.query_row("SELECT id FROM tasks", [], |r| r.get(0)).unwrap();
+    let task_id: i64 = conn
+        .query_row("SELECT id FROM tasks", [], |r| r.get(0))
+        .unwrap();
     let session = app_lib::repository::study_session::StudySessionRepository::new(&conn)
         .start_for_task(p, task_id)
         .unwrap();
     let limit_id: i64 = conn
-        .query_row("SELECT id FROM learning_items WHERE name='极限'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM learning_items WHERE name='极限'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(session.learning_item_id, Some(limit_id), "TC014: Session 启动即 snapshot 极限");
+    assert_eq!(
+        session.learning_item_id,
+        Some(limit_id),
+        "TC014: Session 启动即 snapshot 极限"
+    );
 }
 
 // ==================== LG-TC015 · Snapshot Immutable ====================
@@ -513,16 +671,29 @@ fn lg_tc015_snapshot_immutable() {
         &conn,
         p,
         &draft(
-            vec![unit("math.limit", "极限", ""), unit("math.deriv", "导数", "")],
+            vec![
+                unit("math.limit", "极限", ""),
+                unit("math.deriv", "导数", ""),
+            ],
             vec![task("训练", "2026-08-28", 90, g_learning(&["math.limit"]))],
         ),
     );
-    let task_id: i64 = conn.query_row("SELECT id FROM tasks", [], |r| r.get(0)).unwrap();
+    let task_id: i64 = conn
+        .query_row("SELECT id FROM tasks", [], |r| r.get(0))
+        .unwrap();
     let limit_id: i64 = conn
-        .query_row("SELECT id FROM learning_items WHERE name='极限'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM learning_items WHERE name='极限'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     let deriv_id: i64 = conn
-        .query_row("SELECT id FROM learning_items WHERE name='导数'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM learning_items WHERE name='导数'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     // Session snapshot = 极限
     let _session = app_lib::repository::study_session::StudySessionRepository::new(&conn)
@@ -541,17 +712,23 @@ fn lg_tc015_snapshot_immutable() {
     let cs2 = ChangeSetRepository::new(&conn)
         .create(p, None, None, "reground", "test", &upd)
         .unwrap();
-    ChangeSetRepository::new(&conn).apply(cs2, p, false).unwrap();
+    ChangeSetRepository::new(&conn)
+        .apply(cs2, p, false)
+        .unwrap();
     let now_item: i64 = conn
-        .query_row("SELECT learning_item_id FROM tasks WHERE id=?1", params![task_id], |r| {
-            r.get::<_, Option<i64>>(0)
-        })
+        .query_row(
+            "SELECT learning_item_id FROM tasks WHERE id=?1",
+            params![task_id],
+            |r| r.get::<_, Option<i64>>(0),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(now_item, deriv_id, "TC015: Task 现挂导数");
     // 历史 Session 仍 = 极限（追改禁止）
     let snap: Option<i64> = conn
-        .query_row("SELECT learning_item_id FROM study_sessions", [], |r| r.get(0))
+        .query_row("SELECT learning_item_id FROM study_sessions", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(snap, Some(limit_id), "TC015: 历史 Session 快照冻结");
     let _ = (cs, deriv);
@@ -569,16 +746,30 @@ fn lg_tc016_evidence_closure() {
         p,
         &draft(
             vec![unit("math.limit", "极限", "")],
-            vec![task("极限基础训练", "2026-08-28", 90, g_learning(&["math.limit"]))],
+            vec![task(
+                "极限基础训练",
+                "2026-08-28",
+                90,
+                g_learning(&["math.limit"]),
+            )],
         ),
     );
-    let task_id: i64 = conn.query_row("SELECT id FROM tasks", [], |r| r.get(0)).unwrap();
+    let task_id: i64 = conn
+        .query_row("SELECT id FROM tasks", [], |r| r.get(0))
+        .unwrap();
     let limit_id: i64 = conn
-        .query_row("SELECT id FROM learning_items WHERE name='极限'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM learning_items WHERE name='极限'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     // pace 样本要求 Task completed（DEV-0077.4-A §五十六）
-    conn.execute("UPDATE tasks SET status='completed' WHERE id=?1", params![task_id])
-        .unwrap();
+    conn.execute(
+        "UPDATE tasks SET status='completed' WHERE id=?1",
+        params![task_id],
+    )
+    .unwrap();
     // Session: actual=135min
     let srepo = app_lib::repository::study_session::StudySessionRepository::new(&conn);
     let mut s = srepo.start_for_task(p, task_id).unwrap();
@@ -593,12 +784,19 @@ fn lg_tc016_evidence_closure() {
 
     // Evidence Builder（DEV-0077.4-A 冻结层，只读复用）
     let ev = build_learning_load_evidence(&conn, p, "2026-08-28").unwrap();
-    let u = ev.units.iter().find(|u| u.learning_item_id == limit_id).unwrap();
+    let u = ev
+        .units
+        .iter()
+        .find(|u| u.learning_item_id == limit_id)
+        .unwrap();
     assert_eq!(u.planned_minutes, 90, "TC016: planned=90");
     assert_eq!(u.actual_minutes, 135, "TC016: actual=135");
     assert_eq!(u.pace.sample_count, 1);
     let med = u.pace.median_ratio.unwrap();
-    assert!((med - 1.5).abs() < 1e-9, "TC016: pace median=1.5（实际 {med}）");
+    assert!(
+        (med - 1.5).abs() < 1e-9,
+        "TC016: pace median=1.5（实际 {med}）"
+    );
     let _ = cs;
 }
 
@@ -614,7 +812,11 @@ fn lg_tc017_profile_isolation() {
 
     // A 的 Planner Draft 决不能解析到 B 的 id
     let res = lg::resolve_grounding(&conn, pa, &[unit("math.limit", "极限", "")]).unwrap();
-    assert_eq!(res.reuse.get("math.limit"), Some(&a_limit), "TC017: A → A 的极限");
+    assert_eq!(
+        res.reuse.get("math.limit"),
+        Some(&a_limit),
+        "TC017: A → A 的极限"
+    );
     assert_ne!(*res.reuse.get("math.limit").unwrap(), b_limit);
     // 重复 ref_key 也不允许歧义
     let res_b = lg::resolve_grounding(&conn, pb, &[unit("x", "极限", "")]).unwrap();
@@ -663,7 +865,10 @@ fn lg_tc018_no_direct_mutation() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ai/planner.rs"),
     )
     .unwrap();
-    assert!(!planner_src.contains("execute_action"), "TC018: planner.rs 禁 direct executor");
+    assert!(
+        !planner_src.contains("execute_action"),
+        "TC018: planner.rs 禁 direct executor"
+    );
 }
 
 // ==================== §一百零四 · 性能门（500/100/200，<100ms；<300ms PASS+P2） ====================
@@ -723,16 +928,25 @@ fn performance_gate_grounding_scale() {
     }
     let mut tasks = Vec::new();
     for i in 0..200 {
-        let r = if i % 2 == 0 { format!("c{}", i % 50) } else { format!("root{}", i % 50) };
-        tasks.push(task(&format!("训练{i}：基础练习"), "2026-08-28", 30 + i % 60, g_learning(&[&r])));
+        let r = if i % 2 == 0 {
+            format!("c{}", i % 50)
+        } else {
+            format!("root{}", i % 50)
+        };
+        tasks.push(task(
+            &format!("训练{i}：基础练习"),
+            "2026-08-28",
+            30 + i % 60,
+            g_learning(&[&r]),
+        ));
     }
     let d = draft(all_units.clone(), tasks);
 
     let start = Instant::now();
     let v = validate_plan_draft(&conn, p, &d);
     assert!(v.errors.is_empty(), "perf: 校验错误 {:?}", v.errors);
-    let (ops, _) = compile_to_changeset_ops_grounded(&conn, p, None, false, &d)
-        .expect("perf: compile");
+    let (ops, _) =
+        compile_to_changeset_ops_grounded(&conn, p, None, false, &d).expect("perf: compile");
     let elapsed = start.elapsed().as_millis();
     println!(
         "performance_gate_grounding: 500 items / {} units / 200 tasks → \
@@ -741,7 +955,10 @@ fn performance_gate_grounding_scale() {
         ops.len()
     );
     assert_eq!(ops.len(), 100 + 200, "perf: 100 knowledge + 200 task");
-    assert!(elapsed < 300, "§一百零四：{elapsed}ms 超过 300ms 硬上限（目标 <100ms）");
+    assert!(
+        elapsed < 300,
+        "§一百零四：{elapsed}ms 超过 300ms 硬上限（目标 <100ms）"
+    );
 }
 
 // ==================== §八十五-§八十七 · Planner E2E（JSON 契约全链） ====================
@@ -817,10 +1034,16 @@ fn planner_e2e_grounded_json_contract() {
             }
         }
     }
-    assert_eq!((learning, meta), (3, 1), "E2E: 3 learning grounded + 1 meta");
+    assert_eq!(
+        (learning, meta),
+        (3, 1),
+        "E2E: 3 learning grounded + 1 meta"
+    );
 
     // ReadBack（§三八）
-    let written = ChangeSetRepository::new(&conn).list_operations(cs, p).unwrap();
+    let written = ChangeSetRepository::new(&conn)
+        .list_operations(cs, p)
+        .unwrap();
     let (ok, fail) = verify_written_ops(&conn, p, &written);
     assert!(ok, "E2E: Grounding ReadBack 失败：{fail:?}");
 
@@ -856,7 +1079,11 @@ fn legacy_unlinked_future_task_not_backfilled() {
         ..Default::default()
     };
     let v = validate_plan_draft(&conn, p, &d);
-    assert!(v.errors.is_empty(), "legacy: 旧式草稿不因新契约失败（{:?}）", v.errors);
+    assert!(
+        v.errors.is_empty(),
+        "legacy: 旧式草稿不因新契约失败（{:?}）",
+        v.errors
+    );
     let (ops, report) = compile_to_changeset_ops_grounded(&conn, p, None, false, &d).unwrap();
     assert!(report.is_none(), "legacy: 不产 Grounding 报告");
     let cs = ChangeSetRepository::new(&conn)
@@ -896,10 +1123,18 @@ fn real_data_diagnostic2_readonly() {
         .unwrap();
     for (pid, name) in profiles {
         let items: i64 = conn
-            .query_row("SELECT COUNT(*) FROM learning_items WHERE profile_id=?1", params![pid], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM learning_items WHERE profile_id=?1",
+                params![pid],
+                |r| r.get(0),
+            )
             .unwrap();
         let total_tasks: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1", params![pid], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE profile_id=?1",
+                params![pid],
+                |r| r.get(0),
+            )
             .unwrap();
         let legacy_unlinked: i64 = conn
             .query_row(
@@ -948,7 +1183,11 @@ fn real_data_diagnostic2_readonly() {
             )
             .unwrap()
             .query_map(params![pid], |r| {
-                Ok(format!("  - {} ({})", r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                Ok(format!(
+                    "  - {} ({})",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?
+                ))
             })
             .unwrap()
             .collect::<Result<_, _>>()

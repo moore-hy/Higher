@@ -244,7 +244,11 @@ pub fn retrieve_rule_candidates(
         _ => None,
     };
     if let Some(e) = want_enabled {
-        sql.push_str(if e { " AND enabled = 1" } else { " AND enabled = 0" });
+        sql.push_str(if e {
+            " AND enabled = 1"
+        } else {
+            " AND enabled = 0"
+        });
     }
     if let Some(r) = &hint.recurrence_hint {
         sql.push_str(if r.repeat_type() == "daily" {
@@ -526,12 +530,7 @@ pub fn clear_recent(profile_id: i64, conversation_id: i64) {
 
 /// ChangeSet 真正 Apply 成功后调用（§25：Proposal 创建不算——本函数只有 apply 路径调用）。
 /// 从 ai_change_operations 回读：create 的真实 id 在 apply 时已写回 after_json。
-pub fn record_apply(
-    conn: &Connection,
-    profile_id: i64,
-    conversation_id: i64,
-    change_set_id: i64,
-) {
+pub fn record_apply(conn: &Connection, profile_id: i64, conversation_id: i64, change_set_id: i64) {
     let mut rows: Vec<(String, String, Option<i64>, String)> = Vec::new();
     {
         let Ok(mut stmt) = conn.prepare(
@@ -581,7 +580,8 @@ pub fn record_apply(
 /// 记录一次成功的 Grounding（同样 conversation-scoped ephemeral）。
 pub fn record_grounded(profile_id: i64, conversation_id: i64, entity_type: &str, id: i64) {
     with_recent(profile_id, conversation_id, true, |ctx| {
-        ctx.last_grounded_entity_ids.insert(0, (entity_type.to_string(), id));
+        ctx.last_grounded_entity_ids
+            .insert(0, (entity_type.to_string(), id));
         ctx.last_grounded_entity_ids.truncate(MAX_RECENT);
     });
 }
@@ -589,13 +589,9 @@ pub fn record_grounded(profile_id: i64, conversation_id: i64, entity_type: &str,
 /// Restart fallback（§24）：内存 Recent 为空时，从 **同 profile + 同 conversation**
 /// 最新一次已 Apply 的 ChangeSet 恢复最近真实实体。禁止跨 Conversation。
 /// 返回是否发生了恢复（恢复后内存非空）。
-pub fn load_recent_from_applied(
-    conn: &Connection,
-    profile_id: i64,
-    conversation_id: i64,
-) -> bool {
-    let has_any = with_recent(profile_id, conversation_id, false, |ctx| !ctx.is_empty())
-        .unwrap_or(false);
+pub fn load_recent_from_applied(conn: &Connection, profile_id: i64, conversation_id: i64) -> bool {
+    let has_any =
+        with_recent(profile_id, conversation_id, false, |ctx| !ctx.is_empty()).unwrap_or(false);
     if has_any {
         return false; // 内存已有 → 无需恢复
     }
@@ -633,15 +629,33 @@ pub fn resolve_recent(
         };
         let kind = hint.recency_hint.as_deref().unwrap_or("recent_created");
         if kind == "recent_updated" {
-            (ctx.last_updated_task_ids.clone(), ctx.last_updated_recurring_rule_ids.clone())
+            (
+                ctx.last_updated_task_ids.clone(),
+                ctx.last_updated_recurring_rule_ids.clone(),
+            )
         } else {
-            (ctx.last_created_task_ids.clone(), ctx.last_created_recurring_rule_ids.clone())
+            (
+                ctx.last_created_task_ids.clone(),
+                ctx.last_created_recurring_rule_ids.clone(),
+            )
         }
     };
     // entity_type 决定查哪张表（缺省 task）
-    let etype = if hint.entity_type == "recurring_rule" { "recurring_rule" } else { "task" };
-    let ids: Vec<i64> = if etype == "recurring_rule" { updated } else { created };
-    let table = if etype == "recurring_rule" { "recurring_task_rules" } else { "tasks" };
+    let etype = if hint.entity_type == "recurring_rule" {
+        "recurring_rule"
+    } else {
+        "task"
+    };
+    let ids: Vec<i64> = if etype == "recurring_rule" {
+        updated
+    } else {
+        created
+    };
+    let table = if etype == "recurring_rule" {
+        "recurring_task_rules"
+    } else {
+        "tasks"
+    };
     let mut alive: Vec<i64> = Vec::new();
     for id in ids.iter().take(MAX_RECENT) {
         let ok: bool = conn
@@ -656,7 +670,11 @@ pub fn resolve_recent(
             alive.push(*id);
         }
     }
-    let noun = if etype == "recurring_rule" { "重复任务" } else { "任务" };
+    let noun = if etype == "recurring_rule" {
+        "重复任务"
+    } else {
+        "任务"
+    };
     Ok(match alive.len() {
         0 => GroundingOutcome::NotFound(format!("最近的会话里没有可指向的{noun}")),
         _ if hint.is_plural() => GroundingOutcome::ResolvedMany(alive),
@@ -686,7 +704,13 @@ pub fn retrieve_bulk_tasks(
     profile_id: i64,
     filter: &BulkFilter,
     env: &AiRuntimeEnvelope,
-) -> Result<(Vec<(i64, String, Option<String>, Option<i64>, String)>, usize), String> {
+) -> Result<
+    (
+        Vec<(i64, String, Option<String>, Option<i64>, String)>,
+        usize,
+    ),
+    String,
+> {
     let mut sql = String::from(
         "SELECT id, title, planned_date, planned_time, status FROM tasks
          WHERE profile_id = ?1 AND archived_at IS NULL",
@@ -707,7 +731,10 @@ pub fn retrieve_bulk_tasks(
     }
     if let Some(t) = filter.title_hint.as_deref() {
         if !t.trim().is_empty() {
-            sql.push_str(&format!(" AND title LIKE '%{}%'", t.trim().replace('\'', "''")));
+            sql.push_str(&format!(
+                " AND title LIKE '%{}%'",
+                t.trim().replace('\'', "''")
+            ));
         }
     }
     match filter.recurring {
@@ -716,7 +743,11 @@ pub fn retrieve_bulk_tasks(
         None => {}
     }
     let total: i64 = conn
-        .query_row(&format!("SELECT COUNT(*) FROM ({sql})"), params![profile_id], |r| r.get(0))
+        .query_row(
+            &format!("SELECT COUNT(*) FROM ({sql})"),
+            params![profile_id],
+            |r| r.get(0),
+        )
         .map_err(|e| e.to_string())?;
     sql.push_str(" ORDER BY id ASC");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;

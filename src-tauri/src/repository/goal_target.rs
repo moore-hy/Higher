@@ -96,7 +96,9 @@ impl<'a> GoalTargetRepository<'a> {
             .prepare("SELECT id, profile_id, scenario_type, role, title, target_date, data_json, provenance_json, status, version, supersedes_id, created_at, updated_at, activated_at
                       FROM goal_targets WHERE id=?1 AND profile_id=?2")
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query_map(params![id, profile_id], parse_gt).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![id, profile_id], parse_gt)
+            .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
@@ -106,12 +108,20 @@ impl<'a> GoalTargetRepository<'a> {
             .prepare("SELECT id, profile_id, scenario_type, role, title, target_date, data_json, provenance_json, status, version, supersedes_id, created_at, updated_at, activated_at
                       FROM goal_targets WHERE profile_id=?1 ORDER BY id DESC")
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![profile_id], parse_gt).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![profile_id], parse_gt)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 当前 active（可指定 scenario/role 过滤）。
-    pub fn list_active(&self, profile_id: i64, scenario_type: Option<&str>, role: Option<&str>) -> Result<Vec<GoalTarget>, String> {
+    pub fn list_active(
+        &self,
+        profile_id: i64,
+        scenario_type: Option<&str>,
+        role: Option<&str>,
+    ) -> Result<Vec<GoalTarget>, String> {
         let mut sql = String::from(
             "SELECT id, profile_id, scenario_type, role, title, target_date, data_json, provenance_json, status, version, supersedes_id, created_at, updated_at, activated_at
              FROM goal_targets WHERE profile_id=?1 AND status='active'",
@@ -127,14 +137,20 @@ impl<'a> GoalTargetRepository<'a> {
         }
         sql.push_str(" ORDER BY id DESC");
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(ps.iter()), parse_gt).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(ps.iter()), parse_gt)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// §11.3：激活（一个 transaction）——同 scenario+role 的其他 active → historical；
     /// 目标 → active + activated_at。保证 active 唯一性（postgraduate 由 partial unique 兜底）。
     pub fn activate(&self, profile_id: i64, id: i64) -> Result<GoalTarget, String> {
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         let _ = activate_in_tx(&tx, profile_id, id).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         self.get(id, profile_id)?.ok_or("激活失败".to_string())
@@ -150,11 +166,16 @@ impl<'a> GoalTargetRepository<'a> {
         data_json: &str,
         provenance_json: &str,
     ) -> Result<GoalTarget, String> {
-        let old = self.get(id, profile_id)?.ok_or("目标不存在或不属于当前档案")?;
+        let old = self
+            .get(id, profile_id)?
+            .ok_or("目标不存在或不属于当前档案")?;
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(data_json) {
             Self::validate_data_json(&old.scenario_type, &v)?;
         }
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         tx.execute(
             "UPDATE goal_targets SET status='historical', updated_at=datetime('now') WHERE id=?1",
             params![id],
@@ -189,7 +210,10 @@ impl<'a> GoalTargetRepository<'a> {
 
     /// §11.4：Legacy 目标源候选（只读聚合；绝不自动激活）。
     /// 来源：study_profiles.target_description/target_date、goals.goal_brief_json、goals.name。
-    pub fn list_legacy_candidates(&self, profile_id: i64) -> Result<Vec<LegacyTargetCandidate>, String> {
+    pub fn list_legacy_candidates(
+        &self,
+        profile_id: i64,
+    ) -> Result<Vec<LegacyTargetCandidate>, String> {
         let mut out: Vec<LegacyTargetCandidate> = Vec::new();
         // study_profiles.target_description
         if let Ok(row) = self.conn.query_row(

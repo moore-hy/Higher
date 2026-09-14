@@ -47,11 +47,15 @@ impl AiRuntimeEnvelope {
         mode: &str,
     ) -> Result<Self, String> {
         if !valid_ymd(local_date) {
-            return Err(format!("Runtime local_date 非法（期望 YYYY-MM-DD）：{local_date}"));
+            return Err(format!(
+                "Runtime local_date 非法（期望 YYYY-MM-DD）：{local_date}"
+            ));
         }
         // 时区：UTC-12..UTC+14 → -720..+840（JS offset 取负后语义）
         if !(-720..=840).contains(&timezone_offset_minutes) {
-            return Err(format!("timezone_offset_minutes 超出合理范围：{timezone_offset_minutes}"));
+            return Err(format!(
+                "timezone_offset_minutes 超出合理范围：{timezone_offset_minutes}"
+            ));
         }
         let weekday = crate::repository::recurring_rule::weekday_of(local_date)
             .ok_or_else(|| format!("无法从 local_date 推导 weekday：{local_date}"))?;
@@ -70,7 +74,11 @@ impl AiRuntimeEnvelope {
 
     /// Prompt 摘要（很小；FastChat/Router/Semantic Action 共用）。
     pub fn prompt_block(&self) -> String {
-        let sign = if self.timezone_offset_minutes < 0 { "-" } else { "+" };
+        let sign = if self.timezone_offset_minutes < 0 {
+            "-"
+        } else {
+            "+"
+        };
         let hours = self.timezone_offset_minutes.abs() / 60;
         let mins = self.timezone_offset_minutes.abs() % 60;
         let tz = format!("UTC{sign}{hours:02}:{mins:02}");
@@ -110,11 +118,17 @@ pub enum TemporalIntent {
     Tomorrow,
     Yesterday,
     /// 相对天数（-365..365；0=today、2=后天、-1=昨天）
-    OffsetDays { days: i64 },
+    OffsetDays {
+        days: i64,
+    },
     /// 用户给出的绝对日期（模型可从"2026年9月1日"规范化为 YYYY-MM-DD）
-    AbsoluteDate { date: String },
+    AbsoluteDate {
+        date: String,
+    },
     /// 下一个星期 X（1=周一…7=周日）
-    WeekdayRelative { weekday: u32 },
+    WeekdayRelative {
+        weekday: u32,
+    },
 }
 
 impl TemporalIntent {
@@ -174,7 +188,9 @@ pub fn add_days(base: &str, n: i64) -> Result<String, String> {
 pub enum RecurrenceIntent {
     Daily,
     /// 每周（weekdays 1=周一…7=周日）
-    Weekly { weekdays: Vec<u32> },
+    Weekly {
+        weekdays: Vec<u32>,
+    },
 }
 
 impl RecurrenceIntent {
@@ -254,14 +270,43 @@ pub fn fast_chat_shortcut(user_message: &str) -> bool {
         return false;
     }
     // 极短寒暄
-    if matches!(m, "你好" | "您好" | "hi" | "hello" | "hey" | "谢谢" | "感谢" | "晚安" | "再见") {
+    if matches!(
+        m,
+        "你好" | "您好" | "hi" | "hello" | "hey" | "谢谢" | "感谢" | "晚安" | "再见"
+    ) {
         return true;
     }
     // 明显纯算术/概念（含"等于多少/是多少"的短问句，且无 Higher 动词）
-    let generic_cues = ["等于多少", "是多少", "什么是", "解释一下", "解释", "翻译", "区别是什么"];
+    let generic_cues = [
+        "等于多少",
+        "是多少",
+        "什么是",
+        "解释一下",
+        "解释",
+        "翻译",
+        "区别是什么",
+    ];
     let higher_cues = [
-        "任务", "计划", "规划", "知识", "目标", "学习记录", "我的", "复盘", "安排", "创建",
-        "添加", "修改", "删除", "每天", "每日", "每周", "重复", "提醒", "进度", "掌握",
+        "任务",
+        "计划",
+        "规划",
+        "知识",
+        "目标",
+        "学习记录",
+        "我的",
+        "复盘",
+        "安排",
+        "创建",
+        "添加",
+        "修改",
+        "删除",
+        "每天",
+        "每日",
+        "每周",
+        "重复",
+        "提醒",
+        "进度",
+        "掌握",
     ];
     if m.chars().count() <= 40 && generic_cues.iter().any(|c| m.contains(c)) {
         return !higher_cues.iter().any(|c| m.contains(c));
@@ -274,8 +319,22 @@ pub fn fast_chat_shortcut(user_message: &str) -> bool {
 /// 长对话与新对话中的完整命令不被无关历史污染（聊天主路径的 bounded history 不受影响，§61）。
 pub fn needs_reference_history(user_message: &str) -> bool {
     const CUES: &[&str] = &[
-        "刚才", "刚刚", "那个", "这个", "它", "上一个", "下一个", "第一个", "第二个",
-        "前一个", "后一个", "继续", "同样", "照刚才", "那明天", "那后天",
+        "刚才",
+        "刚刚",
+        "那个",
+        "这个",
+        "它",
+        "上一个",
+        "下一个",
+        "第一个",
+        "第二个",
+        "前一个",
+        "后一个",
+        "继续",
+        "同样",
+        "照刚才",
+        "那明天",
+        "那后天",
     ];
     CUES.iter().any(|c| user_message.contains(c))
 }
@@ -323,27 +382,49 @@ pub fn parse_router_decision(raw: &str) -> Option<RouterDecision> {
         .trim();
     let v: serde_json::Value = serde_json::from_str(t).ok()?;
     let route = v.get("route")?.as_str()?.to_string();
-    if !["fast_chat", "higher_read", "action", "planning", "planner_continuation", "clarification"]
-        .contains(&route.as_str())
+    if ![
+        "fast_chat",
+        "higher_read",
+        "action",
+        "planning",
+        "planner_continuation",
+        "clarification",
+    ]
+    .contains(&route.as_str())
     {
         return None;
     }
     let skills = v
         .get("skills")
         .and_then(|s| s.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let question = v.get("question").and_then(|q| q.as_str()).map(String::from);
-    Some(RouterDecision { route, skills, question })
+    Some(RouterDecision {
+        route,
+        skills,
+        question,
+    })
 }
 
 /// Semantic Action Provider Prompt（§13.1：JSON mode、tools=0、只加载 selected Skills）。
 /// DEV-0061R §18.1：Contract 说明/examples **只来自 semantic_contract.rs**（禁止第二份）。
-pub fn semantic_action_prompt(user_message: &str, env: &AiRuntimeEnvelope, skill_ids: &[String]) -> String {
+pub fn semantic_action_prompt(
+    user_message: &str,
+    env: &AiRuntimeEnvelope,
+    skill_ids: &[String],
+) -> String {
     let mut skills_text = String::new();
     for id in skill_ids {
         if let Some(s) = crate::ai::skills::skill_by_id(id) {
-            skills_text.push_str(&format!("\n===== Skill: {} v{} =====\n{}\n", s.id, s.version, s.instructions));
+            skills_text.push_str(&format!(
+                "\n===== Skill: {} v{} =====\n{}\n",
+                s.id, s.version, s.instructions
+            ));
         }
     }
     format!(
@@ -367,11 +448,17 @@ pub fn semantic_action_prompt(user_message: &str, env: &AiRuntimeEnvelope, skill
 #[derive(Debug, Clone)]
 pub enum TurnDecision {
     FastChat,
-    HigherRead { skills: Vec<String> },
-    Action { action: crate::ai::action::SemanticAction },
+    HigherRead {
+        skills: Vec<String>,
+    },
+    Action {
+        action: crate::ai::action::SemanticAction,
+    },
     Planning,
     PlannerContinuation,
-    Clarification { question: String },
+    Clarification {
+        question: String,
+    },
 }
 
 /// Turn Interpreter Prompt（§10：输入只有 当前消息 + Envelope + Planner 摘要 + Skill 摘要
@@ -439,12 +526,13 @@ pub fn parse_turn_decision(raw: &str) -> Option<TurnDecision> {
     let skills = v
         .get("skills")
         .and_then(|s| s.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
-    let question = v
-        .get("question")
-        .and_then(|q| q.as_str())
-        .map(String::from);
+    let question = v.get("question").and_then(|q| q.as_str()).map(String::from);
     match route.as_str() {
         "fast_chat" => Some(TurnDecision::FastChat),
         "higher_read" => Some(TurnDecision::HigherRead { skills }),
@@ -483,7 +571,9 @@ pub fn bound_history(
 ) -> Vec<(i64, String, String)> {
     let kept_all: Vec<&(i64, String, String)> = history
         .iter()
-        .filter(|(id, role, _)| *id != current_message_id && (role == "user" || role == "assistant"))
+        .filter(|(id, role, _)| {
+            *id != current_message_id && (role == "user" || role == "assistant")
+        })
         .collect();
     let mut kept: Vec<&(i64, String, String)> =
         kept_all.into_iter().rev().take(max_turns * 2).collect();

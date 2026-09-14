@@ -43,24 +43,41 @@ pub fn build_insight_injection(
         s.push_str(&format!("当前焦点：{}\n", ctx.current_focus));
     }
     // 事实类记忆（用户陈述）与推断类（待确认）分开标注，禁止冒充
-    let facts: Vec<&MemoryRecord> = memories.iter().filter(|m| m.memory_type != "ai_inference").collect();
-    let derived: Vec<&MemoryRecord> = memories.iter().filter(|m| m.memory_type == "ai_inference").collect();
+    let facts: Vec<&MemoryRecord> = memories
+        .iter()
+        .filter(|m| m.memory_type != "ai_inference")
+        .collect();
+    let derived: Vec<&MemoryRecord> = memories
+        .iter()
+        .filter(|m| m.memory_type == "ai_inference")
+        .collect();
     if !facts.is_empty() {
         s.push_str("用户明确陈述过：\n");
         for m in facts.iter().take(6) {
-            let line = if m.memory_value.is_empty() { &m.memory_key } else { &m.memory_value };
+            let line = if m.memory_value.is_empty() {
+                &m.memory_key
+            } else {
+                &m.memory_value
+            };
             s.push_str(&format!("- {line}\n"));
         }
     }
     if !derived.is_empty() {
         s.push_str("AI 推断（待用户确认，不得当作既定事实）：\n");
         for m in derived.iter().take(4) {
-            let line = if m.memory_value.is_empty() { &m.memory_key } else { &m.memory_value };
+            let line = if m.memory_value.is_empty() {
+                &m.memory_key
+            } else {
+                &m.memory_value
+            };
             s.push_str(&format!("- {line}\n"));
         }
     }
     if !ctx.active_constraints.is_empty() {
-        s.push_str(&format!("硬约束（建议必须尊重）：{}\n", ctx.active_constraints.join("；")));
+        s.push_str(&format!(
+            "硬约束（建议必须尊重）：{}\n",
+            ctx.active_constraints.join("；")
+        ));
     }
     let req_head: String = current_request.chars().take(80).collect();
     s.push_str(&format!(
@@ -71,14 +88,21 @@ pub fn build_insight_injection(
 
 /// 从注入块反推 PersonalInsight（测试/审计用：结构化呈现模型应遵循的
 /// 推理依据；生产主循环不调用）。
-pub fn insight_from_sources(
-    memories: &[MemoryRecord],
-    confidence: f32,
-) -> PersonalInsight {
+pub fn insight_from_sources(memories: &[MemoryRecord], confidence: f32) -> PersonalInsight {
     PersonalInsight {
         reasoning: memories
             .iter()
-            .map(|m| format!("[{}]{}", m.memory_type, if m.memory_value.is_empty() { m.memory_key.clone() } else { m.memory_value.clone() }))
+            .map(|m| {
+                format!(
+                    "[{}]{}",
+                    m.memory_type,
+                    if m.memory_value.is_empty() {
+                        m.memory_key.clone()
+                    } else {
+                        m.memory_value.clone()
+                    }
+                )
+            })
             .collect::<Vec<_>>()
             .join("；"),
         recommendation: String::new(),

@@ -54,7 +54,11 @@ pub enum FinalContentKind {
 /// §6 分类：只看 content / reasoning_content / finish_reason / tool_calls 的
 /// 非空性（reasoning 只参与判定，原文不出本函数）。
 pub fn classify_final(c: &Completion) -> FinalContentKind {
-    let content_ok = c.content.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false);
+    let content_ok = c
+        .content
+        .as_deref()
+        .map(|t| !t.trim().is_empty())
+        .unwrap_or(false);
     if content_ok {
         return FinalContentKind::FinalText;
     }
@@ -92,13 +96,16 @@ pub fn classify_final(c: &Completion) -> FinalContentKind {
 pub fn is_hard_connection_failure(err: &str) -> bool {
     err.contains("API Key 无效或未授权")            // 401 认证/授权
         || err.contains("接口或模型不存在")           // 404 endpoint/model
-        || err.contains("无法访问 AI 服务地址")       // connect/DNS 失败
+        || err.contains("无法访问 AI 服务地址") // connect/DNS 失败
 }
 
 // =============== §7.1/§7.2 Structured（保持 DEV-0062R 语义） ===============
 
 pub fn structured_output_valid(raw: &str) -> bool {
-    matches!(runtime::parse_turn_decision(raw), Some(TurnDecision::FastChat))
+    matches!(
+        runtime::parse_turn_decision(raw),
+        Some(TurnDecision::FastChat)
+    )
 }
 
 fn structured_prompt() -> String {
@@ -151,7 +158,12 @@ pub struct ProbeDetails {
 
 impl ProbeDetails {
     /// §18.4 last_test_message 摘要段（安全、固定格式）。
-    pub fn summary(&self, json_strategy: JsonStrategy, tools: Option<bool>, stream: Option<bool>) -> String {
+    pub fn summary(
+        &self,
+        json_strategy: JsonStrategy,
+        tools: Option<bool>,
+        stream: Option<bool>,
+    ) -> String {
         let strategy = match json_strategy {
             JsonStrategy::Native => "native",
             JsonStrategy::PromptOnly => "prompt_only",
@@ -159,18 +171,36 @@ impl ProbeDetails {
         };
         format!(
             "basic={}; json={}; tools={}; temp0={}; stream={}",
-            if self.basic.is_empty() { "untested" } else { &self.basic },
+            if self.basic.is_empty() {
+                "untested"
+            } else {
+                &self.basic
+            },
             strategy,
             match tools {
                 Some(true) => "pass",
                 Some(false) => "fail",
-                None => if self.skipped.is_empty() { "untested" } else { &self.skipped },
+                None =>
+                    if self.skipped.is_empty() {
+                        "untested"
+                    } else {
+                        &self.skipped
+                    },
             },
-            if self.temp0.is_empty() { "untested" } else { &self.temp0 },
+            if self.temp0.is_empty() {
+                "untested"
+            } else {
+                &self.temp0
+            },
             match stream {
                 Some(true) => "pass",
                 Some(false) => "fail",
-                None => if self.skipped.is_empty() { "untested" } else { &self.skipped },
+                None =>
+                    if self.skipped.is_empty() {
+                        "untested"
+                    } else {
+                        &self.skipped
+                    },
             },
         )
     }
@@ -293,9 +323,7 @@ async fn probe_temp0(client: &super::client::AiClient) -> (Option<bool>, String)
 }
 
 /// §9 Structured（保持 DEV-0062R：Native→PromptOnly→Repair Once，≤3）。
-async fn probe_structured(
-    config: &AiRuntimeConfig,
-) -> (Option<bool>, JsonStrategy, bool, u32) {
+async fn probe_structured(config: &AiRuntimeConfig) -> (Option<bool>, JsonStrategy, bool, u32) {
     use super::client::AiClient;
 
     let mut calls: u32 = 0;
@@ -518,7 +546,10 @@ pub async fn run_probe(config: &AiRuntimeConfig) -> ProbeOutcome {
         };
         total_calls += 1; // E
     }
-    debug_assert!(total_calls <= PROBE_MAX_TOTAL_CALLS, "Probe call budget exceeded");
+    debug_assert!(
+        total_calls <= PROBE_MAX_TOTAL_CALLS,
+        "Probe call budget exceeded"
+    );
 
     let caps = AiCapabilities {
         basic_chat,

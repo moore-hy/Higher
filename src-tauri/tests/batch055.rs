@@ -61,7 +61,10 @@ fn test_goal_brief_create_read_update() {
     b2.deadline = Some("2027-12-26".into());
     repo.set_final_brief(p, &b2).unwrap();
     assert_eq!(
-        GoalRepository::new(&conn).get_final_brief(p).unwrap().deadline,
+        GoalRepository::new(&conn)
+            .get_final_brief(p)
+            .unwrap()
+            .deadline,
         Some("2027-12-26".into())
     );
 }
@@ -78,22 +81,31 @@ fn test_ambiguous_history_not_canonicalized() {
     conn.execute(
         "UPDATE study_profiles SET target_description='冲刺清华大学计算机' WHERE id=?1",
         rusqlite::params![p],
-    ).unwrap();
+    )
+    .unwrap();
     // 存 canonical brief（outcome 与 profile 描述不同）
-    repo.set_final_brief(p, &GoalBrief {
-        title: "2027 考研".into(),
-        outcome: "考取华中科技大学计算机专业".into(),
-        deadline: Some("2027-12-25".into()),
-        success_criteria: vec!["初试过线".into()],
-        ..Default::default()
-    }).unwrap();
+    repo.set_final_brief(
+        p,
+        &GoalBrief {
+            title: "2027 考研".into(),
+            outcome: "考取华中科技大学计算机专业".into(),
+            deadline: Some("2027-12-25".into()),
+            success_criteria: vec!["初试过线".into()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
     // 冲突必须被检测（不自动选边）
     let conflicts = repo.detect_goal_conflicts(p);
     assert!(!conflicts.is_empty(), "双源不同表述必须报冲突");
     // 且历史数据未被改写
-    let pd: String = conn.query_row(
-        "SELECT target_description FROM study_profiles WHERE id=?1",
-        rusqlite::params![p], |r| r.get(0)).unwrap();
+    let pd: String = conn
+        .query_row(
+            "SELECT target_description FROM study_profiles WHERE id=?1",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(pd, "冲刺清华大学计算机");
     assert_eq!(f.name, "未设置最终目标");
 }
@@ -111,14 +123,17 @@ fn test_planner_readiness_gate() {
     assert!(!st.missing.is_empty());
     // §204 complete：补全后 ready
     GoalRepository::new(&conn)
-        .set_final_brief(p, &GoalBrief {
-            title: "英语提升".into(),
-            outcome: "通过六级".into(),
-            deadline: None,
-            success_criteria: vec!["六级 500+".into()],
-            constraints: vec!["无截止（长期提升）".into()],
-            ..Default::default()
-        })
+        .set_final_brief(
+            p,
+            &GoalBrief {
+                title: "英语提升".into(),
+                outcome: "通过六级".into(),
+                deadline: None,
+                success_criteria: vec!["六级 500+".into()],
+                constraints: vec!["无截止（长期提升）".into()],
+                ..Default::default()
+            },
+        )
         .unwrap();
     let st2 = planner::read_goal_state(&conn, p);
     assert!(st2.missing.is_empty(), "missing={:?}", st2.missing);
@@ -133,7 +148,9 @@ fn test_planning_intent_and_compile_to_changeset() {
     assert!(!planning_write_intent("你觉得我应该怎么复习408？"));
     // §206 Write Intent 必须进
     assert!(planning_write_intent("给我安排未来14天并加入Higher"));
-    assert!(planning_write_intent("根据我的档案生成学习计划并加入 higher"));
+    assert!(planning_write_intent(
+        "根据我的档案生成学习计划并加入 higher"
+    ));
     assert!(planning_write_intent("帮我制定学习计划"));
     assert!(planning_write_intent("把这些任务排进日历"));
 
@@ -213,11 +230,21 @@ fn test_planning_intent_and_compile_to_changeset() {
         "SELECT SUM(goal_level='year'), SUM(goal_level='month'), SUM(goal_level='day') FROM goals WHERE profile_id=?1",
         rusqlite::params![p], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
     assert_eq!((y, m, d), (1, 1, 2));
-    let k: i64 = conn.query_row("SELECT COUNT(*) FROM learning_items WHERE profile_id=?1", rusqlite::params![p], |r| r.get(0)).unwrap();
+    let k: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM learning_items WHERE profile_id=?1",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(k, 1);
-    let (t_title, t_kind, t_item): (String, String, i64) = conn.query_row(
-        "SELECT title, task_kind, learning_item_id FROM tasks WHERE profile_id=?1",
-        rusqlite::params![p], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    let (t_title, t_kind, t_item): (String, String, i64) = conn
+        .query_row(
+            "SELECT title, task_kind, learning_item_id FROM tasks WHERE profile_id=?1",
+            rusqlite::params![p],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
     assert_eq!(t_title, "学习极限定义");
     assert_eq!(t_kind, "structured");
     assert!(t_item > 0, "knowledge_ref 已解析为真实 id");
@@ -234,21 +261,66 @@ fn test_validator_rejections() {
 
     // 休息日有任务 → 拒
     let mut d1 = PlanDraft::default();
-    d1.day_goals.push(PlanGoalNode { name: "周日休息".into(), period: "2026-08-16".into(), parent_ref: "".into(), rest_day: true, operation_ref: "D1".into() });
-    d1.tasks.push(PlanTask { title: "偷跑任务".into(), date: "2026-08-16".into(), estimated_minutes: Some(30), task_kind: "structured".into(), priority: "normal".into(), goal_ref: "D1".into(), knowledge_ref: "".into(), grounding: None });
+    d1.day_goals.push(PlanGoalNode {
+        name: "周日休息".into(),
+        period: "2026-08-16".into(),
+        parent_ref: "".into(),
+        rest_day: true,
+        operation_ref: "D1".into(),
+    });
+    d1.tasks.push(PlanTask {
+        title: "偷跑任务".into(),
+        date: "2026-08-16".into(),
+        estimated_minutes: Some(30),
+        task_kind: "structured".into(),
+        priority: "normal".into(),
+        goal_ref: "D1".into(),
+        knowledge_ref: "".into(),
+        grounding: None,
+    });
     let v = validate_plan_draft(&conn, p, &d1);
     assert!(v.errors.iter().any(|e| e.contains("休息日")));
 
     // 超载 → OVERLOADED 标记（§57）
-    let mut d2 = PlanDraft { daily_available_minutes: Some(120), ..Default::default() };
-    d2.tasks.push(PlanTask { title: "A".into(), date: "2026-08-17".into(), estimated_minutes: Some(90), task_kind: "accumulation".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into(), grounding: None });
-    d2.tasks.push(PlanTask { title: "B".into(), date: "2026-08-17".into(), estimated_minutes: Some(90), task_kind: "accumulation".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into(), grounding: None });
+    let mut d2 = PlanDraft {
+        daily_available_minutes: Some(120),
+        ..Default::default()
+    };
+    d2.tasks.push(PlanTask {
+        title: "A".into(),
+        date: "2026-08-17".into(),
+        estimated_minutes: Some(90),
+        task_kind: "accumulation".into(),
+        priority: "normal".into(),
+        goal_ref: "".into(),
+        knowledge_ref: "".into(),
+        grounding: None,
+    });
+    d2.tasks.push(PlanTask {
+        title: "B".into(),
+        date: "2026-08-17".into(),
+        estimated_minutes: Some(90),
+        task_kind: "accumulation".into(),
+        priority: "normal".into(),
+        goal_ref: "".into(),
+        knowledge_ref: "".into(),
+        grounding: None,
+    });
     let v2 = validate_plan_draft(&conn, p, &d2);
     assert!(!v2.overloaded_days.is_empty(), "180>120 应 OVERLOADED");
 
     // 占位名 / 重复 / 非法日期 / 非法分钟
     let mut d3 = PlanDraft::default();
-    let bad_task = PlanTask { title: "学习任务1".into(), date: "2026/08/17".into(), estimated_minutes: Some(0), task_kind: "structured".into(), priority: "normal".into(), goal_ref: "".into(), knowledge_ref: "".into(), grounding: None };
+    let bad_task = PlanTask {
+        title: "学习任务1".into(),
+        date: "2026/08/17".into(),
+        estimated_minutes: Some(0),
+        task_kind: "structured".into(),
+        priority: "normal".into(),
+        goal_ref: "".into(),
+        knowledge_ref: "".into(),
+        grounding: None,
+    };
     d3.tasks.push(bad_task.clone());
     d3.tasks.push(bad_task);
     let v3 = validate_plan_draft(&conn, p, &d3);
@@ -258,8 +330,20 @@ fn test_validator_rejections() {
 
     // month 不在 year 内 / day 不属于 month
     let mut d4 = PlanDraft::default();
-    d4.year_goals.push(PlanGoalNode { name: "Y".into(), period: "2026-08-01..2026-12-31".into(), parent_ref: "".into(), rest_day: false, operation_ref: "G1".into() });
-    d4.month_goals.push(PlanGoalNode { name: "2027年1月".into(), period: "2027-01".into(), parent_ref: "G1".into(), rest_day: false, operation_ref: "G2".into() });
+    d4.year_goals.push(PlanGoalNode {
+        name: "Y".into(),
+        period: "2026-08-01..2026-12-31".into(),
+        parent_ref: "".into(),
+        rest_day: false,
+        operation_ref: "G1".into(),
+    });
+    d4.month_goals.push(PlanGoalNode {
+        name: "2027年1月".into(),
+        period: "2027-01".into(),
+        parent_ref: "G1".into(),
+        rest_day: false,
+        operation_ref: "G2".into(),
+    });
     let v4 = validate_plan_draft(&conn, p, &d4);
     assert!(v4.errors.iter().any(|e| e.contains("不在其父年范围")));
 }
@@ -285,9 +369,17 @@ fn test_data_aggregates() {
     let trepo = TaskRepository::new(&conn);
 
     // 知识树：数学 > 高数
-    conn.execute("INSERT INTO learning_items (profile_id,parent_id,name) VALUES (?1,NULL,'数学')", rusqlite::params![p]).unwrap();
+    conn.execute(
+        "INSERT INTO learning_items (profile_id,parent_id,name) VALUES (?1,NULL,'数学')",
+        rusqlite::params![p],
+    )
+    .unwrap();
     let math = conn.last_insert_rowid();
-    conn.execute("INSERT INTO learning_items (profile_id,parent_id,name) VALUES (?1,?2,'高数')", rusqlite::params![p, math]).unwrap();
+    conn.execute(
+        "INSERT INTO learning_items (profile_id,parent_id,name) VALUES (?1,?2,'高数')",
+        rusqlite::params![p, math],
+    )
+    .unwrap();
     let gs = conn.last_insert_rowid();
 
     // Day1：数学高数 1h（结束）
@@ -317,8 +409,15 @@ fn test_data_aggregates() {
         // 复刻 get_knowledge_time_distribution 的核心查询
         let mut out = Vec::new();
         let kids: Vec<(i64, String)> = {
-            let mut stmt = conn.prepare("SELECT id,name FROM learning_items WHERE profile_id=?1 AND parent_id IS NULL").unwrap();
-            stmt.query_map(rusqlite::params![p], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().filter_map(|x| x.ok()).collect()
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id,name FROM learning_items WHERE profile_id=?1 AND parent_id IS NULL",
+                )
+                .unwrap();
+            stmt.query_map(rusqlite::params![p], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .filter_map(|x| x.ok())
+                .collect()
         };
         for (id, name) in kids {
             let secs: i64 = conn.query_row(
@@ -338,14 +437,26 @@ fn test_data_aggregates() {
     // §218 Time-of-Day：15日10:00(+8) 1h 全进 09-12；16日13:00 30m 进 12-15；16日14:00 30m 进 12-15
     // （started_at 为 UTC：02:00Z=10:00+8 → 09-12 段 3600s；05:00Z=13:00+8 → 12-15 1800；06:00Z=14:00+8 → 12-15 1800）
     let buckets = app_lib::ai::planner::time_of_day_distribution(&conn, p);
-    let find = |n: &str| buckets.iter().find(|(b, _)| b == n).map(|(_, s)| *s).unwrap_or(0);
+    let find = |n: &str| {
+        buckets
+            .iter()
+            .find(|(b, _)| b == n)
+            .map(|(_, s)| *s)
+            .unwrap_or(0)
+    };
     assert_eq!(find("09-12"), 3600, "15日 10:00-11:00");
     assert_eq!(find("12-15"), 3600, "16日 13:00-14:30");
     // 跨段拆分（§218）：03:30Z(+8=11:30) 时长 1h → 09-12 得 30m + 12-15 得 30m
     let s4 = srepo.start_for_item(gs, None).unwrap();
     conn.execute("UPDATE study_sessions SET started_at='2026-08-17 03:30:00', ended_at='2026-08-17 04:30:00', duration_seconds=3600, status='completed' WHERE id=?1", rusqlite::params![s4.id]).unwrap();
     let buckets2 = app_lib::ai::planner::time_of_day_distribution(&conn, p);
-    let find2 = |n: &str| buckets2.iter().find(|(b, _)| b == n).map(|(_, s)| *s).unwrap_or(0);
+    let find2 = |n: &str| {
+        buckets2
+            .iter()
+            .find(|(b, _)| b == n)
+            .map(|(_, s)| *s)
+            .unwrap_or(0)
+    };
     assert_eq!(find2("09-12"), 3600 + 1800, "原1h + 跨段前半(11:30-12:00)");
     assert_eq!(find2("12-15"), 3600 + 1800, "原1h + 跨段后半(12:00-12:30)");
 }

@@ -37,7 +37,11 @@ pub struct AgentSource {
 /// 确定性 Web 结果注入口（§38 禁止测试访问真实互联网；生产路径不经过此处）。
 pub trait WebFake: Send + Sync {
     /// 搜索：返回 (title, url, snippet, published_at) 列表（与 brave_search 同构）。
-    fn search(&self, query: &str, count: u32) -> Result<Vec<(String, String, String, Option<String>)>, String>;
+    fn search(
+        &self,
+        query: &str,
+        count: u32,
+    ) -> Result<Vec<(String, String, String, Option<String>)>, String>;
     /// 打开 URL：返回页面正文文本；Err = 模拟失败（timeout/404 等）。
     fn open(&self, url: &str) -> Result<String, String>;
 }
@@ -54,7 +58,8 @@ pub fn set_web_fake_for_tests(db: &crate::db::DbState, fake: Option<WebFakeRef>)
     let mut g = WEB_FAKE_REG.lock().unwrap_or_else(|e| e.into_inner());
     match fake {
         Some(f) => {
-            g.get_or_insert_with(std::collections::HashMap::new).insert(key, f);
+            g.get_or_insert_with(std::collections::HashMap::new)
+                .insert(key, f);
         }
         None => {
             if let Some(m) = g.as_mut() {
@@ -277,7 +282,9 @@ pub async fn execute_agent_tool(ctx: &mut AgentToolCtx<'_>, name: &str, args: &J
         "execute_higher_actions" => {
             let conn = match ctx.state.0.lock() {
                 Ok(c) => c,
-                Err(e) => return json!({ "status": "error", "message": e.to_string() }).to_string(),
+                Err(e) => {
+                    return json!({ "status": "error", "message": e.to_string() }).to_string()
+                }
             };
             execute_higher_actions_tool(ctx, &conn, args)
         }
@@ -302,11 +309,20 @@ pub async fn execute_agent_tool(ctx: &mut AgentToolCtx<'_>, name: &str, args: &J
 }
 
 async fn execute_web_search(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
-    let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("").trim().to_string();
+    let query = args
+        .get("query")
+        .and_then(|q| q.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if query.is_empty() {
         return json!({ "error": "缺少 query 参数" }).to_string();
     }
-    let count = args.get("count").and_then(|c| c.as_u64()).unwrap_or(5).clamp(1, 10) as u32;
+    let count = args
+        .get("count")
+        .and_then(|c| c.as_u64())
+        .unwrap_or(5)
+        .clamp(1, 10) as u32;
     let freshness = args.get("freshness").and_then(|f| f.as_str());
     // Phase F §38：测试 fake 优先（确定性；生产 None → 真实 Brave）
     let result = match web_fake_for(ctx.state) {
@@ -418,7 +434,8 @@ fn record_unresolved_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
         })
         .unwrap_or_default();
     if items.is_empty() {
-        return json!({ "status": "invalid_action", "message": "items 至少 1 条非空说明" }).to_string();
+        return json!({ "status": "invalid_action", "message": "items 至少 1 条非空说明" })
+            .to_string();
     }
     for it in &items {
         if !ctx.unresolved_updates.contains(it) {
@@ -436,14 +453,26 @@ fn record_unresolved_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
 /// §11 · 统一写工具入口（Phase C）：Action Pack → higher_action 管线
 /// （parse → permission → validator → compiler → ONE ChangeSet →
 /// Level 1 自动 Apply / Level 2 confirmation_required / Level 3 拒绝 → read-back verify）。
-fn execute_higher_actions_tool(ctx: &mut AgentToolCtx<'_>, conn: &rusqlite::Connection, args: &J) -> String {
-    let title = args.get("title").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+fn execute_higher_actions_tool(
+    ctx: &mut AgentToolCtx<'_>,
+    conn: &rusqlite::Connection,
+    args: &J,
+) -> String {
+    let title = args
+        .get("title")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if title.is_empty() {
         return json!({ "status": "invalid_pack", "message": "缺少 title 参数" }).to_string();
     }
     let actions: Vec<J> = match args.get("actions").and_then(|a| a.as_array()) {
         Some(a) => a.clone(),
-        None => return json!({ "status": "invalid_pack", "message": "缺少 actions 参数（对象数组）" }).to_string(),
+        None => {
+            return json!({ "status": "invalid_pack", "message": "缺少 actions 参数（对象数组）" })
+                .to_string()
+        }
     };
     let result = super::higher_action::execute_higher_action_pack(
         ctx.app,
@@ -473,15 +502,26 @@ fn execute_higher_actions_tool(ctx: &mut AgentToolCtx<'_>, conn: &rusqlite::Conn
 /// **不挂起**，Workflow 自动继续（WAIT-TC003「完整回答 → pending=0 续原任务」
 /// 的唯一合规模型通道；纯文本宣称不构成已回答证据 §十六）。
 fn request_user_input_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
-    let reason = args.get("reason").and_then(|r| r.as_str()).unwrap_or("").trim().to_string();
+    let reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let raw = match args.get("questions").and_then(|q| q.as_array()) {
         Some(a) => a.clone(),
-        None => return json!({ "status": "invalid_action", "message": "缺少 questions 参数（数组）" }).to_string(),
+        None => {
+            return json!({ "status": "invalid_action", "message": "缺少 questions 参数（数组）" })
+                .to_string()
+        }
     };
     let has_collected = args
         .get("collected")
         .and_then(|c| c.as_object())
-        .map(|m| m.values().any(|v| v.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false)))
+        .map(|m| {
+            m.values()
+                .any(|v| v.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false))
+        })
         .unwrap_or(false);
     if raw.is_empty() && !has_collected {
         return json!({ "status": "invalid_action", "message": "questions 至少 1 项（不得空提问）；全部已答时请携带 collected 提交（questions=[] + collected 非空 = 回答提交）" }).to_string();
@@ -495,8 +535,18 @@ fn request_user_input_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
     let mut questions: Vec<super::workflow::AgentQuestion> = Vec::new();
     let mut seen_keys = std::collections::HashSet::new();
     for (i, q) in raw.iter().enumerate() {
-        let key = q.get("key").and_then(|k| k.as_str()).unwrap_or("").trim().to_string();
-        let text = q.get("question").and_then(|c| c.as_str()).unwrap_or("").trim().to_string();
+        let key = q
+            .get("key")
+            .and_then(|k| k.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let text = q
+            .get("question")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if key.is_empty() {
             return json!({ "status": "invalid_action", "message": format!("questions[{i}].key 不可为空") }).to_string();
         }
@@ -507,12 +557,18 @@ fn request_user_input_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
             return json!({
                 "status": "invalid_action",
                 "message": format!("questions[{i}].key「{key}」重复（同一批内 key 必须唯一）"),
-            }).to_string();
+            })
+            .to_string();
         }
         questions.push(super::workflow::AgentQuestion {
             key,
             question: text,
-            why_needed: q.get("why_needed").and_then(|w| w.as_str()).unwrap_or("").trim().to_string(),
+            why_needed: q
+                .get("why_needed")
+                .and_then(|w| w.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string(),
         });
     }
     // collected：模型对用户回答的结构化理解（§12 已答项 / §13 纠正项）
@@ -524,7 +580,8 @@ fn request_user_input_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
                 if ks.is_empty() || s.trim().is_empty() {
                     continue;
                 }
-                ctx.collected_updates.insert(ks.clone(), s.trim().to_string());
+                ctx.collected_updates
+                    .insert(ks.clone(), s.trim().to_string());
                 collected_preview.insert(ks, json!(s.trim()));
             }
         }
@@ -541,7 +598,11 @@ fn request_user_input_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
         })
         .to_string();
     }
-    ctx.hangup_reason = Some(if reason.is_empty() { "需要用户补充信息".to_string() } else { reason });
+    ctx.hangup_reason = Some(if reason.is_empty() {
+        "需要用户补充信息".to_string()
+    } else {
+        reason
+    });
     json!({
         "status": "needs_user_input",
         "reason": ctx.hangup_reason,
@@ -556,8 +617,16 @@ fn request_user_input_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
 /// 不中断 Tool Loop（模型可继续处理新任务）。E-R1-02：new_task=true 表示
 /// 转向新任务——agent.rs 收口时以当前用户消息重建全新 workflow 上下文。
 fn cancel_current_task_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
-    let reason = args.get("reason").and_then(|r| r.as_str()).unwrap_or("").trim().to_string();
-    let new_task = args.get("new_task").and_then(|n| n.as_bool()).unwrap_or(false);
+    let reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let new_task = args
+        .get("new_task")
+        .and_then(|n| n.as_bool())
+        .unwrap_or(false);
     ctx.task_cancelled = true;
     ctx.task_cancel_new_task = new_task;
     if new_task {

@@ -23,8 +23,17 @@ pub struct UserContext {
 impl UserContext {
     /// 七字段是否全部为空。
     pub fn is_empty(&self) -> bool {
-        self.basic_information.as_deref().map(str::trim).unwrap_or("").is_empty()
-            && self.current_status.as_deref().map(str::trim).unwrap_or("").is_empty()
+        self.basic_information
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+            && self
+                .current_status
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
             && self.long_term_goals.is_empty()
             && self.abilities.is_empty()
             && self.resources.is_empty()
@@ -35,24 +44,46 @@ impl UserContext {
     /// 非空字段数。
     pub fn filled_fields(&self) -> usize {
         [
-            !self.basic_information.as_deref().map(str::trim).unwrap_or("").is_empty(),
-            !self.current_status.as_deref().map(str::trim).unwrap_or("").is_empty(),
+            !self
+                .basic_information
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty(),
+            !self
+                .current_status
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty(),
             !self.long_term_goals.is_empty(),
             !self.abilities.is_empty(),
             !self.resources.is_empty(),
             !self.constraints.is_empty(),
             !self.preferences.is_empty(),
         ]
-        .iter().filter(|b| **b).count()
+        .iter()
+        .filter(|b| **b)
+        .count()
     }
 
     /// 可读摘要（§15「当前用户理解」内容）。
     pub fn summary(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
-        if let Some(b) = self.basic_information.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(b) = self
+            .basic_information
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             parts.push(format!("基础信息：{b}"));
         }
-        if let Some(s) = self.current_status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(s) = self
+            .current_status
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             parts.push(format!("当前状态：{s}"));
         }
         if !self.long_term_goals.is_empty() {
@@ -150,7 +181,11 @@ pub fn analyze_document(text: &str) -> UserContext {
         if v.is_empty() {
             continue; // 模板空槽不算已填
         }
-        let entry = if key.is_empty() { v.to_string() } else { format!("{key}：{v}") };
+        let entry = if key.is_empty() {
+            v.to_string()
+        } else {
+            format!("{key}：{v}")
+        };
         match section {
             "basic" => basic.push(entry),
             "status" => status.push(entry),
@@ -232,7 +267,11 @@ fn split_kv(line: &str) -> (&str, Option<&str>) {
 }
 
 fn join_non_empty(items: &[String]) -> Option<String> {
-    if items.is_empty() { None } else { Some(items.join("；")) }
+    if items.is_empty() {
+        None
+    } else {
+        Some(items.join("；"))
+    }
 }
 
 fn dedup_trim(items: Vec<String>) -> Vec<String> {

@@ -130,7 +130,10 @@ pub struct AiRuntimeConfig {
 impl AiRuntimeConfig {
     /// 请求 endpoint：base_url 去尾斜杠 + 单个 /chat/completions（T11）。
     pub fn endpoint(&self) -> String {
-        format!("{}/chat/completions", self.base_url.trim().trim_end_matches('/'))
+        format!(
+            "{}/chat/completions",
+            self.base_url.trim().trim_end_matches('/')
+        )
     }
 
     /// §15 Model Name Rule：DeepSeek + deepseek_model_suffix → model-thinking（保留现有语义）；
@@ -212,7 +215,7 @@ pub fn resolve_active_ai_profiles(conn: &Connection) -> Result<ResolvedAiProfile
         })?;
     if !primary.enabled {
         return Err(
-            "当前主要 AI 连接已被停用。请在「设置 → AI」重新启用或选择主要 AI。".to_string()
+            "当前主要 AI 连接已被停用。请在「设置 → AI」重新启用或选择主要 AI。".to_string(),
         );
     }
     let control_follows_primary = repo.active_control_id().is_none();
@@ -220,9 +223,12 @@ pub fn resolve_active_ai_profiles(conn: &Connection) -> Result<ResolvedAiProfile
         primary.clone()
     } else {
         let control_id = repo.active_control_id().unwrap();
-        let p = repo.get(control_id).map_err(|e| e.to_string())?.ok_or_else(|| {
-            "当前动作理解 AI 连接已不存在。请在「设置 → AI」重新选择动作理解 AI。".to_string()
-        })?;
+        let p = repo
+            .get(control_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                "当前动作理解 AI 连接已不存在。请在「设置 → AI」重新选择动作理解 AI。".to_string()
+            })?;
         if !p.enabled {
             return Err(
                 "当前动作理解 AI 连接已被停用。请在「设置 → AI」重新启用或改为跟随主要 AI。"

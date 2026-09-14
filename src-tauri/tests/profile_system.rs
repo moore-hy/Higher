@@ -14,11 +14,8 @@
 //! 运行：`cargo test --manifest-path src-tauri/Cargo.toml --test profile_system`
 
 use app_lib::repository::{
-    evaluation::EvaluationRepository,
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
+    evaluation::EvaluationRepository, goal::GoalRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, study_session::StudySessionRepository,
     task::TaskRepository,
 };
 use rusqlite::Connection;
@@ -60,7 +57,13 @@ fn test_migration_v005_schema_version_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
+    );
 
     // study_profiles 表存在
     let tables: Vec<String> = {
@@ -335,7 +338,9 @@ fn test_active_profile_restart_persistence() {
         app_lib::migrations::run_migrations(&conn).unwrap();
 
         let repo = StudyProfileRepository::new(&conn);
-        let p = repo.create("2027 考研", None, None, None, None, None).unwrap();
+        let p = repo
+            .create("2027 考研", None, None, None, None, None)
+            .unwrap();
         repo.set_active(p.id).unwrap();
     }
 
@@ -371,8 +376,12 @@ fn test_profile_goal_isolation() {
     let profile_repo = StudyProfileRepository::new(&conn);
     let goal_repo = GoalRepository::new(&conn);
 
-    let pa = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("Linux 内核学习", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("Linux 内核学习", None, None, None, None, None)
+        .unwrap();
 
     let goal_a = goal_repo.create(pa.id, "考研数学", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "Linux 进程管理", None).unwrap();
@@ -400,8 +409,12 @@ fn test_profile_task_isolation() {
     let item_repo = LearningItemRepository::new(&conn);
     let task_repo = TaskRepository::new(&conn);
 
-    let pa = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("Linux 内核学习", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("Linux 内核学习", None, None, None, None, None)
+        .unwrap();
 
     let goal_a = goal_repo.create(pa.id, "考研数学", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "Linux 进程管理", None).unwrap();
@@ -442,8 +455,12 @@ fn test_profile_session_isolation() {
     let item_repo = LearningItemRepository::new(&conn);
     let session_repo = StudySessionRepository::new(&conn);
 
-    let pa = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("Linux 内核学习", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("Linux 内核学习", None, None, None, None, None)
+        .unwrap();
 
     let goal_a = goal_repo.create(pa.id, "考研数学", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "Linux 进程管理", None).unwrap();
@@ -475,17 +492,51 @@ fn test_profile_evaluation_isolation() {
     let goal_repo = GoalRepository::new(&conn);
     let eval_repo = EvaluationRepository::new(&conn);
 
-    let pa = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("Linux 内核学习", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("Linux 内核学习", None, None, None, None, None)
+        .unwrap();
 
     let goal_a = goal_repo.create(pa.id, "考研数学", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "Linux 进程管理", None).unwrap();
 
     eval_repo
-        .create(pa.id, Some(goal_a.id), None, "数学模拟考试", "test", None, None, Some(20), Some(15), Some(5), Some(150.0), Some(150.0), Some("passed"), None)
+        .create(
+            pa.id,
+            Some(goal_a.id),
+            None,
+            "数学模拟考试",
+            "test",
+            None,
+            None,
+            Some(20),
+            Some(15),
+            Some(5),
+            Some(150.0),
+            Some(150.0),
+            Some("passed"),
+            None,
+        )
         .unwrap();
     eval_repo
-        .create(pb.id, Some(goal_b.id), None, "Linux 概念回忆", "recall", None, None, None, None, None, None, None, Some("partial"), None)
+        .create(
+            pb.id,
+            Some(goal_b.id),
+            None,
+            "Linux 概念回忆",
+            "recall",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("partial"),
+            None,
+        )
         .unwrap();
 
     // Profile A 只能看到 A 的 Evaluation
@@ -509,7 +560,9 @@ fn test_has_active_session_blocks_switch() {
     let item_repo = LearningItemRepository::new(&conn);
     let session_repo = StudySessionRepository::new(&conn);
 
-    let pa = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "考研数学", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "高等数学", None).unwrap();
 
@@ -540,7 +593,9 @@ fn test_profile_calendar_aggregation() {
     let session_repo = StudySessionRepository::new(&conn);
     let eval_repo = EvaluationRepository::new(&conn);
 
-    let pa = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "考研数学", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "高等数学", None).unwrap();
 
@@ -567,7 +622,22 @@ fn test_profile_calendar_aggregation() {
 
     // 创建一个 Evaluation（occurred_at 默认为现在）
     eval_repo
-        .create(pa.id, Some(goal_a.id), Some(item_a.id), "极限小测", "test", None, None, Some(10), Some(8), Some(2), Some(80.0), Some(100.0), Some("passed"), None)
+        .create(
+            pa.id,
+            Some(goal_a.id),
+            Some(item_a.id),
+            "极限小测",
+            "test",
+            None,
+            None,
+            Some(10),
+            Some(8),
+            Some(2),
+            Some(80.0),
+            Some(100.0),
+            Some("passed"),
+            None,
+        )
         .unwrap();
 
     // 查询日历
@@ -592,8 +662,12 @@ fn test_profile_calendar_cross_profile_isolation() {
     let item_repo = LearningItemRepository::new(&conn);
     let session_repo = StudySessionRepository::new(&conn);
 
-    let pa = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("Linux 内核学习", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("Linux 内核学习", None, None, None, None, None)
+        .unwrap();
 
     let goal_a = goal_repo.create(pa.id, "考研数学", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "Linux 进程", None).unwrap();
@@ -639,16 +713,34 @@ fn test_two_profiles_full_scenario() {
 
     // 创建两个不同类型档案
     let pa = profile_repo
-        .create("2027 考研", Some("kaoyan"), Some("目标 XX 大学"), None, None, None)
+        .create(
+            "2027 考研",
+            Some("kaoyan"),
+            Some("目标 XX 大学"),
+            None,
+            None,
+            None,
+        )
         .unwrap();
     let pb = profile_repo
-        .create("Linux 内核学习", Some("tech_skill"), Some("系统掌握 Linux Kernel"), None, None, None)
+        .create(
+            "Linux 内核学习",
+            Some("tech_skill"),
+            Some("系统掌握 Linux Kernel"),
+            None,
+            None,
+            None,
+        )
         .unwrap();
 
     // Profile A: 2027 考研
     let goal_math = goal_repo.create(pa.id, "考研数学", None).unwrap();
-    let item_math = item_repo.create_root(goal_math.id, "高等数学", None).unwrap();
-    let item_calc = item_repo.create_child(goal_math.id, item_math.id, "极限", None).unwrap();
+    let item_math = item_repo
+        .create_root(goal_math.id, "高等数学", None)
+        .unwrap();
+    let item_calc = item_repo
+        .create_child(goal_math.id, item_math.id, "极限", None)
+        .unwrap();
 
     let today = chrono_like_today();
     let task_a = task_repo
@@ -659,13 +751,32 @@ fn test_two_profiles_full_scenario() {
     session_repo.end(s_a.id, Some("完成了 8 题")).unwrap();
 
     eval_repo
-        .create(pa.id, Some(goal_math.id), Some(item_calc.id), "极限小测", "test", None, None, Some(10), Some(8), Some(2), Some(80.0), Some(100.0), Some("passed"), None)
+        .create(
+            pa.id,
+            Some(goal_math.id),
+            Some(item_calc.id),
+            "极限小测",
+            "test",
+            None,
+            None,
+            Some(10),
+            Some(8),
+            Some(2),
+            Some(80.0),
+            Some(100.0),
+            Some("passed"),
+            None,
+        )
         .unwrap();
 
     // Profile B: Linux 内核学习
     let goal_kernel = goal_repo.create(pb.id, "Linux 进程管理", None).unwrap();
-    let item_sched = item_repo.create_root(goal_kernel.id, "进程调度", None).unwrap();
-    let item_cfs = item_repo.create_child(goal_kernel.id, item_sched.id, "CFS 调度器", None).unwrap();
+    let item_sched = item_repo
+        .create_root(goal_kernel.id, "进程调度", None)
+        .unwrap();
+    let item_cfs = item_repo
+        .create_child(goal_kernel.id, item_sched.id, "CFS 调度器", None)
+        .unwrap();
 
     let task_b = task_repo
         .create_with_plan_legacy(item_cfs.id, "阅读 schedule.c 源码", Some(&today), None)
@@ -675,7 +786,22 @@ fn test_two_profiles_full_scenario() {
     session_repo.end(s_b.id, Some("读了 200 行")).unwrap();
 
     eval_repo
-        .create(pb.id, Some(goal_kernel.id), Some(item_cfs.id), "CFS 概念回忆", "recall", None, None, None, None, None, None, None, Some("partial"), None)
+        .create(
+            pb.id,
+            Some(goal_kernel.id),
+            Some(item_cfs.id),
+            "CFS 概念回忆",
+            "recall",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("partial"),
+            None,
+        )
         .unwrap();
 
     // 验证 Profile A 数据隔离
@@ -733,7 +859,7 @@ fn current_utc_datetime() -> (i64, i64, i64) {
         .unwrap()
         .as_secs()
         + 8 * 3600; // DEV-0049：学习日 = UTC+8（与 get_calendar 的 +8h 归类一致）
-    // 简单计算（不处理闰秒等极端情况，测试足够）
+                    // 简单计算（不处理闰秒等极端情况，测试足够）
     let days = secs / 86400;
     let _day_of_week = (days % 7 + 4) % 7; // 1970-01-01 是周四
     let (year, month, day) = days_to_ymd(days as i64);
@@ -754,7 +880,20 @@ fn days_to_ymd(days: i64) -> (i64, i64, i64) {
         y += 1;
     }
 
-    let months = [31, if is_leap(y) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = [
+        31,
+        if is_leap(y) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 1i64;
     for &dm in &months {
         if d < dm {

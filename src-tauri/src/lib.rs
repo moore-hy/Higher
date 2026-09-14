@@ -1,14 +1,14 @@
 pub mod ai;
+pub mod app;
+pub mod commands;
 pub mod db;
+pub mod ipc;
 pub mod migrations;
 pub mod notifications;
 pub mod platform;
 pub mod repository;
 pub mod sandbox;
 pub mod sync;
-pub mod commands;
-pub mod ipc;
-pub mod app;
 
 /// 附件根目录（app data / attachments；Dev 与 Prod 均使用系统 app data 路径）。
 pub struct AttachmentDir(pub std::path::PathBuf);

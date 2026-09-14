@@ -21,8 +21,11 @@ pub fn apply_change_set_with_side_effects(
     source: &str,
 ) -> Result<(), String> {
     // ① 事务 Apply（ChangeSetRepository 内部保证全包 rollback，不允许半成功）
-    crate::repository::changeset::ChangeSetRepository::new(conn)
-        .apply(change_set_id, profile_id, only_selected)?;
+    crate::repository::changeset::ChangeSetRepository::new(conn).apply(
+        change_set_id,
+        profile_id,
+        only_selected,
+    )?;
     // ② grounding Recent Context（(profile, conversation) 隔离；Proposal 不算，Apply 才算）
     let conv_id: Option<i64> = conn
         .query_row(
@@ -46,7 +49,12 @@ pub fn apply_change_set_with_side_effects(
              LEFT JOIN ai_runs r ON r.id = cs.run_id
              WHERE cs.id=?1 AND cs.profile_id=?2",
             rusqlite::params![change_set_id, profile_id],
-            |r| Ok((r.get::<_, Option<String>>(0)?.unwrap_or_default(), r.get(1)?)),
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    r.get(1)?,
+                ))
+            },
         )
         .ok();
     if let Some((run_id, wf_type)) = run_ref {

@@ -69,7 +69,11 @@ fn empty_intel() -> ModelResponder {
 #[test]
 fn parse_eight_section_template() {
     let uc = analyze_document(SAMPLE);
-    assert!(uc.basic_information.as_deref().unwrap().contains("本科大三"));
+    assert!(uc
+        .basic_information
+        .as_deref()
+        .unwrap()
+        .contains("本科大三"));
     assert!(uc.current_status.as_deref().unwrap().contains("在校生"));
     assert!(uc.long_term_goals.iter().any(|g| g.contains("2028考研")));
     assert!(!uc.is_empty());
@@ -90,7 +94,11 @@ fn goal_dynamic_inference_maps_required_information() {
       ]}"#;
     let uc = UserContext::default();
     let g = tauri::async_runtime::block_on(goal_understanding::analyze(
-        &scripted(json), &uc, "我想三年内做一个自己的 SaaS", &Default::default(), "",
+        &scripted(json),
+        &uc,
+        "我想三年内做一个自己的 SaaS",
+        &Default::default(),
+        "",
     ))
     .unwrap();
     assert_eq!(g.goal_type, "career");
@@ -112,13 +120,21 @@ fn goal_analysis_rejects_invalid_source_kind_and_empty_goal_items() {
     let bad = r#"{"goal":"x","goal_type":"other","required_information":[{"key":"k","source_kind":"web"}]}"#;
     let uc = UserContext::default();
     let r = tauri::async_runtime::block_on(goal_understanding::analyze(
-        &scripted(bad), &uc, "x", &Default::default(), "",
+        &scripted(bad),
+        &uc,
+        "x",
+        &Default::default(),
+        "",
     ));
     assert!(r.is_err(), "非法 source_kind 必须整体失败");
 
     let casual = r#"{"goal":"","goal_type":"other","required_information":[{"key":"k","source_kind":"user"}]}"#;
     let g = tauri::async_runtime::block_on(goal_understanding::analyze(
-        &scripted(casual), &uc, "1+1是多少", &Default::default(), "",
+        &scripted(casual),
+        &uc,
+        "1+1是多少",
+        &Default::default(),
+        "",
     ))
     .unwrap();
     assert!(g.goal.is_empty());
@@ -195,7 +211,10 @@ fn evaluate_decision_loop() {
         required_information: vec![],
         ..Default::default()
     };
-    assert_eq!(evaluate(&g3, &from_goal(&g3)).decision, AiDecision::ReadyForPlanning);
+    assert_eq!(
+        evaluate(&g3, &from_goal(&g3)).decision,
+        AiDecision::ReadyForPlanning
+    );
 
     // Complete + planning_required=false（无需正式规划）→ Execute，不进规划链
     let g4 = super::GoalUnderstanding {
@@ -215,7 +234,10 @@ fn evaluate_decision_loop() {
         planning_required: Some(true),
         ..Default::default()
     };
-    assert_eq!(evaluate(&g5, &from_goal(&g5)).decision, AiDecision::Research);
+    assert_eq!(
+        evaluate(&g5, &from_goal(&g5)).decision,
+        AiDecision::Research
+    );
 }
 
 /// DEV-0073 Phase 1：DecisionResult 结构与 decide 规则一致。
@@ -239,11 +261,11 @@ fn decision_result_wraps_decide_rules() {
 /// DEV-0073 Phase 2：Information Gate 规则。
 #[test]
 fn information_gate_rules() {
+    use super::goal_understanding::RequiredInformation;
     use super::missing_information::{
         build_requirements, goal_information_status, information_gate, InformationRequirement,
         InformationStatus,
     };
-    use super::goal_understanding::RequiredInformation;
 
     let req = |name: &str, required: bool, completed: bool| InformationRequirement {
         field_name: name.into(),
@@ -269,7 +291,11 @@ fn information_gate_rules() {
     );
     // 混合：存在任一必填未完成 → Incomplete
     assert_eq!(
-        information_gate(&[req("a", true, true), req("b", true, false), req("c", false, false)]),
+        information_gate(&[
+            req("a", true, true),
+            req("b", true, false),
+            req("c", false, false)
+        ]),
         InformationStatus::Incomplete
     );
 
@@ -277,20 +303,21 @@ fn information_gate_rules() {
     let goal = super::GoalUnderstanding {
         goal: "2028考研".into(),
         goal_type: "education".into(),
-        required_information: vec![
-            RequiredInformation {
-                key: "target_school".into(),
-                description: String::new(),
-                why_needed: String::new(),
-                source_kind: SOURCE_USER.into(),
-            },
-        ],
+        required_information: vec![RequiredInformation {
+            key: "target_school".into(),
+            description: String::new(),
+            why_needed: String::new(),
+            source_kind: SOURCE_USER.into(),
+        }],
         ..Default::default()
     };
     let rs = build_requirements(&goal);
     assert_eq!(rs.len(), 1);
     assert!(rs[0].required && !rs[0].completed);
-    assert_eq!(goal_information_status(&goal), InformationStatus::Incomplete);
+    assert_eq!(
+        goal_information_status(&goal),
+        InformationStatus::Incomplete
+    );
 
     // 模型未列缺失（信息齐全）→ Complete
     let complete_goal = super::GoalUnderstanding {
@@ -299,7 +326,10 @@ fn information_gate_rules() {
         required_information: vec![],
         ..Default::default()
     };
-    assert_eq!(goal_information_status(&complete_goal), InformationStatus::Complete);
+    assert_eq!(
+        goal_information_status(&complete_goal),
+        InformationStatus::Complete
+    );
 }
 
 /// DEV-0073 Phase 3：新字段（deadline/priority/planning_required/confidence）
@@ -333,7 +363,11 @@ fn goal_understanding_phase3_fields_backward_compatible() {
     assert_eq!(g.deadline.as_deref(), Some("2028"));
     assert_eq!(g.priority.as_deref(), Some("high"));
     assert_eq!(g.planning_required, Some(true));
-    assert_eq!(g.confidence, Some(1.7), "serde 直读保留原值；钳制在 analyze Validator");
+    assert_eq!(
+        g.confidence,
+        Some(1.7),
+        "serde 直读保留原值；钳制在 analyze Validator"
+    );
 
     // analyze Validator 路径：priority 大写被规范化、confidence 钳制
     let raw = r#"{"goal":"2028考研","goal_type":"education","deadline":"2028","priority":"HIGH","planning_required":true,"confidence":2.5,"required_information":[]}"#;
@@ -345,7 +379,11 @@ fn goal_understanding_phase3_fields_backward_compatible() {
         "",
     ))
     .unwrap();
-    assert_eq!(g.priority.as_deref(), Some("high"), "analyze 内 priority 小写规范化");
+    assert_eq!(
+        g.priority.as_deref(),
+        Some("high"),
+        "analyze 内 priority 小写规范化"
+    );
     assert_eq!(g.confidence, Some(1.0));
     assert_eq!(g.planning_required, Some(true));
     assert_eq!(g.deadline.as_deref(), Some("2028"));
@@ -393,8 +431,14 @@ fn template_eight_sections() {
     assert_eq!(TEMPLATE_FILE_NAME, "Higher_User_Profile_Template.md");
     let t = generate_template();
     for section in [
-        "# 基础信息", "# 当前状态", "# 教育背景", "# 能力基础",
-        "# 长期目标", "# 时间资源", "# 限制条件", "# 偏好",
+        "# 基础信息",
+        "# 当前状态",
+        "# 教育背景",
+        "# 能力基础",
+        "# 长期目标",
+        "# 时间资源",
+        "# 限制条件",
+        "# 偏好",
     ] {
         assert!(t.contains(section), "模板缺节：{section}");
     }

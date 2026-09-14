@@ -16,10 +16,8 @@
 use app_lib::ai;
 use app_lib::ai::tools::{execute_read_tool, TOOL_ALLOWLIST};
 use app_lib::repository::{
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
+    goal::GoalRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, study_session::StudySessionRepository,
     task::TaskRepository,
 };
 use rusqlite::Connection;
@@ -77,7 +75,7 @@ fn test_ai_mode_independence() {
         let ctx = ai::context::build_context(
             &conn,
             &ai::context::ContextInput {
-            date: None,
+                date: None,
                 profile_id: pid,
                 action: ai::AiAction::AssistantChat,
                 session_id: None,
@@ -86,7 +84,10 @@ fn test_ai_mode_independence() {
             },
         )
         .unwrap();
-        assert!(!ctx.is_empty(), "assistant_chat 对任意 mode/type 档案均可用");
+        assert!(
+            !ctx.is_empty(),
+            "assistant_chat 对任意 mode/type 档案均可用"
+        );
     }
 
     // DEV-0057 §75-78：build_context = 统一 Builder adapter。AssistantChat 带 learning_item_id
@@ -103,7 +104,10 @@ fn test_ai_mode_independence() {
         },
     )
     .unwrap();
-    assert!(ctx_g.contains("极限"), "L1/knowledge_detail 应含当前档案知识");
+    assert!(
+        ctx_g.contains("极限"),
+        "L1/knowledge_detail 应含当前档案知识"
+    );
     assert!(!ctx_g.contains("政治"));
 
     // assistant_chat 属性与 mode 无关：允许工具、结构化 JSON
@@ -121,14 +125,26 @@ fn test_list_tasks_tool() {
     let task_repo = TaskRepository::new(&conn);
 
     // A 档案：今天 + 明天 + 昨天 + 无日期 + 已完成
-    let t1 = task_repo.create_with_plan_legacy(item_g, "极限练习", Some("2026-08-15"), None).unwrap();
-    task_repo.create_with_plan_legacy(item_g, "连续性预习", Some("2026-08-16"), None).unwrap();
-    task_repo.create_with_plan_legacy(item_g, "昨天遗留", Some("2026-08-14"), None).unwrap();
-    task_repo.create_with_plan_legacy(item_g, "无日期任务", None, None).unwrap();
-    let t5 = task_repo.create_with_plan_legacy(item_g, "已完成任务", Some("2026-08-15"), None).unwrap();
+    let t1 = task_repo
+        .create_with_plan_legacy(item_g, "极限练习", Some("2026-08-15"), None)
+        .unwrap();
+    task_repo
+        .create_with_plan_legacy(item_g, "连续性预习", Some("2026-08-16"), None)
+        .unwrap();
+    task_repo
+        .create_with_plan_legacy(item_g, "昨天遗留", Some("2026-08-14"), None)
+        .unwrap();
+    task_repo
+        .create_with_plan_legacy(item_g, "无日期任务", None, None)
+        .unwrap();
+    let t5 = task_repo
+        .create_with_plan_legacy(item_g, "已完成任务", Some("2026-08-15"), None)
+        .unwrap();
     task_repo.complete(t5.id).unwrap();
     // B 档案
-    task_repo.create_with_plan_legacy(item_e, "政治任务", Some("2026-08-15"), None).unwrap();
+    task_repo
+        .create_with_plan_legacy(item_e, "政治任务", Some("2026-08-15"), None)
+        .unwrap();
 
     // 1) 全量（仅 A 档案）
     let all = execute_read_tool(&conn, pg, "list_tasks", &json!({})).unwrap();
@@ -139,14 +155,18 @@ fn test_list_tasks_tool() {
 
     // 2) date range
     let ranged = execute_read_tool(
-        &conn, pg, "list_tasks",
+        &conn,
+        pg,
+        "list_tasks",
         &json!({"start_date": "2026-08-15", "end_date": "2026-08-15"}),
     )
     .unwrap();
     let rv: serde_json::Value = serde_json::from_str(&ranged).unwrap();
     let rarr = rv.as_array().unwrap();
     assert_eq!(rarr.len(), 2, "仅 08-15 两条");
-    assert!(rarr.iter().all(|t| t["planned_date"] == json!("2026-08-15")));
+    assert!(rarr
+        .iter()
+        .all(|t| t["planned_date"] == json!("2026-08-15")));
 
     // 3) status
     let done = execute_read_tool(&conn, pg, "list_tasks", &json!({"status": "completed"})).unwrap();
@@ -165,11 +185,23 @@ fn test_list_tasks_tool() {
 
     // 5) 最小字段：不含内部字段（如 completed_at / created_at / plan_id 原始值）
     let t0 = &arr[0];
-    for key in ["title", "planned_date", "status", "learning_item_id", "knowledge", "goal_id", "from_plan"] {
+    for key in [
+        "title",
+        "planned_date",
+        "status",
+        "learning_item_id",
+        "knowledge",
+        "goal_id",
+        "from_plan",
+    ] {
         assert!(t0.get(key).is_some(), "缺少必要字段 {}", key);
     }
     for forbidden in ["created_at", "updated_at", "completed_at", "description"] {
-        assert!(t0.get(forbidden).is_none(), "不得返回无关内部字段 {}", forbidden);
+        assert!(
+            t0.get(forbidden).is_none(),
+            "不得返回无关内部字段 {}",
+            forbidden
+        );
     }
 
     // 6) allowlist 注册（DEV-0060 §9.3：禁止硬编码数量——与 tool_definitions 集合一致）
@@ -189,12 +221,16 @@ fn test_page_context_objects() {
     let session_repo = StudySessionRepository::new(&conn);
 
     let goal = goal_repo.create(pg, "数学", None).unwrap();
-    stage_repo.create(goal.id, "基础阶段", None, None, None).unwrap();
+    stage_repo
+        .create(goal.id, "基础阶段", None, None, None)
+        .unwrap();
     let item = app_lib::repository::learning_item::LearningItemRepository::new(&conn)
         .create_root(goal.id, "函数极限", None)
         .unwrap();
     let s = session_repo.start(item.id, None).unwrap();
-    session_repo.update_note(s.id, "本次学习笔记CONTENT-LW").unwrap();
+    session_repo
+        .update_note(s.id, "本次学习笔记CONTENT-LW")
+        .unwrap();
 
     // Knowledge：正确 item（knowledge_analysis）
     let k = ai::context::build_context(
@@ -224,7 +260,10 @@ fn test_page_context_objects() {
         },
     )
     .unwrap();
-    assert!(lw.contains("本次学习笔记CONTENT-LW"), "页面默认对象：当前会话笔记注入");
+    assert!(
+        lw.contains("本次学习笔记CONTENT-LW"),
+        "页面默认对象：当前会话笔记注入"
+    );
     assert!(lw.contains("函数极限"));
 
     // Planning：DEV-0057 §75-79 统一 Builder adapter——legacy stage 块不再默认注入；
@@ -241,7 +280,10 @@ fn test_page_context_objects() {
         },
     )
     .unwrap();
-    assert!(p.contains("学习建议") || p.contains("今日"), "统一 Builder L1/当日任务块存在");
+    assert!(
+        p.contains("学习建议") || p.contains("今日"),
+        "统一 Builder L1/当日任务块存在"
+    );
     assert!(!p.contains("政治"), "跨档案隔离保持");
 
     // Progress / Today：统一 Builder L1 页面标签（档案名不再默认注入——profile_block 已并入统一 Builder）
@@ -257,7 +299,10 @@ fn test_page_context_objects() {
         },
     )
     .unwrap();
-    assert!(t.contains("学习建议") && !t.contains("政治"), "L1 页面标签正确且隔离");
+    assert!(
+        t.contains("学习建议") && !t.contains("政治"),
+        "L1 页面标签正确且隔离"
+    );
 
     // 跨 Profile 的 item 附带 → 拒绝（页面上下文同样过归属校验）
     assert!(ai::context::build_context(
@@ -283,13 +328,21 @@ fn test_followup_history_truncation() {
     let mut msgs = Vec::new();
     for i in 0..20 {
         msgs.push(FollowupHistory {
-            role: if i % 2 == 0 { "user".into() } else { "assistant".into() },
+            role: if i % 2 == 0 {
+                "user".into()
+            } else {
+                "assistant".into()
+            },
             content: format!("消息{}", i),
         });
     }
     let trimmed = FollowupHistory::trim(&msgs, 8, 12000);
     assert_eq!(trimmed.len(), 16, "8 turn = 16 条消息");
-    assert_eq!(trimmed.first().unwrap().content, "消息4", "丢弃最旧（保留 4..19）");
+    assert_eq!(
+        trimmed.first().unwrap().content,
+        "消息4",
+        "丢弃最旧（保留 4..19）"
+    );
     assert_eq!(trimmed.last().unwrap().content, "消息19");
 
     // 低于上限：全部保留
@@ -313,9 +366,18 @@ fn test_followup_history_truncation() {
 
     // 非 user/assistant 角色一律不发送（system/tool 注入防御）
     let mixed = vec![
-        FollowupHistory { role: "system".into(), content: "SYS".into() },
-        FollowupHistory { role: "user".into(), content: "q".into() },
-        FollowupHistory { role: "tool".into(), content: "{\"x\":1}".into() },
+        FollowupHistory {
+            role: "system".into(),
+            content: "SYS".into(),
+        },
+        FollowupHistory {
+            role: "user".into(),
+            content: "q".into(),
+        },
+        FollowupHistory {
+            role: "tool".into(),
+            content: "{\"x\":1}".into(),
+        },
     ];
     let t3 = FollowupHistory::trim(&mixed, 8, 12000);
     assert_eq!(t3.len(), 1);
@@ -340,13 +402,19 @@ fn test_tool_protocol_dispatch() {
     for (name, args) in calls {
         let out = execute_read_tool(&conn, pg, name, &args)
             .unwrap_or_else(|e| panic!("{} 执行失败：{}", name, e));
-        let v: serde_json::Value = serde_json::from_str(&out)
-            .unwrap_or_else(|_| panic!("{} 输出应为 JSON", name));
+        let v: serde_json::Value =
+            serde_json::from_str(&out).unwrap_or_else(|_| panic!("{} 输出应为 JSON", name));
         assert!(!v.is_null(), "{} 返回非空", name);
     }
 
     // 错误参数 → 报错（进入 trace 的 error 状态），不 panic
-    assert!(execute_read_tool(&conn, pg, "read_knowledge_item", &json!({"item_id": 999999})).is_err());
+    assert!(execute_read_tool(
+        &conn,
+        pg,
+        "read_knowledge_item",
+        &json!({"item_id": 999999})
+    )
+    .is_err());
 }
 
 // ---------- §86 Tool Allowlist ----------
@@ -356,11 +424,22 @@ fn test_allowlist_rejects_dangerous_tools() {
     let conn = setup();
     let (pg, _pe, _ig, _ie) = seed_modes(&conn);
     for evil in [
-        "run_command", "shell", "powershell", "cmd", "read_file", "write_file", "query_sql",
-        "apply_change_set", "read_vault",
+        "run_command",
+        "shell",
+        "powershell",
+        "cmd",
+        "read_file",
+        "write_file",
+        "query_sql",
+        "apply_change_set",
+        "read_vault",
     ] {
         assert!(!TOOL_ALLOWLIST.contains(&evil), "{} 不得在白名单", evil);
-        assert!(execute_read_tool(&conn, pg, evil, &json!({})).is_err(), "{} 必须被拒绝", evil);
+        assert!(
+            execute_read_tool(&conn, pg, evil, &json!({})).is_err(),
+            "{} 必须被拒绝",
+            evil
+        );
     }
     // web_search / web_open 属于 DEV-0052 合法联网工具（execute_read_tool 不 dispatch，
     // 由 run_chat_turn 专用路径执行 + SSRF 校验）
@@ -370,12 +449,19 @@ fn test_allowlist_rejects_dangerous_tools() {
         .iter()
         .filter(|t| {
             let n = t.to_lowercase();
-            (n.contains("create") || n.contains("update") || n.contains("delete") || n.contains("write"))
+            (n.contains("create")
+                || n.contains("update")
+                || n.contains("delete")
+                || n.contains("write"))
                 && !n.starts_with("propose_")
         })
         .copied()
         .collect();
-    assert!(direct_writes.is_empty(), "直接写工具泄漏：{:?}", direct_writes);
+    assert!(
+        direct_writes.is_empty(),
+        "直接写工具泄漏：{:?}",
+        direct_writes
+    );
     // DEV-0060 §9.3：不硬编码数量；集合一致性由 batch060 T7 保证
     assert_eq!(TOOL_ALLOWLIST.len(), ai::tools::defined_tool_names().len());
 }
@@ -385,7 +471,10 @@ fn test_allowlist_rejects_dangerous_tools() {
 #[test]
 fn test_assistant_chat_response_types() {
     // A. message
-    let a = ai::AssistantChatResponse::parse(r#"{"type":"message","message":"根据最近记录，建议先巩固极限。"}"#).unwrap();
+    let a = ai::AssistantChatResponse::parse(
+        r#"{"type":"message","message":"根据最近记录，建议先巩固极限。"}"#,
+    )
+    .unwrap();
     assert_eq!(a.resp_type, "message");
     assert!(a.proposal.is_none());
 
@@ -393,15 +482,17 @@ fn test_assistant_chat_response_types() {
     let raw = r#"{"type":"knowledge_proposal","message":"我整理了一版修改建议。","proposal":{"summary":"拆分等价无穷小","operations":[{"operation":"create_child","parent_id":42,"name":"等价无穷小","reason":"拆分","proposed_content":"x~sinx"}]}}"#;
     let b = ai::AssistantChatResponse::parse(raw).unwrap();
     assert_eq!(b.resp_type, "knowledge_proposal");
-    let ops = b.proposal.unwrap()["operations"].as_array().unwrap().clone();
+    let ops = b.proposal.unwrap()["operations"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(ops.len(), 1);
     assert_eq!(ops[0]["operation"], json!("create_child"));
 
     // markdown 围栏剥离
-    let fenced = ai::AssistantChatResponse::parse(
-        "```json\n{\"type\":\"message\",\"message\":\"hi\"}\n```",
-    )
-    .unwrap();
+    let fenced =
+        ai::AssistantChatResponse::parse("```json\n{\"type\":\"message\",\"message\":\"hi\"}\n```")
+            .unwrap();
     assert_eq!(fenced.message, "hi");
 
     // 非法类型 / 非法 JSON 拒绝
@@ -447,14 +538,21 @@ fn test_chat_proposal_guard() {
     assert!(allowed.contains(&item_g));
 
     item_repo.update_content(item_g, "整理后的内容").unwrap();
-    assert_eq!(item_repo.get(item_g).unwrap().unwrap().content, "整理后的内容");
+    assert_eq!(
+        item_repo.get(item_g).unwrap().unwrap().content,
+        "整理后的内容"
+    );
 
     // 跨 Goal parent 依旧拒绝（v013 起 Guard 语义为跨档案）
     let other_profile = StudyProfileRepository::new(&conn)
         .create("另一档案", None, None, None, None, None)
         .unwrap();
-    let other_goal = GoalRepository::new(&conn).create(other_profile.id, "另一目标", None).unwrap();
-    assert!(item_repo.create_child(other_goal.id, item_g, "越权", None).is_err());
+    let other_goal = GoalRepository::new(&conn)
+        .create(other_profile.id, "另一目标", None)
+        .unwrap();
+    assert!(item_repo
+        .create_child(other_goal.id, item_g, "越权", None)
+        .is_err());
 }
 
 // ---------- §89 JSON Repair（一次修复，不无限重试） ----------

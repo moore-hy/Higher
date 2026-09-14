@@ -121,14 +121,19 @@ fn test_malicious_db_relative_path_cannot_escape() {
         "1/2/../../..\\escape.png",
         "./../escape.png",
         "1//../escape.png",
-        "…/escape.png",      // 非法字符不构成 ..，但也无法指向 root 外
+        "…/escape.png", // 非法字符不构成 ..，但也无法指向 root 外
         "1/2/%2e%2e/escape",
     ] {
         let r = sandbox::resolve_in_sandbox(&root, evil);
         // 要么被拒绝；要么解析结果仍在 root 内（绝不越界）
         match r {
             Err(_) => {}
-            Ok(p) => assert!(p.starts_with(root.canonicalize().unwrap()), "越界：{} → {:?}", evil, p),
+            Ok(p) => assert!(
+                p.starts_with(root.canonicalize().unwrap()),
+                "越界：{} → {:?}",
+                evil,
+                p
+            ),
         }
     }
 }
@@ -167,18 +172,42 @@ fn test_profile_attachment_isolation_still_enforced() {
     let item_repo = LearningItemRepository::new(&conn);
     let att_repo = AttachmentRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let ga = goal_repo.create(pa.id, "GA", None).unwrap();
     let gb = goal_repo.create(pb.id, "GB", None).unwrap();
     let ia = item_repo.create_root(ga.id, "IA", None).unwrap();
     let ib = item_repo.create_root(gb.id, "IB", None).unwrap();
 
     let att_a = att_repo
-        .create(pa.id, Some(ia.id), None, "image", "a.png", "1/1/1/a.png", None, "")
+        .create(
+            pa.id,
+            Some(ia.id),
+            None,
+            "image",
+            "a.png",
+            "1/1/1/a.png",
+            None,
+            "",
+        )
         .unwrap();
     // B 无法读取/列出 A 的附件（list 按 item；跨 Profile create 已被拒）
-    assert!(att_repo.create(pb.id, Some(ia.id), None, "image", "x.png", "x.png", None, "").is_err());
+    assert!(att_repo
+        .create(
+            pb.id,
+            Some(ia.id),
+            None,
+            "image",
+            "x.png",
+            "x.png",
+            None,
+            ""
+        )
+        .is_err());
     let b_list = att_repo.list_by_learning_item(ib.id).unwrap();
     assert_eq!(b_list.len(), 0);
     // A 的附件仍归属 A

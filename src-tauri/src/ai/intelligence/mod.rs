@@ -21,10 +21,10 @@ pub mod inference;
 pub mod intelligence_builder;
 pub mod memory;
 pub mod memory_confirmation;
-pub mod profile;
 pub mod missing_information;
-pub mod user_context;
+pub mod profile;
 mod tests;
+pub mod user_context;
 
 pub use decision::{decide, decide_result, AiDecision, DecisionResult};
 pub use goal_understanding::GoalUnderstanding;
@@ -220,7 +220,9 @@ pub fn build_profile_corpus(
             format!("source《{name}》(id={id}) extracted text 读取失败（{path}）：{e}")
         })?;
         if text.trim().is_empty() {
-            return Err(format!("source《{name}》(id={id}) extracted text 为空，禁止残缺分析"));
+            return Err(format!(
+                "source《{name}》(id={id}) extracted text 为空，禁止残缺分析"
+            ));
         }
         corpus.push_str(&format!("Source {id}: {name}\n{text}\n---\n"));
     }
@@ -256,7 +258,12 @@ pub async fn run_full_profile_analysis(
     // Step4/5：单次正式分析 + Validator
     let res = user_context::analyze_strict(responder, &corpus).await;
     // Step6：单次写库
-    let status = apply_analysis(conn, profile_id, &res, state_dirs.first().map(|p| p.as_path()));
+    let status = apply_analysis(
+        conn,
+        profile_id,
+        &res,
+        state_dirs.first().map(|p| p.as_path()),
+    );
     // 其余目录同步状态（审计标记一致性）
     for d in state_dirs.iter().skip(1) {
         let st = match &res {
@@ -308,7 +315,10 @@ pub fn build_prompt_block(
         s.push_str(&format!("当前用户理解：\n{understanding}\n"));
     }
     if !goal.goal.is_empty() {
-        s.push_str(&format!("当前目标：{}（类型 {}）\n", goal.goal, goal.goal_type));
+        s.push_str(&format!(
+            "当前目标：{}（类型 {}）\n",
+            goal.goal, goal.goal_type
+        ));
     }
     if !missing.is_empty() {
         s.push_str("缺失信息：\n");

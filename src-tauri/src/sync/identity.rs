@@ -8,7 +8,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 use super::types::{ENTITY_GOAL, ENTITY_LEARNING_ITEM, ENTITY_STUDY_PROFILE, ENTITY_TASK};
 
 /// local id → sync_id（含墓碑：deleted_at 非空仍返回，调用方自行判断业务行存活性）。
-pub fn sync_id_for(conn: &Connection, entity_type: &str, local_id: i64) -> rusqlite::Result<Option<String>> {
+pub fn sync_id_for(
+    conn: &Connection,
+    entity_type: &str,
+    local_id: i64,
+) -> rusqlite::Result<Option<String>> {
     conn.query_row(
         "SELECT sync_id FROM sync_entity_map WHERE entity_type = ?1 AND local_id = ?2",
         params![entity_type, local_id],
@@ -18,7 +22,11 @@ pub fn sync_id_for(conn: &Connection, entity_type: &str, local_id: i64) -> rusql
 }
 
 /// sync_id → local id。
-pub fn local_id_for(conn: &Connection, entity_type: &str, sync_id: &str) -> rusqlite::Result<Option<i64>> {
+pub fn local_id_for(
+    conn: &Connection,
+    entity_type: &str,
+    sync_id: &str,
+) -> rusqlite::Result<Option<i64>> {
     conn.query_row(
         "SELECT local_id FROM sync_entity_map WHERE entity_type = ?1 AND sync_id = ?2",
         params![entity_type, sync_id],
@@ -29,7 +37,12 @@ pub fn local_id_for(conn: &Connection, entity_type: &str, sync_id: &str) -> rusq
 
 /// 登记映射（Remote Apply 新建实体时使用；Trigger 在 guard=1 时不登记）。
 /// 若 sync_id 已映射到其他 local_id，保持原映射不变（数据异常防御）。
-pub fn record_mapping(conn: &Connection, entity_type: &str, local_id: i64, sync_id: &str) -> rusqlite::Result<()> {
+pub fn record_mapping(
+    conn: &Connection,
+    entity_type: &str,
+    local_id: i64,
+    sync_id: &str,
+) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO sync_entity_map (entity_type, local_id, sync_id, created_at, updated_at)
          VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
@@ -39,7 +52,11 @@ pub fn record_mapping(conn: &Connection, entity_type: &str, local_id: i64, sync_
 }
 
 /// 远端删除后标记墓碑（guard=1 时 Trigger 不做，需显式维护）。
-pub fn mark_mapping_deleted(conn: &Connection, entity_type: &str, sync_id: &str) -> rusqlite::Result<()> {
+pub fn mark_mapping_deleted(
+    conn: &Connection,
+    entity_type: &str,
+    sync_id: &str,
+) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE sync_entity_map SET deleted_at = datetime('now'), updated_at = datetime('now')
          WHERE entity_type = ?1 AND sync_id = ?2",
@@ -173,7 +190,13 @@ pub fn upsert_peer(
             peer_addr = excluded.peer_addr,
             shared_token = excluded.shared_token,
             paired_at = datetime('now')",
-        params![peer_device_id, peer_name, peer_platform, peer_addr, shared_token],
+        params![
+            peer_device_id,
+            peer_name,
+            peer_platform,
+            peer_addr,
+            shared_token
+        ],
     )?;
     Ok(())
 }
@@ -187,7 +210,11 @@ pub fn touch_peer_sync(conn: &Connection, peer_device_id: &str) -> rusqlite::Res
 }
 
 /// apply 语义下的游标推进（不重置 acked）。
-pub fn advance_received_cursor(conn: &Connection, peer_device_id: &str, change_id: i64) -> rusqlite::Result<()> {
+pub fn advance_received_cursor(
+    conn: &Connection,
+    peer_device_id: &str,
+    change_id: i64,
+) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE sync_peers
          SET last_received_remote_change_id = MAX(last_received_remote_change_id, ?2)
@@ -197,7 +224,11 @@ pub fn advance_received_cursor(conn: &Connection, peer_device_id: &str, change_i
     Ok(())
 }
 
-pub fn advance_acked_cursor(conn: &Connection, peer_device_id: &str, change_id: i64) -> rusqlite::Result<()> {
+pub fn advance_acked_cursor(
+    conn: &Connection,
+    peer_device_id: &str,
+    change_id: i64,
+) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE sync_peers
          SET last_acked_local_change_id = MAX(last_acked_local_change_id, ?2)
@@ -214,7 +245,10 @@ pub fn pending_outbox_count(conn: &Connection) -> rusqlite::Result<i64> {
 
 /// DEV-SYNC-002 §六：针对指定 peer 尚未确认的本机变化数
 ///（= outbox.id > 该 peer 的 ack 游标）。无 peer（未配对）时返回全量。
-pub fn pending_outbox_count_for(conn: &Connection, peer_device_id: Option<&str>) -> rusqlite::Result<i64> {
+pub fn pending_outbox_count_for(
+    conn: &Connection,
+    peer_device_id: Option<&str>,
+) -> rusqlite::Result<i64> {
     match peer_device_id {
         None => pending_outbox_count(conn),
         Some(peer) => {
@@ -250,7 +284,11 @@ pub fn trim_acked_outbox(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 /// DEV-SYNC-002 §七：记录对端监听地址（对端「立即同步」主动反向连接用）。
-pub fn update_peer_addr(conn: &Connection, peer_device_id: &str, addr: Option<&str>) -> rusqlite::Result<()> {
+pub fn update_peer_addr(
+    conn: &Connection,
+    peer_device_id: &str,
+    addr: Option<&str>,
+) -> rusqlite::Result<()> {
     if let Some(addr) = addr {
         conn.execute(
             "UPDATE sync_peers SET peer_addr = ?2 WHERE peer_device_id = ?1",

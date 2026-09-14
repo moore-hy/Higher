@@ -73,10 +73,7 @@ impl<'a> FeedbackRepository<'a> {
                     |row| row.get(0),
                 )
                 .map_err(|_| {
-                    rusqlite::Error::InvalidParameterName(format!(
-                        "evaluation_id {} 不存在",
-                        ev_id
-                    ))
+                    rusqlite::Error::InvalidParameterName(format!("evaluation_id {} 不存在", ev_id))
                 })?;
             if ev_goal != goal_id {
                 return Err(rusqlite::Error::InvalidParameterName(

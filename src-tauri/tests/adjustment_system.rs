@@ -13,13 +13,9 @@
 //! 运行：`cargo test --manifest-path src-tauri/Cargo.toml --test adjustment_system`
 
 use app_lib::repository::{
-    adjustment::AdjustmentRepository,
-    evaluation::EvaluationRepository,
-    feedback::FeedbackRepository,
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    task::TaskRepository,
+    adjustment::AdjustmentRepository, evaluation::EvaluationRepository,
+    feedback::FeedbackRepository, goal::GoalRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, task::TaskRepository,
 };
 use rusqlite::Connection;
 
@@ -70,7 +66,13 @@ fn test_migration_v008_applied_and_idempotent() {
     // v026（personalization_profiles.user_context_json，DEV-0070 Phase F v2.0）已追加
     // v027（memory_confirmation_lifecycle，DEV-0076 §四）已追加
     // v028（local_sync_foundation，DEV-SYNC-001）已追加
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
+    );
 
     let columns: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(adjustments)").unwrap();
@@ -80,11 +82,26 @@ fn test_migration_v008_applied_and_idempotent() {
             .collect()
     };
     for expected in [
-        "id", "feedback_id", "goal_id", "learning_item_id", "adjustment_type",
-        "title", "note", "status", "target_date", "task_id", "plan_id",
-        "created_at", "updated_at", "completed_at",
+        "id",
+        "feedback_id",
+        "goal_id",
+        "learning_item_id",
+        "adjustment_type",
+        "title",
+        "note",
+        "status",
+        "target_date",
+        "task_id",
+        "plan_id",
+        "created_at",
+        "updated_at",
+        "completed_at",
     ] {
-        assert!(columns.contains(&expected.to_string()), "缺少列 {}", expected);
+        assert!(
+            columns.contains(&expected.to_string()),
+            "缺少列 {}",
+            expected
+        );
     }
 
     // 幂等 + feedbacks 旧数据仍可用
@@ -169,7 +186,17 @@ fn test_create_adjustment_binds_feedback_defaults_planned() {
         .unwrap();
 
     let adj = adj_repo
-        .create(fb.id, goal.id, Some(item.id), "relearn", "重新学习极限", "测试", Some("2026-08-16"), None, None)
+        .create(
+            fb.id,
+            goal.id,
+            Some(item.id),
+            "relearn",
+            "重新学习极限",
+            "测试",
+            Some("2026-08-16"),
+            None,
+            None,
+        )
         .unwrap();
     assert_eq!(adj.status, "planned", "新建默认待执行");
     assert_eq!(adj.feedback_id, fb.id, "正确绑定 Feedback");
@@ -185,13 +212,21 @@ fn test_cross_profile_feedback_rejected() {
     let fb_repo = FeedbackRepository::new(&conn);
     let adj_repo = AdjustmentRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
-    let fb_a = fb_repo.create(goal_a.id, None, None, "weakness", "A 问题", "").unwrap();
+    let fb_a = fb_repo
+        .create(goal_a.id, None, None, "weakness", "A 问题", "")
+        .unwrap();
 
-    let result = adj_repo.create(fb_a.id, goal_b.id, None, "relearn", "错绑", "", None, None, None);
+    let result = adj_repo.create(
+        fb_a.id, goal_b.id, None, "relearn", "错绑", "", None, None, None,
+    );
     assert!(result.is_err(), "跨 Profile Feedback 必须被拒绝");
 }
 
@@ -204,15 +239,31 @@ fn test_cross_goal_item_rejected() {
     let fb_repo = FeedbackRepository::new(&conn);
     let adj_repo = AdjustmentRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     // Goal B 下的 item
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     let item_b = item_repo.create_root(goal_b.id, "IB", None).unwrap();
 
-    let fb_a = fb_repo.create(goal_a.id, None, None, "weakness", "A 问题", "").unwrap();
-    let result = adj_repo.create(fb_a.id, goal_a.id, Some(item_b.id), "relearn", "错绑", "", None, None, None);
+    let fb_a = fb_repo
+        .create(goal_a.id, None, None, "weakness", "A 问题", "")
+        .unwrap();
+    let result = adj_repo.create(
+        fb_a.id,
+        goal_a.id,
+        Some(item_b.id),
+        "relearn",
+        "错绑",
+        "",
+        None,
+        None,
+        None,
+    );
     assert!(result.is_err(), "跨 Goal 知识节点必须被拒绝");
 }
 
@@ -224,7 +275,10 @@ fn arrange_relearn(
     feedback_id: i64,
     title: &str,
     date: &str,
-) -> (app_lib::repository::task::Task, app_lib::repository::adjustment::Adjustment) {
+) -> (
+    app_lib::repository::task::Task,
+    app_lib::repository::adjustment::Adjustment,
+) {
     let task = TaskRepository::new(conn)
         .create_with_plan_legacy(item_id, title, Some(date), None)
         .unwrap();
@@ -260,12 +314,23 @@ fn test_arrange_relearn_creates_real_task_with_correct_relations() {
         .create(goal.id, Some(item.id), None, "weakness", "定义不稳", "")
         .unwrap();
 
-    let (task, adj) = arrange_relearn(&conn, goal.id, item.id, fb.id, "重新学习 · 极限", "2026-08-16");
+    let (task, adj) = arrange_relearn(
+        &conn,
+        goal.id,
+        item.id,
+        fb.id,
+        "重新学习 · 极限",
+        "2026-08-16",
+    );
 
     // Task 是真实正式任务
     let loaded = task_repo.get(task.id).unwrap().unwrap();
     assert_eq!(loaded.title, "重新学习 · 极限");
-    assert_eq!(loaded.learning_item_id, Some(item.id), "Task learning_item 正确");
+    assert_eq!(
+        loaded.learning_item_id,
+        Some(item.id),
+        "Task learning_item 正确"
+    );
     assert_eq!(
         loaded.planned_date.as_deref(),
         Some("2026-08-16"),
@@ -295,14 +360,35 @@ fn test_feedback_not_auto_resolved_by_adjustment_or_passed_eval() {
         .unwrap();
 
     // 安排重新学习
-    let _ = arrange_relearn(&conn, goal.id, item.id, fb.id, "重新学习 · 极限", "2026-08-16");
+    let _ = arrange_relearn(
+        &conn,
+        goal.id,
+        item.id,
+        fb.id,
+        "重新学习 · 极限",
+        "2026-08-16",
+    );
     let f1 = fb_repo.get(fb.id).unwrap().unwrap();
     assert_eq!(f1.status, "open", "安排重新学习 ≠ 问题已解决");
 
     // 后续 passed Evaluation
     eval_repo
-        .create(profile_id, Some(goal.id), Some(item.id), "再验证", "test", None, None,
-                Some(10), Some(10), Some(0), Some(100.0), Some(100.0), Some("passed"), None)
+        .create(
+            profile_id,
+            Some(goal.id),
+            Some(item.id),
+            "再验证",
+            "test",
+            None,
+            None,
+            Some(10),
+            Some(10),
+            Some(0),
+            Some(100.0),
+            Some(100.0),
+            Some("passed"),
+            None,
+        )
         .unwrap();
     let f2 = fb_repo.get(fb.id).unwrap().unwrap();
     assert_eq!(f2.status, "open", "passed Evaluation 不得自动 resolve");
@@ -323,17 +409,45 @@ fn test_mark_completed_cancel_pending_counts_and_profile_isolation() {
     let fb_repo = FeedbackRepository::new(&conn);
     let adj_repo = AdjustmentRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "IA", None).unwrap();
-    let fb_a = fb_repo.create(goal_a.id, Some(item_a.id), None, "weakness", "A 问题", "").unwrap();
-    let fb_b = fb_repo.create(goal_b.id, None, None, "weakness", "B 问题", "").unwrap();
+    let fb_a = fb_repo
+        .create(goal_a.id, Some(item_a.id), None, "weakness", "A 问题", "")
+        .unwrap();
+    let fb_b = fb_repo
+        .create(goal_b.id, None, None, "weakness", "B 问题", "")
+        .unwrap();
 
-    let a1 = adj_repo.create(fb_a.id, goal_a.id, Some(item_a.id), "relearn", "调整1", "", Some("2026-08-16"), None, None).unwrap();
-    let a2 = adj_repo.create(fb_a.id, goal_a.id, None, "other", "调整2", "", None, None, None).unwrap();
-    let _a3 = adj_repo.create(fb_b.id, goal_b.id, None, "practice", "B 调整", "", None, None, None).unwrap();
+    let a1 = adj_repo
+        .create(
+            fb_a.id,
+            goal_a.id,
+            Some(item_a.id),
+            "relearn",
+            "调整1",
+            "",
+            Some("2026-08-16"),
+            None,
+            None,
+        )
+        .unwrap();
+    let a2 = adj_repo
+        .create(
+            fb_a.id, goal_a.id, None, "other", "调整2", "", None, None, None,
+        )
+        .unwrap();
+    let _a3 = adj_repo
+        .create(
+            fb_b.id, goal_b.id, None, "practice", "B 调整", "", None, None, None,
+        )
+        .unwrap();
 
     adj_repo.mark_completed(a1.id).unwrap();
     adj_repo.cancel(a2.id).unwrap();
@@ -356,7 +470,13 @@ fn test_mark_completed_cancel_pending_counts_and_profile_isolation() {
 
     // 计数
     let counts = adj_repo.count_by_status_by_profile(pa.id).unwrap();
-    let get = |k: &str| counts.iter().find(|c| c.label == k).map(|c| c.count).unwrap_or(0);
+    let get = |k: &str| {
+        counts
+            .iter()
+            .find(|c| c.label == k)
+            .map(|c| c.count)
+            .unwrap_or(0)
+    };
     assert_eq!(get("completed"), 1);
     assert_eq!(get("cancelled"), 1);
 }

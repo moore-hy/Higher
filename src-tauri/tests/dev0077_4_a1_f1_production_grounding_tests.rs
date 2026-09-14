@@ -20,12 +20,12 @@ use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{Completion, Usage};
 use app_lib::ai::higher_action::{execute_action, verify_written_ops};
 use app_lib::ai::learning_grounding::{LearningUnitDraft, TaskGroundingDraft, TaskGroundingMode};
-use app_lib::ai::planner::{
-    compile_production_plan, grounding_repair_prompt, validate_production_grounding_contract,
-    ActionPlan, MAX_GROUNDING_REPAIR, PlanDraft, PlanKnowledgeNode, PlanTask,
-};
 #[allow(deprecated)]
 use app_lib::ai::planner::compile_to_changeset_ops_grounded;
+use app_lib::ai::planner::{
+    compile_production_plan, grounding_repair_prompt, validate_production_grounding_contract,
+    ActionPlan, PlanDraft, PlanKnowledgeNode, PlanTask, MAX_GROUNDING_REPAIR,
+};
 use app_lib::ai::provider::{
     AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
 };
@@ -48,8 +48,11 @@ fn setup() -> Connection {
 }
 
 fn mk_profile(conn: &Connection, name: &str) -> i64 {
-    conn.execute("INSERT INTO study_profiles (name) VALUES (?1)", params![name])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO study_profiles (name) VALUES (?1)",
+        params![name],
+    )
+    .unwrap();
     conn.last_insert_rowid()
 }
 
@@ -125,7 +128,10 @@ fn setup_e2e(name: &str) -> (DbState, VaultState) {
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
     let vault_dir = std::env::temp_dir().join(format!("higher_f1a1_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -276,7 +282,8 @@ fn a1f1_tc001_production_missing_grounding_rejected() {
     );
     let errs = validate_production_grounding_contract(&d).unwrap_err();
     assert!(
-        errs.iter().any(|e| e.contains("planning_grounding_required")),
+        errs.iter()
+            .any(|e| e.contains("planning_grounding_required")),
         "TC001: Production Contract 必须 FAIL（{errs:?}）"
     );
     assert!(
@@ -285,13 +292,18 @@ fn a1f1_tc001_production_missing_grounding_rejected() {
     );
     let err = compile_production_plan(&conn, p, None, false, &d).unwrap_err();
     assert!(
-        err.starts_with("planning_grounding_invalid") || err.starts_with("planning_grounding_required"),
+        err.starts_with("planning_grounding_invalid")
+            || err.starts_with("planning_grounding_required"),
         "TC001: compile 必须带错误代码（{err}）"
     );
     // 业务表 0 mutation
     assert_eq!(count(&conn, "learning_items"), 0, "TC001: 0 mutation");
     assert_eq!(count(&conn, "tasks"), 0, "TC001: 0 mutation");
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "TC001: 连 ChangeSet 都未创建");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "TC001: 连 ChangeSet 都未创建"
+    );
 }
 
 // ==================== A1F1-TC002 · Legacy Knowledge Ref Production Reject ====================
@@ -349,13 +361,20 @@ fn a1f1_tc003_meta_only_plan_legal() {
     let cs = ChangeSetRepository::new(&conn)
         .create(p, None, None, "F1 meta", "test", &ops)
         .unwrap();
-    ChangeSetRepository::new(&conn).apply(cs, p, false).expect("apply");
+    ChangeSetRepository::new(&conn)
+        .apply(cs, p, false)
+        .expect("apply");
     let item: Option<i64> = conn
         .query_row("SELECT learning_item_id FROM tasks", [], |r| r.get(0))
         .unwrap();
     assert_eq!(item, None, "TC003: meta task learning_item_id=NULL 合法");
-    let written = ChangeSetRepository::new(&conn).list_operations(cs, p).unwrap();
-    assert!(verify_written_ops(&conn, p, &written).0, "TC003: ReadBack 通过");
+    let written = ChangeSetRepository::new(&conn)
+        .list_operations(cs, p)
+        .unwrap();
+    assert!(
+        verify_written_ops(&conn, p, &written).0,
+        "TC003: ReadBack 通过"
+    );
     let _ = report;
 }
 
@@ -372,7 +391,8 @@ fn a1f1_tc004_learning_missing_item_rejected() {
     );
     let errs = validate_production_grounding_contract(&d).unwrap_err();
     assert!(
-        errs.iter().any(|e| e.contains("unit_refs 为空") || e.contains("缺少学习单元")),
+        errs.iter()
+            .any(|e| e.contains("unit_refs 为空") || e.contains("缺少学习单元")),
         "TC004: Learning+空 refs 必须 FAIL（{errs:?}）"
     );
     assert!(
@@ -392,13 +412,21 @@ fn a1f1_tc005_grounding_repair_success_one_changeset() {
     // 第一次 Draft：一条混合「高数 + 英语」（多 unit 违反原子性）
     let mixed = draft(
         vec![unit("math", "数学", ""), unit("eng", "英语", "")],
-        vec![task("高数+英语 复合训练", "2026-08-28", 120, g_learning(&["math", "eng"]))],
+        vec![task(
+            "高数+英语 复合训练",
+            "2026-08-28",
+            120,
+            g_learning(&["math", "eng"]),
+        )],
     );
     let errs = validate_production_grounding_contract(&mixed).unwrap_err();
     assert!(!errs.is_empty(), "TC005: 前置——混合任务必须 invalid");
     // Repair Prompt：只修 grounding（点名任务 + 拆分指令；不含重写战略）
     let prompt = grounding_repair_prompt(&mixed, &errs);
-    assert!(prompt.contains("高数+英语 复合训练"), "TC005: prompt 点名 invalid 任务");
+    assert!(
+        prompt.contains("高数+英语 复合训练"),
+        "TC005: prompt 点名 invalid 任务"
+    );
     assert!(
         prompt.contains("拆分") || prompt.contains("grounding"),
         "TC005: prompt 只含 grounding 修复指令"
@@ -417,14 +445,19 @@ fn a1f1_tc005_grounding_repair_success_one_changeset() {
         ],
     );
     let c = validate_production_grounding_contract(&repaired).expect("TC005: 修复后合法");
-    assert_eq!((c.learning_task_count, c.grounded_learning_task_count), (2, 2));
-    let (ops, _) = compile_production_plan(&conn, p, None, false, &repaired)
-        .expect("TC005: 修复后可编译");
+    assert_eq!(
+        (c.learning_task_count, c.grounded_learning_task_count),
+        (2, 2)
+    );
+    let (ops, _) =
+        compile_production_plan(&conn, p, None, false, &repaired).expect("TC005: 修复后可编译");
     // ONE ChangeSet → Apply PASS
     let cs = ChangeSetRepository::new(&conn)
         .create(p, None, None, "F1 repair", "test", &ops)
         .unwrap();
-    ChangeSetRepository::new(&conn).apply(cs, p, false).expect("apply");
+    ChangeSetRepository::new(&conn)
+        .apply(cs, p, false)
+        .expect("apply");
     assert_eq!(count(&conn, "ai_change_sets"), 1, "TC005: ONE ChangeSet");
     let grounded: i64 = conn
         .query_row(
@@ -445,24 +478,46 @@ fn a1f1_tc006_grounding_repair_failure_zero_mutation() {
     // 第一次 invalid：混合任务
     let mixed = draft(
         vec![unit("math", "数学", ""), unit("eng", "英语", "")],
-        vec![task("高数+英语 复合训练", "2026-08-28", 120, g_learning(&["math", "eng"]))],
+        vec![task(
+            "高数+英语 复合训练",
+            "2026-08-28",
+            120,
+            g_learning(&["math", "eng"]),
+        )],
     );
     assert!(validate_production_grounding_contract(&mixed).is_err());
     // Repair 一次后仍 invalid（模型没修对）
     let still_bad = draft(
         vec![unit("math", "数学", ""), unit("eng", "英语", "")],
-        vec![task("高数+英语 复合训练（修复失败版）", "2026-08-28", 120, g_learning(&["math", "eng"]))],
+        vec![task(
+            "高数+英语 复合训练（修复失败版）",
+            "2026-08-28",
+            120,
+            g_learning(&["math", "eng"]),
+        )],
     );
     assert!(
         compile_production_plan(&conn, p, None, false, &still_bad).is_err(),
         "TC006: 修复无效 → Run failed（编译拒绝）"
     );
     // 数据库：LearningItem delta=0 / Task delta=0 / 无 partial apply
-    assert_eq!(count(&conn, "learning_items"), 0, "TC006: LearningItem delta=0");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        0,
+        "TC006: LearningItem delta=0"
+    );
     assert_eq!(count(&conn, "tasks"), 0, "TC006: Task delta=0");
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "TC006: ChangeSet 未 Apply（未创建）");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "TC006: ChangeSet 未 Apply（未创建）"
+    );
     let goals: i64 = conn
-        .query_row("SELECT COUNT(*) FROM goals WHERE profile_id=?1", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM goals WHERE profile_id=?1",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(goals, 0, "TC006: Goal/Blueprint 不得 partial apply");
 }
@@ -476,10 +531,7 @@ fn a1f1_tc007_no_production_legacy_fallback() {
     // ungrounded Draft：legacy 路径（deprecated compiler 内部 fallback）会成功产出 ops；
     // Production 必须 Err——同一输入的行为分叉即「legacy 未被调用」的行为级证明
     //（若 compile_production_plan 内部走了 legacy 路径，将得到与对照组相同的 Ok+ops）。
-    let d = draft(
-        vec![],
-        vec![task("旧式无关联任务", "2026-08-28", 60, None)],
-    );
+    let d = draft(vec![], vec![task("旧式无关联任务", "2026-08-28", 60, None)]);
     #[allow(deprecated)]
     let legacy = compile_to_changeset_ops_grounded(&conn, p, None, false, &d)
         .expect("TC007: 对照组——legacy 通道本身仍工作（供 legacy 测试）");
@@ -487,7 +539,8 @@ fn a1f1_tc007_no_production_legacy_fallback() {
     let prod = compile_production_plan(&conn, p, None, false, &d);
     let err = prod.unwrap_err();
     assert!(
-        err.starts_with("planning_grounding_invalid") || err.starts_with("planning_grounding_required"),
+        err.starts_with("planning_grounding_invalid")
+            || err.starts_with("planning_grounding_required"),
         "TC007: Production 必须 Err（{err}）"
     );
     // 行为级 0 mutation：fallback 若发生，ops 已产出（此处无任何落库）
@@ -549,7 +602,12 @@ fn a1f1_tc008_planner_e2e_grounded_no_direct_executor() {
         seed_e2e(&conn, "F1T8")
     };
     let out = run_turn(
-        &state, &vault, "f1-tc008", pid, cid, E2E_MSG,
+        &state,
+        &vault,
+        "f1-tc008",
+        pid,
+        cid,
+        E2E_MSG,
         vec![goal_json(json!([]))],
         vec![text_completion(&case1_plan_draft().to_string())],
     )
@@ -567,7 +625,11 @@ fn a1f1_tc008_planner_e2e_grounded_no_direct_executor() {
         .expect("TC008: ChangeSet 必须创建");
     assert_eq!(cs.1, "applied", "TC008: Explicit → Level1 Auto Apply");
     let n_cs: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n_cs, 1, "TC008: ONE ChangeSet");
     // §九四：所有 Learning Task learning_item_id NOT NULL
@@ -591,11 +653,17 @@ fn a1f1_tc008_planner_e2e_grounded_no_direct_executor() {
         assert_eq!(n, 1, "TC008: {title} 的 item 存在且 Profile 正确");
     }
     // §九十九 ReadBack
-    let written = ChangeSetRepository::new(&conn).list_operations(cs.0, pid).unwrap();
+    let written = ChangeSetRepository::new(&conn)
+        .list_operations(cs.0, pid)
+        .unwrap();
     let (ok, fail) = verify_written_ops(&conn, pid, &written);
     assert!(ok, "TC008: ReadBack 失败 {fail:?}");
     // Direct Executor test spy：0 calls（无任何未审计 task create）
-    assert_eq!(unaudited_task_creates(&conn, pid), 0, "TC008: direct executor 0 调用痕迹");
+    assert_eq!(
+        unaudited_task_creates(&conn, pid),
+        0,
+        "TC008: direct executor 0 调用痕迹"
+    );
     let reply = last_assistant(&conn, cid, pid);
     assert!(reply.contains("已应用"), "TC008: F1 交付文案（{reply}）");
 }
@@ -619,7 +687,11 @@ fn a1f1_tc009_execute_action_legacy_still_testable() {
     }
     assert_eq!(count(&conn, "tasks"), 2, "TC009: legacy 单测可直执行");
     // legacy 直执行特征：不经 ChangeSet（审计为 0）——正是 Production 关闭它的原因
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "TC009: 直执行无审计（对照 TC008）");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "TC009: 直执行无审计（对照 TC008）"
+    );
 }
 
 // ==================== A1F1-TC010 · CreateSession Task Snapshot ====================
@@ -630,7 +702,11 @@ fn a1f1_tc010_create_session_task_snapshot() {
     let p = mk_profile(&conn, "P");
     mk_final_goal(&conn, p);
     let goal_id: i64 = conn
-        .query_row("SELECT id FROM goals WHERE profile_id=?1", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM goals WHERE profile_id=?1",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     let item = mk_item(&conn, p, None, "极限");
     // Task: learning_item_id=item, goal_id=goal（fixture 直插，测试构造）
@@ -672,7 +748,10 @@ fn a1f1_tc011_unplanned_session_null_legal() {
         )
         .unwrap();
     assert_eq!(row.0, None, "TC011: 无 task");
-    assert_eq!(row.1, None, "TC011: learning_item_id=NULL 合法（不误判失败）");
+    assert_eq!(
+        row.1, None,
+        "TC011: learning_item_id=NULL 合法（不误判失败）"
+    );
     assert_eq!(row.2, None, "TC011: 无 goal");
     // 空 task_id 字符串同样走 unplanned（先结束第一条——仓储约束同时仅一条 active）
     let sid: i64 = conn
@@ -711,15 +790,19 @@ fn a1f1_tc012_session_snapshot_immutable() {
     )
     .unwrap();
     let now_item: i64 = conn
-        .query_row("SELECT learning_item_id FROM tasks WHERE id=?1", params![task_id], |r| {
-            r.get::<_, Option<i64>>(0)
-        })
+        .query_row(
+            "SELECT learning_item_id FROM tasks WHERE id=?1",
+            params![task_id],
+            |r| r.get::<_, Option<i64>>(0),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(now_item, item_b, "TC012: Task 现挂 item_b");
     // 历史 Session 仍 = item_a（快照冻结，禁止追写）
     let snap: Option<i64> = conn
-        .query_row("SELECT learning_item_id FROM study_sessions", [], |r| r.get(0))
+        .query_row("SELECT learning_item_id FROM study_sessions", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(snap, Some(item_a), "TC012: 历史 Session 快照不变");
 }
@@ -768,7 +851,12 @@ fn e2e_case2_grounding_repair_applies_once() {
     // 注意：Repair 调用为非工具 chat → ScriptedIntel 路由 intel 队列
     //（harness 契约：tools=None = intel 通道），故修复响应脚本化在 intel 第二位。
     let out = run_turn(
-        &state, &vault, "f1-case2", pid, cid, E2E_MSG,
+        &state,
+        &vault,
+        "f1-case2",
+        pid,
+        cid,
+        E2E_MSG,
         vec![goal_json(json!([])), text_completion(&repaired.to_string())],
         vec![text_completion(&first.to_string())],
     )
@@ -787,11 +875,19 @@ fn e2e_case2_grounding_repair_applies_once() {
     assert_eq!(mixed, 0, "Case2: 第一版（复合任务）未 Apply");
     // Repair 后：3 atomic tasks 全部 grounded；ONE ChangeSet
     let n_cs: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n_cs, 1, "Case2: ONE ChangeSet（Repair 不另开包）");
     let status: String = conn
-        .query_row("SELECT status FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(status, "applied", "Case2: Explicit → Auto Apply");
     let ungrounded: i64 = conn
@@ -803,10 +899,18 @@ fn e2e_case2_grounding_repair_applies_once() {
         .unwrap();
     assert_eq!(ungrounded, 0, "Case2: 3/3 grounded（无 NULL 学习任务）");
     let n_tasks: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n_tasks, 3, "Case2: 3 atomic tasks");
-    assert_eq!(unaudited_task_creates(&conn, pid), 0, "Case2: direct executor 0 调用痕迹");
+    assert_eq!(
+        unaudited_task_creates(&conn, pid),
+        0,
+        "Case2: direct executor 0 调用痕迹"
+    );
 }
 
 // ==================== E2E Case 3 · 两次都不给 grounding → Run failed（§九六） ====================
@@ -839,8 +943,16 @@ fn e2e_case3_persistent_ungrounded_zero_mutation() {
     });
     // Repair 同样经 intel 通道（tools=None）→ bad_repair 脚本化在 intel 第二位
     let out = run_turn(
-        &state, &vault, "f1-case3", pid, cid, E2E_MSG,
-        vec![goal_json(json!([])), text_completion(&bad_repair.to_string())],
+        &state,
+        &vault,
+        "f1-case3",
+        pid,
+        cid,
+        E2E_MSG,
+        vec![
+            goal_json(json!([])),
+            text_completion(&bad_repair.to_string()),
+        ],
         vec![text_completion(&first.to_string())],
     )
     .unwrap();
@@ -850,7 +962,11 @@ fn e2e_case3_persistent_ungrounded_zero_mutation() {
     // Run failed 的可观察证据：0 Planning business mutation
     assert_eq!(count(&conn, "ai_change_sets"), 0, "Case3: 0 ChangeSet");
     assert_eq!(count(&conn, "tasks"), 0, "Case3: Task delta=0");
-    assert_eq!(count(&conn, "learning_items"), 0, "Case3: LearningItem delta=0");
+    assert_eq!(
+        count(&conn, "learning_items"),
+        0,
+        "Case3: LearningItem delta=0"
+    );
     let reply = last_assistant(&conn, cid, pid);
     assert!(
         reply.contains("未通过学习关联校验") && reply.contains("正式数据未变化"),
@@ -874,7 +990,12 @@ fn e2e_actionplan_direct_executor_blocked() {
         ]
     });
     let out = run_turn(
-        &state, &vault, "9901", pid, cid, E2E_MSG,
+        &state,
+        &vault,
+        "9901",
+        pid,
+        cid,
+        E2E_MSG,
         vec![goal_json(json!([]))],
         vec![text_completion(&action_plan.to_string())],
     )
@@ -928,7 +1049,10 @@ fn governance_production_call_graph() {
         );
     }
     // Legacy allowlist：execute_action 仅定义于 higher_action.rs（源码保留可测，TC009）
-    assert!(higher.contains("pub fn execute_action("), "Governance: 定义文件保留");
+    assert!(
+        higher.contains("pub fn execute_action("),
+        "Governance: 定义文件保留"
+    );
 
     // §九一：Production source 不得使用 legacy compiler（含 deprecated grounded 版）
     for (src, name) in [(&agent, "agent.rs"), (&lib, "lib.rs")] {
@@ -942,10 +1066,22 @@ fn governance_production_call_graph() {
         );
     }
     // §九二：所有正式 Planning entry 覆盖 production compiler
-    assert!(agent.contains("compile_production_plan("), "Governance: agent 规划入口");
-    assert!(lib.contains("compile_production_plan("), "Governance: lib 规划入口");
-    assert!(planner.contains("compile_production_plan("), "Governance: Review 复盘路径");
-    assert!(planner.contains("pub fn compile_production_plan("), "Governance: 唯一定义");
+    assert!(
+        agent.contains("compile_production_plan("),
+        "Governance: agent 规划入口"
+    );
+    assert!(
+        lib.contains("compile_production_plan("),
+        "Governance: lib 规划入口"
+    );
+    assert!(
+        planner.contains("compile_production_plan("),
+        "Governance: Review 复盘路径"
+    );
+    assert!(
+        planner.contains("pub fn compile_production_plan("),
+        "Governance: 唯一定义"
+    );
 
     // P1-03：Session 路由（task_id → start_for_task；无 → start_quick）
     assert!(

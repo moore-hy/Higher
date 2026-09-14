@@ -20,9 +20,7 @@ use app_lib::ai::planner::{
 };
 use app_lib::ai::tools::execute_read_tool;
 use app_lib::repository::goal_target::GoalTargetRepository;
-use app_lib::repository::personalization::{
-    build_personal_structured, PersonalizationRepository,
-};
+use app_lib::repository::personalization::{build_personal_structured, PersonalizationRepository};
 use app_lib::repository::planning::PlanningRepository;
 use app_lib::repository::planning_review::PlanningReviewRepository;
 use app_lib::repository::planning_source::PlanningSourceRepository;
@@ -45,8 +43,12 @@ fn mk_profile(conn: &Connection) -> i64 {
 }
 
 fn add_days(conn: &Connection, base: &str, n: i64) -> String {
-    conn.query_row("SELECT date(?1, printf('%+d days', ?2))", params![base, n], |r| r.get(0))
-        .unwrap()
+    conn.query_row(
+        "SELECT date(?1, printf('%+d days', ?2))",
+        params![base, n],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 /// 激活一份 review_interval_days 间隔的 active Blueprint。
@@ -54,7 +56,16 @@ fn mk_active_bp(conn: &Connection, p: i64, interval: i64) -> i64 {
     let today = app_lib::repository::planning::today_utc8();
     let repo = PlanningRepository::new(conn);
     let bp = repo
-        .create_blueprint(p, "generic", "蓝图", "# 蓝图", Some("{}"), "{}", "{}", interval)
+        .create_blueprint(
+            p,
+            "generic",
+            "蓝图",
+            "# 蓝图",
+            Some("{}"),
+            "{}",
+            "{}",
+            interval,
+        )
         .unwrap();
     repo.activate(p, bp.id, &today, interval).unwrap();
     bp.id
@@ -117,9 +128,14 @@ fn test_cadence_period_exact_days() {
         assert!(cs.is_none());
         let rev = rrepo.get(rid, p).unwrap().unwrap();
         let expected_start = add_days(&conn, &today, -(interval - 1));
-        assert_eq!(rev.period_start, expected_start,
-            "interval={interval}: period_start 必须 = today-(days-1)");
-        assert_eq!(rev.period_end, today, "interval={interval}: period_end = today");
+        assert_eq!(
+            rev.period_start, expected_start,
+            "interval={interval}: period_start 必须 = today-(days-1)"
+        );
+        assert_eq!(
+            rev.period_end, today,
+            "interval={interval}: period_end = today"
+        );
         assert_eq!(rev.blueprint_id, Some(bp_id));
         // 严格覆盖 interval 个日历日（BETWEEN 含端点）
         let diff: f64 = conn
@@ -129,7 +145,11 @@ fn test_cadence_period_exact_days() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!((diff + 1.0) as i64, interval, "interval={interval}: 覆盖日历日 = {interval}");
+        assert_eq!(
+            (diff + 1.0) as i64,
+            interval,
+            "interval={interval}: 覆盖日历日 = {interval}"
+        );
     }
 }
 
@@ -145,7 +165,11 @@ fn test_open_review_dedupe_and_waiting_approval_reuse() {
     let (rid2, _, _, _) = rrepo.prepare_current(p, "manual").unwrap();
     assert_eq!(rid1, rid2, "running review 连点两次必须复用同一个 review");
     let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(count, 1, "不得创建重复 review 行");
 
@@ -160,7 +184,11 @@ fn test_open_review_dedupe_and_waiting_approval_reuse() {
     assert_eq!(status3, "waiting_approval");
     assert!(snap3.is_empty(), "waiting_approval 不得重新构建/重跑");
     let count2: i64 = conn
-        .query_row("SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(count2, 1, "waiting_approval 不得生成第二条 review");
 }
@@ -189,8 +217,17 @@ fn test_structured_object_arrays_enter_context() {
     prepo.confirm(p).unwrap();
 
     let ctx = build_planning_truth_context(&conn, p);
-    for needle in ["在职备考", "每天可学习 3 小时", "每周一三五晚上有课", "高数一轮进行中", "C 语言基础扎实"] {
-        assert!(ctx.instruction.contains(needle), "对象数组事实必须进入 context：缺 {needle}");
+    for needle in [
+        "在职备考",
+        "每天可学习 3 小时",
+        "每周一三五晚上有课",
+        "高数一轮进行中",
+        "C 语言基础扎实",
+    ] {
+        assert!(
+            ctx.instruction.contains(needle),
+            "对象数组事实必须进入 context：缺 {needle}"
+        );
     }
 }
 
@@ -220,10 +257,20 @@ fn test_priority_truncation_keeps_availability_constraints() {
     prepo.confirm(p).unwrap();
 
     let ctx = build_planning_truth_context(&conn, p);
-    for needle in ["每天可学习 3 小时", "每周最多 4 个整块学习时段", "高数一轮进行中"] {
-        assert!(ctx.instruction.contains(needle), "优先级字段不得因预算截断消失：缺 {needle}");
+    for needle in [
+        "每天可学习 3 小时",
+        "每周最多 4 个整块学习时段",
+        "高数一轮进行中",
+    ] {
+        assert!(
+            ctx.instruction.contains(needle),
+            "优先级字段不得因预算截断消失：缺 {needle}"
+        );
     }
-    let tail = long_blob.chars().skip(long_blob.chars().count() - 60).collect::<String>();
+    let tail = long_blob
+        .chars()
+        .skip(long_blob.chars().count() - 60)
+        .collect::<String>();
     assert!(
         !ctx.instruction.contains(&tail),
         "低优先级长内容应在预算外被截断（不允许把超长偏好挤进 1800 预算）"
@@ -248,17 +295,27 @@ fn test_goal_observation_is_not_active_goaltarget() {
     assert_eq!(unresolved.len(), 1, "目标描述只能进 unresolved");
     assert_eq!(unresolved[0]["kind"], "goal_observation");
     assert!(
-        unresolved[0]["note"].as_str().unwrap().contains("不是正式目标"),
+        unresolved[0]["note"]
+            .as_str()
+            .unwrap()
+            .contains("不是正式目标"),
         "必须带'不是正式目标'说明"
     );
     let basics = v["basics"].as_object().unwrap();
     assert!(
-        !serde_json::to_string(basics).unwrap().contains("最终学习目标"),
+        !serde_json::to_string(basics)
+            .unwrap()
+            .contains("最终学习目标"),
         "basics 不得再携带正式目标"
     );
     // 该档案没有 active GoalTarget（goal observation 不是正式 Goal）
-    let active = GoalTargetRepository::new(&conn).list_active(p, None, None).unwrap();
-    assert!(active.is_empty(), "goal observation 不得产生 active GoalTarget");
+    let active = GoalTargetRepository::new(&conn)
+        .list_active(p, None, None)
+        .unwrap();
+    assert!(
+        active.is_empty(),
+        "goal observation 不得产生 active GoalTarget"
+    );
 }
 
 // ==================== 6 · GoalTarget data_json → planner truth ====================
@@ -292,7 +349,10 @@ fn test_goaltarget_data_json_enters_planner_truth() {
         "学位类型：学硕",
         "学习方式：全日制",
     ] {
-        assert!(ctx.instruction.contains(needle), "data_json 考研字段必须直接进入 truth：缺 {needle}");
+        assert!(
+            ctx.instruction.contains(needle),
+            "data_json 考研字段必须直接进入 truth：缺 {needle}"
+        );
     }
 }
 
@@ -304,7 +364,10 @@ fn test_blueprint_scenario_inherits_postgraduate() {
     let p = mk_profile(&conn);
     // 无 active GoalTarget → generic
     let draft = bp_fixture(&app_lib::repository::planning::today_utc8());
-    assert_eq!(resolve_blueprint_scenario(&conn, p, &draft, false), "generic");
+    assert_eq!(
+        resolve_blueprint_scenario(&conn, p, &draft, false),
+        "generic"
+    );
 
     // active postgraduate REACH 主目标 → postgraduate
     let gt = GoalTargetRepository::new(&conn)
@@ -322,19 +385,39 @@ fn test_blueprint_scenario_inherits_postgraduate() {
     GoalTargetRepository::new(&conn).activate(p, gt.id).unwrap();
     let mut d2 = bp_fixture(&app_lib::repository::planning::today_utc8());
     d2.scenario_type = String::new(); // AI 未给 → 必须继承 active 主场景
-    assert_eq!(resolve_blueprint_scenario(&conn, p, &d2, false), "postgraduate");
+    assert_eq!(
+        resolve_blueprint_scenario(&conn, p, &d2, false),
+        "postgraduate"
+    );
 
     // Review（prefer_active_blueprint=true）继承当前 active Blueprint，不让模型随意改场景
     let today = app_lib::repository::planning::today_utc8();
     let repo = PlanningRepository::new(&conn);
-    let bp = repo.create_blueprint(p, "postgraduate", "考研蓝图", "# 蓝图", Some("{}"), "{}", "{}", 14).unwrap();
+    let bp = repo
+        .create_blueprint(
+            p,
+            "postgraduate",
+            "考研蓝图",
+            "# 蓝图",
+            Some("{}"),
+            "{}",
+            "{}",
+            14,
+        )
+        .unwrap();
     repo.activate(p, bp.id, &today, 14).unwrap();
     let mut d3 = bp_fixture(&today);
     d3.scenario_type = "postgraduate".to_string();
-    assert_eq!(resolve_blueprint_scenario(&conn, p, &d3, true), "postgraduate");
+    assert_eq!(
+        resolve_blueprint_scenario(&conn, p, &d3, true),
+        "postgraduate"
+    );
     // 即使模型试图给 generic，Review 仍继承 active blueprint 的 postgraduate
     d3.scenario_type = "generic".to_string();
-    assert_eq!(resolve_blueprint_scenario(&conn, p, &d3, true), "postgraduate");
+    assert_eq!(
+        resolve_blueprint_scenario(&conn, p, &d3, true),
+        "postgraduate"
+    );
 }
 
 // ==================== 8 · Review adjustment change_set_id 可从 PlanningReview 读出 ====================
@@ -366,12 +449,22 @@ fn test_review_change_set_id_readable_from_planning_review() {
     assert_eq!(outcome, "waiting_approval");
 
     let rev = rrepo.get(rid, p).unwrap().unwrap();
-    let cs_id = rev.change_set_id.expect("ADJUSTMENT_PROPOSAL 必须创建 ChangeSet");
+    let cs_id = rev
+        .change_set_id
+        .expect("ADJUSTMENT_PROPOSAL 必须创建 ChangeSet");
     // Frontend route 直接按 planning_reviews.change_set_id 恢复「审阅 AI 调整」入口
     let cs_from_db: Option<i64> = conn
-        .query_row("SELECT change_set_id FROM planning_reviews WHERE id=?1 AND profile_id=?2", params![rid, p], |r| r.get(0))
+        .query_row(
+            "SELECT change_set_id FROM planning_reviews WHERE id=?1 AND profile_id=?2",
+            params![rid, p],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(cs_from_db, Some(cs_id), "planning_reviews.change_set_id 必须真实可读");
+    assert_eq!(
+        cs_from_db,
+        Some(cs_id),
+        "planning_reviews.change_set_id 必须真实可读"
+    );
     assert_eq!(rev.blueprint_id, Some(bp_id));
 }
 
@@ -473,13 +566,20 @@ fn test_planning_source_pagination() {
     let conn = setup();
     let p = mk_profile(&conn);
     let src_repo = PlanningSourceRepository::new(&conn);
-    let sid = src_repo.insert(p, "user_file", "长规划.txt", "txt", "/tmp/long.txt", "sha").unwrap();
+    let sid = src_repo
+        .insert(p, "user_file", "长规划.txt", "txt", "/tmp/long.txt", "sha")
+        .unwrap();
     let body: String = "A".repeat(3000);
     src_repo.store_chunks(sid, p, &body).unwrap();
     src_repo.set_status(sid, "ready").unwrap();
 
-    let page1 = execute_read_tool(&conn, p, "read_planning_source", &json!({"source_id": sid, "start_char": 0, "max_chars": 1200}))
-        .unwrap();
+    let page1 = execute_read_tool(
+        &conn,
+        p,
+        "read_planning_source",
+        &json!({"source_id": sid, "start_char": 0, "max_chars": 1200}),
+    )
+    .unwrap();
     let v1: serde_json::Value = serde_json::from_str(&page1).unwrap();
     assert_eq!(v1["start_char"], 0);
     assert_eq!(v1["next_start_char"], 1200);
@@ -487,15 +587,25 @@ fn test_planning_source_pagination() {
     assert_eq!(v1["total_chars"], 3000);
     assert_eq!(v1["text"].as_str().unwrap().chars().count(), 1200);
 
-    let page2 = execute_read_tool(&conn, p, "read_planning_source", &json!({"source_id": sid, "start_char": 1200, "max_chars": 1200}))
-        .unwrap();
+    let page2 = execute_read_tool(
+        &conn,
+        p,
+        "read_planning_source",
+        &json!({"source_id": sid, "start_char": 1200, "max_chars": 1200}),
+    )
+    .unwrap();
     let v2: serde_json::Value = serde_json::from_str(&page2).unwrap();
     assert_eq!(v2["start_char"], 1200);
     assert_eq!(v2["next_start_char"], 2400);
     assert_eq!(v2["has_more"], true);
 
-    let page3 = execute_read_tool(&conn, p, "read_planning_source", &json!({"source_id": sid, "start_char": 2400, "max_chars": 1200}))
-        .unwrap();
+    let page3 = execute_read_tool(
+        &conn,
+        p,
+        "read_planning_source",
+        &json!({"source_id": sid, "start_char": 2400, "max_chars": 1200}),
+    )
+    .unwrap();
     let v3: serde_json::Value = serde_json::from_str(&page3).unwrap();
     assert_eq!(v3["start_char"], 2400);
     assert_eq!(v3["next_start_char"], 3000);
@@ -503,8 +613,8 @@ fn test_planning_source_pagination() {
     assert_eq!(v3["text"].as_str().unwrap().chars().count(), 600);
 
     // 默认参数（start_char=0, max_chars=12000 且上限 16000）
-    let def = execute_read_tool(&conn, p, "read_planning_source", &json!({"source_id": sid}))
-        .unwrap();
+    let def =
+        execute_read_tool(&conn, p, "read_planning_source", &json!({"source_id": sid})).unwrap();
     let vd: serde_json::Value = serde_json::from_str(&def).unwrap();
     assert_eq!(vd["start_char"], 0);
     assert_eq!(vd["has_more"], false, "3000 字全文在默认 12000 内读完");
@@ -519,11 +629,38 @@ fn test_manual_first_blueprint_path() {
     let today = app_lib::repository::planning::today_utc8();
     let repo = PlanningRepository::new(&conn);
     // createPlanningBlueprint(..., status=draft)：无 AI 创建第一份正式规划
-    let bp = repo.create_blueprint(p, "postgraduate", "手工蓝图", "# 手工规划", Some("{}"), "{}", "{}", 14).unwrap();
-    assert_eq!(bp.status, "draft", "create 后必须为 draft（未激活不打扰 Today）");
+    let bp = repo
+        .create_blueprint(
+            p,
+            "postgraduate",
+            "手工蓝图",
+            "# 手工规划",
+            Some("{}"),
+            "{}",
+            "{}",
+            14,
+        )
+        .unwrap();
+    assert_eq!(
+        bp.status, "draft",
+        "create 后必须为 draft（未激活不打扰 Today）"
+    );
     assert_eq!(bp.scenario_type, "postgraduate");
-    let ph = repo.add_phase(bp.id, "P1", "基础期", Some(&today), None, "打基础", 1).unwrap();
-    repo.add_milestone(bp.id, Some(ph), "M1", "一轮结束", None, None, "month", "estimated", "{}").unwrap();
+    let ph = repo
+        .add_phase(bp.id, "P1", "基础期", Some(&today), None, "打基础", 1)
+        .unwrap();
+    repo.add_milestone(
+        bp.id,
+        Some(ph),
+        "M1",
+        "一轮结束",
+        None,
+        None,
+        "month",
+        "estimated",
+        "{}",
+    )
+    .unwrap();
     // 激活草稿 → active + 投影
     let active = repo.activate(p, bp.id, &today, 14).unwrap();
     assert_eq!(active.status, "active");
@@ -532,7 +669,18 @@ fn test_manual_first_blueprint_path() {
     assert_eq!(repo.list_milestones(bp.id).unwrap().len(), 1);
     // 未设 GoalTarget 时也能手工创建（§10 无 AI 完整可运行）
     let p2 = mk_profile(&conn);
-    let bp2 = repo.create_blueprint(p2, "generic", "通用草稿", "# 内容", Some("{}"), "{}", "{}", 7).unwrap();
+    let bp2 = repo
+        .create_blueprint(
+            p2,
+            "generic",
+            "通用草稿",
+            "# 内容",
+            Some("{}"),
+            "{}",
+            "{}",
+            7,
+        )
+        .unwrap();
     assert_eq!(bp2.status, "draft");
     repo.activate(p2, bp2.id, &today, 7).unwrap();
     assert_eq!(repo.get_active(p2).unwrap().unwrap().id, bp2.id);
@@ -548,7 +696,11 @@ fn test_reality_change_due_no_stack() {
     // 无 active Blueprint → 不创建
     rrepo.ensure_reality_change_due(p).unwrap();
     let c0: i64 = conn
-        .query_row("SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(c0, 0, "无 active Blueprint 不得创建 reality_change review");
 
@@ -560,18 +712,33 @@ fn test_reality_change_due_no_stack() {
         .iter()
         .filter(|r| r.status == "due" && r.trigger_type == "reality_change")
         .collect();
-    assert_eq!(open.len(), 1, "confirm 变化后应恰有 1 条 reality_change due");
-    assert_eq!(open[0].period_end, app_lib::repository::planning::today_utc8());
+    assert_eq!(
+        open.len(),
+        1,
+        "confirm 变化后应恰有 1 条 reality_change due"
+    );
+    assert_eq!(
+        open[0].period_end,
+        app_lib::repository::planning::today_utc8()
+    );
 
     // 重复更新（confirm / user_edit 再次触发）→ 不堆重复 open review
     rrepo.ensure_reality_change_due(p).unwrap();
     rrepo.ensure_reality_change_due(p).unwrap();
     let c1: i64 = conn
-        .query_row("SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1 AND status='due'", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1 AND status='due'",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(c1, 1, "重复 reality_change 不得堆叠多条 due");
     let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM planning_reviews WHERE profile_id=?1",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(total, 1, "全程只有 1 条 review");
 }

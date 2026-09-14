@@ -10,7 +10,5 @@
 use rusqlite::Connection;
 
 pub fn up(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "ALTER TABLE personalization_profiles ADD COLUMN user_context_json TEXT;",
-    )
+    conn.execute_batch("ALTER TABLE personalization_profiles ADD COLUMN user_context_json TEXT;")
 }

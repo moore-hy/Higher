@@ -370,28 +370,31 @@ pub fn execute_read_tool(
                 .unwrap_or_default();
             let formal: Vec<serde_json::Value> = targets
                 .iter()
-                .map(|t| json!({
-                    "id": t.id, "scenario_type": t.scenario_type, "role": t.role,
-                    "title": t.title, "target_date": t.target_date,
-                    "status": t.status, "data_json": t.data_json,
-                }))
+                .map(|t| {
+                    json!({
+                        "id": t.id, "scenario_type": t.scenario_type, "role": t.role,
+                        "title": t.title, "target_date": t.target_date,
+                        "status": t.status, "data_json": t.data_json,
+                    })
+                })
                 .collect();
             let primary = targets
                 .iter()
                 .find(|t| t.scenario_type == "postgraduate" && t.role == "reach")
                 .or_else(|| targets.iter().find(|t| t.role == "reach"))
                 .or_else(|| targets.first())
-                .map(|t| json!({
+                .map(|t| {
+                    json!({
+                        "id": t.id, "scenario_type": t.scenario_type, "role": t.role,
+                        "title": t.title, "target_date": t.target_date, "data_json": t.data_json,
+                    })
+                });
+            let safety = targets.iter().find(|t| t.role == "safety").map(|t| {
+                json!({
                     "id": t.id, "scenario_type": t.scenario_type, "role": t.role,
                     "title": t.title, "target_date": t.target_date, "data_json": t.data_json,
-                }));
-            let safety = targets
-                .iter()
-                .find(|t| t.role == "safety")
-                .map(|t| json!({
-                    "id": t.id, "scenario_type": t.scenario_type, "role": t.role,
-                    "title": t.title, "target_date": t.target_date, "data_json": t.data_json,
-                }));
+                })
+            });
             let legacy_candidates: Vec<serde_json::Value> = {
                 let mut stmt = match conn.prepare(
                     "SELECT id, name, COALESCE(description,''), COALESCE(goal_brief_json,'')
@@ -452,82 +455,107 @@ pub fn execute_read_tool(
         }
         "list_plans" => {
             // DEV-0060 §8.4：legacy compatibility（plans 为旧表；正式规划 = read_active_planning_blueprint）
-            let mut stmt = conn.prepare(
-                "SELECT p.title, COALESCE(p.start_date,''), COALESCE(p.end_date,''), p.status
+            let mut stmt = conn
+                .prepare(
+                    "SELECT p.title, COALESCE(p.start_date,''), COALESCE(p.end_date,''), p.status
                  FROM plans p JOIN goals g ON p.goal_id = g.id
                  WHERE g.profile_id = ?1 ORDER BY p.id DESC LIMIT 20",
-            ).map_err(|e| e.to_string())?;
-            let rows: Vec<serde_json::Value> = stmt.query_map(params![profile_id], |r| {
-                Ok(json!({
-                    "title": r.get::<_, String>(0)?,
-                    "start_date": r.get::<_, String>(1)?,
-                    "end_date": r.get::<_, String>(2)?,
-                    "status": r.get::<_, String>(3)?,
-                }))
-            }).map_err(|e| e.to_string())?.filter_map(|v| v.ok()).collect();
+                )
+                .map_err(|e| e.to_string())?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map(params![profile_id], |r| {
+                    Ok(json!({
+                        "title": r.get::<_, String>(0)?,
+                        "start_date": r.get::<_, String>(1)?,
+                        "end_date": r.get::<_, String>(2)?,
+                        "status": r.get::<_, String>(3)?,
+                    }))
+                })
+                .map_err(|e| e.to_string())?
+                .filter_map(|v| v.ok())
+                .collect();
             json!({ "legacy_plans": rows, "legacy_compatibility": true,
-                    "note": "旧计划表（legacy）；正式规划请读 read_active_planning_blueprint" }).to_string()
+                    "note": "旧计划表（legacy）；正式规划请读 read_active_planning_blueprint" })
+            .to_string()
         }
         "list_knowledge_tree" => {
-            let mut stmt = conn.prepare(
-                "SELECT li.id, li.name, li.mastery_status FROM learning_items li
+            let mut stmt = conn
+                .prepare(
+                    "SELECT li.id, li.name, li.mastery_status FROM learning_items li
                  WHERE li.profile_id = ?1 ORDER BY li.id LIMIT 200",
-            ).map_err(|e| e.to_string())?;
-            let rows: Vec<serde_json::Value> = stmt.query_map(params![profile_id], |r| {
-                Ok(json!({
-                    "id": r.get::<_, i64>(0)?,
-                    "name": r.get::<_, String>(1)?,
-                    "mastery_status": r.get::<_, String>(2)?,
-                }))
-            }).map_err(|e| e.to_string())?.filter_map(|v| v.ok()).collect();
+                )
+                .map_err(|e| e.to_string())?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map(params![profile_id], |r| {
+                    Ok(json!({
+                        "id": r.get::<_, i64>(0)?,
+                        "name": r.get::<_, String>(1)?,
+                        "mastery_status": r.get::<_, String>(2)?,
+                    }))
+                })
+                .map_err(|e| e.to_string())?
+                .filter_map(|v| v.ok())
+                .collect();
             json!(rows).to_string()
         }
         "read_knowledge_item" => {
-            let item_id = arguments.get("item_id").and_then(|v| v.as_i64())
+            let item_id = arguments
+                .get("item_id")
+                .and_then(|v| v.as_i64())
                 .ok_or("缺少 item_id")?;
-            let row = conn.query_row(
-                "SELECT li.name, li.mastery_status, COALESCE(li.content,'')
+            let row = conn
+                .query_row(
+                    "SELECT li.name, li.mastery_status, COALESCE(li.content,'')
                  FROM learning_items li JOIN goals g ON li.goal_id = g.id
                  WHERE li.id = ?1 AND g.profile_id = ?2",
-                params![item_id, profile_id],
-                |r| {
-                    Ok(json!({
-                        "id": item_id,
-                        "name": r.get::<_, String>(0)?,
-                        "mastery_status": r.get::<_, String>(1)?,
-                        "content": r.get::<_, String>(2)?,
-                    }))
-                },
-            ).map_err(|_| "该知识节点不存在或不属于当前档案".to_string())?;
+                    params![item_id, profile_id],
+                    |r| {
+                        Ok(json!({
+                            "id": item_id,
+                            "name": r.get::<_, String>(0)?,
+                            "mastery_status": r.get::<_, String>(1)?,
+                            "content": r.get::<_, String>(2)?,
+                        }))
+                    },
+                )
+                .map_err(|_| "该知识节点不存在或不属于当前档案".to_string())?;
             row.to_string()
         }
         "list_recent_sessions" => {
             // DEV-0057 §59-61：AI 必须看到该 Profile 全部真实 Session；Goal/Knowledge 只是
             // 可选附加信息 → INNER JOIN 改 LEFT JOIN（Quick 未关联学习不再被遗漏）。
-            let mut stmt = conn.prepare(
-                "SELECT ss.id, li.name, ss.started_at, COALESCE(ss.duration_seconds,0),
+            let mut stmt = conn
+                .prepare(
+                    "SELECT ss.id, li.name, ss.started_at, COALESCE(ss.duration_seconds,0),
                         ss.title, ss.activity_kind, ss.status, ss.duration_review_state
                  FROM study_sessions ss
                  LEFT JOIN learning_items li ON ss.learning_item_id = li.id
                  WHERE ss.profile_id = ?1 ORDER BY ss.id DESC LIMIT 20",
-            ).map_err(|e| e.to_string())?;
-            let rows: Vec<serde_json::Value> = stmt.query_map(params![profile_id], |r| {
-                let knowledge: Option<String> = r.get(1).ok();
-                Ok(json!({
-                    "id": r.get::<_, i64>(0)?,
-                    "knowledge": knowledge,
-                    "started_at": r.get::<_, String>(2)?,
-                    "duration_seconds": r.get::<_, i64>(3)?,
-                    "title": r.get::<_, String>(4)?,
-                    "activity_kind": r.get::<_, String>(5)?,
-                    "status": r.get::<_, String>(6)?,
-                    "duration_review_state": r.get::<_, String>(7)?,
-                }))
-            }).map_err(|e| e.to_string())?.filter_map(|v| v.ok()).collect();
+                )
+                .map_err(|e| e.to_string())?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map(params![profile_id], |r| {
+                    let knowledge: Option<String> = r.get(1).ok();
+                    Ok(json!({
+                        "id": r.get::<_, i64>(0)?,
+                        "knowledge": knowledge,
+                        "started_at": r.get::<_, String>(2)?,
+                        "duration_seconds": r.get::<_, i64>(3)?,
+                        "title": r.get::<_, String>(4)?,
+                        "activity_kind": r.get::<_, String>(5)?,
+                        "status": r.get::<_, String>(6)?,
+                        "duration_review_state": r.get::<_, String>(7)?,
+                    }))
+                })
+                .map_err(|e| e.to_string())?
+                .filter_map(|v| v.ok())
+                .collect();
             json!(rows).to_string()
         }
         "read_session" => {
-            let sid = arguments.get("session_id").and_then(|v| v.as_i64())
+            let sid = arguments
+                .get("session_id")
+                .and_then(|v| v.as_i64())
                 .ok_or("缺少 session_id")?;
             let row = conn.query_row(
                 "SELECT ss.started_at, COALESCE(ss.ended_at,''), COALESCE(ss.duration_seconds,0),
@@ -563,25 +591,41 @@ pub fn execute_read_tool(
                  WHERE g.profile_id = ?1 AND (e.trust_state IS NULL OR e.trust_state != 'needs_review')
                  ORDER BY e.id DESC LIMIT 20",
             ).map_err(|e| e.to_string())?;
-            let rows: Vec<serde_json::Value> = stmt.query_map(params![profile_id], |r| {
-                Ok(json!({
-                    "date": r.get::<_, String>(5)?,
-                    "knowledge": r.get::<_, Option<String>>(4)?,
-                    "type": r.get::<_, String>(0)?,
-                    "outcome": r.get::<_, String>(1)?,
-                    "correct": r.get::<_, i64>(2)?,
-                    "total": r.get::<_, i64>(3)?,
-                }))
-            }).map_err(|e| e.to_string())?.filter_map(|v| v.ok()).collect();
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map(params![profile_id], |r| {
+                    Ok(json!({
+                        "date": r.get::<_, String>(5)?,
+                        "knowledge": r.get::<_, Option<String>>(4)?,
+                        "type": r.get::<_, String>(0)?,
+                        "outcome": r.get::<_, String>(1)?,
+                        "correct": r.get::<_, i64>(2)?,
+                        "total": r.get::<_, i64>(3)?,
+                    }))
+                })
+                .map_err(|e| e.to_string())?
+                .filter_map(|v| v.ok())
+                .collect();
             json!(rows).to_string()
         }
         "list_tasks" => {
             // 可选过滤：日期范围（planned_date 为 TEXT 'YYYY-MM-DD'）与状态
-            let start = arguments.get("start_date").and_then(|v| v.as_str()).map(str::to_string);
-            let end = arguments.get("end_date").and_then(|v| v.as_str()).map(str::to_string);
-            let status = arguments.get("status").and_then(|v| v.as_str()).map(str::to_string);
+            let start = arguments
+                .get("start_date")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let end = arguments
+                .get("end_date")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let status = arguments
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
             // archived：默认仅活跃（v011 起归档任务不进普通列表语义；可显式查询）
-            let include_archived = arguments.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(false);
+            let include_archived = arguments
+                .get("include_archived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             // 静态拼接（值不进 SQL 文本；参数化绑定）
             let mut sql = String::from(
                 "SELECT t.id, t.title, COALESCE(t.planned_date,''), t.status,
@@ -600,9 +644,20 @@ pub fn execute_read_tool(
             }
             let mut idx = 2u32;
             let mut binds: Vec<String> = Vec::new();
-            if let Some(s) = &start { sql.push_str(&format!(" AND t.planned_date >= ?{}", idx)); binds.push(s.clone()); idx += 1; }
-            if let Some(e) = &end { sql.push_str(&format!(" AND t.planned_date <= ?{}", idx)); binds.push(e.clone()); idx += 1; }
-            if let Some(st) = &status { sql.push_str(&format!(" AND t.status = ?{}", idx)); binds.push(st.clone()); }
+            if let Some(s) = &start {
+                sql.push_str(&format!(" AND t.planned_date >= ?{}", idx));
+                binds.push(s.clone());
+                idx += 1;
+            }
+            if let Some(e) = &end {
+                sql.push_str(&format!(" AND t.planned_date <= ?{}", idx));
+                binds.push(e.clone());
+                idx += 1;
+            }
+            if let Some(st) = &status {
+                sql.push_str(&format!(" AND t.status = ?{}", idx));
+                binds.push(st.clone());
+            }
             sql.push_str(" ORDER BY t.planned_date IS NULL, t.planned_date, t.id LIMIT 50");
 
             let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -643,21 +698,39 @@ pub fn execute_read_tool(
                 "days": active,
                 "total_sessions_14d": trend.iter().map(|t| t.session_count).sum::<i64>(),
                 "total_evaluations_14d": trend.iter().map(|t| t.evaluation_count).sum::<i64>(),
-            }).to_string()
+            })
+            .to_string()
         }
         "search_higher" => {
-            let q = arguments.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            let limit = arguments.get("limit").and_then(|v| v.as_i64()).unwrap_or(10);
+            let q = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let limit = arguments
+                .get("limit")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(10);
             let ets: Option<Vec<String>> = arguments
                 .get("entity_types")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
-            let hits = crate::repository::search::SearchRepository::new(conn)
-                .search(profile_id, q, ets.as_deref(), limit)?;
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                });
+            let hits = crate::repository::search::SearchRepository::new(conn).search(
+                profile_id,
+                q,
+                ets.as_deref(),
+                limit,
+            )?;
             json!(hits).to_string()
         }
         "search_memory" => {
-            let q = arguments.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let q = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let limit = arguments.get("limit").and_then(|v| v.as_i64()).unwrap_or(8);
             let mems = crate::repository::memory::MemoryRepository::new(conn)
                 .search(profile_id, q, limit)?;
@@ -667,22 +740,39 @@ pub fn execute_read_tool(
             // DEV-0066 §10.2：draft 不再返回空 md——AI 必须能真正检查私人档案
             //（status/version/structured/md/unresolved/source count/confirmed 标记）。
             let repo = crate::repository::personalization::PersonalizationRepository::new(conn);
-            let (pp, confirmed): (Option<crate::repository::personalization::PersonalizationProfile>, bool) = {
-                let c = repo.get_confirmed_profile(profile_id).map_err(|e| e.to_string())?;
+            let (pp, confirmed): (
+                Option<crate::repository::personalization::PersonalizationProfile>,
+                bool,
+            ) = {
+                let c = repo
+                    .get_confirmed_profile(profile_id)
+                    .map_err(|e| e.to_string())?;
                 match c {
                     Some(p) => (Some(p), true),
-                    None => (repo.get_draft_profile(profile_id).map_err(|e| e.to_string())?, false),
+                    None => (
+                        repo.get_draft_profile(profile_id)
+                            .map_err(|e| e.to_string())?,
+                        false,
+                    ),
                 }
             };
-            let source_count = repo.list_sources(profile_id).map_err(|e| e.to_string())?.len();
+            let source_count = repo
+                .list_sources(profile_id)
+                .map_err(|e| e.to_string())?
+                .len();
             let (status, filled, missing, unresolved_count) = match &pp {
                 Some(p) => {
-                    let (filled, missing) = personalization_section_status(p.structured_json.as_deref());
+                    let (filled, missing) =
+                        personalization_section_status(p.structured_json.as_deref());
                     let unresolved_count = p
                         .structured_json
                         .as_deref()
                         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                        .and_then(|v| v.get("unresolved").and_then(|u| u.as_array()).map(|a| a.len()))
+                        .and_then(|v| {
+                            v.get("unresolved")
+                                .and_then(|u| u.as_array())
+                                .map(|a| a.len())
+                        })
                         .unwrap_or(0);
                     (p.status.clone(), filled, missing, unresolved_count)
                 }
@@ -715,8 +805,10 @@ pub fn execute_read_tool(
                 .filter(|d| crate::ai::runtime::valid_ymd(d))
                 .map(|d| d.to_string())
                 .unwrap_or_else(|| {
-                    conn.query_row("SELECT date('now','localtime')", [], |r| r.get::<_, String>(0))
-                        .unwrap_or_default()
+                    conn.query_row("SELECT date('now','localtime')", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .unwrap_or_default()
                 });
             crate::ai::overview::build_higher_overview(conn, profile_id, &date)
                 .map_err(|e| e.to_string())?
@@ -800,7 +892,11 @@ pub fn execute_read_tool(
                 .into_iter()
                 .filter(|s| s.status == "ready" || s.status == "imported")
                 .map(|s| {
-                    let chars = repo.joined_text(profile_id, s.id).unwrap_or_default().chars().count();
+                    let chars = repo
+                        .joined_text(profile_id, s.id)
+                        .unwrap_or_default()
+                        .chars()
+                        .count();
                     json!({
                         "id": s.id,
                         "name": s.original_name,
@@ -830,7 +926,9 @@ pub fn execute_read_tool(
                 .unwrap_or(12000)
                 .clamp(1, 16000) as usize;
             let repo = crate::repository::planning_source::PlanningSourceRepository::new(conn);
-            let text = repo.joined_text(profile_id, source_id).map_err(|e| e.to_string())?;
+            let text = repo
+                .joined_text(profile_id, source_id)
+                .map_err(|e| e.to_string())?;
             let total_chars = text.chars().count();
             let start = start_char.min(total_chars);
             let chunk: String = text.chars().skip(start).take(max_chars).collect();
@@ -851,15 +949,17 @@ pub fn execute_read_tool(
                 .map_err(|e| e.to_string())?;
             let vals: Vec<serde_json::Value> = rows
                 .into_iter()
-                .map(|t| json!({
-                    "id": t.id,
-                    "scenario_type": t.scenario_type,
-                    "role": t.role,
-                    "title": t.title,
-                    "target_date": t.target_date,
-                    "status": t.status,
-                    "data_json": t.data_json,
-                }))
+                .map(|t| {
+                    json!({
+                        "id": t.id,
+                        "scenario_type": t.scenario_type,
+                        "role": t.role,
+                        "title": t.title,
+                        "target_date": t.target_date,
+                        "status": t.status,
+                        "data_json": t.data_json,
+                    })
+                })
                 .collect();
             json!(vals).to_string()
         }
@@ -885,7 +985,8 @@ pub fn execute_read_tool(
                         "structured_json": b.structured_json,
                         "phases": phases,
                         "milestones": milestones,
-                    }).to_string()
+                    })
+                    .to_string()
                 }
                 None => json!({"blueprint": null}).to_string(),
             }
@@ -897,7 +998,9 @@ pub fn execute_read_tool(
 
 /// DEV-0066 §10.2：解析 structured_json → (已有信息分节, 缺失信息分节)。
 /// 分节集合与 build_personal_structured 的字段一一对应；空/缺字段即"档案未覆盖"。
-fn personalization_section_status(structured_json: Option<&str>) -> (Vec<&'static str>, Vec<&'static str>) {
+fn personalization_section_status(
+    structured_json: Option<&str>,
+) -> (Vec<&'static str>, Vec<&'static str>) {
     const SECTIONS: &[(&str, &[&str])] = &[
         ("basic_info", &["basics", "basic_info"]),
         ("capabilities", &["capabilities"]),
@@ -1082,7 +1185,11 @@ pub async fn run_with_tools(
         });
 
         for call in tool_calls.as_array().unwrap() {
-            let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = call
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let fn_name = call
                 .get("function")
                 .and_then(|f| f.get("name"))
@@ -1104,10 +1211,7 @@ pub async fn run_with_tools(
                 let conn = db.0.lock().map_err(|e| e.to_string())?;
                 match execute_read_tool(&conn, profile_id, &fn_name, &args) {
                     Ok(ok) => (ok, "success".to_string()),
-                    Err(err) => (
-                        json!({"error": err}).to_string(),
-                        "error".to_string(),
-                    ),
+                    Err(err) => (json!({"error": err}).to_string(), "error".to_string()),
                 }
             } else {
                 (

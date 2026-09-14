@@ -84,7 +84,10 @@ fn test_a_migration_v002_applied_and_idempotent() {
     };
     assert_eq!(
         versions,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ],
         "全部 migrations 都应已执行"
     );
 
@@ -99,7 +102,11 @@ fn test_a_migration_v002_applied_and_idempotent() {
             .collect()
     };
     for expected in ["goals", "learning_items", "tasks", "study_sessions"] {
-        assert!(tables.contains(&expected.to_string()), "缺少表 {}", expected);
+        assert!(
+            tables.contains(&expected.to_string()),
+            "缺少表 {}",
+            expected
+        );
     }
 
     // 幂等：再次执行 Migration 不应报错也不应重复
@@ -116,7 +123,9 @@ fn test_b_create_and_read_goal() {
     let conn = setup();
     let repo = GoalRepository::new(&conn);
 
-    let g = repo.create(create_default_profile(&conn), "2027 考研", Some("长期目标")).unwrap();
+    let g = repo
+        .create(create_default_profile(&conn), "2027 考研", Some("长期目标"))
+        .unwrap();
     assert!(g.id > 0);
     assert_eq!(g.name, "2027 考研");
     assert_eq!(g.status, "active");
@@ -135,7 +144,9 @@ fn test_c_create_learning_item_with_goal() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "Linux 学习", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "Linux 学习", None)
+        .unwrap();
     let item = item_repo
         .create(goal.id, "Linux 进程调度", Some("CFS"), None)
         .unwrap();
@@ -183,7 +194,9 @@ fn test_e_start_session_immediately_persisted() {
     let item_repo = LearningItemRepository::new(&conn);
     let sess_repo = StudySessionRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "嵌入式学习", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "嵌入式学习", None)
+        .unwrap();
     let item = item_repo.create(goal.id, "驱动开发", None, None).unwrap();
 
     let session = sess_repo.start(item.id, None).unwrap();
@@ -233,11 +246,15 @@ fn test_g_status_and_note_persisted() {
     let item_repo = LearningItemRepository::new(&conn);
     let sess_repo = StudySessionRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "测试目标", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "测试目标", None)
+        .unwrap();
     let item = item_repo.create(goal.id, "测试对象", None, None).unwrap();
 
     let session = sess_repo.start(item.id, None).unwrap();
-    let ended = sess_repo.end(session.id, Some("今天先完成第一轮学习")).unwrap();
+    let ended = sess_repo
+        .end(session.id, Some("今天先完成第一轮学习"))
+        .unwrap();
     assert_eq!(ended.note, Some("今天先完成第一轮学习".to_string()));
 
     // 更新 Learning Item 状态
@@ -253,7 +270,9 @@ fn test_h_history_query() {
     let item_repo = LearningItemRepository::new(&conn);
     let sess_repo = StudySessionRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "历史测试", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "历史测试", None)
+        .unwrap();
     let item = item_repo.create(goal.id, "对象 A", None, None).unwrap();
 
     for _ in 0..3 {
@@ -275,7 +294,9 @@ fn test_j_multiple_sessions_per_task_no_auto_complete() {
     let task_repo = TaskRepository::new(&conn);
     let sess_repo = StudySessionRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "多 Session 测试", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "多 Session 测试", None)
+        .unwrap();
     let item = item_repo.create(goal.id, "对象 X", None, None).unwrap();
     let task = task_repo.create(item.id, "完成 X 章节", None).unwrap();
 
@@ -324,7 +345,9 @@ fn test_persistence_full_loop() {
         let task_repo = TaskRepository::new(&conn);
         let sess_repo = StudySessionRepository::new(&conn);
 
-        let goal = goal_repo.create(create_default_profile(&conn), "持久化测试", None).unwrap();
+        let goal = goal_repo
+            .create(create_default_profile(&conn), "持久化测试", None)
+            .unwrap();
         let item = item_repo.create(goal.id, "持久化对象", None, None).unwrap();
         let task = task_repo.create(item.id, "持久化任务", None).unwrap();
         let s = sess_repo.start(item.id, Some(task.id)).unwrap();
@@ -374,7 +397,10 @@ fn test_persistence_full_loop() {
         };
         assert_eq!(
             versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+            vec![
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29
+            ]
         );
     }
 

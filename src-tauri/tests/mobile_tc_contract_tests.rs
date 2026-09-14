@@ -17,7 +17,9 @@ use std::path::Path;
 fn read_repo(rel: &str) -> String {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
     // DEV-INTEGRATE-001：Windows core.autocrlf 下工作树为 CRLF，多行字面量断言需 LF 归一
-    std::fs::read_to_string(p).unwrap_or_default().replace("\r\n", "\n")
+    std::fs::read_to_string(p)
+        .unwrap_or_default()
+        .replace("\r\n", "\n")
 }
 
 /// 前端源码（仓库根 ../src/）。
@@ -40,7 +42,8 @@ fn read_rust(rel: &str) -> String {
 fn tc001_003_platform_shell_selection_contract() {
     let rp = read_web("platform/runtimePlatform.ts");
     assert!(
-        rp.contains("__HIGHER_TARGET_PLATFORM__") && rp.contains("declare const __HIGHER_TARGET_PLATFORM__"),
+        rp.contains("__HIGHER_TARGET_PLATFORM__")
+            && rp.contains("declare const __HIGHER_TARGET_PLATFORM__"),
         "TC001-003: 平台唯一来源 = 编译期常量 __HIGHER_TARGET_PLATFORM__（F1.1 §二）"
     );
     assert!(
@@ -50,7 +53,8 @@ fn tc001_003_platform_shell_selection_contract() {
     // 浏览器 dev（无平台 env）→ vite define 值 "desktop" → desktop Shell（§109）
     let vite = read_repo("../vite.config.ts");
     assert!(
-        vite.contains("HIGHER_TARGET_PLATFORM") && vite.contains("__HIGHER_TARGET_PLATFORM__: JSON.stringify(higherTarget)"),
+        vite.contains("HIGHER_TARGET_PLATFORM")
+            && vite.contains("__HIGHER_TARGET_PLATFORM__: JSON.stringify(higherTarget)"),
         "TC001: vite define 注入平台常量（无 env 默认 desktop）"
     );
     // F1.1 §三 + F1 §四/§九：meta 与编译常量同源（vite closeBundle 写出，禁双源；
@@ -291,7 +295,10 @@ fn tc017_pending_send_navigates_ai() {
         "TC017: AiPanel 单点挂载"
     );
     let app = read_web("App.tsx");
-    assert!(app.contains("path=\"/ai\""), "TC017: /ai 路由存在（仅 Android）");
+    assert!(
+        app.contains("path=\"/ai\""),
+        "TC017: /ai 路由存在（仅 Android）"
+    );
 }
 
 // ==================== 补充 · Window / Notification 平台隔离 ====================

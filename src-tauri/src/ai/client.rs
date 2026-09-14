@@ -21,13 +21,31 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into(), tool_calls: None, tool_call_id: None, name: None }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into(), tool_calls: None, tool_call_id: None, name: None }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: content.into(), tool_calls: None, tool_call_id: None, name: None }
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
     }
 }
 
@@ -136,7 +154,8 @@ impl AiClient {
         tools: Option<serde_json::Value>,
         max_tokens: Option<i64>,
     ) -> Result<Completion, String> {
-        self.chat_with_temperature(messages, json_mode, tools, max_tokens, 0.3).await
+        self.chat_with_temperature(messages, json_mode, tools, max_tokens, 0.3)
+            .await
     }
 
     /// 显式温度版本。`temp` 由调用方决定：
@@ -164,7 +183,9 @@ impl AiClient {
             response_format: self
                 .config
                 .use_native_json(json_mode)
-                .then(|| ResponseFormat { kind: "json_object".into() }),
+                .then(|| ResponseFormat {
+                    kind: "json_object".into(),
+                }),
             tools,
             stream: false,
         };
@@ -269,9 +290,18 @@ impl AiClient {
                                 }
                                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(d) {
                                     if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
-                                        usage.prompt_tokens = u.get("prompt_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
-                                        usage.completion_tokens = u.get("completion_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
-                                        usage.total_tokens = u.get("total_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                        usage.prompt_tokens = u
+                                            .get("prompt_tokens")
+                                            .and_then(|x| x.as_i64())
+                                            .unwrap_or(0);
+                                        usage.completion_tokens = u
+                                            .get("completion_tokens")
+                                            .and_then(|x| x.as_i64())
+                                            .unwrap_or(0);
+                                        usage.total_tokens = u
+                                            .get("total_tokens")
+                                            .and_then(|x| x.as_i64())
+                                            .unwrap_or(0);
                                     }
                                     let delta = v
                                         .pointer("/choices/0/delta/content")
@@ -369,13 +399,27 @@ impl AiClient {
                             if let Some(data) = line.strip_prefix("data:") {
                                 let d = data.trim();
                                 if d == "[DONE]" {
-                                    return Ok(Self::stream_completion(full, tool_calls, finish_reason, usage));
+                                    return Ok(Self::stream_completion(
+                                        full,
+                                        tool_calls,
+                                        finish_reason,
+                                        usage,
+                                    ));
                                 }
                                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(d) {
                                     if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
-                                        usage.prompt_tokens = u.get("prompt_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
-                                        usage.completion_tokens = u.get("completion_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
-                                        usage.total_tokens = u.get("total_tokens").and_then(|x| x.as_i64()).unwrap_or(0);
+                                        usage.prompt_tokens = u
+                                            .get("prompt_tokens")
+                                            .and_then(|x| x.as_i64())
+                                            .unwrap_or(0);
+                                        usage.completion_tokens = u
+                                            .get("completion_tokens")
+                                            .and_then(|x| x.as_i64())
+                                            .unwrap_or(0);
+                                        usage.total_tokens = u
+                                            .get("total_tokens")
+                                            .and_then(|x| x.as_i64())
+                                            .unwrap_or(0);
                                     }
                                     // content delta（§二十六：仅 content；reasoning_content 不解析）
                                     let delta = v
@@ -387,9 +431,16 @@ impl AiClient {
                                         on_delta(delta);
                                     }
                                     // tool_calls 增量聚合
-                                    if let Some(arr) = v.pointer("/choices/0/delta/tool_calls").and_then(|x| x.as_array()) {
+                                    if let Some(arr) = v
+                                        .pointer("/choices/0/delta/tool_calls")
+                                        .and_then(|x| x.as_array())
+                                    {
                                         for frag in arr {
-                                            let idx = frag.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                                            let idx = frag
+                                                .get("index")
+                                                .and_then(|x| x.as_u64())
+                                                .unwrap_or(0)
+                                                as usize;
                                             while tool_calls.len() <= idx {
                                                 tool_calls.push(serde_json::json!({
                                                     "id": "", "type": "function",
@@ -397,28 +448,46 @@ impl AiClient {
                                                 }));
                                             }
                                             let tc = &mut tool_calls[idx];
-                                            if let Some(id) = frag.get("id").and_then(|x| x.as_str()) {
+                                            if let Some(id) =
+                                                frag.get("id").and_then(|x| x.as_str())
+                                            {
                                                 if !id.is_empty() {
                                                     tc["id"] = serde_json::json!(id);
                                                 }
                                             }
-                                            if let Some(ty) = frag.get("type").and_then(|x| x.as_str()) {
+                                            if let Some(ty) =
+                                                frag.get("type").and_then(|x| x.as_str())
+                                            {
                                                 if !ty.is_empty() {
                                                     tc["type"] = serde_json::json!(ty);
                                                 }
                                             }
-                                            if let Some(name) = frag.pointer("/function/name").and_then(|x| x.as_str()) {
+                                            if let Some(name) = frag
+                                                .pointer("/function/name")
+                                                .and_then(|x| x.as_str())
+                                            {
                                                 if !name.is_empty() {
-                                                    tc["function"]["name"] = serde_json::json!(name);
+                                                    tc["function"]["name"] =
+                                                        serde_json::json!(name);
                                                 }
                                             }
-                                            if let Some(args) = frag.pointer("/function/arguments").and_then(|x| x.as_str()) {
-                                                let cur = tc["function"]["arguments"].as_str().unwrap_or("").to_string();
-                                                tc["function"]["arguments"] = serde_json::json!(format!("{cur}{args}"));
+                                            if let Some(args) = frag
+                                                .pointer("/function/arguments")
+                                                .and_then(|x| x.as_str())
+                                            {
+                                                let cur = tc["function"]["arguments"]
+                                                    .as_str()
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                tc["function"]["arguments"] =
+                                                    serde_json::json!(format!("{cur}{args}"));
                                             }
                                         }
                                     }
-                                    if let Some(fr) = v.pointer("/choices/0/finish_reason").and_then(|x| x.as_str()) {
+                                    if let Some(fr) = v
+                                        .pointer("/choices/0/finish_reason")
+                                        .and_then(|x| x.as_str())
+                                    {
                                         finish_reason = Some(fr.to_string());
                                     }
                                 }
@@ -435,7 +504,12 @@ impl AiClient {
                 }
             }
         }
-        Ok(Self::stream_completion(full, tool_calls, finish_reason, usage))
+        Ok(Self::stream_completion(
+            full,
+            tool_calls,
+            finish_reason,
+            usage,
+        ))
     }
 
     fn stream_completion(
@@ -493,7 +567,10 @@ fn human_http_error(code: u16, body: &str) -> String {
         402 => "账户余额或额度不足，请前往服务商充值。".to_string(),
         404 => format!("接口或模型不存在（404）。请检查 Base URL 与模型名。{brief}"),
         429 => "请求过于频繁或额度受限（429），请稍后重试。".to_string(),
-        400 | 422 => format!("请求被拒绝（{}）：可能是模型名或 thinking 参数不支持。{}", code, brief),
+        400 | 422 => format!(
+            "请求被拒绝（{}）：可能是模型名或 thinking 参数不支持。{}",
+            code, brief
+        ),
         500..=599 => format!("AI 服务暂时不可用（{}），请稍后重试。", code),
         _ => format!("请求失败（HTTP {}）：{}", code, brief),
     }

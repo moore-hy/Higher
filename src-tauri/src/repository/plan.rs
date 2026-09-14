@@ -76,12 +76,9 @@ impl<'a> PlanRepository<'a> {
                     |row| row.get(0),
                 )
                 .map_err(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => {
-                        rusqlite::Error::InvalidParameterName(format!(
-                            "learning_item_id {} 不存在",
-                            iid
-                        ))
-                    }
+                    rusqlite::Error::QueryReturnedNoRows => rusqlite::Error::InvalidParameterName(
+                        format!("learning_item_id {} 不存在", iid),
+                    ),
                     other => other,
                 })?;
             if item_goal_id != goal_id {
@@ -145,9 +142,7 @@ impl<'a> PlanRepository<'a> {
         end_date: Option<&str>,
     ) -> rusqlite::Result<()> {
         // 取出 plan 的 goal_id 用于校验
-        let plan: Plan = self
-            .get(id)?
-            .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        let plan: Plan = self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
         let goal_id = plan.goal_id;
 
         if let Some(sid) = stage_id {
@@ -182,7 +177,15 @@ impl<'a> PlanRepository<'a> {
              SET stage_id = ?1, learning_item_id = ?2, title = ?3, description = ?4,
                  start_date = ?5, end_date = ?6, updated_at = datetime('now')
              WHERE id = ?7",
-            params![stage_id, learning_item_id, title, description, start_date, end_date, id],
+            params![
+                stage_id,
+                learning_item_id,
+                title,
+                description,
+                start_date,
+                end_date,
+                id
+            ],
         )?;
         Ok(())
     }
@@ -199,7 +202,8 @@ impl<'a> PlanRepository<'a> {
     /// 删除 Plan（用户明确操作）。
     /// 关联 Task 的 plan_id 由 FK ON DELETE SET NULL 自动解链，历史执行记录保留。
     pub fn delete(&self, id: i64) -> rusqlite::Result<()> {
-        self.conn.execute("DELETE FROM plans WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM plans WHERE id = ?1", params![id])?;
         Ok(())
     }
 }

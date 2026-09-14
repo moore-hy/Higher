@@ -64,8 +64,7 @@ pub fn propose_profile_update(
 /// PI-005：用户确认——最新 draft 升 confirmed（v021 既有确认流；
 /// confirm 内部会把旧 confirmed 置 superseded）。
 pub fn confirm_profile(conn: &Connection, profile_id: i64) -> Result<(), String> {
-    crate::repository::personalization::PersonalizationRepository::new(conn)
-        .confirm(profile_id)
+    crate::repository::personalization::PersonalizationRepository::new(conn).confirm(profile_id)
 }
 
 /// 是否存在待确认的 Profile 提案（UI 可提示「AI 更新了你的档案，待确认」）。

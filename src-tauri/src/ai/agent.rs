@@ -78,7 +78,10 @@ impl ModelResponder {
                 if tools.is_none() {
                     // F22-01：intel 通道未脚本化 → 失败（不消耗主队列）
                     let _ = messages;
-                    return Err("Scripted 未脚本化 intelligence 通道（测试脚本不包含 intel 结果）".to_string());
+                    return Err(
+                        "Scripted 未脚本化 intelligence 通道（测试脚本不包含 intel 结果）"
+                            .to_string(),
+                    );
                 }
                 let _ = (messages, max_tokens);
                 let mut g = q.lock().map_err(|e| e.to_string())?;
@@ -88,7 +91,10 @@ impl ModelResponder {
             ModelResponder::ScriptedCapture(q, cap) => {
                 if tools.is_none() {
                     let _ = messages;
-                    return Err("ScriptedCapture 未脚本化 intelligence 通道（测试脚本不包含 intel 结果）".to_string());
+                    return Err(
+                        "ScriptedCapture 未脚本化 intelligence 通道（测试脚本不包含 intel 结果）"
+                            .to_string(),
+                    );
                 }
                 let _ = max_tokens;
                 if let Ok(mut g) = cap.lock() {
@@ -98,7 +104,11 @@ impl ModelResponder {
                 g.pop_front()
                     .ok_or_else(|| "Scripted 模型应答已耗尽（测试脚本不完整）".to_string())
             }
-            ModelResponder::ScriptedIntel { intel, main, capture } => {
+            ModelResponder::ScriptedIntel {
+                intel,
+                main,
+                capture,
+            } => {
                 if let Some(cap) = capture {
                     if let Ok(mut g) = cap.lock() {
                         g.push(messages);
@@ -107,18 +117,23 @@ impl ModelResponder {
                 let _ = max_tokens;
                 if tools.is_none() {
                     let mut g = intel.lock().map_err(|e| e.to_string())?;
-                    g.pop_front()
-                        .ok_or_else(|| "ScriptedIntel intel 队列已耗尽（测试脚本不完整）".to_string())
+                    g.pop_front().ok_or_else(|| {
+                        "ScriptedIntel intel 队列已耗尽（测试脚本不完整）".to_string()
+                    })
                 } else {
                     let mut g = main.lock().map_err(|e| e.to_string())?;
-                    g.pop_front()
-                        .ok_or_else(|| "ScriptedIntel main 队列已耗尽（测试脚本不完整）".to_string())
+                    g.pop_front().ok_or_else(|| {
+                        "ScriptedIntel main 队列已耗尽（测试脚本不完整）".to_string()
+                    })
                 }
             }
             ModelResponder::ScriptedStream { main } => {
                 if tools.is_none() {
                     let _ = messages;
-                    return Err("ScriptedStream 未脚本化 intelligence 通道（测试脚本不包含 intel 结果）".to_string());
+                    return Err(
+                        "ScriptedStream 未脚本化 intelligence 通道（测试脚本不包含 intel 结果）"
+                            .to_string(),
+                    );
                 }
                 let _ = (messages, max_tokens);
                 let mut g = main.lock().map_err(|e| e.to_string())?;
@@ -126,7 +141,12 @@ impl ModelResponder {
                     .map(|(_, c)| c)
                     .ok_or_else(|| "ScriptedStream 队列已耗尽（测试脚本不完整）".to_string())
             }
-            ModelResponder::ScriptedIntelGate { intel, main, gate, intel_calls } => {
+            ModelResponder::ScriptedIntelGate {
+                intel,
+                main,
+                gate,
+                intel_calls,
+            } => {
                 let _ = max_tokens;
                 if tools.is_none() {
                     // RUNTIME-TC010：第 2+ 次 intel 调用（Memory）阻塞等 gate
@@ -134,12 +154,14 @@ impl ModelResponder {
                         gate.cancelled().await;
                     }
                     let mut g = intel.lock().map_err(|e| e.to_string())?;
-                    g.pop_front()
-                        .ok_or_else(|| "ScriptedIntelGate intel 队列已耗尽（测试脚本不完整）".to_string())
+                    g.pop_front().ok_or_else(|| {
+                        "ScriptedIntelGate intel 队列已耗尽（测试脚本不完整）".to_string()
+                    })
                 } else {
                     let mut g = main.lock().map_err(|e| e.to_string())?;
-                    g.pop_front()
-                        .ok_or_else(|| "ScriptedIntelGate main 队列已耗尽（测试脚本不完整）".to_string())
+                    g.pop_front().ok_or_else(|| {
+                        "ScriptedIntelGate main 队列已耗尽（测试脚本不完整）".to_string()
+                    })
                 }
             }
         }
@@ -313,8 +335,15 @@ pub async fn agent_turn_core(
                 let mut message_id: Option<i64> = None;
                 if has_msg == 0 {
                     let safe = format!("[出错] {e}");
-                    if let Ok(m) = crate::repository::conversation::ConversationRepository::new(&conn)
-                        .add_message(args.conversation_id, args.profile_id, "assistant", &safe, Some(args.run_id))
+                    if let Ok(m) =
+                        crate::repository::conversation::ConversationRepository::new(&conn)
+                            .add_message(
+                                args.conversation_id,
+                                args.profile_id,
+                                "assistant",
+                                &safe,
+                                Some(args.run_id),
+                            )
                     {
                         message_id = Some(m.id);
                     }
@@ -335,14 +364,27 @@ pub async fn agent_turn_core(
                         |r| r.get(0),
                     )
                     .unwrap_or_default();
-                let reason = if cur.is_empty() { "agent_runtime_error".to_string() } else { cur };
+                let reason = if cur.is_empty() {
+                    "agent_runtime_error".to_string()
+                } else {
+                    cur
+                };
                 finish_run(
-                    &conn, args.run_id, args.profile_id, args.conversation_id,
-                    "failed", &reason, &Usage::default(),
+                    &conn,
+                    args.run_id,
+                    args.profile_id,
+                    args.conversation_id,
+                    "failed",
+                    &reason,
+                    &Usage::default(),
                 );
                 super::workflow::set_workflow_state(
-                    &conn, args.run_id, args.profile_id, args.conversation_id,
-                    super::workflow::STATE_FAILED, None,
+                    &conn,
+                    args.run_id,
+                    args.profile_id,
+                    args.conversation_id,
+                    super::workflow::STATE_FAILED,
+                    None,
                 );
                 // §三十三顺序：kind=error（§五十二）→ Message DB commit →
                 // message_committed → terminal failed
@@ -399,8 +441,13 @@ async fn agent_turn_inner(
                 ?4,?5,?6,?7,?4,?5,?6,?7)
              ON CONFLICT(id) DO NOTHING",
             rusqlite::params![
-                run_id, profile_id, conversation_id,
-                primary.profile_id, primary.display_name, primary.adapter_kind.as_str(), primary.model,
+                run_id,
+                profile_id,
+                conversation_id,
+                primary.profile_id,
+                primary.display_name,
+                primary.adapter_kind.as_str(),
+                primary.model,
             ],
         );
         trace.turn_started(&conn, page_label);
@@ -436,9 +483,22 @@ async fn agent_turn_inner(
             primary.display_name
         );
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let _ = crate::repository::conversation::ConversationRepository::new(&conn)
-            .add_message(*conversation_id, *profile_id, "assistant", &msg, Some(run_id));
-        finish_run(&conn, run_id, *profile_id, *conversation_id, "completed", "primary_basic_guard", &Usage::default());
+        let _ = crate::repository::conversation::ConversationRepository::new(&conn).add_message(
+            *conversation_id,
+            *profile_id,
+            "assistant",
+            &msg,
+            Some(run_id),
+        );
+        finish_run(
+            &conn,
+            run_id,
+            *profile_id,
+            *conversation_id,
+            "completed",
+            "primary_basic_guard",
+            &Usage::default(),
+        );
         return Ok("completed");
     }
 
@@ -451,7 +511,8 @@ async fn agent_turn_inner(
     let (mut workflow, continuation_block, prev_waiting) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let (prev_state, mut payload) =
-            super::workflow::read_workflow_payload(&conn, *profile_id, *conversation_id).unwrap_or_default();
+            super::workflow::read_workflow_payload(&conn, *profile_id, *conversation_id)
+                .unwrap_or_default();
         // 续接块必须在 record_user_answers 改写 payload 之前、按恢复态构建
         //（保留原 pending/collected 供模型对照用户最新回答）
         let waiting = prev_state == super::workflow::STATE_WAITING_USER;
@@ -470,8 +531,12 @@ async fn agent_turn_inner(
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         super::workflow::set_workflow_payload(
-            &conn, run_id, *profile_id, *conversation_id,
-            super::workflow::STATE_UNDERSTANDING, &workflow,
+            &conn,
+            run_id,
+            *profile_id,
+            *conversation_id,
+            super::workflow::STATE_UNDERSTANDING,
+            &workflow,
         );
     }
 
@@ -481,27 +546,35 @@ async fn agent_turn_inner(
     // §二十二权限执行）；分支内部自行持久化与收口，直接返回 run 终态。
     // §十四续接：waiting_user 的 adaptation 问询回答（任意自然语言，无关键词）→
     // 恢复原 entry 权限级别，继续同一 Adaptation Workflow（不要求重新发起）。
-    let adaptation_entry = super::adaptation::detect_adaptation_intent(user_message).or_else(|| {
-        if prev_waiting && workflow.collected_user_information.contains_key("_adaptation_context") {
-            Some(
-                if workflow
+    let adaptation_entry =
+        super::adaptation::detect_adaptation_intent(user_message).or_else(|| {
+            if prev_waiting
+                && workflow
                     .collected_user_information
-                    .get("_adaptation_entry")
-                    .map(|s| s.as_str())
-                    == Some("proactive")
-                {
-                    super::adaptation::decision::AdaptationEntry::Proactive
-                } else {
-                    super::adaptation::decision::AdaptationEntry::Explicit
-                },
-            )
-        } else {
-            None
-        }
-    });
+                    .contains_key("_adaptation_context")
+            {
+                Some(
+                    if workflow
+                        .collected_user_information
+                        .get("_adaptation_entry")
+                        .map(|s| s.as_str())
+                        == Some("proactive")
+                    {
+                        super::adaptation::decision::AdaptationEntry::Proactive
+                    } else {
+                        super::adaptation::decision::AdaptationEntry::Explicit
+                    },
+                )
+            } else {
+                None
+            }
+        });
     if let Some(entry) = adaptation_entry {
         // §五十一：Adaptation 分支共用同一 Emitter（seq 连续、协议一致）
-        return super::adaptation::adaptation_turn(app, state, vault, &responder, args, emitter, entry).await;
+        return super::adaptation::adaptation_turn(
+            app, state, vault, &responder, args, emitter, entry,
+        )
+        .await;
     }
     let collected_info = workflow
         .collected_user_information
@@ -533,103 +606,110 @@ async fn agent_turn_inner(
     // DEV-0077.3 §十（Stage 由代码确定）：进入 goal_understanding::analyze
     // 之前 → understanding_goal（任何长 await 前先发 Stage，§二）。
     emitter.emit_stage(super::runtime_events::stage::UNDERSTANDING_GOAL);
-    let user_context_block = {
-        let (uc, higher_ctx) = {
-            let conn = state.0.lock().map_err(|e| e.to_string())?;
-            let uc = super::intelligence::load_user_context(&conn, *profile_id);
-            let higher = super::context_builder::current_goal_summary(&conn, *profile_id)
-                .unwrap_or(None)
-                .unwrap_or_default();
-            (uc, higher)
-        };
-        // DEV-0077.4-A.1 F2 §十二/§十三（FIX-1，RC-1）：waiting_user 续接轮的
-        // intelligence 分析输入 = 原始请求 + 本轮回答（确定性桥接，非关键词路由）。
-        // 纯编号回答本身无目标语义（Turn 2「1.每天11小时…」），必须与
-        // original_request 一起呈现，goal_understanding 才能恢复原任务的目标
-        // 与真实 remaining 缺口；非续接轮保持既有行为零变化（只传本轮消息）。
-        let intel_request: String = if prev_waiting && !workflow.original_request.trim().is_empty() {
-            super::planner::log_continuation_event("WAITING_WORKFLOW_RESUMED");
-            format!(
+    let user_context_block =
+        {
+            let (uc, higher_ctx) = {
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                let uc = super::intelligence::load_user_context(&conn, *profile_id);
+                let higher = super::context_builder::current_goal_summary(&conn, *profile_id)
+                    .unwrap_or(None)
+                    .unwrap_or_default();
+                (uc, higher)
+            };
+            // DEV-0077.4-A.1 F2 §十二/§十三（FIX-1，RC-1）：waiting_user 续接轮的
+            // intelligence 分析输入 = 原始请求 + 本轮回答（确定性桥接，非关键词路由）。
+            // 纯编号回答本身无目标语义（Turn 2「1.每天11小时…」），必须与
+            // original_request 一起呈现，goal_understanding 才能恢复原任务的目标
+            // 与真实 remaining 缺口；非续接轮保持既有行为零变化（只传本轮消息）。
+            let intel_request: String =
+                if prev_waiting && !workflow.original_request.trim().is_empty() {
+                    super::planner::log_continuation_event("WAITING_WORKFLOW_RESUMED");
+                    format!(
                 "（用户正在回答一个进行中工作流的待确认问题）\n原始请求：{}\n用户本轮回答：{}",
                 workflow.original_request.chars().take(2000).collect::<String>(),
                 user_message
             )
-        } else {
-            user_message.to_string()
-        };
-        match super::intelligence::goal_understanding::analyze(
-            &responder,
-            &uc,
-            &intel_request,
-            &workflow.collected_user_information,
-            &higher_ctx,
-        )
-        .await
-        {
-            Ok(goal) => {
-                let missing = super::intelligence::missing_information::from_goal(&goal);
-                // DEV-0073 Phase 4：goal_understanding → missing_information
-                // → information_gate → decision（Complete + planning_required
-                // → 自动 ReadyForPlanning；planning_required 缺省 true 保持
-                // v2.2 行为，渠道规则同 decide）
-                let result = super::intelligence::decision::evaluate(&goal, &missing);
-                let decision = result.decision;
-                let block = super::intelligence::build_prompt_block(&uc, &goal, &missing);
-                // F21-T07/F22-T02：goal 为空（闲聊/无目标）不产生决策、不推进状态
-                if !goal.goal.trim().is_empty() {
-                    intel_decision = Some(decision);
-                    // DEV-0073 Phase 5：ReadyForPlanning（gate Complete + 规划需求）
-                    // → 本轮自动进入 Dedicated Planner（Decision → Planner →
-                    // Plan Draft → ChangeSet），不再依赖关键词路由。
-                    if decision == super::intelligence::decision::AiDecision::ReadyForPlanning {
-                        planner_ready = true;
-                        let mut s = format!("{}（类型 {}", goal.goal, goal.goal_type);
-                        if let Some(d) = goal.deadline.as_deref() {
-                            s.push_str(&format!("，期限 {d}"));
-                        }
-                        s.push('）');
-                        let understanding = uc.summary();
-                        if !understanding.is_empty() {
-                            s.push_str(&format!("；当前情况：{understanding}"));
-                        }
-                        for (k, v) in &workflow.collected_user_information {
-                            s.push_str(&format!("；{k}：{v}"));
-                        }
-                        planner_goal_summary = s;
-                    }
-                    if let Some(phase) = super::intelligence::determine_phase(&goal, decision) {
-                        let conn = state.0.lock().map_err(|e| e.to_string())?;
-                        // §17 状态推进：分析时点持久化 + 事件留存（对称 researching 先例）
-                        workflow.last_phase = phase.to_string();
-                        super::workflow::set_workflow_payload(
-                            &conn, run_id, *profile_id, *conversation_id, phase, &workflow,
-                        );
-                        let _ = conn.execute(
-                            "INSERT INTO ai_run_events (run_id, event_type, data_json)
-                             VALUES (?1, 'workflow_user_context', ?2)",
-                            rusqlite::params![
-                                run_id,
-                                format!(
-                                    "{{\"state\":\"{phase}\",\"decision\":\"{}\"}}",
-                                    decision.as_str()
-                                )
-                            ],
-                        );
-                    }
-                }
-                block
-            }
-            Err(_) => {
-                // 分析失败：只注入既有理解摘要（可能为空，不编造缺失清单）
-                let understanding = uc.summary();
-                if understanding.is_empty() {
-                    String::new()
                 } else {
-                    format!("当前用户理解：\n{understanding}\n")
+                    user_message.to_string()
+                };
+            match super::intelligence::goal_understanding::analyze(
+                &responder,
+                &uc,
+                &intel_request,
+                &workflow.collected_user_information,
+                &higher_ctx,
+            )
+            .await
+            {
+                Ok(goal) => {
+                    let missing = super::intelligence::missing_information::from_goal(&goal);
+                    // DEV-0073 Phase 4：goal_understanding → missing_information
+                    // → information_gate → decision（Complete + planning_required
+                    // → 自动 ReadyForPlanning；planning_required 缺省 true 保持
+                    // v2.2 行为，渠道规则同 decide）
+                    let result = super::intelligence::decision::evaluate(&goal, &missing);
+                    let decision = result.decision;
+                    let block = super::intelligence::build_prompt_block(&uc, &goal, &missing);
+                    // F21-T07/F22-T02：goal 为空（闲聊/无目标）不产生决策、不推进状态
+                    if !goal.goal.trim().is_empty() {
+                        intel_decision = Some(decision);
+                        // DEV-0073 Phase 5：ReadyForPlanning（gate Complete + 规划需求）
+                        // → 本轮自动进入 Dedicated Planner（Decision → Planner →
+                        // Plan Draft → ChangeSet），不再依赖关键词路由。
+                        if decision == super::intelligence::decision::AiDecision::ReadyForPlanning {
+                            planner_ready = true;
+                            let mut s = format!("{}（类型 {}", goal.goal, goal.goal_type);
+                            if let Some(d) = goal.deadline.as_deref() {
+                                s.push_str(&format!("，期限 {d}"));
+                            }
+                            s.push('）');
+                            let understanding = uc.summary();
+                            if !understanding.is_empty() {
+                                s.push_str(&format!("；当前情况：{understanding}"));
+                            }
+                            for (k, v) in &workflow.collected_user_information {
+                                s.push_str(&format!("；{k}：{v}"));
+                            }
+                            planner_goal_summary = s;
+                        }
+                        if let Some(phase) = super::intelligence::determine_phase(&goal, decision) {
+                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                            // §17 状态推进：分析时点持久化 + 事件留存（对称 researching 先例）
+                            workflow.last_phase = phase.to_string();
+                            super::workflow::set_workflow_payload(
+                                &conn,
+                                run_id,
+                                *profile_id,
+                                *conversation_id,
+                                phase,
+                                &workflow,
+                            );
+                            let _ = conn.execute(
+                                "INSERT INTO ai_run_events (run_id, event_type, data_json)
+                             VALUES (?1, 'workflow_user_context', ?2)",
+                                rusqlite::params![
+                                    run_id,
+                                    format!(
+                                        "{{\"state\":\"{phase}\",\"decision\":\"{}\"}}",
+                                        decision.as_str()
+                                    )
+                                ],
+                            );
+                        }
+                    }
+                    block
+                }
+                Err(_) => {
+                    // 分析失败：只注入既有理解摘要（可能为空，不编造缺失清单）
+                    let understanding = uc.summary();
+                    if understanding.is_empty() {
+                        String::new()
+                    } else {
+                        format!("当前用户理解：\n{understanding}\n")
+                    }
                 }
             }
-        }
-    };
+        };
 
     // ⑤ 消息组装：短 System Prompt + 有界历史（8 轮 / 14k 字符）+ 当前用户消息
     // DEV-0075 §八：轮首加载 Personal Intelligence（档案/记忆/运行上下文）
@@ -638,7 +718,10 @@ async fn agent_turn_inner(
     let pi_block = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         super::intelligence::intelligence_builder::build_injection(
-            &conn, *profile_id, &workflow, user_message,
+            &conn,
+            *profile_id,
+            &workflow,
+            user_message,
         )
     };
     let user_context_block = if pi_block.is_empty() {
@@ -659,7 +742,12 @@ async fn agent_turn_inner(
     };
     let mut messages: Vec<ChatMessage> = Vec::new();
     messages.push(ChatMessage::system(agent_prompt::agent_system_prompt(
-        &envelope, page_label, &collected_info, &user_context_block, *web_enabled, &continuation_block,
+        &envelope,
+        page_label,
+        &collected_info,
+        &user_context_block,
+        *web_enabled,
+        &continuation_block,
     )));
     // DEV-0073 Phase 5：ReadyForPlanning → 注入 Dedicated Planner 指令
     //（PLAN_DRAFT_INSTRUCTION + PLANNER_TURN_PROTOCOL + Planning Truth 五区块；
@@ -679,7 +767,8 @@ async fn agent_turn_inner(
             "【DEV-0073 · 信息已齐备，本轮进入正式规划】\n目标理解：{planner_goal_summary}\n以下按 Planner Response Protocol 输出（只输出一个 JSON 对象）：\n\n{instruction}"
         )));
     }
-    for (_, role, content) in super::runtime::bound_history(&recent, *current_message_id, 8, 14_000) {
+    for (_, role, content) in super::runtime::bound_history(&recent, *current_message_id, 8, 14_000)
+    {
         if role == "user" {
             messages.push(ChatMessage::user(content));
         } else {
@@ -737,7 +826,14 @@ async fn agent_turn_inner(
         }
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            trace.provider_request_started_role(&conn, round as i64 + 1, "main", tool_count, "primary", Some(primary));
+            trace.provider_request_started_role(
+                &conn,
+                round as i64 + 1,
+                "main",
+                tool_count,
+                "primary",
+                Some(primary),
+            );
         }
         // DEV-0077.3 §二十二/§二十七（True Streaming 分流）：
         // - planner_ready 轮 → 非流式（该轮最终回答是 structured JSON，
@@ -747,13 +843,21 @@ async fn agent_turn_inner(
         // §二十六：流式路径不产生 reasoning_content（client 不解析）。
         let mut streamed_this_round = false;
         let comp = if planner_ready {
-            responder.chat(messages.clone(), Some(tools.clone()), Some(4096)).await?
+            responder
+                .chat(messages.clone(), Some(tools.clone()), Some(4096))
+                .await?
         } else {
             let em = &*emitter;
             let c = responder
-                .chat_streaming(messages.clone(), Some(tools.clone()), Some(4096), token, |chunk| {
-                    em.emit_delta(chunk);
-                })
+                .chat_streaming(
+                    messages.clone(),
+                    Some(tools.clone()),
+                    Some(4096),
+                    token,
+                    |chunk| {
+                        em.emit_delta(chunk);
+                    },
+                )
                 .await?;
             streamed_this_round = true;
             c
@@ -768,7 +872,8 @@ async fn agent_turn_inner(
             let conn = state.0.lock().map_err(|e| e.to_string())?;
             trace.provider_request_finished(&conn, round as i64 + 1, "main");
         }
-        match super::planner::classify_tool_round(comp.tool_calls.as_ref(), comp.content.as_deref()) {
+        match super::planner::classify_tool_round(comp.tool_calls.as_ref(), comp.content.as_deref())
+        {
             super::planner::ToolRoundOutcome::FinalAnswer(text) => {
                 final_text = text;
                 // DEV-0073 Phase 5：ReadyForPlanning 轮的 FinalAnswer 按
@@ -797,10 +902,15 @@ async fn agent_turn_inner(
                         );
                         {
                             let conn = state.0.lock().map_err(|e| e.to_string())?;
-                            let _ = crate::repository::conversation::ConversationRepository::new(&conn)
-                                .add_message(
-                                    *conversation_id, *profile_id, "assistant", &msg, Some(run_id),
-                                );
+                            let _ =
+                                crate::repository::conversation::ConversationRepository::new(&conn)
+                                    .add_message(
+                                        *conversation_id,
+                                        *profile_id,
+                                        "assistant",
+                                        &msg,
+                                        Some(run_id),
+                                    );
                             // §一一六 标记双写：ai_runs.error（finish_run 完成态会覆写）
                             // + ai_run_events 事件（durable，同 researching 先例）
                             let _ = conn.execute(
@@ -826,10 +936,12 @@ async fn agent_turn_inner(
                         .trim()
                         .to_string();
                     let turn: Option<(String, serde_json::Value)> =
-                        serde_json::from_str::<serde_json::Value>(&trimmed).ok().and_then(|v| {
-                            let t = v.get("type").and_then(|t| t.as_str()).map(String::from);
-                            t.map(|t| (t, v))
-                        });
+                        serde_json::from_str::<serde_json::Value>(&trimmed)
+                            .ok()
+                            .and_then(|v| {
+                                let t = v.get("type").and_then(|t| t.as_str()).map(String::from);
+                                t.map(|t| (t, v))
+                            });
                     if let Some((t, v)) = turn {
                         match t.as_str() {
                             "clarification" => {
@@ -842,8 +954,14 @@ async fn agent_turn_inner(
                                         arr.iter()
                                             .take(super::planner::MAX_BLOCKING_QUESTIONS)
                                             .filter_map(|q| {
-                                                let key = q.get("key").and_then(|x| x.as_str())?.to_string();
-                                                let question = q.get("question").and_then(|x| x.as_str())?.to_string();
+                                                let key = q
+                                                    .get("key")
+                                                    .and_then(|x| x.as_str())?
+                                                    .to_string();
+                                                let question = q
+                                                    .get("question")
+                                                    .and_then(|x| x.as_str())?
+                                                    .to_string();
                                                 Some(super::workflow::AgentQuestion {
                                                     key,
                                                     question,
@@ -860,24 +978,37 @@ async fn agent_turn_inner(
                                 }
                             }
                             "handoff_chat" => {
-                                let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                                let msg = v
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
                                 if !msg.is_empty() {
                                     final_text = msg;
                                 }
                             }
                             "plan_draft" => {
-                                let draft_val = v.get("draft").cloned().unwrap_or_else(|| v.clone());
+                                let draft_val =
+                                    v.get("draft").cloned().unwrap_or_else(|| v.clone());
                                 if let Ok(mut draft) =
                                     serde_json::from_value::<super::planner::PlanDraft>(draft_val)
                                 {
                                     let validation = {
                                         let conn = state.0.lock().map_err(|e| e.to_string())?;
                                         if let Some(bp) = draft.blueprint.as_mut() {
-                                            bp.scenario_type = super::planner::resolve_blueprint_scenario(
-                                                &conn, *profile_id, bp, false,
-                                            );
+                                            bp.scenario_type =
+                                                super::planner::resolve_blueprint_scenario(
+                                                    &conn,
+                                                    *profile_id,
+                                                    bp,
+                                                    false,
+                                                );
                                         }
-                                        super::planner::validate_plan_draft(&conn, *profile_id, &draft)
+                                        super::planner::validate_plan_draft(
+                                            &conn,
+                                            *profile_id,
+                                            &draft,
+                                        )
                                     };
                                     if validation.errors.is_empty() {
                                         let (fid, has_gt) = {
@@ -899,7 +1030,9 @@ async fn agent_turn_inner(
                                         // DEV-0077.4-A.1：Grounding 编译错误（ambiguity 等）
                                         // 捕获后走 Repair（F1 §十九-§二四，≤1 次）或失败文案（0 mutation）。
                                         let mut grounding_err: Option<String> = None;
-                                        let mut grounding_report: Option<super::planner::GroundedCompileReport> = None;
+                                        let mut grounding_report: Option<
+                                            super::planner::GroundedCompileReport,
+                                        > = None;
                                         // DEV-0077.2 §三十五/§三十六：Planning Completeness
                                         // 校验 + 一次 Repair Pass（只补缺失，禁止重做整个计划）。
                                         // 阻断级 = 近期任务为 0（execution planning 缺口）；
@@ -911,21 +1044,34 @@ async fn agent_turn_inner(
                                             // Completeness 试编译同样走 compile_production_plan
                                             //（ungrounded 首稿在此即 Err → 进入 Grounding Repair）
                                             match super::planner::compile_production_plan(
-                                                &conn, *profile_id, fid, has_gt, &draft,
+                                                &conn,
+                                                *profile_id,
+                                                fid,
+                                                has_gt,
+                                                &draft,
                                             ) {
                                                 Ok((ops0, rep0)) => {
                                                     grounding_report = rep0;
-                                                    super::planner::validate_planning_completeness(&conn, *profile_id, &ops0)
+                                                    super::planner::validate_planning_completeness(
+                                                        &conn,
+                                                        *profile_id,
+                                                        &ops0,
+                                                    )
                                                 }
                                                 Err(e) => {
                                                     grounding_err = Some(e);
-                                                    super::planner::PlanningCompleteness { missing_tasks: false, notes: vec![] }
+                                                    super::planner::PlanningCompleteness {
+                                                        missing_tasks: false,
+                                                        notes: vec![],
+                                                    }
                                                 }
                                             }
                                         };
                                         if completeness.missing_tasks && draft.blueprint.is_some() {
                                             // §三十六：一次 Repair Pass——只要求补 near_term_tasks
-                                            let bp_summary = draft.blueprint.as_ref()
+                                            let bp_summary = draft
+                                                .blueprint
+                                                .as_ref()
                                                 .map(|b| b.summary.clone())
                                                 .unwrap_or_default();
                                             let repair_prompt = format!(
@@ -934,16 +1080,16 @@ async fn agent_turn_inner(
 基于真实基础与可执行性安排，不要求机械填满每天），不要改动蓝图其他内容。\
 严格返回 JSON：{{\"future_tasks\":[{{\"title\":\"...\",\"planned_date\":\"YYYY-MM-DD\",\"estimated_minutes\":60}}]}}"
                                             );
-                                            let repair_msgs = vec![crate::ai::client::ChatMessage {
-                                                role: "user".into(),
-                                                content: repair_prompt,
-                                                tool_calls: None,
-                                                tool_call_id: None,
-                                                name: None,
-                                            }];
-                                            if let Ok(rc) = responder
-                                                .chat(repair_msgs, None, Some(2000))
-                                                .await
+                                            let repair_msgs =
+                                                vec![crate::ai::client::ChatMessage {
+                                                    role: "user".into(),
+                                                    content: repair_prompt,
+                                                    tool_calls: None,
+                                                    tool_call_id: None,
+                                                    name: None,
+                                                }];
+                                            if let Ok(rc) =
+                                                responder.chat(repair_msgs, None, Some(2000)).await
                                             {
                                                 let raw = rc.content.unwrap_or_default();
                                                 let t = raw
@@ -952,10 +1098,22 @@ async fn agent_turn_inner(
                                                     .trim_start_matches("```")
                                                     .trim_end_matches("```")
                                                     .trim();
-                                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
-                                                    if let Some(arr) = v.get("future_tasks").and_then(|x| x.as_array()).cloned() {
-                                                        if let Ok(tasks) = serde_json::from_value::<Vec<super::planner::BlueprintTaskDraft>>(serde_json::Value::Array(arr)) {
-                                                            if let Some(bp) = draft.blueprint.as_mut() {
+                                                if let Ok(v) =
+                                                    serde_json::from_str::<serde_json::Value>(t)
+                                                {
+                                                    if let Some(arr) = v
+                                                        .get("future_tasks")
+                                                        .and_then(|x| x.as_array())
+                                                        .cloned()
+                                                    {
+                                                        if let Ok(tasks) = serde_json::from_value::<
+                                                            Vec<super::planner::BlueprintTaskDraft>,
+                                                        >(
+                                                            serde_json::Value::Array(arr),
+                                                        ) {
+                                                            if let Some(bp) =
+                                                                draft.blueprint.as_mut()
+                                                            {
                                                                 bp.future_tasks = tasks;
                                                             }
                                                         }
@@ -964,9 +1122,14 @@ async fn agent_turn_inner(
                                             }
                                             // 重新校验（repair 后 ops 已含任务）
                                             completeness = {
-                                                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                let conn =
+                                                    state.0.lock().map_err(|e| e.to_string())?;
                                                 match super::planner::compile_production_plan(
-                                                    &conn, *profile_id, fid, has_gt, &draft,
+                                                    &conn,
+                                                    *profile_id,
+                                                    fid,
+                                                    has_gt,
+                                                    &draft,
                                                 ) {
                                                     Ok((ops1, rep1)) => {
                                                         grounding_report = rep1;
@@ -974,7 +1137,10 @@ async fn agent_turn_inner(
                                                     }
                                                     Err(e) => {
                                                         grounding_err = Some(e);
-                                                        super::planner::PlanningCompleteness { missing_tasks: false, notes: vec![] }
+                                                        super::planner::PlanningCompleteness {
+                                                            missing_tasks: false,
+                                                            notes: vec![],
+                                                        }
                                                     }
                                                 }
                                             };
@@ -986,25 +1152,29 @@ async fn agent_turn_inner(
                                         // 重写战略（§二十/§二十一）。ChangeSet 尚未 Apply →
                                         // 修复失败也是 0 business mutation（§二三）。=====
                                         if let Some(ge) = grounding_err.clone() {
-                                            super::planner::log_grounding_event("GROUNDING_REPAIR_START");
-                                            let repair_prompt = super::planner::grounding_repair_prompt(
-                                                &draft,
-                                                &[ge],
+                                            super::planner::log_grounding_event(
+                                                "GROUNDING_REPAIR_START",
                                             );
-                                            let repair_msgs = vec![crate::ai::client::ChatMessage {
-                                                role: "user".into(),
-                                                content: repair_prompt,
-                                                tool_calls: None,
-                                                tool_call_id: None,
-                                                name: None,
-                                            }];
-                                            if let Ok(rc) = responder
-                                                .chat(repair_msgs, None, Some(4096))
-                                                .await
+                                            let repair_prompt =
+                                                super::planner::grounding_repair_prompt(
+                                                    &draft,
+                                                    &[ge],
+                                                );
+                                            let repair_msgs =
+                                                vec![crate::ai::client::ChatMessage {
+                                                    role: "user".into(),
+                                                    content: repair_prompt,
+                                                    tool_calls: None,
+                                                    tool_call_id: None,
+                                                    name: None,
+                                                }];
+                                            if let Ok(rc) =
+                                                responder.chat(repair_msgs, None, Some(4096)).await
                                             {
                                                 let raw = rc.content.unwrap_or_default();
                                                 usage_total.prompt_tokens += rc.usage.prompt_tokens;
-                                                usage_total.completion_tokens += rc.usage.completion_tokens;
+                                                usage_total.completion_tokens +=
+                                                    rc.usage.completion_tokens;
                                                 usage_total.total_tokens += rc.usage.total_tokens;
                                                 let t = raw
                                                     .trim()
@@ -1018,7 +1188,10 @@ async fn agent_turn_inner(
                                                 if let Some(mut rd) = repaired {
                                                     // 场景继承与原 validate 保持同口径
                                                     {
-                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                        let conn = state
+                                                            .0
+                                                            .lock()
+                                                            .map_err(|e| e.to_string())?;
                                                         if let Some(bp) = rd.blueprint.as_mut() {
                                                             bp.scenario_type = super::planner::resolve_blueprint_scenario(
                                                                 &conn, *profile_id, bp, false,
@@ -1027,11 +1200,21 @@ async fn agent_turn_inner(
                                                     }
                                                     // §六六：Repair 后重新完整校验（非仅 grounding）
                                                     let revalidate = {
-                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                                        super::planner::validate_plan_draft(&conn, *profile_id, &rd)
+                                                        let conn = state
+                                                            .0
+                                                            .lock()
+                                                            .map_err(|e| e.to_string())?;
+                                                        super::planner::validate_plan_draft(
+                                                            &conn,
+                                                            *profile_id,
+                                                            &rd,
+                                                        )
                                                     };
                                                     if revalidate.errors.is_empty() {
-                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                        let conn = state
+                                                            .0
+                                                            .lock()
+                                                            .map_err(|e| e.to_string())?;
                                                         match super::planner::compile_production_plan(
                                                             &conn, *profile_id, fid, has_gt, &rd,
                                                         ) {
@@ -1046,13 +1229,19 @@ async fn agent_turn_inner(
                                                             }
                                                         }
                                                     } else {
-                                                        super::planner::log_grounding_event("GROUNDING_REPAIR_FAILED");
+                                                        super::planner::log_grounding_event(
+                                                            "GROUNDING_REPAIR_FAILED",
+                                                        );
                                                     }
                                                 } else {
-                                                    super::planner::log_grounding_event("GROUNDING_REPAIR_FAILED");
+                                                    super::planner::log_grounding_event(
+                                                        "GROUNDING_REPAIR_FAILED",
+                                                    );
                                                 }
                                             } else {
-                                                super::planner::log_grounding_event("GROUNDING_REPAIR_FAILED");
+                                                super::planner::log_grounding_event(
+                                                    "GROUNDING_REPAIR_FAILED",
+                                                );
                                             }
                                         }
                                         // ===== F1 §六八/§六九：Production 唯一编译入口；
@@ -1060,7 +1249,11 @@ async fn agent_turn_inner(
                                         let ops = {
                                             let conn = state.0.lock().map_err(|e| e.to_string())?;
                                             match super::planner::compile_production_plan(
-                                                &conn, *profile_id, fid, has_gt, &draft,
+                                                &conn,
+                                                *profile_id,
+                                                fid,
+                                                has_gt,
+                                                &draft,
                                             ) {
                                                 Ok((o, rep)) => {
                                                     grounding_report = rep;
@@ -1078,7 +1271,9 @@ async fn agent_turn_inner(
                                             final_text = format!(
                                                 "计划草稿未通过学习关联校验（正式数据未变化）：{ge}\n\n请回复「重新生成」，我会修正任务关联后重新提交。"
                                             );
-                                        } else if completeness.missing_tasks && draft.blueprint.is_some() {
+                                        } else if completeness.missing_tasks
+                                            && draft.blueprint.is_some()
+                                        {
                                             // §四十一 Partial Planning Failure：repair 后近期任务
                                             // 仍为 0 → 不得以「完整计划」名义交付 ChangeSet。
                                             final_text = format!(
@@ -1095,22 +1290,31 @@ async fn agent_turn_inner(
                                             // Validation/Repair（上方已完成）→
                                             // Production Plan Valid → 计算
                                             // Replacement Ops → ONE ChangeSet。 =====
-                                            let intent_source = if workflow.original_request.trim().is_empty() {
-                                                user_message.to_string()
-                                            } else {
-                                                workflow.original_request.clone()
-                                            };
-                                            let answer_blob = format!("{intent_source}\n{user_message}");
+                                            let intent_source =
+                                                if workflow.original_request.trim().is_empty() {
+                                                    user_message.to_string()
+                                                } else {
+                                                    workflow.original_request.clone()
+                                                };
+                                            let answer_blob =
+                                                format!("{intent_source}\n{user_message}");
                                             let wants_replace =
                                                 super::planner::is_replacement_intent(&answer_blob);
                                             let mut final_ops = ops;
                                             let mut replacement_selected: usize = 0;
                                             if wants_replace {
-                                                let (ws, we) = super::planner::replacement_window(&local_date);
+                                                let (ws, we) =
+                                                    super::planner::replacement_window(&local_date);
                                                 let selected = {
-                                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                    let conn = state
+                                                        .0
+                                                        .lock()
+                                                        .map_err(|e| e.to_string())?;
                                                     super::planner::select_replaceable_future_tasks(
-                                                        &conn, *profile_id, &ws, &we,
+                                                        &conn,
+                                                        *profile_id,
+                                                        &ws,
+                                                        &we,
                                                     )
                                                 };
                                                 replacement_selected = selected.len();
@@ -1132,16 +1336,24 @@ async fn agent_turn_inner(
                                             // 超限 → 不创建 ChangeSet（0 mutation），走既有失败文案分支
                                             let oversized_after_replacement =
                                                 !super::planner::ops_within_limit(&final_ops);
-                                            let title = format!("AI 规划 · {}", draft
-                                                .blueprint.as_ref().map(|b| b.title.clone())
-                                                .filter(|t| !t.trim().is_empty())
-                                                .unwrap_or_else(|| "学习计划".to_string()));
+                                            let title = format!(
+                                                "AI 规划 · {}",
+                                                draft
+                                                    .blueprint
+                                                    .as_ref()
+                                                    .map(|b| b.title.clone())
+                                                    .filter(|t| !t.trim().is_empty())
+                                                    .unwrap_or_else(|| "学习计划".to_string())
+                                            );
                                             let summary = draft
-                                                .blueprint.as_ref().map(|b| b.summary.clone())
+                                                .blueprint
+                                                .as_ref()
+                                                .map(|b| b.summary.clone())
                                                 .filter(|s| !s.trim().is_empty())
                                                 .unwrap_or_else(|| planner_goal_summary.clone());
                                             let created = {
-                                                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                let conn =
+                                                    state.0.lock().map_err(|e| e.to_string())?;
                                                 if oversized_after_replacement {
                                                     Err("计划加替换操作总规模超过单次修改上限 120 项；请缩短规划范围（如 7 天）后重试".to_string())
                                                 } else {
@@ -1158,7 +1370,11 @@ async fn agent_turn_inner(
                                             };
                                             match created {
                                                 Ok(cs_id) => {
-                                                    vault.record_ai("changeset_proposed", run_id, &title);
+                                                    vault.record_ai(
+                                                        "changeset_proposed",
+                                                        run_id,
+                                                        &title,
+                                                    );
                                                     emitter.emit_side_effect(
                                                         "ai://changeset",
                                                         json!({ "change_set_id": cs_id, "title": title, "count": final_ops.len() }),
@@ -1179,9 +1395,14 @@ async fn agent_turn_inner(
                                                     let mut auto_applied = false;
                                                     if explicit {
                                                         // §二十八：进入写库 Apply → executing
-                                                        emitter.emit_stage(super::runtime_events::stage::EXECUTING);
+                                                        emitter.emit_stage(
+                                                            super::runtime_events::stage::EXECUTING,
+                                                        );
                                                         let apply_result = {
-                                                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                            let conn = state
+                                                                .0
+                                                                .lock()
+                                                                .map_err(|e| e.to_string())?;
                                                             super::commands::apply_change_set_with_side_effects(
                                                                 app, &conn, vault, *profile_id, cs_id, false, "agent",
                                                             )
@@ -1191,7 +1412,10 @@ async fn agent_turn_inner(
                                                                 // §二十八：ReadBack 校验 → verifying
                                                                 emitter.emit_stage(super::runtime_events::stage::VERIFYING);
                                                                 let (verified, verification) = {
-                                                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                                    let conn =
+                                                                        state.0.lock().map_err(
+                                                                            |e| e.to_string(),
+                                                                        )?;
                                                                     let written = crate::repository::changeset::ChangeSetRepository::new(&conn)
                                                                         .list_operations(cs_id, *profile_id)
                                                                         .unwrap_or_default();
@@ -1199,10 +1423,16 @@ async fn agent_turn_inner(
                                                                 };
                                                                 if verified {
                                                                     auto_applied = true;
-                                                                    applied_changeset_ids.push(cs_id);
+                                                                    applied_changeset_ids
+                                                                        .push(cs_id);
                                                                     // §六 Assistant Final Response（实际创建清单自 DB ReadBack 生成）
                                                                     let summary = {
-                                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                                        let conn = state
+                                                                            .0
+                                                                            .lock()
+                                                                            .map_err(
+                                                                            |e| e.to_string(),
+                                                                        )?;
                                                                         super::planner::planning_apply_readback_summary(
                                                                             &conn, *profile_id, &local_date,
                                                                         )
@@ -1212,20 +1442,33 @@ async fn agent_turn_inner(
                                                                     );
                                                                     // DEV-0077.4-A.1 §九七：学习关联 ReadBack 汇总
                                                                     //（不展示数据库 id / 内部 ref_key）
-                                                                    if let Some(rep) = &grounding_report {
-                                                                        final_text.push_str(&format!(
+                                                                    if let Some(rep) =
+                                                                        &grounding_report
+                                                                    {
+                                                                        final_text.push_str(
+                                                                            &format!(
                                                                             "\n\n学习关联：\n{}",
                                                                             rep.summary_line
-                                                                        ));
+                                                                        ),
+                                                                        );
                                                                     }
-                                                                    if !completeness.notes.is_empty() {
-                                                                        final_text.push_str(&format!(
-                                                                            "\n\n尚待完善：{}",
-                                                                            completeness.notes.join("；")
-                                                                        ));
+                                                                    if !completeness
+                                                                        .notes
+                                                                        .is_empty()
+                                                                    {
+                                                                        final_text.push_str(
+                                                                            &format!(
+                                                                                "\n\n尚待完善：{}",
+                                                                                completeness
+                                                                                    .notes
+                                                                                    .join("；")
+                                                                            ),
+                                                                        );
                                                                     }
                                                                     // F2 §四九说明：要求替换但窗口无候选（全被保护）
-                                                                    if wants_replace && replacement_selected == 0 {
+                                                                    if wants_replace
+                                                                        && replacement_selected == 0
+                                                                    {
                                                                         final_text.push_str(
                                                                             "\n\n（说明：当前14天窗口内没有可安全替换的旧未来任务——已完成或有学习记录/手工修改的任务会被保留，本次仅创建新任务。）",
                                                                         );
@@ -1234,17 +1477,33 @@ async fn agent_turn_inner(
                                                                     // §七 ReadBack 失败：写入已生效但验证未过——
                                                                     // 不得声称完成；run failed；用户可 Undo。
                                                                     let fail_desc = match (
-                                                                        verification.get("entity").and_then(|x| x.as_str()),
-                                                                        verification.get("action").and_then(|x| x.as_str()),
+                                                                        verification
+                                                                            .get("entity")
+                                                                            .and_then(|x| {
+                                                                                x.as_str()
+                                                                            }),
+                                                                        verification
+                                                                            .get("action")
+                                                                            .and_then(|x| {
+                                                                                x.as_str()
+                                                                            }),
                                                                     ) {
-                                                                        (Some(en), Some(ac)) => format!("{ac} {en}"),
-                                                                        _ => "内容级核对未通过".to_string(),
+                                                                        (Some(en), Some(ac)) => {
+                                                                            format!("{ac} {en}")
+                                                                        }
+                                                                        _ => "内容级核对未通过"
+                                                                            .to_string(),
                                                                     };
                                                                     let failed_msg = format!(
                                                                         "规划已写入，但回读验证未通过（{fail_desc}），我无法确认全部内容正确落库。请不要以此为准；可在审查面板撤销 ChangeSet #{cs_id}。"
                                                                     );
                                                                     {
-                                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                                        let conn = state
+                                                                            .0
+                                                                            .lock()
+                                                                            .map_err(
+                                                                            |e| e.to_string(),
+                                                                        )?;
                                                                         let _ = crate::repository::conversation::ConversationRepository::new(&conn)
                                                                             .add_message(*conversation_id, *profile_id, "assistant", &failed_msg, Some(run_id));
                                                                         let _ = conn.execute(
@@ -1262,7 +1521,10 @@ async fn agent_turn_inner(
                                                                     "规划应用失败（正式数据未变化，已整体回滚）：{e}\n\n请回复「重新生成」，或到审查面板查看提案后手动应用。"
                                                                 );
                                                                 {
-                                                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                                    let conn =
+                                                                        state.0.lock().map_err(
+                                                                            |e| e.to_string(),
+                                                                        )?;
                                                                     let _ = crate::repository::conversation::ConversationRepository::new(&conn)
                                                                         .add_message(*conversation_id, *profile_id, "assistant", &failed_msg, Some(run_id));
                                                                     let _ = conn.execute(
@@ -1279,14 +1541,21 @@ async fn agent_turn_inner(
                                                         // —— 保持 waiting_approval，由用户在审查面板决定。
                                                         // F2 §三六/§五一 B：Replacement 等待的是现有正式
                                                         // confirmation action（≠「请告诉我下一步」）。
-                                                        let mut reply = if wants_replace && replacement_selected > 0 {
+                                                        let mut reply = if wants_replace
+                                                            && replacement_selected > 0
+                                                        {
                                                             let new_task_n = final_ops
                                                                 .iter()
-                                                                .filter(|o| o.entity_type == "task" && o.action == "create")
+                                                                .filter(|o| {
+                                                                    o.entity_type == "task"
+                                                                        && o.action == "create"
+                                                                })
                                                                 .count();
                                                             let new_item_n = final_ops
                                                                 .iter()
-                                                                .filter(|o| o.entity_type == "knowledge")
+                                                                .filter(|o| {
+                                                                    o.entity_type == "knowledge"
+                                                                })
                                                                 .count();
                                                             format!(
                                                                 "新的14天计划已经生成完成（新学习任务 {} 项、知识节点 {} 个）。\n\
@@ -1297,15 +1566,43 @@ async fn agent_turn_inner(
                                                         } else {
                                                             String::from("你的目标理解如下：\n")
                                                         };
-                                                        if !(wants_replace && replacement_selected > 0) {
+                                                        if !(wants_replace
+                                                            && replacement_selected > 0)
+                                                        {
                                                             reply.push_str(&format!(
                                                                 "目标：{planner_goal_summary}\n\n下一步：制定年度/月/日计划。\n\n已生成学习计划提案（共 {} 项），请在审查面板确认后应用。",
                                                                 final_ops.len()
                                                             ));
-                                                            let task_n = final_ops.iter().filter(|o| o.entity_type == "task").count();
-                                                            let phase_n = final_ops.iter().filter(|o| o.entity_type == "planning_phase").count();
-                                                            let ms_n = final_ops.iter().filter(|o| o.entity_type == "planning_milestone").count();
-                                                            let year_n = final_ops.iter().filter(|o| o.entity_type == "goal" && o.after.get("goal_level").and_then(|x| x.as_str()) == Some("year")).count();
+                                                            let task_n = final_ops
+                                                                .iter()
+                                                                .filter(|o| o.entity_type == "task")
+                                                                .count();
+                                                            let phase_n = final_ops
+                                                                .iter()
+                                                                .filter(|o| {
+                                                                    o.entity_type
+                                                                        == "planning_phase"
+                                                                })
+                                                                .count();
+                                                            let ms_n = final_ops
+                                                                .iter()
+                                                                .filter(|o| {
+                                                                    o.entity_type
+                                                                        == "planning_milestone"
+                                                                })
+                                                                .count();
+                                                            let year_n = final_ops
+                                                                .iter()
+                                                                .filter(|o| {
+                                                                    o.entity_type == "goal"
+                                                                        && o.after
+                                                                            .get("goal_level")
+                                                                            .and_then(|x| {
+                                                                                x.as_str()
+                                                                            })
+                                                                            == Some("year")
+                                                                })
+                                                                .count();
                                                             reply.push_str(&format!(
                                                                 "\n\n本次包含：蓝图 1 份、阶段 {phase_n}、里程碑 {ms_n}、年度目标 {year_n}、近期任务 {task_n} 项。"
                                                             ));
@@ -1368,18 +1665,28 @@ async fn agent_turn_inner(
                         break 'outer;
                     }
                     let fname = call
-                        .get("function").and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str()).unwrap_or("").to_string();
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let raw_args = call
-                        .get("function").and_then(|f| f.get("arguments"))
-                        .and_then(|a| a.as_str()).unwrap_or("{}");
+                        .get("function")
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("{}");
                     let args: J = serde_json::from_str(raw_args).unwrap_or(json!({}));
-                    let call_id = call.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                    let call_id = call
+                        .get("id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     // Phase F §28：首次真正调用 web_search/web_open 之前 →
                     // workflow_state=researching + last_phase=researching 持久化
                     //（checked：失败即冒泡 failed，不继续 Provider），并写
                     // ai_run_events 事件（§35 research state/event 可供 UI 使用）。
-                    if !research_state_persisted && *web_enabled
+                    if !research_state_persisted
+                        && *web_enabled
                         && (fname == "web_search" || fname == "web_open")
                     {
                         research_state_persisted = true;
@@ -1387,8 +1694,12 @@ async fn agent_turn_inner(
                         {
                             let conn = state.0.lock().map_err(|e| e.to_string())?;
                             super::workflow::set_workflow_payload_checked(
-                                &conn, run_id, *profile_id, *conversation_id,
-                                super::workflow::STATE_RESEARCHING, &workflow,
+                                &conn,
+                                run_id,
+                                *profile_id,
+                                *conversation_id,
+                                super::workflow::STATE_RESEARCHING,
+                                &workflow,
                             )?;
                             let _ = conn.execute(
                                 "INSERT INTO ai_run_events (run_id, event_type, data_json)
@@ -1450,7 +1761,9 @@ async fn agent_turn_inner(
                         {
                             let conn = state.0.lock().map_err(|e| e.to_string())?;
                             let _ = super::workflow::cancel_waiting_workflow(
-                                &conn, *profile_id, *conversation_id,
+                                &conn,
+                                *profile_id,
+                                *conversation_id,
                             );
                         }
                     }
@@ -1465,7 +1778,11 @@ async fn agent_turn_inner(
                     // ③ 清空旧 workflow 临时 collected/pending + fresh payload
                     // ④ 下一次 Provider messages 严格重建为
                     //    [fresh system prompt] + [current user message]
-                    if task_cancelled && task_cancel_new_task && !new_task_context_switched && !cancelled {
+                    if task_cancelled
+                        && task_cancel_new_task
+                        && !new_task_context_switched
+                        && !cancelled
+                    {
                         new_task_context_switched = true;
                         applied_before_context_switch = applied_changeset_ids.clone();
                         let mut fresh = super::workflow::AgentWorkflowPayload::default();
@@ -1492,13 +1809,22 @@ async fn agent_turn_inner(
                         {
                             let conn = state.0.lock().map_err(|e| e.to_string())?;
                             super::workflow::set_workflow_payload_checked(
-                                &conn, run_id, *profile_id, *conversation_id,
-                                super::workflow::STATE_UNDERSTANDING, &workflow,
+                                &conn,
+                                run_id,
+                                *profile_id,
+                                *conversation_id,
+                                super::workflow::STATE_UNDERSTANDING,
+                                &workflow,
                             )?;
                         }
                         messages = vec![
                             ChatMessage::system(agent_prompt::agent_system_prompt(
-                                &envelope, page_label, "", "", *web_enabled, "",
+                                &envelope,
+                                page_label,
+                                "",
+                                "",
+                                *web_enabled,
+                                "",
                             )),
                             ChatMessage::user(user_message.to_string()),
                         ];
@@ -1515,7 +1841,9 @@ async fn agent_turn_inner(
                     //  确定性检测并进入 Planner Truth（§六三）。
                     if prev_waiting
                         && !initial_pending_empty
-                        && pending_questions_override.as_ref().is_some_and(|q| q.is_empty())
+                        && pending_questions_override
+                            .as_ref()
+                            .is_some_and(|q| q.is_empty())
                         && !collected_updates.is_empty()
                         && !planner_ready
                         && !cancelled
@@ -1527,7 +1855,8 @@ async fn agent_turn_inner(
                         // 合并答案 → 本地 Decision（不重问模型，§一一五）
                         let mut merged = workflow.collected_user_information.clone();
                         merged.extend(collected_updates.clone());
-                        let mut goal2 = super::intelligence::goal_understanding::GoalUnderstanding::default();
+                        let mut goal2 =
+                            super::intelligence::goal_understanding::GoalUnderstanding::default();
                         goal2.goal = if workflow.current_goal.trim().is_empty() {
                             workflow.original_request.chars().take(200).collect()
                         } else {
@@ -1543,23 +1872,28 @@ async fn agent_turn_inner(
                         {
                             planner_ready = true;
                             intel_decision = Some(decision2.decision);
-                            planner_goal_summary = format!(
-                                "{}（类型 planning；由待确认问题回答恢复）",
-                                goal2.goal
-                            );
+                            planner_goal_summary =
+                                format!("{}（类型 planning；由待确认问题回答恢复）", goal2.goal);
                             // §六二/§六三：Planner Context = 原始请求 + collected +
                             // Planning Truth（含替换窗口旧任务区块）
                             let instruction = {
                                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                let truth = super::planner::build_planning_truth_context(&conn, *profile_id);
+                                let truth = super::planner::build_planning_truth_context(
+                                    &conn,
+                                    *profile_id,
+                                );
                                 let mut p = super::planner::PlanningWorkflowPayload::default();
                                 p.original_request = workflow.original_request.clone();
                                 p.answered = merged.clone();
                                 p.updated_by_user_turn = user_message.to_string();
-                                let mut ins =
-                                    super::planner::build_planning_instruction(&truth.instruction, &p);
+                                let mut ins = super::planner::build_planning_instruction(
+                                    &truth.instruction,
+                                    &p,
+                                );
                                 ins.push_str(&super::planner::future_tasks_truth_block(
-                                    &conn, *profile_id, &local_date,
+                                    &conn,
+                                    *profile_id,
+                                    &local_date,
                                 ));
                                 ins
                             };
@@ -1575,12 +1909,19 @@ async fn agent_turn_inner(
                             ));
                         }
                     }
-                    let cut: String = out.chars().take(agent_tools::TOOL_RESULT_MAX_CHARS).collect();
+                    let cut: String = out
+                        .chars()
+                        .take(agent_tools::TOOL_RESULT_MAX_CHARS)
+                        .collect();
                     messages.push(ChatMessage {
                         role: "tool".into(),
                         content: cut,
                         tool_calls: None,
-                        tool_call_id: if call_id.is_empty() { None } else { Some(call_id) },
+                        tool_call_id: if call_id.is_empty() {
+                            None
+                        } else {
+                            Some(call_id)
+                        },
                         name: if fname.is_empty() { None } else { Some(fname) },
                     });
                     // Phase E §24：request_user_input 已挂起 → 立即暂停本轮 Tool Loop
@@ -1704,7 +2045,13 @@ async fn agent_turn_inner(
         }
         // §三十二 finalize：Assistant Message 立即落库（Main Answer 持久化优先）
         let committed = crate::repository::conversation::ConversationRepository::new(&conn)
-            .add_message(*conversation_id, *profile_id, "assistant", &final_text, Some(run_id))?;
+            .add_message(
+                *conversation_id,
+                *profile_id,
+                "assistant",
+                &final_text,
+                Some(run_id),
+            )?;
         committed_message_id = Some(committed.id);
         super::runtime_events::runtime_trace("MESSAGE_COMMITTED", run_id);
         for s in &sources {
@@ -1718,7 +2065,9 @@ async fn agent_turn_inner(
         // 收口不再重复重建。此处仅合并本轮（新任务上下文的）模型提交。
         // E-R1-01：pending_questions 的命运只在收口改变——request_user_input 原子
         // 替换 / completed 清空 / cancelled 清空 / 失败原样保留。
-        workflow.collected_user_information.extend(collected_updates.clone());
+        workflow
+            .collected_user_information
+            .extend(collected_updates.clone());
         if let Some(qs) = pending_questions_override.clone() {
             workflow.pending_questions = qs;
         }
@@ -1734,7 +2083,11 @@ async fn agent_turn_inner(
                 workflow.unresolved.push(u.clone());
             }
         }
-        let err_flag = if writes_applied > 0 { "agent_executed" } else { "" };
+        let err_flag = if writes_applied > 0 {
+            "agent_executed"
+        } else {
+            ""
+        };
         // E-R2-02 → E-R3-02：durable 取消已在 cancel 工具成功后、下一次 Provider
         // 调用之前正式执行（见 Tool Loop 内切换点）；此处为幂等兜底（查无 waiting
         // 行即 no-op），覆盖模型未走 cancel 工具等边缘收口。
@@ -1768,7 +2121,15 @@ async fn agent_turn_inner(
         //（durable 错误码；workflow 保持 waiting_user 携 original_request，
         // 用户重试时 FIX-1 桥接仍可恢复原任务，不假装 completed）
         if continuation_incomplete_flag && !cancelled {
-            finish_run(&conn, run_id, *profile_id, *conversation_id, "failed", "planning_continuation_incomplete", &usage_total);
+            finish_run(
+                &conn,
+                run_id,
+                *profile_id,
+                *conversation_id,
+                "failed",
+                "planning_continuation_incomplete",
+                &usage_total,
+            );
             let _ = conn.execute(
                 "INSERT INTO ai_run_events (run_id, event_type, data_json)
                  VALUES (?1, 'planning_continuation_incomplete',
@@ -1777,35 +2138,71 @@ async fn agent_turn_inner(
             );
             workflow.last_phase = super::workflow::STATE_COLLECTING_INFORMATION.to_string();
             super::workflow::set_workflow_payload(
-                &conn, run_id, *profile_id, *conversation_id,
-                super::workflow::STATE_WAITING_USER, &workflow,
+                &conn,
+                run_id,
+                *profile_id,
+                *conversation_id,
+                super::workflow::STATE_WAITING_USER,
+                &workflow,
             );
             trace.run_finished(&conn, "failed");
         } else if (hangup_reason.is_some() || side_question_keep) && !cancelled {
             // §7：waiting_user 收口——run 不标记 completed，workflow 挂起等用户回答
             //（side question：pending 不变继续等原问题的真实回答 §十九）
-            finish_run(&conn, run_id, *profile_id, *conversation_id, "waiting_user", "", &usage_total);
+            finish_run(
+                &conn,
+                run_id,
+                *profile_id,
+                *conversation_id,
+                "waiting_user",
+                "",
+                &usage_total,
+            );
             workflow.last_phase = super::workflow::STATE_COLLECTING_INFORMATION.to_string();
             super::workflow::set_workflow_payload(
-                &conn, run_id, *profile_id, *conversation_id,
-                super::workflow::STATE_WAITING_USER, &workflow,
+                &conn,
+                run_id,
+                *profile_id,
+                *conversation_id,
+                super::workflow::STATE_WAITING_USER,
+                &workflow,
             );
             trace.run_finished(&conn, "waiting_user");
         } else if cancelled || (task_cancelled && !task_cancel_new_task) {
             // 用户点停 或 §19 纯放弃原任务：workflow 结束 cancelled、pending 清空
-            finish_run(&conn, run_id, *profile_id, *conversation_id, "cancelled", err_flag, &usage_total);
+            finish_run(
+                &conn,
+                run_id,
+                *profile_id,
+                *conversation_id,
+                "cancelled",
+                err_flag,
+                &usage_total,
+            );
             workflow.pending_questions.clear();
             workflow.last_phase = super::workflow::STATE_CANCELLED.to_string();
             super::workflow::set_workflow_payload(
-                &conn, run_id, *profile_id, *conversation_id,
-                super::workflow::STATE_CANCELLED, &workflow,
+                &conn,
+                run_id,
+                *profile_id,
+                *conversation_id,
+                super::workflow::STATE_CANCELLED,
+                &workflow,
             );
             trace.run_finished(&conn, "cancelled");
         } else {
             // 正常完成（含 E-R2-01 新任务完成）：completed；E-R1-01——信息已足够
             // 才正常继续，completed 时清空 pending。
             // E-R2-01：切换前已 applied 的 ChangeSet 属旧 workflow，不计入新任务。
-            finish_run(&conn, run_id, *profile_id, *conversation_id, "completed", err_flag, &usage_total);
+            finish_run(
+                &conn,
+                run_id,
+                *profile_id,
+                *conversation_id,
+                "completed",
+                err_flag,
+                &usage_total,
+            );
             workflow.pending_questions.clear();
             workflow.applied_changeset_ids = applied_changeset_ids
                 .iter()
@@ -1834,8 +2231,12 @@ async fn agent_turn_inner(
             };
             workflow.last_phase = final_state.to_string();
             super::workflow::set_workflow_payload(
-                &conn, run_id, *profile_id, *conversation_id,
-                final_state, &workflow,
+                &conn,
+                run_id,
+                *profile_id,
+                *conversation_id,
+                final_state,
+                &workflow,
             );
             trace.run_finished(&conn, "completed");
         }
@@ -1862,7 +2263,11 @@ async fn agent_turn_inner(
     emitter.emit_terminal(outcome);
     emitter.compat_run_status(outcome);
     super::runtime_events::runtime_trace("TERMINAL_EVENT", run_id);
-    vault.record_ai("run_completed", run_id, &format!("tokens={}", usage_total.total_tokens));
+    vault.record_ai(
+        "run_completed",
+        run_id,
+        &format!("tokens={}", usage_total.total_tokens),
+    );
 
     // DEV-0077.3 §三十七（Memory 后置）：terminal 已发——Memory/PI 是
     // Post-Turn Side Effect，发生在 Main Run 完成之后，且不得修改 Main Run
@@ -1881,14 +2286,19 @@ async fn agent_turn_inner(
             )
         };
         if let Ok(items) = super::intelligence::memory::extract_memories(
-            &responder, &pi_summary, user_message, &pi_collected,
+            &responder,
+            &pi_summary,
+            user_message,
+            &pi_collected,
         )
         .await
         {
             if !items.is_empty() {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
                 let outcome = super::intelligence::intelligence_builder::post_turn_apply(
-                    &conn, *profile_id, &items,
+                    &conn,
+                    *profile_id,
+                    &items,
                 );
                 // DEV-0076 §八：认知卡片事件（§三十九：主回答后稍后出现，
                 // source_run_id 随事件带出，不覆盖 Main Runtime State）
@@ -1908,7 +2318,8 @@ async fn agent_turn_inner(
 /// Original Request / Current Goal / 已收集信息 / 此前待答问题 + 用户最新回答判定指引
 ///（§18 四态判定交给模型，禁止关键词 if/else 路由）。
 fn build_continuation_block(payload: &super::workflow::AgentWorkflowPayload) -> String {
-    let mut s = String::from("\n【任务续接】上一轮你正在处理一个未完成任务，并等待用户补充信息：\n");
+    let mut s =
+        String::from("\n【任务续接】上一轮你正在处理一个未完成任务，并等待用户补充信息：\n");
     if !payload.original_request.is_empty() {
         s.push_str(&format!("- 原始请求：{}\n", payload.original_request));
     }

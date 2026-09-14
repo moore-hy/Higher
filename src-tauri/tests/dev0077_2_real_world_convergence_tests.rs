@@ -16,7 +16,9 @@ use std::collections::VecDeque;
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{Completion, Usage};
 use app_lib::ai::intelligence::user_context::UserContext;
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
 use app_lib::repository::conversation::ConversationRepository;
@@ -32,8 +34,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0077r2_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0077r2_{name}_{}", std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -170,15 +176,18 @@ fn seed_personal_profile(conn: &Connection, pid: i64) {
 
 /// goal 分析 intel JSON（required_information 驱动 gate）。
 fn goal_json(required: serde_json::Value) -> Completion {
-    text_completion(&json!({
-        "goal": "2028考研上岸华中科技大学408",
-        "goal_type": "education",
-        "deadline": "2028-12",
-        "priority": "high",
-        "planning_required": true,
-        "confidence": 0.9,
-        "required_information": required,
-    }).to_string())
+    text_completion(
+        &json!({
+            "goal": "2028考研上岸华中科技大学408",
+            "goal_type": "education",
+            "deadline": "2028-12",
+            "priority": "high",
+            "planning_required": true,
+            "confidence": 0.9,
+            "required_information": required,
+        })
+        .to_string(),
+    )
 }
 
 fn pending_count(conn: &Connection, pid: i64, cid: i64) -> usize {
@@ -239,13 +248,22 @@ fn e2e_three_turns() -> (DbState, VaultState, i64, i64, i64) {
 
     // ---- Turn 2：side question「每日计划呢」→ 模型纯文本回答（无工具）----
     let out2 = run_turn(
-        &state, &vault, "rw-t2", pid, cid,
+        &state,
+        &vault,
+        "rw-t2",
+        pid,
+        cid,
         "每日计划呢",
         vec![goal_json(json!([]))], // side 轮 goal 分析不完整无妨（无 required 也不触发 planning）
-        vec![text_completion("会生成每日计划。等这几项关键信息确认后，我会直接生成近期任务安排。")],
+        vec![text_completion(
+            "会生成每日计划。等这几项关键信息确认后，我会直接生成近期任务安排。",
+        )],
     )
     .unwrap();
-    assert_eq!(out2, "needs_user_input", "RW-TC003：side question 后仍 waiting_user");
+    assert_eq!(
+        out2, "needs_user_input",
+        "RW-TC003：side question 后仍 waiting_user"
+    );
 
     // ---- Turn 3：完整回答 → ReadyForPlanning → plan_draft（完整 Draft）----
     let plan_draft = json!({
@@ -309,7 +327,10 @@ fn e2e_three_turns() -> (DbState, VaultState, i64, i64, i64) {
         vec![text_completion(&plan_draft.to_string())],
     )
     .unwrap();
-    assert_eq!(out3, "completed", "RW-TC005：完整回答 → 清空 pending → 续原 Workflow 至规划");
+    assert_eq!(
+        out3, "completed",
+        "RW-TC005：完整回答 → 清空 pending → 续原 Workflow 至规划"
+    );
 
     // DEV-0077.2 F1 §九：Production Agent 本身完成 Apply（Explicit Planning Intent →
     // Level1 Auto Apply）——测试**不得**自行调用 apply_change_set_with_side_effects
@@ -368,7 +389,9 @@ fn rw_tc002_need_user_input_and_tc003_side_question() {
     let (state, _vault, pid, cid, _cs) = e2e_three_turns();
     let conn = state.0.lock().unwrap();
     // TC002：Turn1 问询文本已落库（历史任何一条 assistant 消息可查）
-    let all = ConversationRepository::new(&conn).list_messages(cid, pid, 50, 0).unwrap();
+    let all = ConversationRepository::new(&conn)
+        .list_messages(cid, pid, 50, 0)
+        .unwrap();
     let asked = all
         .iter()
         .filter(|m| m.role == "assistant")
@@ -380,12 +403,16 @@ fn rw_tc002_need_user_input_and_tc003_side_question() {
         "RW-TC002：NeedUserInput 问题文本已落库（历史可查）：{asked}"
     );
     // TC003 复验：side question 后 pending 已在 T3 清空，但 workflow 仍在（原 Workflow 未丢）：
-    let (state_str, payload) = app_lib::ai::workflow::read_workflow_payload(&conn, pid, cid).unwrap();
+    let (state_str, payload) =
+        app_lib::ai::workflow::read_workflow_payload(&conn, pid, cid).unwrap();
     assert!(
         state_str == "ready_for_planning" || state_str == "completed",
         "RW-TC004/005：完整回答后原 Workflow 续接收口（{state_str}）"
     );
-    assert!(payload.pending_questions.is_empty(), "RW-TC005：pending 清空");
+    assert!(
+        payload.pending_questions.is_empty(),
+        "RW-TC005：pending 清空"
+    );
 }
 
 // =============== RW-TC003 独立复验 · side question 不减 pending ===============
@@ -405,29 +432,52 @@ fn rw_tc003_side_question_keeps_pending() {
         {"key":"daily_time","description":"时长","why_needed":"强度","source_kind":"user"},
         {"key":"target_school","description":"院校","why_needed":"科目","source_kind":"user"}
     ]);
-    run_turn(&state, &vault, "rw3-a", pid, cid, "帮我生成考研计划",
+    run_turn(
+        &state,
+        &vault,
+        "rw3-a",
+        pid,
+        cid,
+        "帮我生成考研计划",
         vec![goal_json(required)],
-        vec![tool_call("request_user_input", json!({
-            "questions": [
-                { "key": "exam_year", "question": "哪一年考研？", "why_needed": "时间线" },
-                { "key": "current_level", "question": "基础如何？", "why_needed": "起点" },
-                { "key": "daily_time", "question": "每天多久？", "why_needed": "强度" },
-                { "key": "target_school", "question": "目标院校？", "why_needed": "科目" }
-            ]
-        }))],
-    ).unwrap();
+        vec![tool_call(
+            "request_user_input",
+            json!({
+                "questions": [
+                    { "key": "exam_year", "question": "哪一年考研？", "why_needed": "时间线" },
+                    { "key": "current_level", "question": "基础如何？", "why_needed": "起点" },
+                    { "key": "daily_time", "question": "每天多久？", "why_needed": "强度" },
+                    { "key": "target_school", "question": "目标院校？", "why_needed": "科目" }
+                ]
+            }),
+        )],
+    )
+    .unwrap();
     {
         let conn = state.0.lock().unwrap();
         assert_eq!(pending_count(&conn, pid, cid), 4, "前置：4 pending");
     }
     // 轮2：side question（模型纯文本回复，无任何工具）→ 4 问全部保留
-    let out = run_turn(&state, &vault, "rw3-b", pid, cid, "每日计划呢",
+    let out = run_turn(
+        &state,
+        &vault,
+        "rw3-b",
+        pid,
+        cid,
+        "每日计划呢",
         vec![goal_json(json!([]))],
-        vec![text_completion("会生成每日计划。等这几项关键信息确认后，我会直接生成近期任务安排。")],
-    ).unwrap();
+        vec![text_completion(
+            "会生成每日计划。等这几项关键信息确认后，我会直接生成近期任务安排。",
+        )],
+    )
+    .unwrap();
     assert_eq!(out, "needs_user_input", "side question 保持 waiting_user");
     let conn = state.0.lock().unwrap();
-    assert_eq!(pending_count(&conn, pid, cid), 4, "RW-TC003：插话不减 pending");
+    assert_eq!(
+        pending_count(&conn, pid, cid),
+        4,
+        "RW-TC003：插话不减 pending"
+    );
     let (state_str, _) = app_lib::ai::workflow::read_workflow_payload(&conn, pid, cid).unwrap();
     assert_eq!(state_str, "waiting_user", "原 Workflow 不丢");
 }
@@ -448,17 +498,27 @@ fn rw_tc004_partial_answer_resolves_only_answered() {
         {"key":"daily_time","description":"时长","why_needed":"强度","source_kind":"user"},
         {"key":"target_school","description":"院校","why_needed":"科目","source_kind":"user"}
     ]);
-    run_turn(&state, &vault, "rw4-a", pid, cid, "帮我生成考研计划",
+    run_turn(
+        &state,
+        &vault,
+        "rw4-a",
+        pid,
+        cid,
+        "帮我生成考研计划",
         vec![goal_json(required)],
-        vec![tool_call("request_user_input", json!({
-            "questions": [
-                { "key": "exam_year", "question": "哪一年考研？", "why_needed": "时间线" },
-                { "key": "current_level", "question": "基础如何？", "why_needed": "起点" },
-                { "key": "daily_time", "question": "每天多久？", "why_needed": "强度" },
-                { "key": "target_school", "question": "目标院校？", "why_needed": "科目" }
-            ]
-        }))],
-    ).unwrap();
+        vec![tool_call(
+            "request_user_input",
+            json!({
+                "questions": [
+                    { "key": "exam_year", "question": "哪一年考研？", "why_needed": "时间线" },
+                    { "key": "current_level", "question": "基础如何？", "why_needed": "起点" },
+                    { "key": "daily_time", "question": "每天多久？", "why_needed": "强度" },
+                    { "key": "target_school", "question": "目标院校？", "why_needed": "科目" }
+                ]
+            }),
+        )],
+    )
+    .unwrap();
     // 部分回答：exam_year + daily_time 已答 → 模型 request_user_input 只追问剩余 2
     let out = run_turn(&state, &vault, "rw4-b", pid, cid,
         "2028考研，每天大概8小时",
@@ -473,10 +533,26 @@ fn rw_tc004_partial_answer_resolves_only_answered() {
     ).unwrap();
     assert_eq!(out, "needs_user_input");
     let conn = state.0.lock().unwrap();
-    assert_eq!(pending_count(&conn, pid, cid), 2, "RW-TC004：只剩 2 pending");
+    assert_eq!(
+        pending_count(&conn, pid, cid),
+        2,
+        "RW-TC004：只剩 2 pending"
+    );
     let (_, payload) = app_lib::ai::workflow::read_workflow_payload(&conn, pid, cid).unwrap();
-    assert!(payload.collected_user_information.get("exam_year").is_some(), "已答项已收集");
-    assert!(payload.collected_user_information.get("target_school").is_none(), "未答项未伪造");
+    assert!(
+        payload
+            .collected_user_information
+            .get("exam_year")
+            .is_some(),
+        "已答项已收集"
+    );
+    assert!(
+        payload
+            .collected_user_information
+            .get("target_school")
+            .is_none(),
+        "未答项未伪造"
+    );
 }
 
 // =============== RW-TC005 · Full Answer（E2E 链） ===============
@@ -485,7 +561,11 @@ fn rw_tc004_partial_answer_resolves_only_answered() {
 fn rw_tc005_full_answer_continues_workflow() {
     let (state, _vault, pid, cid, _cs) = e2e_three_turns();
     let conn = state.0.lock().unwrap();
-    assert_eq!(pending_count(&conn, pid, cid), 0, "RW-TC005：完整回答 pending 清空");
+    assert_eq!(
+        pending_count(&conn, pid, cid),
+        0,
+        "RW-TC005：完整回答 pending 清空"
+    );
 }
 
 // =============== RW-TC006 · ReadyForPlanning 不退化为 chat ===============
@@ -495,18 +575,27 @@ fn rw_tc006_ready_for_planning_not_chat() {
     let (state, _vault, pid, cid, cs_id) = e2e_three_turns();
     let conn = state.0.lock().unwrap();
     // 不退化为普通 chat 的行为证据：ChangeSet 真实生成（planner 产物），且回复含规划提案
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM ai_change_sets WHERE id=?1",
-        params![cs_id], |r| r.get(0),
-    ).unwrap();
-    assert_eq!(n, 1, "RW-TC006：ReadyForPlanning → Planner → ChangeSet（非纯文本）");
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE id=?1",
+            params![cs_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        n, 1,
+        "RW-TC006：ReadyForPlanning → Planner → ChangeSet（非纯文本）"
+    );
     let reply = last_assistant(&conn, cid, pid);
     assert!(
         reply.contains("完成规划并写入") && reply.contains("已应用"),
         "RW-TC006：Explicit → Auto Apply 交付回复（非提案话术）：{reply}"
     );
     let (state_str, _) = app_lib::ai::workflow::read_workflow_payload(&conn, pid, cid).unwrap();
-    assert_eq!(state_str, "ready_for_planning", "决策态 ReadyForPlanning 持久化");
+    assert_eq!(
+        state_str, "ready_for_planning",
+        "决策态 ReadyForPlanning 持久化"
+    );
 }
 
 // =============== RW-TC007 · Planner Draft completeness（Apply 后全层次落地） ===============
@@ -523,7 +612,10 @@ fn rw_tc007_planning_completeness_all_layers() {
         params![pid], |r| Ok((r.get(0)?, r.get(1)?)),
     ).unwrap();
     assert_eq!(root_n, 1, "final root 唯一");
-    assert!(brief.contains("华中科技大学"), "RW-TC007：Final Goal Brief 落地：{brief}");
+    assert!(
+        brief.contains("华中科技大学"),
+        "RW-TC007：Final Goal Brief 落地：{brief}"
+    );
     // Blueprint + Phase + Milestone
     let (bp, ph, ms): (i64, i64, i64) = conn.query_row(
         "SELECT (SELECT COUNT(*) FROM planning_blueprints WHERE profile_id=?1),
@@ -535,10 +627,13 @@ fn rw_tc007_planning_completeness_all_layers() {
     assert!(ph >= 1, "Phase >= 1");
     assert!(ms >= 1, "Milestone >= 1");
     // Goal Tree（year 层）
-    let year_n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM goals WHERE profile_id=?1 AND goal_level='year'",
-        params![pid], |r| r.get(0),
-    ).unwrap();
+    let year_n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM goals WHERE profile_id=?1 AND goal_level='year'",
+            params![pid],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert!(year_n >= 1, "Formal Goal Tree（year）>= 1");
 }
 
@@ -548,15 +643,23 @@ fn rw_tc007_planning_completeness_all_layers() {
 fn rw_tc008_final_goal_root_consistency() {
     let (state, _vault, pid, _cid, _cs) = e2e_three_turns();
     let conn = state.0.lock().unwrap();
-    let (name, brief): (String, String) = conn.query_row(
-        "SELECT name, COALESCE(goal_brief_json,'') FROM goals
+    let (name, brief): (String, String) = conn
+        .query_row(
+            "SELECT name, COALESCE(goal_brief_json,'') FROM goals
          WHERE profile_id=?1 AND goal_level='final'",
-        params![pid], |r| Ok((r.get(0)?, r.get(1)?)),
-    )
-    .unwrap();
+            params![pid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
     // 语义一致：两者同指 2028 考研 + 华中科技大学（同一行存储——结构性一致）
-    assert!(name.contains("2028") && name.contains("华中科技大学"), "root name：{name}");
-    assert!(brief.contains("2028") || brief.contains("华中科技大学"), "brief：{brief}");
+    assert!(
+        name.contains("2028") && name.contains("华中科技大学"),
+        "root name：{name}"
+    );
+    assert!(
+        brief.contains("2028") || brief.contains("华中科技大学"),
+        "brief：{brief}"
+    );
     // 不再「目标待完善」：readiness_missing 为空（FinalGoalCard 同源判定）
     let state_r = app_lib::ai::planner::read_goal_state(&conn, pid);
     assert!(
@@ -588,7 +691,10 @@ fn rw_tc009_future_7day_tasks() {
             .filter_map(|x| x.ok())
             .collect()
     };
-    assert!(!titles.iter().all(|t| t.trim().is_empty()), "任务有真实标题");
+    assert!(
+        !titles.iter().all(|t| t.trim().is_empty()),
+        "任务有真实标题"
+    );
 }
 
 // =============== RW-TC010 · ONE ChangeSet ===============
@@ -597,10 +703,13 @@ fn rw_tc009_future_7day_tasks() {
 fn rw_tc010_one_changeset() {
     let (state, _vault, pid, _cid, _cs) = e2e_three_turns();
     let conn = state.0.lock().unwrap();
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
-        params![pid], |r| r.get(0),
-    ).unwrap();
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(n, 1, "RW-TC010：三层规划 + 近期任务 = ONE ChangeSet");
 }
 
@@ -611,11 +720,14 @@ fn rw_tc011_assistant_final_message() {
     let (state, _vault, pid, cid, _cs) = e2e_three_turns();
     let conn = state.0.lock().unwrap();
     // run rw-t3 的 assistant 消息已落库（run completed 同步可读——后端先 add_message 后 emit）
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM ai_messages WHERE conversation_id=?1 AND profile_id=?2
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ai_messages WHERE conversation_id=?1 AND profile_id=?2
          AND role='assistant' AND run_id='rw-t3'",
-        params![cid, pid], |r| r.get(0),
-    ).unwrap();
+            params![cid, pid],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(n, 1, "RW-TC011：Assistant Final Message 已持久化");
     let text = last_assistant(&conn, cid, pid);
     assert!(
@@ -635,7 +747,10 @@ fn rw_tc012_message_hydration_contract() {
     // BUG-1 修复：delta 双 key 兼容（agent 路径 text / legacy delta）
     assert!(panel.contains("d.delta ?? d.text"), "delta key 双向兼容");
     // BUG-2 修复：needs_user_input / failed → refreshMessages（不再等下一轮）
-    assert!(panel.contains("\"needs_user_input\""), "needs_user_input 有分支");
+    assert!(
+        panel.contains("\"needs_user_input\""),
+        "needs_user_input 有分支"
+    );
     assert!(panel.contains("\"failed\""), "failed 有分支");
     // BUG-3 修复：Only latest hydration may commit state
     assert!(panel.contains("hydrationSeqRef"), "stale load guard 存在");
@@ -644,11 +759,20 @@ fn rw_tc012_message_hydration_contract() {
     // transient——hydration 提交块内调用 confirmHydrated（terminal 已到但
     // 未确认 persisted 前 streamText 保留；确认后 reducer 归零 transient）。
     let commit = panel.find("commitIfLatest(seq, () => {").unwrap();
-    let confirm = panel[commit..].find("confirmHydrated(cur, hasCommitted)").unwrap() + commit;
+    let confirm = panel[commit..]
+        .find("confirmHydrated(cur, hasCommitted)")
+        .unwrap()
+        + commit;
     let after = panel[confirm..].find("setRt(next)").unwrap() + confirm;
-    assert!(confirm > commit && after > confirm, "清空 transient 在 hydration 提交内经 confirmHydrated 完成");
+    assert!(
+        confirm > commit && after > confirm,
+        "清空 transient 在 hydration 提交内经 confirmHydrated 完成"
+    );
     // streamText 不再有独立 setStreamText 直清（§四十三禁止 terminal→立即清空）
-    assert!(!panel.contains("setStreamText(\"\""), "DEV-0077.3：禁止直接 setStreamText 清空（防内容消失）");
+    assert!(
+        !panel.contains("setStreamText(\"\""),
+        "DEV-0077.3：禁止直接 setStreamText 清空（防内容消失）"
+    );
 }
 
 // =============== RW-TC013 · Restart 后历史立即可读 ===============
@@ -659,11 +783,20 @@ fn rw_tc013_restart_history_readable() {
     // 「重启视角」：新的只读查询（无任何前置发送动作）必须直接取到完整历史
     let msgs = {
         let conn = state.0.lock().unwrap();
-        ConversationRepository::new(&conn).list_messages(cid, pid, 50, 0).unwrap()
+        ConversationRepository::new(&conn)
+            .list_messages(cid, pid, 50, 0)
+            .unwrap()
     };
-    assert!(msgs.len() >= 6, "RW-TC013：三轮 user+assistant 全部立即可读（{}）", msgs.len());
+    assert!(
+        msgs.len() >= 6,
+        "RW-TC013：三轮 user+assistant 全部立即可读（{}）",
+        msgs.len()
+    );
     let last_a = msgs.iter().rev().find(|m| m.role == "assistant").unwrap();
-    assert!(last_a.content.contains("已应用"), "RW-TC013：最新 assistant（F1 交付文案）立即可见");
+    assert!(
+        last_a.content.contains("已应用"),
+        "RW-TC013：最新 assistant（F1 交付文案）立即可见"
+    );
 }
 
 // =============== RW-TC014 · temporary intent 不产生 Memory Proposal ===============
@@ -672,7 +805,10 @@ fn rw_tc013_restart_history_readable() {
 fn rw_tc014_temporary_intent_no_memory_proposal() {
     // 代码级硬过滤单元验证（提示词规则 6 为软闸门，此处锁死兜底）
     let (state, _vault) = setup("tc014");
-    let pid = { let conn = state.0.lock().unwrap(); mk_profile(&conn, "RW72T14") };
+    let pid = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn, "RW72T14")
+    };
     let bad = serde_json::from_str::<app_lib::ai::intelligence::memory::ExtractedMemory>(
         r#"{"kind":"explicit","memory_type":"goal_context","category":"目标","key":"当前请求",
             "value":"用户需要生成考研计划","excerpt":"生成考研计划","importance":2,"confidence":"medium"}"#,
@@ -689,15 +825,21 @@ fn rw_tc014_temporary_intent_no_memory_proposal() {
         assert_eq!(ids.len(), 1, "仅长期事实落库（temporary intent 被过滤）");
     }
     let conn = state.0.lock().unwrap();
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM memory_records WHERE profile_id=?1",
-        params![pid], |r| r.get(0),
-    ).unwrap();
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM memory_records WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(n, 1, "RW-TC014：0 条 temporary intent proposal");
-    let v: String = conn.query_row(
-        "SELECT memory_value FROM memory_records WHERE profile_id=?1",
-        params![pid], |r| r.get(0),
-    ).unwrap();
+    let v: String = conn
+        .query_row(
+            "SELECT memory_value FROM memory_records WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert!(v.contains("2028"), "落库的是长期事实：{v}");
 }
 

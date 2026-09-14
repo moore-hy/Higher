@@ -14,11 +14,8 @@
 //! 运行：`cargo test --manifest-path src-tauri/Cargo.toml --test feedback_system`
 
 use app_lib::repository::{
-    evaluation::EvaluationRepository,
-    feedback::FeedbackRepository,
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
+    evaluation::EvaluationRepository, feedback::FeedbackRepository, goal::GoalRepository,
+    learning_item::LearningItemRepository, study_profile::StudyProfileRepository,
 };
 use rusqlite::Connection;
 
@@ -62,7 +59,13 @@ fn test_migration_v007_applied_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
+    );
 
     let columns: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(feedbacks)").unwrap();
@@ -72,10 +75,23 @@ fn test_migration_v007_applied_and_idempotent() {
             .collect()
     };
     for expected in [
-        "id", "goal_id", "learning_item_id", "evaluation_id", "feedback_type",
-        "title", "description", "status", "created_at", "updated_at", "resolved_at",
+        "id",
+        "goal_id",
+        "learning_item_id",
+        "evaluation_id",
+        "feedback_type",
+        "title",
+        "description",
+        "status",
+        "created_at",
+        "updated_at",
+        "resolved_at",
     ] {
-        assert!(columns.contains(&expected.to_string()), "缺少列 {}", expected);
+        assert!(
+            columns.contains(&expected.to_string()),
+            "缺少列 {}",
+            expected
+        );
     }
 
     // 幂等
@@ -144,7 +160,13 @@ fn test_v006_to_v007_upgrade_preserves_old_data() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
+    );
     let goals: i64 = conn
         .query_row("SELECT COUNT(*) FROM goals", [], |r| r.get(0))
         .unwrap();
@@ -164,7 +186,14 @@ fn test_create_feedback_and_default_open() {
 
     let repo = FeedbackRepository::new(&conn);
     let f = repo
-        .create(goal.id, Some(item.id), None, "weakness", "极限定义理解不稳定", "洛必达条件记错")
+        .create(
+            goal.id,
+            Some(item.id),
+            None,
+            "weakness",
+            "极限定义理解不稳定",
+            "洛必达条件记错",
+        )
         .unwrap();
     assert_eq!(f.status, "open", "新建 Feedback 默认需要处理");
     assert_eq!(f.goal_id, goal.id);
@@ -180,20 +209,17 @@ fn test_cross_goal_learning_item_rejected() {
     let item_repo = LearningItemRepository::new(&conn);
     let repo = FeedbackRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "IA", None).unwrap();
 
-    let result = repo.create(
-        goal_b.id,
-        Some(item_a.id),
-        None,
-        "weakness",
-        "错绑",
-        "",
-    );
+    let result = repo.create(goal_b.id, Some(item_a.id), None, "weakness", "错绑", "");
     assert!(result.is_err(), "LearningItem 跨 Goal 必须被后端拒绝");
 }
 
@@ -205,12 +231,31 @@ fn test_cross_goal_evaluation_rejected() {
     let eval_repo = EvaluationRepository::new(&conn);
     let repo = FeedbackRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
     let ev_a = eval_repo
-        .create(pa.id, Some(goal_a.id), None, "A 测试", "test", None, None, None, None, None, None, None, Some("failed"), None)
+        .create(
+            pa.id,
+            Some(goal_a.id),
+            None,
+            "A 测试",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("failed"),
+            None,
+        )
         .unwrap();
 
     let result = repo.create(goal_b.id, None, Some(ev_a.id), "error", "错绑", "");
@@ -229,9 +274,15 @@ fn test_resolve_dismiss_keeps_history_and_counts() {
         .unwrap();
     let repo = FeedbackRepository::new(&conn);
 
-    let f1 = repo.create(goal.id, Some(item.id), None, "weakness", "问题1", "").unwrap();
-    let f2 = repo.create(goal.id, Some(item.id), None, "error", "问题2", "").unwrap();
-    let f3 = repo.create(goal.id, None, None, "observation", "问题3", "").unwrap();
+    let f1 = repo
+        .create(goal.id, Some(item.id), None, "weakness", "问题1", "")
+        .unwrap();
+    let f2 = repo
+        .create(goal.id, Some(item.id), None, "error", "问题2", "")
+        .unwrap();
+    let f3 = repo
+        .create(goal.id, None, None, "observation", "问题3", "")
+        .unwrap();
 
     // open 列表
     let open = repo.list_open_by_profile(profile_id).unwrap();
@@ -252,11 +303,21 @@ fn test_resolve_dismiss_keeps_history_and_counts() {
     assert_eq!(repo.list_open_by_profile(profile_id).unwrap().len(), 1);
 
     // 全量历史保留 3 条
-    assert_eq!(repo.list_by_profile(profile_id).unwrap().len(), 3, "不物理删除历史");
+    assert_eq!(
+        repo.list_by_profile(profile_id).unwrap().len(),
+        3,
+        "不物理删除历史"
+    );
 
     // 计数
     let counts = repo.count_by_status_by_profile(profile_id).unwrap();
-    let get = |k: &str| counts.iter().find(|c| c.label == k).map(|c| c.count).unwrap_or(0);
+    let get = |k: &str| {
+        counts
+            .iter()
+            .find(|c| c.label == k)
+            .map(|c| c.count)
+            .unwrap_or(0)
+    };
     assert_eq!(get("open"), 1);
     assert_eq!(get("resolved"), 1);
     assert_eq!(get("dismissed"), 1);
@@ -274,17 +335,47 @@ fn test_list_by_learning_item_and_evaluation() {
 
     let goal = goal_repo.create(profile_id, "G", None).unwrap();
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
-    let limit = item_repo.create_child(goal.id, math.id, "极限", None).unwrap();
+    let limit = item_repo
+        .create_child(goal.id, math.id, "极限", None)
+        .unwrap();
     let ev = eval_repo
-        .create(profile_id, Some(goal.id), Some(limit.id), "极限测试", "test", None, None, None, None, None, None, None, Some("failed"), None)
+        .create(
+            profile_id,
+            Some(goal.id),
+            Some(limit.id),
+            "极限测试",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("failed"),
+            None,
+        )
         .unwrap();
 
-    repo.create(goal.id, Some(limit.id), Some(ev.id), "weakness", "定义不稳", "").unwrap();
-    repo.create(goal.id, Some(math.id), None, "observation", "父级观察", "").unwrap();
+    repo.create(
+        goal.id,
+        Some(limit.id),
+        Some(ev.id),
+        "weakness",
+        "定义不稳",
+        "",
+    )
+    .unwrap();
+    repo.create(goal.id, Some(math.id), None, "observation", "父级观察", "")
+        .unwrap();
 
     assert_eq!(repo.list_by_learning_item(limit.id).unwrap().len(), 1);
     assert_eq!(repo.list_by_learning_item(math.id).unwrap().len(), 1);
-    assert_eq!(repo.list_by_evaluation(ev.id).unwrap().len(), 1, "Review 去重依据");
+    assert_eq!(
+        repo.list_by_evaluation(ev.id).unwrap().len(),
+        1,
+        "Review 去重依据"
+    );
 }
 
 #[test]
@@ -294,12 +385,18 @@ fn test_multi_profile_isolation() {
     let goal_repo = GoalRepository::new(&conn);
     let repo = FeedbackRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "GB", None).unwrap();
-    repo.create(goal_a.id, None, None, "weakness", "A 的问题", "").unwrap();
-    repo.create(goal_b.id, None, None, "weakness", "B 的问题", "").unwrap();
+    repo.create(goal_a.id, None, None, "weakness", "A 的问题", "")
+        .unwrap();
+    repo.create(goal_b.id, None, None, "weakness", "B 的问题", "")
+        .unwrap();
 
     let list_a = repo.list_by_profile(pa.id).unwrap();
     assert_eq!(list_a.len(), 1);
@@ -321,10 +418,28 @@ fn test_no_auto_feedback_on_failed_evaluation() {
     let goal = goal_repo.create(profile_id, "G", None).unwrap();
     for outcome in ["failed", "partial", "failed"] {
         eval_repo
-            .create(profile_id, Some(goal.id), None, "验证", "test", None, None, None, None, None, None, None, Some(outcome), None)
+            .create(
+                profile_id,
+                Some(goal.id),
+                None,
+                "验证",
+                "test",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(outcome),
+                None,
+            )
             .unwrap();
     }
 
-    assert_eq!(fb_repo.list_by_profile(profile_id).unwrap().len(), 0,
-        "Evaluation 失败不得自动创建 Feedback");
+    assert_eq!(
+        fb_repo.list_by_profile(profile_id).unwrap().len(),
+        0,
+        "Evaluation 失败不得自动创建 Feedback"
+    );
 }

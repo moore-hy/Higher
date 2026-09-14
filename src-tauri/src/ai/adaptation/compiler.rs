@@ -68,8 +68,13 @@ fn resolve_future_task(
             t.status != "completed"
                 && t.status != "skipped"
                 && t.title.contains(hint)
-                && t.planned_date.as_deref().map(|d| d >= today).unwrap_or(false)
-                && date_hint.map(|dh| t.planned_date.as_deref() == Some(dh)).unwrap_or(true)
+                && t.planned_date
+                    .as_deref()
+                    .map(|d| d >= today)
+                    .unwrap_or(false)
+                && date_hint
+                    .map(|dh| t.planned_date.as_deref() == Some(dh))
+                    .unwrap_or(true)
         })
         .collect();
     // 去重同 id（范围查询不含重复，防御）
@@ -93,7 +98,11 @@ fn add_days_str(date: &str, days: i64) -> String {
             1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
             4 | 6 | 9 | 11 => 30,
             _ => {
-                if (yy % 4 == 0 && yy % 100 != 0) || yy % 400 == 0 { 29 } else { 28 }
+                if (yy % 4 == 0 && yy % 100 != 0) || yy % 400 == 0 {
+                    29
+                } else {
+                    28
+                }
             }
         }
     };
@@ -159,11 +168,16 @@ pub fn compile_intents(
         match it.kind.as_str() {
             "RescheduleFutureTask" => {
                 let task = resolve_future_task(
-                    conn, profile_id, today,
+                    conn,
+                    profile_id,
+                    today,
                     it.task_title_hint.as_deref().unwrap_or(""),
                     it.task_date_hint.as_deref(),
                 )?;
-                let new_date = it.new_date.as_deref().ok_or("RescheduleFutureTask 缺少 new_date")?;
+                let new_date = it
+                    .new_date
+                    .as_deref()
+                    .ok_or("RescheduleFutureTask 缺少 new_date")?;
                 ensure_future_date(new_date, today, "new_date")?;
                 out.actions.push(json!({
                     "type": "update_task",
@@ -182,7 +196,9 @@ pub fn compile_intents(
             }
             "ChangeFutureTaskEstimate" => {
                 let task = resolve_future_task(
-                    conn, profile_id, today,
+                    conn,
+                    profile_id,
+                    today,
                     it.task_title_hint.as_deref().unwrap_or(""),
                     it.task_date_hint.as_deref(),
                 )?;
@@ -206,11 +222,16 @@ pub fn compile_intents(
             }
             "ReprioritizeFutureTask" => {
                 let task = resolve_future_task(
-                    conn, profile_id, today,
+                    conn,
+                    profile_id,
+                    today,
                     it.task_title_hint.as_deref().unwrap_or(""),
                     it.task_date_hint.as_deref(),
                 )?;
-                let p = it.new_priority.as_deref().ok_or("ReprioritizeFutureTask 缺少 new_priority")?;
+                let p = it
+                    .new_priority
+                    .as_deref()
+                    .ok_or("ReprioritizeFutureTask 缺少 new_priority")?;
                 if !["core", "normal", "low"].contains(&p) {
                     return Err(format!("new_priority 非法（{p}，允许 core|normal|low）"));
                 }
@@ -223,12 +244,20 @@ pub fn compile_intents(
                     },
                     "patch": { "priority": p },
                 }));
-                out.plan_notes.push(format!("任务「{}」优先级 → {p}", task.title));
+                out.plan_notes
+                    .push(format!("任务「{}」优先级 → {p}", task.title));
             }
             "CreateFutureTask" => {
-                let title = it.new_task_title.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                let title = it
+                    .new_task_title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
                     .ok_or("CreateFutureTask 缺少 new_task_title")?;
-                let date = it.new_date.as_deref().ok_or("CreateFutureTask 缺少 new_date")?;
+                let date = it
+                    .new_date
+                    .as_deref()
+                    .ok_or("CreateFutureTask 缺少 new_date")?;
                 ensure_future_date(date, today, "new_date")?;
                 if let Some(m) = it.new_estimated_minutes {
                     if !(1..=1440).contains(&m) {
@@ -242,7 +271,8 @@ pub fn compile_intents(
                     "estimated_minutes": it.new_estimated_minutes,
                     "priority": it.new_priority,
                 }));
-                out.plan_notes.push(format!("新增未来任务「{title}」（{date}）"));
+                out.plan_notes
+                    .push(format!("新增未来任务「{title}」（{date}）"));
             }
             "UpdatePlanningBlueprint" | "UpdatePlanningPhase" | "UpdatePlanningMilestone" => {
                 bp_updates.push(it);
@@ -264,7 +294,13 @@ pub fn compile_intents(
         }
     }
     if !bp_updates.is_empty() {
-        let action = compile_blueprint_new_version(conn, profile_id, today, &bp_updates, &mut out.plan_notes)?;
+        let action = compile_blueprint_new_version(
+            conn,
+            profile_id,
+            today,
+            &bp_updates,
+            &mut out.plan_notes,
+        )?;
         out.actions.push(action);
     }
     Ok(out)
@@ -298,16 +334,30 @@ fn compile_blueprint_new_version(
     for it in updates {
         match it.kind.as_str() {
             "UpdatePlanningBlueprint" => {
-                if let Some(t) = it.new_blueprint_title.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                if let Some(t) = it
+                    .new_blueprint_title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     title = t.to_string();
                 }
-                if let Some(s) = it.new_blueprint_summary.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                if let Some(s) = it
+                    .new_blueprint_summary
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     summary_patch = Some(s.to_string());
                 }
                 notes.push("Planning 蓝图元信息更新（新版本）".to_string());
             }
             "UpdatePlanningPhase" => {
-                let key = it.phase_key.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                let key = it
+                    .phase_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
                     .ok_or("UpdatePlanningPhase 缺少 phase_key")?;
                 let ph = phases
                     .iter()
@@ -325,14 +375,20 @@ fn compile_blueprint_new_version(
                 }
                 if let (Some(sd), Some(ed)) = (&s, &e) {
                     if sd > ed {
-                        return Err(format!("phase「{key}」start_date（{sd}）不得晚于 end_date（{ed}）"));
+                        return Err(format!(
+                            "phase「{key}」start_date（{sd}）不得晚于 end_date（{ed}）"
+                        ));
                     }
                 }
                 phase_dates.insert(key.to_string(), (s, e));
                 notes.push(format!("阶段「{key}」边界调整（新版本）"));
             }
             "UpdatePlanningMilestone" => {
-                let key = it.milestone_key.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                let key = it
+                    .milestone_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
                     .ok_or("UpdatePlanningMilestone 缺少 milestone_key")?;
                 let ms = milestones
                     .iter()
@@ -344,7 +400,9 @@ fn compile_blueprint_new_version(
                     if ms.date_precision != "month" {
                         ensure_future_date(v, today, "new_start_date")?;
                     } else if !valid_ym(v) {
-                        return Err(format!("new_start_date 非法（{v}，month 精度期望 YYYY-MM）"));
+                        return Err(format!(
+                            "new_start_date 非法（{v}，month 精度期望 YYYY-MM）"
+                        ));
                     }
                     s = Some(v.to_string());
                 }
@@ -431,5 +489,8 @@ fn valid_ym(s: &str) -> bool {
         && p[0].bytes().all(|b| b.is_ascii_digit())
         && p[1].len() == 2
         && p[1].bytes().all(|b| b.is_ascii_digit())
-        && p[1].parse::<i64>().map(|m| (1..=12).contains(&m)).unwrap_or(false)
+        && p[1]
+            .parse::<i64>()
+            .map(|m| (1..=12).contains(&m))
+            .unwrap_or(false)
 }

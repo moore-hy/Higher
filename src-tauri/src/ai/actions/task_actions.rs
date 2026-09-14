@@ -19,10 +19,18 @@ pub struct TaskExecutor<'a> {
 impl ActionExecutor for TaskExecutor<'_> {
     fn execute(&self, action: HigherAction) -> Result<(), String> {
         if action.action_type != HigherActionType::CreateTask {
-            return Err(format!("TaskExecutor 不处理 {}", action.action_type.as_str()));
+            return Err(format!(
+                "TaskExecutor 不处理 {}",
+                action.action_type.as_str()
+            ));
         }
         let p = &action.payload;
-        let title = p.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let title = p
+            .get("title")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if title.is_empty() {
             return Err("CreateTask 缺少 title".to_string());
         }
@@ -45,9 +53,9 @@ impl ActionExecutor for TaskExecutor<'_> {
                 goal_id,
                 &title,
                 date,
-                None,  // planned_time
-                None,  // learning_item_id
-                None,  // estimated_minutes
+                None, // planned_time
+                None, // learning_item_id
+                None, // estimated_minutes
                 "structured",
                 "normal",
             )
@@ -57,7 +65,11 @@ impl ActionExecutor for TaskExecutor<'_> {
 }
 
 /// §九函数形态入口。
-pub fn create_task(conn: &Connection, profile_id: i64, payload: &serde_json::Value) -> Result<(), String> {
+pub fn create_task(
+    conn: &Connection,
+    profile_id: i64,
+    payload: &serde_json::Value,
+) -> Result<(), String> {
     TaskExecutor { conn, profile_id }.execute(HigherAction {
         action_type: HigherActionType::CreateTask,
         payload: payload.clone(),

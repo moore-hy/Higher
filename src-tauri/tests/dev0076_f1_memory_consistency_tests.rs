@@ -65,17 +65,25 @@ fn count_active(conn: &Connection, profile_id: i64) -> i64 {
 #[test]
 fn f1_tc001_pending_not_searchable() {
     let state = setup("tc001");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     let id = intelligence::memory_confirmation::create_memory_proposal(
-        &conn, profile_id, &pending_item("考研计划", "正在准备2028考研", "我要准备2028考研"),
+        &conn,
+        profile_id,
+        &pending_item("考研计划", "正在准备2028考研", "我要准备2028考研"),
     )
     .unwrap();
 
     // DB 存在（pending 期间数据不丢，供用户确认）
     let repo = MemoryRepository::new(&conn);
-    assert_eq!(repo.get(id, profile_id).unwrap().unwrap().status, "pending_confirmation");
+    assert_eq!(
+        repo.get(id, profile_id).unwrap().unwrap().status,
+        "pending_confirmation"
+    );
     assert_eq!(repo.list_pending(profile_id).unwrap().len(), 1);
 
     // search 不可见（FTS 未写入 + 候选口径 confirmed——pending 两路都被隔离）
@@ -84,7 +92,10 @@ fn f1_tc001_pending_not_searchable() {
         "pending 不得进入 AI 检索（search_memory）"
     );
     assert!(
-        repo.search(profile_id, "", 10).unwrap().iter().all(|m| m.id != id),
+        repo.search(profile_id, "", 10)
+            .unwrap()
+            .iter()
+            .all(|m| m.id != id),
         "空查询候选路也不得返回 pending"
     );
     // FTS 物理未写入（search_index 无 memory 行）
@@ -104,18 +115,29 @@ fn f1_tc001_pending_not_searchable() {
 #[test]
 fn f1_tc002_confirm_builds_retrieval_entry() {
     let state = setup("tc002");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     let id = intelligence::memory_confirmation::create_memory_proposal(
-        &conn, profile_id, &pending_item("学习习惯", "用户偏好晚上学习", "我晚上学习效率高"),
+        &conn,
+        profile_id,
+        &pending_item("学习习惯", "用户偏好晚上学习", "我晚上学习效率高"),
     )
     .unwrap();
     let repo = MemoryRepository::new(&conn);
-    assert!(repo.search(profile_id, "晚上学习", 10).unwrap().is_empty(), "确认前不可检索");
+    assert!(
+        repo.search(profile_id, "晚上学习", 10).unwrap().is_empty(),
+        "确认前不可检索"
+    );
 
     intelligence::memory_confirmation::confirm_memory(&conn, profile_id, id).unwrap();
-    assert_eq!(repo.get(id, profile_id).unwrap().unwrap().status, "confirmed");
+    assert_eq!(
+        repo.get(id, profile_id).unwrap().unwrap().status,
+        "confirmed"
+    );
 
     // FTS 已建立 + 检索可见
     let hits = repo.search(profile_id, "晚上学习", 10).unwrap();
@@ -137,18 +159,23 @@ fn f1_tc002_confirm_builds_retrieval_entry() {
 #[test]
 fn f1_tc003_ai_reads_confirmed_only() {
     let state = setup("tc003");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     // A：未确认候选
     let a = intelligence::memory_confirmation::create_memory_proposal(
-        &conn, profile_id,
+        &conn,
+        profile_id,
         &pending_item("候选A", "A-未确认的推断内容-XYZ", "A 的原话"),
     )
     .unwrap();
     // B：候选 → 用户确认
     let b = intelligence::memory_confirmation::create_memory_proposal(
-        &conn, profile_id,
+        &conn,
+        profile_id,
         &pending_item("记忆B", "B-已确认的长期记忆-ABC", "B 的原话"),
     )
     .unwrap();
@@ -162,13 +189,24 @@ fn f1_tc003_ai_reads_confirmed_only() {
 
     // 轮首注入块（build_injection = Decision 输入增强层）只含 B 内容
     let injection = intelligence::intelligence_builder::build_injection(
-        &conn, profile_id, &AgentWorkflowPayload::default(), "帮我安排复习",
+        &conn,
+        profile_id,
+        &AgentWorkflowPayload::default(),
+        "帮我安排复习",
     );
-    assert!(injection.contains("B-已确认的长期记忆-ABC"), "confirmed B 注入 AI context");
-    assert!(!injection.contains("A-未确认的推断内容-XYZ"), "pending A 不得注入 AI context");
+    assert!(
+        injection.contains("B-已确认的长期记忆-ABC"),
+        "confirmed B 注入 AI context"
+    );
+    assert!(
+        !injection.contains("A-未确认的推断内容-XYZ"),
+        "pending A 不得注入 AI context"
+    );
 
     // 管理口径（list_active）两者都可见（用户可在设置页处理 A）
-    let managed = MemoryRepository::new(&conn).list_active(profile_id).unwrap();
+    let managed = MemoryRepository::new(&conn)
+        .list_active(profile_id)
+        .unwrap();
     assert_eq!(managed.len(), 2, "管理口径 = confirmed + pending");
 }
 
@@ -182,7 +220,10 @@ fn f1_tc003_ai_reads_confirmed_only() {
 #[test]
 fn f1_tc004_legacy_path_never_produces_active() {
     let state = setup("tc004");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     // ① 动态模拟 legacy 收口写入（与 lib.rs Memory Extract 相同构造：
@@ -212,12 +253,21 @@ fn f1_tc004_legacy_path_never_produces_active() {
             last_used_at: None,
         };
         if !rec.memory_value.is_empty() {
-            MemoryRepository::new(&conn).create_pending_memory(&rec).unwrap();
+            MemoryRepository::new(&conn)
+                .create_pending_memory(&rec)
+                .unwrap();
         }
     }
-    assert_eq!(count_active(&conn, profile_id), 0, "legacy 收口不得产生 'active' 状态");
     assert_eq!(
-        MemoryRepository::new(&conn).list_pending(profile_id).unwrap().len(),
+        count_active(&conn, profile_id),
+        0,
+        "legacy 收口不得产生 'active' 状态"
+    );
+    assert_eq!(
+        MemoryRepository::new(&conn)
+            .list_pending(profile_id)
+            .unwrap()
+            .len(),
         2,
         "AI 生成的记忆一律以待确认身份落库"
     );
@@ -244,7 +294,10 @@ fn f1_tc004_legacy_path_never_produces_active() {
 #[test]
 fn f1_tc005_user_edit_directly_confirmed() {
     let state = setup("tc005");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     PersonalizationRepository::new(&conn)
@@ -262,7 +315,9 @@ fn f1_tc005_user_edit_directly_confirmed() {
     assert_eq!(row.0, "user_edit", "用户亲手编辑 → source_kind=user_edit");
     assert_eq!(row.1, "confirmed", "用户事实直接 confirmed（§十一）");
     // 且立即可被 AI 检索（confirmed 进入 FTS）
-    let hits = MemoryRepository::new(&conn).search(profile_id, "手工编辑档案", 10).unwrap();
+    let hits = MemoryRepository::new(&conn)
+        .search(profile_id, "手工编辑档案", 10)
+        .unwrap();
     assert!(!hits.is_empty(), "user_edit 记忆即时进入 AI 长期读取");
     assert_eq!(count_active(&conn, profile_id), 0);
 }

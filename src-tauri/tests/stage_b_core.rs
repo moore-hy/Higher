@@ -13,8 +13,7 @@
 use app_lib::db::DbState;
 use app_lib::repository::{
     goal::GoalRepository, learning_item::LearningItemRepository, plan::PlanRepository,
-    study_session::StudySessionRepository, study_stage::StudyStageRepository,
-    task::TaskRepository,
+    study_session::StudySessionRepository, study_stage::StudyStageRepository, task::TaskRepository,
 };
 use rusqlite::Connection;
 
@@ -73,8 +72,11 @@ fn test_goal_edit() {
     let conn = setup();
     let repo = GoalRepository::new(&conn);
 
-    let goal = repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
-    repo.update(goal.id, "2027 计算机考研", Some("计算机方向")).unwrap();
+    let goal = repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
+    repo.update(goal.id, "2027 计算机考研", Some("计算机方向"))
+        .unwrap();
 
     let updated = repo.get(goal.id).unwrap().unwrap();
     assert_eq!(updated.name, "2027 计算机考研");
@@ -87,7 +89,9 @@ fn test_goal_archive_and_restore() {
     let conn = setup();
     let repo = GoalRepository::new(&conn);
 
-    let goal = repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     assert_eq!(goal.status, "active");
 
     // 归档
@@ -109,7 +113,9 @@ fn test_goal_archive_does_not_delete_related_data() {
     let task_repo = TaskRepository::new(&conn);
     let session_repo = StudySessionRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let item = item_repo.create_root(goal.id, "数学", None).unwrap();
     let task = task_repo.create(item.id, "复习极限", None).unwrap();
     let session = session_repo.start(item.id, Some(task.id)).unwrap();
@@ -137,11 +143,15 @@ fn test_learning_item_rename_and_description() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let item = item_repo.create_root(goal.id, "数学", None).unwrap();
 
     // 重命名 + 添加描述
-    item_repo.update(item.id, "高等数学", Some("数学的核心部分")).unwrap();
+    item_repo
+        .update(item.id, "高等数学", Some("数学的核心部分"))
+        .unwrap();
 
     let updated = item_repo.get(item.id).unwrap().unwrap();
     assert_eq!(updated.name, "高等数学");
@@ -158,10 +168,16 @@ fn test_learning_item_full_path() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
-    let adv_math = item_repo.create_child(goal.id, math.id, "高等数学", None).unwrap();
-    let limit = item_repo.create_child(goal.id, adv_math.id, "极限", None).unwrap();
+    let adv_math = item_repo
+        .create_child(goal.id, math.id, "高等数学", None)
+        .unwrap();
+    let limit = item_repo
+        .create_child(goal.id, adv_math.id, "极限", None)
+        .unwrap();
 
     // 根节点路径 = 自身名称
     let path_math = item_repo.get_full_path(math.id).unwrap();
@@ -182,9 +198,13 @@ fn test_learning_item_safe_delete_empty_leaf() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
-    let adv_math = item_repo.create_child(goal.id, math.id, "高等数学", None).unwrap();
+    let adv_math = item_repo
+        .create_child(goal.id, math.id, "高等数学", None)
+        .unwrap();
 
     // 叶子节点（无子项/无 Task/无 Session）可以删除
     item_repo.safe_delete(adv_math.id).unwrap();
@@ -201,16 +221,24 @@ fn test_learning_item_safe_delete_rejected_with_children() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
-    let _adv_math = item_repo.create_child(goal.id, math.id, "高等数学", None).unwrap();
+    let _adv_math = item_repo
+        .create_child(goal.id, math.id, "高等数学", None)
+        .unwrap();
 
     // 有子节点 → 拒绝删除
     let result = item_repo.safe_delete(math.id);
     assert!(result.is_err(), "有子节点的 Learning Item 不应被删除");
 
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("子项"), "错误信息应提到子项，实际: {}", err_msg);
+    assert!(
+        err_msg.contains("子项"),
+        "错误信息应提到子项，实际: {}",
+        err_msg
+    );
 
     // 数据仍在
     assert!(item_repo.get(math.id).unwrap().is_some());
@@ -223,7 +251,9 @@ fn test_learning_item_safe_delete_rejected_with_task() {
     let item_repo = LearningItemRepository::new(&conn);
     let task_repo = TaskRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let item = item_repo.create_root(goal.id, "极限", None).unwrap();
     let _task = task_repo.create(item.id, "复习极限定义", None).unwrap();
 
@@ -232,7 +262,11 @@ fn test_learning_item_safe_delete_rejected_with_task() {
     assert!(result.is_err(), "有 Task 的 Learning Item 不应被删除");
 
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("任务"), "错误信息应提到任务，实际: {}", err_msg);
+    assert!(
+        err_msg.contains("任务"),
+        "错误信息应提到任务，实际: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -242,7 +276,9 @@ fn test_learning_item_safe_delete_rejected_with_session() {
     let item_repo = LearningItemRepository::new(&conn);
     let session_repo = StudySessionRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let item = item_repo.create_root(goal.id, "极限", None).unwrap();
     let _session = session_repo.start(item.id, None).unwrap();
 
@@ -251,7 +287,11 @@ fn test_learning_item_safe_delete_rejected_with_session() {
     assert!(result.is_err(), "有 Session 的 Learning Item 不应被删除");
 
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("学习记录"), "错误信息应提到学习记录，实际: {}", err_msg);
+    assert!(
+        err_msg.contains("学习记录"),
+        "错误信息应提到学习记录，实际: {}",
+        err_msg
+    );
 }
 
 // ==================== Planning System 测试 ====================
@@ -262,9 +302,15 @@ fn test_create_stage_and_list_by_goal() {
     let goal_repo = GoalRepository::new(&conn);
     let stage_repo = StudyStageRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
-    let stage1 = stage_repo.create(goal.id, "基础阶段", None, None, None).unwrap();
-    let stage2 = stage_repo.create(goal.id, "强化阶段", Some("暑期强化"), None, None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
+    let stage1 = stage_repo
+        .create(goal.id, "基础阶段", None, None, None)
+        .unwrap();
+    let stage2 = stage_repo
+        .create(goal.id, "强化阶段", Some("暑期强化"), None, None)
+        .unwrap();
 
     assert_eq!(stage1.goal_id, goal.id);
     assert_eq!(stage1.status, "active");
@@ -282,10 +328,22 @@ fn test_update_stage() {
     let goal_repo = GoalRepository::new(&conn);
     let stage_repo = StudyStageRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
-    let stage = stage_repo.create(goal.id, "基础", None, None, None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
+    let stage = stage_repo
+        .create(goal.id, "基础", None, None, None)
+        .unwrap();
 
-    stage_repo.update(stage.id, "基础阶段", Some("打基础"), Some("2026-08-01"), Some("2027-02-01")).unwrap();
+    stage_repo
+        .update(
+            stage.id,
+            "基础阶段",
+            Some("打基础"),
+            Some("2026-08-01"),
+            Some("2027-02-01"),
+        )
+        .unwrap();
 
     let updated = stage_repo.get(stage.id).unwrap().unwrap();
     assert_eq!(updated.name, "基础阶段");
@@ -300,14 +358,24 @@ fn test_stage_complete_and_archive() {
     let goal_repo = GoalRepository::new(&conn);
     let stage_repo = StudyStageRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
-    let stage = stage_repo.create(goal.id, "基础阶段", None, None, None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
+    let stage = stage_repo
+        .create(goal.id, "基础阶段", None, None, None)
+        .unwrap();
 
     stage_repo.set_status(stage.id, "completed").unwrap();
-    assert_eq!(stage_repo.get(stage.id).unwrap().unwrap().status, "completed");
+    assert_eq!(
+        stage_repo.get(stage.id).unwrap().unwrap().status,
+        "completed"
+    );
 
     stage_repo.set_status(stage.id, "archived").unwrap();
-    assert_eq!(stage_repo.get(stage.id).unwrap().unwrap().status, "archived");
+    assert_eq!(
+        stage_repo.get(stage.id).unwrap().unwrap().status,
+        "archived"
+    );
 }
 
 #[test]
@@ -318,22 +386,32 @@ fn test_create_plan_with_goal_stage_and_item() {
     let stage_repo = StudyStageRepository::new(&conn);
     let plan_repo = PlanRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
-    let adv_math = item_repo.create_child(goal.id, math.id, "高等数学", None).unwrap();
-    let limit = item_repo.create_child(goal.id, adv_math.id, "极限", None).unwrap();
-    let stage = stage_repo.create(goal.id, "基础阶段", None, None, None).unwrap();
+    let adv_math = item_repo
+        .create_child(goal.id, math.id, "高等数学", None)
+        .unwrap();
+    let limit = item_repo
+        .create_child(goal.id, adv_math.id, "极限", None)
+        .unwrap();
+    let stage = stage_repo
+        .create(goal.id, "基础阶段", None, None, None)
+        .unwrap();
 
     // 完整关联：Goal + Stage + Learning Item
-    let plan = plan_repo.create(
-        goal.id,
-        Some(stage.id),
-        Some(limit.id),
-        "高等数学极限基础",
-        Some("完成极限基础学习"),
-        None,
-        None,
-    ).unwrap();
+    let plan = plan_repo
+        .create(
+            goal.id,
+            Some(stage.id),
+            Some(limit.id),
+            "高等数学极限基础",
+            Some("完成极限基础学习"),
+            None,
+            None,
+        )
+        .unwrap();
 
     assert_eq!(plan.goal_id, goal.id);
     assert_eq!(plan.stage_id, Some(stage.id));
@@ -348,10 +426,14 @@ fn test_create_plan_without_stage_and_item() {
     let goal_repo = GoalRepository::new(&conn);
     let plan_repo = PlanRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
 
     // 仅 Goal，无 Stage / Item
-    let plan = plan_repo.create(goal.id, None, None, "整理学习方法", None, None, None).unwrap();
+    let plan = plan_repo
+        .create(goal.id, None, None, "整理学习方法", None, None, None)
+        .unwrap();
     assert_eq!(plan.goal_id, goal.id);
     assert_eq!(plan.stage_id, None);
     assert_eq!(plan.learning_item_id, None);
@@ -364,14 +446,28 @@ fn test_plan_list_by_goal_and_stage() {
     let stage_repo = StudyStageRepository::new(&conn);
     let plan_repo = PlanRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
-    let stage1 = stage_repo.create(goal.id, "基础阶段", None, None, None).unwrap();
-    let stage2 = stage_repo.create(goal.id, "强化阶段", None, None, None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
+    let stage1 = stage_repo
+        .create(goal.id, "基础阶段", None, None, None)
+        .unwrap();
+    let stage2 = stage_repo
+        .create(goal.id, "强化阶段", None, None, None)
+        .unwrap();
 
-    let _plan1 = plan_repo.create(goal.id, Some(stage1.id), None, "高数基础", None, None, None).unwrap();
-    let _plan2 = plan_repo.create(goal.id, Some(stage1.id), None, "英语基础", None, None, None).unwrap();
-    let _plan3 = plan_repo.create(goal.id, Some(stage2.id), None, "高数强化", None, None, None).unwrap();
-    let _plan4 = plan_repo.create(goal.id, None, None, "无阶段计划", None, None, None).unwrap();
+    let _plan1 = plan_repo
+        .create(goal.id, Some(stage1.id), None, "高数基础", None, None, None)
+        .unwrap();
+    let _plan2 = plan_repo
+        .create(goal.id, Some(stage1.id), None, "英语基础", None, None, None)
+        .unwrap();
+    let _plan3 = plan_repo
+        .create(goal.id, Some(stage2.id), None, "高数强化", None, None, None)
+        .unwrap();
+    let _plan4 = plan_repo
+        .create(goal.id, None, None, "无阶段计划", None, None, None)
+        .unwrap();
 
     // 按 Goal 查询
     let by_goal = plan_repo.list_by_goal(goal.id).unwrap();
@@ -392,18 +488,36 @@ fn test_plan_cross_goal_stage_rejected() {
     let stage_repo = StudyStageRepository::new(&conn);
     let plan_repo = PlanRepository::new(&conn);
 
-    let goal_a = goal_repo.create(create_default_profile(&conn), "Goal A", None).unwrap();
-    let goal_b = goal_repo.create(create_default_profile(&conn), "Goal B", None).unwrap();
+    let goal_a = goal_repo
+        .create(create_default_profile(&conn), "Goal A", None)
+        .unwrap();
+    let goal_b = goal_repo
+        .create(create_default_profile(&conn), "Goal B", None)
+        .unwrap();
 
     // Stage 属于 Goal B
-    let stage_b = stage_repo.create(goal_b.id, "B 的阶段", None, None, None).unwrap();
+    let stage_b = stage_repo
+        .create(goal_b.id, "B 的阶段", None, None, None)
+        .unwrap();
 
     // 尝试用 Goal A + Stage B 创建 Plan → 必须拒绝
-    let result = plan_repo.create(goal_a.id, Some(stage_b.id), None, "跨 Goal 计划", None, None, None);
+    let result = plan_repo.create(
+        goal_a.id,
+        Some(stage_b.id),
+        None,
+        "跨 Goal 计划",
+        None,
+        None,
+        None,
+    );
     assert!(result.is_err(), "跨 Goal Stage 必须被拒绝");
 
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("跨 Goal"), "错误信息应说明跨 Goal，实际: {}", err_msg);
+    assert!(
+        err_msg.contains("跨 Goal"),
+        "错误信息应说明跨 Goal，实际: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -413,18 +527,34 @@ fn test_plan_cross_goal_learning_item_rejected() {
     let item_repo = LearningItemRepository::new(&conn);
     let plan_repo = PlanRepository::new(&conn);
 
-    let goal_a = goal_repo.create(create_default_profile(&conn), "Goal A", None).unwrap();
-    let goal_b = goal_repo.create(create_default_profile(&conn), "Goal B", None).unwrap();
+    let goal_a = goal_repo
+        .create(create_default_profile(&conn), "Goal A", None)
+        .unwrap();
+    let goal_b = goal_repo
+        .create(create_default_profile(&conn), "Goal B", None)
+        .unwrap();
 
     // Item 属于 Goal B
     let item_b = item_repo.create_root(goal_b.id, "B 的知识", None).unwrap();
 
     // 尝试用 Goal A + Item B 创建 Plan → 必须拒绝
-    let result = plan_repo.create(goal_a.id, None, Some(item_b.id), "跨 Goal 计划", None, None, None);
+    let result = plan_repo.create(
+        goal_a.id,
+        None,
+        Some(item_b.id),
+        "跨 Goal 计划",
+        None,
+        None,
+        None,
+    );
     assert!(result.is_err(), "跨 Goal Learning Item 必须被拒绝");
 
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("跨 Goal"), "错误信息应说明跨 Goal，实际: {}", err_msg);
+    assert!(
+        err_msg.contains("跨 Goal"),
+        "错误信息应说明跨 Goal，实际: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -446,11 +576,17 @@ fn test_plan_persistence() {
         let stage_repo = StudyStageRepository::new(&conn);
         let plan_repo = PlanRepository::new(&conn);
 
-        let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+        let goal = goal_repo
+            .create(create_default_profile(&conn), "2027 考研", None)
+            .unwrap();
         goal_id = goal.id;
-        let stage = stage_repo.create(goal_id, "基础阶段", None, None, None).unwrap();
+        let stage = stage_repo
+            .create(goal_id, "基础阶段", None, None, None)
+            .unwrap();
         stage_id = stage.id;
-        let plan = plan_repo.create(goal_id, Some(stage_id), None, "高数基础", None, None, None).unwrap();
+        let plan = plan_repo
+            .create(goal_id, Some(stage_id), None, "高数基础", None, None, None)
+            .unwrap();
         plan_id = plan.id;
     }
 
@@ -485,12 +621,18 @@ fn test_task_with_plan_association() {
     let plan_repo = PlanRepository::new(&conn);
     let task_repo = TaskRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let item = item_repo.create_root(goal.id, "极限", None).unwrap();
-    let plan = plan_repo.create(goal.id, None, Some(item.id), "极限基础", None, None, None).unwrap();
+    let plan = plan_repo
+        .create(goal.id, None, Some(item.id), "极限基础", None, None, None)
+        .unwrap();
 
     // 创建带 Plan 的 Task
-    let task = task_repo.create_with_plan_legacy(item.id, "复习极限", None, Some(plan.id)).unwrap();
+    let task = task_repo
+        .create_with_plan_legacy(item.id, "复习极限", None, Some(plan.id))
+        .unwrap();
     assert_eq!(task.plan_id, Some(plan.id));
     assert_eq!(task.learning_item_id, Some(item.id));
 }
@@ -502,7 +644,9 @@ fn test_task_without_plan_still_works() {
     let item_repo = LearningItemRepository::new(&conn);
     let task_repo = TaskRepository::new(&conn);
 
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
     let item = item_repo.create_root(goal.id, "极限", None).unwrap();
 
     // 旧方式创建 Task（无 Plan）
@@ -516,15 +660,16 @@ fn test_migration_v003_adds_plan_id_column() {
 
     // 验证 tasks 表有 plan_id 列
     let columns: Vec<String> = {
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(tasks)")
-            .unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(tasks)").unwrap();
         stmt.query_map([], |row| row.get::<_, String>(1))
             .unwrap()
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert!(columns.contains(&"plan_id".to_string()), "tasks 表应有 plan_id 列");
+    assert!(
+        columns.contains(&"plan_id".to_string()),
+        "tasks 表应有 plan_id 列"
+    );
 
     // 验证 study_stages 表存在
     let tables: Vec<String> = {
@@ -536,7 +681,10 @@ fn test_migration_v003_adds_plan_id_column() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert!(tables.contains(&"study_stages".to_string()), "study_stages 表应存在");
+    assert!(
+        tables.contains(&"study_stages".to_string()),
+        "study_stages 表应存在"
+    );
     assert!(tables.contains(&"plans".to_string()), "plans 表应存在");
 }
 
@@ -561,7 +709,9 @@ fn test_session_recovery_active_session_persists() {
         let item_repo = LearningItemRepository::new(&conn);
         let session_repo = StudySessionRepository::new(&conn);
 
-        let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+        let goal = goal_repo
+            .create(create_default_profile(&conn), "2027 考研", None)
+            .unwrap();
         let item = item_repo.create_root(goal.id, "极限", None).unwrap();
         item_id = item.id;
         let session = session_repo.start(item_id, None).unwrap();
@@ -625,43 +775,58 @@ fn test_full_stage_b_integration() {
     let session_repo = StudySessionRepository::new(&conn);
 
     // 1. 创建 Goal
-    let goal = goal_repo.create(create_default_profile(&conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(&conn), "2027 考研", None)
+        .unwrap();
 
     // 2. 编辑 Goal
-    goal_repo.update(goal.id, "2027 计算机考研", Some("目标描述")).unwrap();
+    goal_repo
+        .update(goal.id, "2027 计算机考研", Some("目标描述"))
+        .unwrap();
     let goal_updated = goal_repo.get(goal.id).unwrap().unwrap();
     assert_eq!(goal_updated.name, "2027 计算机考研");
 
     // 3. 建立知识树：数学 > 高等数学 > 极限
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
-    let adv_math = item_repo.create_child(goal.id, math.id, "高等数学", None).unwrap();
-    let limit = item_repo.create_child(goal.id, adv_math.id, "极限", None).unwrap();
+    let adv_math = item_repo
+        .create_child(goal.id, math.id, "高等数学", None)
+        .unwrap();
+    let limit = item_repo
+        .create_child(goal.id, adv_math.id, "极限", None)
+        .unwrap();
 
     // 4. 取得完整路径
     let path = item_repo.get_full_path(limit.id).unwrap();
     assert_eq!(path, "数学 > 高等数学 > 极限");
 
     // 5. 创建 Stage
-    let stage = stage_repo.create(goal.id, "基础阶段", None, Some("2026-08-01"), Some("2027-02-01")).unwrap();
+    let stage = stage_repo
+        .create(
+            goal.id,
+            "基础阶段",
+            None,
+            Some("2026-08-01"),
+            Some("2027-02-01"),
+        )
+        .unwrap();
 
     // 6. 创建 Plan，关联 Goal + Stage + Learning Item
-    let plan = plan_repo.create(
-        goal.id,
-        Some(stage.id),
-        Some(limit.id),
-        "高等数学极限基础",
-        Some("完成极限基础学习"),
-        None,
-        None,
-    ).unwrap();
+    let plan = plan_repo
+        .create(
+            goal.id,
+            Some(stage.id),
+            Some(limit.id),
+            "高等数学极限基础",
+            Some("完成极限基础学习"),
+            None,
+            None,
+        )
+        .unwrap();
 
     // 7. 创建 Task，关联 Plan
-    let task = task_repo.create_with_plan_legacy(
-        limit.id,
-        "今天学习极限第一节",
-        None,
-        Some(plan.id),
-    ).unwrap();
+    let task = task_repo
+        .create_with_plan_legacy(limit.id, "今天学习极限第一节", None, Some(plan.id))
+        .unwrap();
     assert_eq!(task.plan_id, Some(plan.id));
 
     // 8. 开始 Session
@@ -729,37 +894,40 @@ fn test_migration_upgrade_from_v002_to_v003_preserves_data() {
                 name        TEXT NOT NULL,
                 executed_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
         // 插入旧数据（使用原始 SQL，因为此时 tasks 表还没有 plan_id 列）
-        conn.execute(
-            "INSERT INTO goals (name) VALUES ('旧 Goal')",
-            [],
-        ).unwrap();
+        conn.execute("INSERT INTO goals (name) VALUES ('旧 Goal')", [])
+            .unwrap();
         goal_id = conn.last_insert_rowid();
 
         conn.execute(
             "INSERT INTO learning_items (goal_id, name) VALUES (?1, '旧知识')",
             rusqlite::params![goal_id],
-        ).unwrap();
+        )
+        .unwrap();
         item_id = conn.last_insert_rowid();
 
         // v002 的 tasks 表没有 plan_id 列，用原始 SQL 插入
         conn.execute(
             "INSERT INTO tasks (learning_item_id, title) VALUES (?1, '旧任务')",
             rusqlite::params![item_id],
-        ).unwrap();
+        )
+        .unwrap();
         task_id = conn.last_insert_rowid();
 
         // 手动标记 v001 + v002 已执行（不执行 v003）
         conn.execute(
             "INSERT INTO schema_migrations (version, name) VALUES (1, 'initial')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO schema_migrations (version, name) VALUES (2, 'core_models')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     // 重新打开 → run_migrations 应自动执行 v003
@@ -780,7 +948,14 @@ fn test_migration_upgrade_from_v002_to_v003_preserves_data() {
                 .filter_map(|v| v.ok())
                 .collect()
         };
-        assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29], "v001~v006 应全部已执行");
+        assert_eq!(
+            versions,
+            vec![
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29
+            ],
+            "v001~v006 应全部已执行"
+        );
 
         // 旧数据仍在
         let goal_repo = GoalRepository::new(&conn);

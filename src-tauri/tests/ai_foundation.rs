@@ -12,11 +12,8 @@
 
 use app_lib::ai;
 use app_lib::repository::{
-    attachment::AttachmentRepository,
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
+    attachment::AttachmentRepository, goal::GoalRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, study_session::StudySessionRepository,
     task::TaskRepository,
 };
 use rusqlite::Connection;
@@ -66,7 +63,10 @@ fn test_ai_settings_save_read_plaintext_key() {
     ai::save_ai_settings(&conn, &s).unwrap();
 
     let loaded = ai::load_ai_settings(&conn).unwrap();
-    assert_eq!(loaded.api_key, "sk-test-plaintext-123", "API Key 明文保持（个人本地软件）");
+    assert_eq!(
+        loaded.api_key, "sk-test-plaintext-123",
+        "API Key 明文保持（个人本地软件）"
+    );
     assert_eq!(loaded.model, "deepseek-v4-pro");
     assert!(loaded.thinking_enabled);
 }
@@ -79,15 +79,23 @@ fn build_two_profiles(conn: &Connection) -> (i64, i64) {
     let item_repo = LearningItemRepository::new(conn);
     let session_repo = StudySessionRepository::new(conn);
 
-    let pa = profile_repo.create("A档案", None, None, None, None, None).unwrap();
-    let pb = profile_repo.create("B档案", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("A档案", None, None, None, None, None)
+        .unwrap();
+    let pb = profile_repo
+        .create("B档案", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "A目标", None).unwrap();
     let goal_b = goal_repo.create(pb.id, "B目标", None).unwrap();
-    let item_a = item_repo.create_root(goal_a.id, "A知识机密内容XYZ", None).unwrap();
+    let item_a = item_repo
+        .create_root(goal_a.id, "A知识机密内容XYZ", None)
+        .unwrap();
     let _item_b = item_repo.create_root(goal_b.id, "B知识", None).unwrap();
 
     let s = session_repo.start(item_a.id, None).unwrap();
-    session_repo.update_note(s.id, "A档案的私有笔记SECRET").unwrap();
+    session_repo
+        .update_note(s.id, "A档案的私有笔记SECRET")
+        .unwrap();
     session_repo.end(s.id, None).unwrap();
 
     (pa.id, pb.id)
@@ -99,7 +107,11 @@ fn test_session_analysis_context_isolation() {
     let (pa, pb) = build_two_profiles(&conn);
     // 找 A 的 session id
     let sid: i64 = conn
-        .query_row("SELECT id FROM study_sessions ORDER BY id LIMIT 1", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM study_sessions ORDER BY id LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
 
     // B 请求 A 的 session → 拒绝（Profile Scope）
@@ -137,7 +149,11 @@ fn test_knowledge_analysis_context_isolation() {
     let conn = setup();
     let (pa, pb) = build_two_profiles(&conn);
     let item_a: i64 = conn
-        .query_row("SELECT id FROM learning_items WHERE name LIKE 'A知识%'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM learning_items WHERE name LIKE 'A知识%'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
 
     let result = ai::context::build_context(
@@ -151,7 +167,10 @@ fn test_knowledge_analysis_context_isolation() {
             user_instruction: None,
         },
     );
-    assert!(result.is_err(), "跨 Profile 的 knowledge_analysis 必须被拒绝");
+    assert!(
+        result.is_err(),
+        "跨 Profile 的 knowledge_analysis 必须被拒绝"
+    );
 
     let ctx = ai::context::build_context(
         &conn,
@@ -188,7 +207,10 @@ fn test_profile_analysis_context_isolation() {
         },
     )
     .unwrap();
-    assert!(!ctx_b.contains("A档案"), "profile_analysis 不泄露其他 Profile");
+    assert!(
+        !ctx_b.contains("A档案"),
+        "profile_analysis 不泄露其他 Profile"
+    );
     assert!(!ctx_b.contains("A知识"), "不泄露其他 Profile 知识");
     assert!(!ctx_b.contains("SECRET"), "不泄露其他 Profile 笔记");
 
@@ -213,17 +235,32 @@ fn test_read_tools_dispatch_and_scope() {
 
     // read_knowledge_item：跨 Profile 拒绝
     let item_a: i64 = conn
-        .query_row("SELECT id FROM learning_items WHERE name LIKE 'A知识%'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM learning_items WHERE name LIKE 'A知识%'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    let result = ai::tools::execute_read_tool(&conn, pb, "read_knowledge_item", &json!({"item_id": item_a}));
+    let result = ai::tools::execute_read_tool(
+        &conn,
+        pb,
+        "read_knowledge_item",
+        &json!({"item_id": item_a}),
+    );
     assert!(result.is_err(), "read_knowledge_item 跨 Profile 拒绝");
 
     // read_session：跨 Profile 拒绝
     let sid: i64 = conn
         .query_row("SELECT id FROM study_sessions LIMIT 1", [], |r| r.get(0))
         .unwrap();
-    assert!(ai::tools::execute_read_tool(&conn, pb, "read_session", &json!({"session_id": sid})).is_err());
-    assert!(ai::tools::execute_read_tool(&conn, pa, "read_session", &json!({"session_id": sid})).is_ok());
+    assert!(
+        ai::tools::execute_read_tool(&conn, pb, "read_session", &json!({"session_id": sid}))
+            .is_err()
+    );
+    assert!(
+        ai::tools::execute_read_tool(&conn, pa, "read_session", &json!({"session_id": sid}))
+            .is_ok()
+    );
 
     // get_progress_summary
     let prog = ai::tools::execute_read_tool(&conn, pa, "get_progress_summary", &json!({})).unwrap();
@@ -243,8 +280,14 @@ fn test_proposal_apply_guards() {
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
 
-    let pa = profile_repo.create("A", None, None, None, None, None).unwrap().id;
-    let pb = profile_repo.create("B", None, None, None, None, None).unwrap().id;
+    let pa = profile_repo
+        .create("A", None, None, None, None, None)
+        .unwrap()
+        .id;
+    let pb = profile_repo
+        .create("B", None, None, None, None, None)
+        .unwrap()
+        .id;
     let goal_a = goal_repo.create(pa, "GA", None).unwrap();
     let goal_b = goal_repo.create(pb, "GB", None).unwrap();
     let item_a = item_repo.create_root(goal_a.id, "IA", None).unwrap();
@@ -267,7 +310,9 @@ fn test_proposal_apply_guards() {
     assert!(result.is_err(), "parent 属于其他 Goal 必须拒绝");
 
     // 3. 合法 create child
-    let child = item_repo.create_child(goal_a.id, item_a.id, "合法子节点", None).unwrap();
+    let child = item_repo
+        .create_child(goal_a.id, item_a.id, "合法子节点", None)
+        .unwrap();
     assert_eq!(child.parent_id, Some(item_a.id));
 
     // 4. 合法 update content
@@ -291,20 +336,34 @@ fn test_full_workspace_loop_with_simulated_proposal() {
     let att_repo = AttachmentRepository::new(&conn);
 
     // Profile → Goal → Knowledge → Task
-    let profile = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
+    let profile = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
     let goal = goal_repo.create(profile.id, "考研数学", None).unwrap();
     let math = item_repo.create_root(goal.id, "高等数学", None).unwrap();
-    let limit = item_repo.create_child(goal.id, math.id, "函数极限", None).unwrap();
+    let limit = item_repo
+        .create_child(goal.id, math.id, "函数极限", None)
+        .unwrap();
     let task = task_repo
         .create_with_plan_legacy(limit.id, "函数极限第一轮", Some("2026-08-15"), None)
         .unwrap();
 
     // Session + Note + Attachment
     let s = session_repo.start(limit.id, Some(task.id)).unwrap();
-    session_repo.update_note(s.id, "学习了极限定义与等价无穷小，例题2错在符号").unwrap();
+    session_repo
+        .update_note(s.id, "学习了极限定义与等价无穷小，例题2错在符号")
+        .unwrap();
     att_repo
-        .create(profile.id, Some(limit.id), Some(s.id), "image", "板书.png",
-                "1/1/42/board.png", Some("image/png"), "等价无穷小表")
+        .create(
+            profile.id,
+            Some(limit.id),
+            Some(s.id),
+            "image",
+            "板书.png",
+            "1/1/42/board.png",
+            Some("image/png"),
+            "等价无穷小表",
+        )
         .unwrap();
     // End（保留笔记）
     session_repo.end(s.id, None).unwrap();
@@ -341,7 +400,9 @@ fn test_full_workspace_loop_with_simulated_proposal() {
             "update_content" => {
                 let id = op["learning_item_id"].as_i64().unwrap();
                 assert!(allowed.contains(&id), "update 目标必须在本档案");
-                item_repo.update_content(id, op["proposed_content"].as_str().unwrap()).unwrap();
+                item_repo
+                    .update_content(id, op["proposed_content"].as_str().unwrap())
+                    .unwrap();
             }
             "create_child" => {
                 let pid = op["parent_id"].as_i64().unwrap();
@@ -361,7 +422,14 @@ fn test_full_workspace_loop_with_simulated_proposal() {
     let limit_after = item_repo.get(limit.id).unwrap().unwrap();
     assert_eq!(limit_after.content, "极限定义：∀ε>0 ∃δ>0 ...");
     let child_after: LearningItemRepositoryItem = item_repo
-        .get(conn.query_row("SELECT id FROM learning_items WHERE name = '等价无穷小'", [], |r| r.get(0)).unwrap())
+        .get(
+            conn.query_row(
+                "SELECT id FROM learning_items WHERE name = '等价无穷小'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap(),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(child_after.content, "x~sinx (x→0) 等常用替换");

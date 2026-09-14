@@ -35,9 +35,22 @@ impl<'a> ConversationRepository<'a> {
         Self { conn }
     }
 
-    pub fn create(&self, profile_id: i64, mode: &str, title: &str) -> Result<AiConversation, String> {
-        let t = if title.trim().is_empty() { "新对话" } else { title.trim() };
-        let m = if mode == "assistant" { "assistant" } else { "readonly" };
+    pub fn create(
+        &self,
+        profile_id: i64,
+        mode: &str,
+        title: &str,
+    ) -> Result<AiConversation, String> {
+        let t = if title.trim().is_empty() {
+            "新对话"
+        } else {
+            title.trim()
+        };
+        let m = if mode == "assistant" {
+            "assistant"
+        } else {
+            "readonly"
+        };
         self.conn
             .execute(
                 "INSERT INTO ai_conversations (profile_id, title, mode) VALUES (?1, ?2, ?3)",
@@ -45,14 +58,17 @@ impl<'a> ConversationRepository<'a> {
             )
             .map_err(|e| e.to_string())?;
         let id = self.conn.last_insert_rowid();
-        self.get(id, profile_id)?.ok_or_else(|| "创建失败".to_string())
+        self.get(id, profile_id)?
+            .ok_or_else(|| "创建失败".to_string())
     }
 
     pub fn get(&self, id: i64, profile_id: i64) -> Result<Option<AiConversation>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, profile_id, title, mode, created_at, updated_at, archived_at
-                      FROM ai_conversations WHERE id = ?1 AND profile_id = ?2")
+            .prepare(
+                "SELECT id, profile_id, title, mode, created_at, updated_at, archived_at
+                      FROM ai_conversations WHERE id = ?1 AND profile_id = ?2",
+            )
             .map_err(|e| e.to_string())?;
         let mut rows = stmt
             .query_map(params![id, profile_id], parse_conv)
@@ -78,9 +94,13 @@ impl<'a> ConversationRepository<'a> {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![profile_id, before_id, limit.clamp(1, 100)], parse_conv)
+            .query_map(
+                params![profile_id, before_id, limit.clamp(1, 100)],
+                parse_conv,
+            )
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     pub fn touch(&self, id: i64, profile_id: i64) -> Result<(), String> {
@@ -104,7 +124,11 @@ impl<'a> ConversationRepository<'a> {
     }
 
     pub fn set_mode(&self, id: i64, profile_id: i64, mode: &str) -> Result<(), String> {
-        let m = if mode == "assistant" { "assistant" } else { "readonly" };
+        let m = if mode == "assistant" {
+            "assistant"
+        } else {
+            "readonly"
+        };
         self.conn
             .execute(
                 "UPDATE ai_conversations SET mode = ?1, updated_at = datetime('now') WHERE id = ?2 AND profile_id = ?3",
@@ -189,7 +213,10 @@ impl<'a> ConversationRepository<'a> {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![conversation_id, limit.clamp(1, 200), offset.max(0)], parse_msg)
+            .query_map(
+                params![conversation_id, limit.clamp(1, 200), offset.max(0)],
+                parse_msg,
+            )
             .map_err(|e| e.to_string())?;
         let mut out: Vec<AiMessage> = rows.filter_map(|v| v.ok()).collect();
         out.reverse(); // 时间正序返回
@@ -204,8 +231,12 @@ impl<'a> ConversationRepository<'a> {
         exclude_conversation_id: Option<i64>,
         limit: i64,
     ) -> Result<Vec<AiMessage>, String> {
-        let ids = crate::repository::search::SearchRepository::new(self.conn)
-            .search(profile_id, query, Some(&["conversation".to_string()]), limit)?;
+        let ids = crate::repository::search::SearchRepository::new(self.conn).search(
+            profile_id,
+            query,
+            Some(&["conversation".to_string()]),
+            limit,
+        )?;
         let mut out = Vec::new();
         for h in ids {
             let msg = self.conn.query_row(

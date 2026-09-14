@@ -15,17 +15,33 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 pub enum NoteBlock {
-    Text { c: String },
-    Image { a: i64, #[serde(default)] n: String },
-    Video { a: i64, #[serde(default)] n: String },
-    Drawing { a: i64, #[serde(default)] n: String },
+    Text {
+        c: String,
+    },
+    Image {
+        a: i64,
+        #[serde(default)]
+        n: String,
+    },
+    Video {
+        a: i64,
+        #[serde(default)]
+        n: String,
+    },
+    Drawing {
+        a: i64,
+        #[serde(default)]
+        n: String,
+    },
 }
 
 impl NoteBlock {
     pub fn attachment_id(&self) -> Option<i64> {
         match self {
             NoteBlock::Text { .. } => None,
-            NoteBlock::Image { a, .. } | NoteBlock::Video { a, .. } | NoteBlock::Drawing { a, .. } => Some(*a),
+            NoteBlock::Image { a, .. }
+            | NoteBlock::Video { a, .. }
+            | NoteBlock::Drawing { a, .. } => Some(*a),
         }
     }
     pub fn kind(&self) -> &'static str {
@@ -51,11 +67,15 @@ pub fn parse_blocks(note: Option<&str>) -> Vec<NoteBlock> {
         _ => return Vec::new(),
     };
     if !note.starts_with('{') {
-        return vec![NoteBlock::Text { c: note.to_string() }];
+        return vec![NoteBlock::Text {
+            c: note.to_string(),
+        }];
     }
     match serde_json::from_str::<V2Doc>(note) {
         Ok(doc) if doc.v == 2 => doc.blocks,
-        _ => vec![NoteBlock::Text { c: note.to_string() }],
+        _ => vec![NoteBlock::Text {
+            c: note.to_string(),
+        }],
     }
 }
 
@@ -100,7 +120,10 @@ pub fn media_counts(note: Option<&str>) -> (usize, usize) {
 
 /// 媒体附件 id 列表。
 pub fn media_ids(note: Option<&str>) -> Vec<i64> {
-    parse_blocks(note).iter().filter_map(|b| b.attachment_id()).collect()
+    parse_blocks(note)
+        .iter()
+        .filter_map(|b| b.attachment_id())
+        .collect()
 }
 
 /// 序列化 blocks → note（v2 JSON）。空 blocks → None 语义由调用方处理（存空串）。
@@ -123,17 +146,33 @@ mod tests {
     #[test]
     fn v2_roundtrip_and_helpers() {
         let blocks = vec![
-            NoteBlock::Text { c: "第一段".into() },
-            NoteBlock::Image { a: 7, n: "a.png".into() },
-            NoteBlock::Text { c: "第二段".into() },
-            NoteBlock::Video { a: 8, n: "b.mp4".into() },
-            NoteBlock::Drawing { a: 9, n: "c.png".into() },
+            NoteBlock::Text {
+                c: "第一段".into()
+            },
+            NoteBlock::Image {
+                a: 7,
+                n: "a.png".into(),
+            },
+            NoteBlock::Text {
+                c: "第二段".into()
+            },
+            NoteBlock::Video {
+                a: 8,
+                n: "b.mp4".into(),
+            },
+            NoteBlock::Drawing {
+                a: 9,
+                n: "c.png".into(),
+            },
         ];
         let s = serialize_blocks(&blocks);
         assert!(s.starts_with("{\"blocks\""));
         let parsed = parse_blocks(Some(&s));
         assert_eq!(parsed.len(), 5);
-        assert_eq!(plain_text(Some(&s)), "第一段\n[图片]\n第二段\n[视频]\n[画图]");
+        assert_eq!(
+            plain_text(Some(&s)),
+            "第一段\n[图片]\n第二段\n[视频]\n[画图]"
+        );
         assert_eq!(text_len(Some(&s)), 6);
         assert_eq!(media_counts(Some(&s)), (2, 1));
         assert_eq!(media_ids(Some(&s)), vec![7, 8, 9]);

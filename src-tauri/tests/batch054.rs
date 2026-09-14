@@ -28,10 +28,22 @@ fn test_case_a_single_dimension_no_fake_efficiency() {
     let p = mk_profile(&conn);
     // 1 任务 completed、estimated NULL、无 Day Goal
     let t = TaskRepository::new(&conn)
-        .create_v2(p, None, "x", Some("2026-08-16"), None, None, None, "structured", "normal")
+        .create_v2(
+            p,
+            None,
+            "x",
+            Some("2026-08-16"),
+            None,
+            None,
+            None,
+            "structured",
+            "normal",
+        )
         .unwrap();
     TaskRepository::new(&conn).complete(t.id).unwrap();
-    let rep = DailyReportRepository::new(&conn).get(p, "2026-08-16").unwrap();
+    let rep = DailyReportRepository::new(&conn)
+        .get(p, "2026-08-16")
+        .unwrap();
     // 任务完成 100%
     assert!((rep.task_completion_rate.unwrap() - 100.0).abs() < 0.01);
     // 计划 0 + 1 项未估时
@@ -39,7 +51,11 @@ fn test_case_a_single_dimension_no_fake_efficiency() {
     // §64：时间计划不完整 → None
     assert!(rep.time_execution_rate.is_none(), "未估时不得算时间执行度");
     // §65：仅一个维度 → 综合效率 None（禁止 100%）
-    assert!(rep.overall_efficiency.is_none(), "单维度不得冒充综合效率：{:?}", rep.overall_efficiency);
+    assert!(
+        rep.overall_efficiency.is_none(),
+        "单维度不得冒充综合效率：{:?}",
+        rep.overall_efficiency
+    );
     assert_eq!(rep.learning_status, "自由学习");
 }
 
@@ -50,7 +66,17 @@ fn test_case_b_two_dimensions_renormalize() {
     let conn = setup();
     let p = mk_profile(&conn);
     let t = TaskRepository::new(&conn)
-        .create_v2(p, None, "x", Some("2026-08-16"), None, None, Some(60), "structured", "normal")
+        .create_v2(
+            p,
+            None,
+            "x",
+            Some("2026-08-16"),
+            None,
+            None,
+            Some(60),
+            "structured",
+            "normal",
+        )
         .unwrap();
     // 完成 + 关联学习 30m
     TaskRepository::new(&conn).complete(t.id).unwrap();
@@ -60,7 +86,9 @@ fn test_case_b_two_dimensions_renormalize() {
         "UPDATE study_sessions SET duration_seconds=1800, status='completed', started_at='2026-08-15 20:00:00', ended_at='2026-08-16 03:00:00' WHERE id=?1",
         rusqlite::params![s.id],
     ).unwrap();
-    let rep = DailyReportRepository::new(&conn).get(p, "2026-08-16").unwrap();
+    let rep = DailyReportRepository::new(&conn)
+        .get(p, "2026-08-16")
+        .unwrap();
     assert!((rep.task_completion_rate.unwrap() - 100.0).abs() < 0.01);
     assert!((rep.time_execution_rate.unwrap() - 50.0).abs() < 0.01);
     // §67：两维动态归一 (100*0.4 + 50*0.3)/(0.7) = 78.57
@@ -77,11 +105,29 @@ fn test_case_c_three_dimensions_403030() {
     let p = mk_profile(&conn);
     let grepo = app_lib::repository::goal::GoalRepository::new(&conn);
     let f = grepo.ensure_final(p).unwrap();
-    let y = grepo.create_tree_node(p, "year", Some(f.id), "2026", None, Some("2026")).unwrap();
-    let m = grepo.create_tree_node(p, "month", Some(y.id), "8月", None, Some("2026-08")).unwrap();
-    let d = grepo.create_tree_node(p, "day", Some(m.id), "8/16", None, Some("2026-08-16")).unwrap();
+    let y = grepo
+        .create_tree_node(p, "year", Some(f.id), "2026", None, Some("2026"))
+        .unwrap();
+    let m = grepo
+        .create_tree_node(p, "month", Some(y.id), "8月", None, Some("2026-08"))
+        .unwrap();
+    let d = grepo
+        .create_tree_node(p, "day", Some(m.id), "8/16", None, Some("2026-08-16"))
+        .unwrap();
     let trepo = TaskRepository::new(&conn);
-    let t = trepo.create_v2(p, Some(d.id), "x", Some("2026-08-16"), None, None, Some(60), "structured", "core").unwrap();
+    let t = trepo
+        .create_v2(
+            p,
+            Some(d.id),
+            "x",
+            Some("2026-08-16"),
+            None,
+            None,
+            Some(60),
+            "structured",
+            "core",
+        )
+        .unwrap();
     trepo.complete(t.id).unwrap();
     let srepo = StudySessionRepository::new(&conn);
     let s = srepo.start_for_task(p, t.id).unwrap();
@@ -89,7 +135,9 @@ fn test_case_c_three_dimensions_403030() {
         "UPDATE study_sessions SET duration_seconds=1800, status='completed', started_at='2026-08-15 20:00:00', ended_at='2026-08-16 03:00:00' WHERE id=?1",
         rusqlite::params![s.id],
     ).unwrap();
-    let rep = DailyReportRepository::new(&conn).get(p, "2026-08-16").unwrap();
+    let rep = DailyReportRepository::new(&conn)
+        .get(p, "2026-08-16")
+        .unwrap();
     // C=100 T=50 G=100 → 0.4*100+0.3*50+0.3*100 = 85
     let eff = rep.overall_efficiency.unwrap();
     assert!((eff - 85.0).abs() < 0.01, "eff={eff}");
@@ -110,13 +158,29 @@ fn test_active_session_start_guard() {
     assert!(s1.id > 0);
 
     // §132：已有 active → 再 quick 不能创建第二个（Repository 层 guard）
-    assert!(srepo.start_quick(pa, None).is_err(), "同 Profile 第二个 active 应被拒绝");
+    assert!(
+        srepo.start_quick(pa, None).is_err(),
+        "同 Profile 第二个 active 应被拒绝"
+    );
 
     // §133：已有 quick active → start_for_task 也不能创建
     let t = TaskRepository::new(&conn)
-        .create_v2(pa, None, "task", Some("2026-08-16"), None, None, Some(30), "structured", "normal")
+        .create_v2(
+            pa,
+            None,
+            "task",
+            Some("2026-08-16"),
+            None,
+            None,
+            Some(30),
+            "structured",
+            "normal",
+        )
         .unwrap();
-    assert!(srepo.start_for_task(pa, t.id).is_err(), "同 Profile Task start 应被拒绝");
+    assert!(
+        srepo.start_for_task(pa, t.id).is_err(),
+        "同 Profile Task start 应被拒绝"
+    );
 
     // §134：不同 Profile 互不影响
     let sb = srepo.start_quick(pb, None).unwrap();

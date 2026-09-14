@@ -46,7 +46,14 @@ pub fn build(
         l1.push_str(&format!("当前日期：{}\n", d));
     }
     l1.push_str(&format!("当前页面：{}\n", page.page_label));
-    l1.push_str(&format!("权限模式：{}\n", if mode == "assistant" { "助手模式" } else { "只读模式" }));
+    l1.push_str(&format!(
+        "权限模式：{}\n",
+        if mode == "assistant" {
+            "助手模式"
+        } else {
+            "只读模式"
+        }
+    ));
     // DEV-0060 §7.1：Generic 问题最多只注入 当前页面/权限模式——
     // 不注入 当前目标/PersonalProfile/Memory/跨会话历史（Context 按需，不是 Context 删除）。
     // §7.3：Planning 请求不依赖普通 Context 猜目标——正式事实统一走 build_planning_truth_context
@@ -72,7 +79,10 @@ pub fn build(
             ));
         }
     }
-    layers.push(Layer { name: "L1 当前上下文", text: l1 });
+    layers.push(Layer {
+        name: "L1 当前上下文",
+        text: l1,
+    });
     chips.push("当前上下文".into());
 
     if purpose == ContextPurpose::Generic || purpose == ContextPurpose::Planning {
@@ -88,7 +98,10 @@ pub fn build(
 
     // ---- L2 私人化档案（相关章节，非全量 §50） ----
     if let Some(md) = personalization_related(conn, profile_id, user_message)? {
-        layers.push(Layer { name: "L2 私人化档案", text: md });
+        layers.push(Layer {
+            name: "L2 私人化档案",
+            text: md,
+        });
         chips.push("私人化档案".into());
     }
 
@@ -99,7 +112,10 @@ pub fn build(
         let uc = super::intelligence::load_user_context(conn, profile_id);
         let summary = uc.summary();
         if !summary.is_empty() {
-            layers.push(Layer { name: "AI User Understanding", text: format!("当前用户理解：\n{summary}") });
+            layers.push(Layer {
+                name: "AI User Understanding",
+                text: format!("当前用户理解：\n{summary}"),
+            });
             chips.push("用户理解".into());
         }
     }
@@ -107,32 +123,48 @@ pub fn build(
     // ---- L3 Higher 事实（FTS → 实体详情摘要） ----
     let l3 = search_and_summarize(conn, profile_id, user_message)?;
     if !l3.is_empty() {
-        layers.push(Layer { name: "L3 Higher 数据", text: l3 });
+        layers.push(Layer {
+            name: "L3 Higher 数据",
+            text: l3,
+        });
         chips.push("Higher 数据".into());
     }
 
     // ---- L4 Memory + 跨会话历史 ----
-    let mems = crate::repository::memory::MemoryRepository::new(conn)
-        .search(profile_id, user_message, 12)?;
+    let mems = crate::repository::memory::MemoryRepository::new(conn).search(
+        profile_id,
+        user_message,
+        12,
+    )?;
     if !mems.is_empty() {
-        crate::repository::memory::MemoryRepository::new(conn).touch_used(
-            &mems.iter().map(|m| m.id).collect::<Vec<_>>(),
-        );
+        crate::repository::memory::MemoryRepository::new(conn)
+            .touch_used(&mems.iter().map(|m| m.id).collect::<Vec<_>>());
         let txt = mems
             .iter()
             .map(|m| {
                 format!(
                     "- [{}] {}: {}（来源 {}；原话：{}）",
                     m.memory_type,
-                    if m.memory_key.is_empty() { "-" } else { &m.memory_key },
+                    if m.memory_key.is_empty() {
+                        "-"
+                    } else {
+                        &m.memory_key
+                    },
                     m.memory_value,
                     m.source_kind,
-                    if m.source_excerpt.is_empty() { "—" } else { &m.source_excerpt }
+                    if m.source_excerpt.is_empty() {
+                        "—"
+                    } else {
+                        &m.source_excerpt
+                    }
                 )
             })
             .collect::<Vec<_>>()
             .join("\n");
-        layers.push(Layer { name: "L4 长期记忆", text: format!("## 相关长期记忆\n{}", txt) });
+        layers.push(Layer {
+            name: "L4 长期记忆",
+            text: format!("## 相关长期记忆\n{}", txt),
+        });
         chips.push("Memory".into());
     }
     {
@@ -147,7 +179,10 @@ pub fn build(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            layers.push(Layer { name: "L4 历史对话", text: format!("## 相关历史对话片段\n{}", txt) });
+            layers.push(Layer {
+                name: "L4 历史对话",
+                text: format!("## 相关历史对话片段\n{}", txt),
+            });
             chips.push("历史对话".into());
         }
     }
@@ -161,7 +196,10 @@ pub fn build(
             let remain = CONTEXT_BUDGET.saturating_sub(total);
             if remain > 200 {
                 let cut: String = l.text.chars().take(remain).collect();
-                kept.push(Layer { name: l.name, text: cut });
+                kept.push(Layer {
+                    name: l.name,
+                    text: cut,
+                });
             }
             truncated = true;
             break;
@@ -216,12 +254,27 @@ pub fn detect_context_purpose(
     let m = user_message.trim();
     // 显式页面指代（升级为页面锚定 purpose）
     let knowledge_cues = [
-        "这个知识", "这个节点", "这个知识点", "当前知识", "当前节点", "这个文档", "这篇知识",
-        "总结一下当前", "总结这个", "解释这个", "讲讲这个",
+        "这个知识",
+        "这个节点",
+        "这个知识点",
+        "当前知识",
+        "当前节点",
+        "这个文档",
+        "这篇知识",
+        "总结一下当前",
+        "总结这个",
+        "解释这个",
+        "讲讲这个",
     ];
     let session_cues = [
-        "这个会话", "本次学习", "这次学习", "当前会话", "这个session", "本次session",
-        "刚才学的", "这轮学习",
+        "这个会话",
+        "本次学习",
+        "这次学习",
+        "当前会话",
+        "这个session",
+        "本次session",
+        "刚才学的",
+        "这轮学习",
     ];
     if page.session_title.is_some() && session_cues.iter().any(|c| m.contains(c)) {
         return ContextPurpose::Session;
@@ -231,16 +284,43 @@ pub fn detect_context_purpose(
     }
     // Personal：「我」+ 自我状态分析（不含纯世界知识问题）
     let personal_cues = [
-        "我的情况", "我的档案", "我最近", "我目前", "我现在", "学得怎么样", "我的水平", "我的进度",
-        "根据我的", "我每天", "我应该学", "我的状态", "帮我分析我", "我的优势", "我的短板",
+        "我的情况",
+        "我的档案",
+        "我最近",
+        "我目前",
+        "我现在",
+        "学得怎么样",
+        "我的水平",
+        "我的进度",
+        "根据我的",
+        "我每天",
+        "我应该学",
+        "我的状态",
+        "帮我分析我",
+        "我的优势",
+        "我的短板",
     ];
     if personal_cues.iter().any(|c| m.contains(c)) {
         return ContextPurpose::Personal;
     }
     // HigherData：Higher 私有状态关键词（SYSTEM_PROMPT 第 30 行同一语义）
     let data_cues = [
-        "我的任务", "今日任务", "今天任务", "我的目标", "知识库", "知识树", "学习记录",
-        "我的笔记", "验证记录", "进度", "规划", "计划", "复盘", "掌握", "学了什么", "学了多久",
+        "我的任务",
+        "今日任务",
+        "今天任务",
+        "我的目标",
+        "知识库",
+        "知识树",
+        "学习记录",
+        "我的笔记",
+        "验证记录",
+        "进度",
+        "规划",
+        "计划",
+        "复盘",
+        "掌握",
+        "学了什么",
+        "学了多久",
     ];
     if data_cues.iter().any(|c| m.contains(c)) {
         return ContextPurpose::HigherData;
@@ -252,13 +332,17 @@ pub fn detect_context_purpose(
 /// - 有 active GoalTarget：REACH=主目标、SAFETY=风险参考（考研）；generic 取第一个 active
 /// - 无 active GoalTarget：返回「正式目标：未设置」，**不自动返回旧 goals.final**（legacy 只能是候选）
 /// DEV-0070 F21-02：pub(crate) 供 agent 轮首 intelligence 分析复用（Higher 当前上下文）。
-pub(crate) fn current_goal_summary(conn: &Connection, profile_id: i64) -> Result<Option<String>, String> {
+pub(crate) fn current_goal_summary(
+    conn: &Connection,
+    profile_id: i64,
+) -> Result<Option<String>, String> {
     let targets = crate::repository::goal_target::GoalTargetRepository::new(conn)
         .list_active(profile_id, None, None)
         .unwrap_or_default();
     if targets.is_empty() {
         return Ok(Some(
-            "正式目标未设置（GoalTarget=0；历史数据中的旧目标仅为候选，不是当前正式目标）".to_string(),
+            "正式目标未设置（GoalTarget=0；历史数据中的旧目标仅为候选，不是当前正式目标）"
+                .to_string(),
         ));
     }
     let reach = targets
@@ -272,7 +356,11 @@ pub(crate) fn current_goal_summary(conn: &Connection, profile_id: i64) -> Result
         parts.push(format!(
             "{}（正式 GoalTarget{}）",
             r.title,
-            if r.scenario_type == "postgraduate" { "·REACH 主目标" } else { "" }
+            if r.scenario_type == "postgraduate" {
+                "·REACH 主目标"
+            } else {
+                ""
+            }
         ));
     }
     if let Some(s) = safety {
@@ -296,7 +384,11 @@ impl Default for PageContext {
 /// DEV-0059 §6.9：正式 AI Context = confirmed PersonalProfile.structured_json 优先，
 /// md_content 为人类可读补充。中文检索：结构化字段直接读 key；md 段落用字符级关键词
 /// （中文 2-gram + 英文单词），禁止依赖 query.split_whitespace()；不再"永远 fallback 只取头 1500 字"。
-fn personalization_related(conn: &Connection, profile_id: i64, query: &str) -> Result<Option<String>, String> {
+fn personalization_related(
+    conn: &Connection,
+    profile_id: i64,
+    query: &str,
+) -> Result<Option<String>, String> {
     let row: Option<(Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT structured_json, md_content FROM personalization_profiles
@@ -305,7 +397,9 @@ fn personalization_related(conn: &Connection, profile_id: i64, query: &str) -> R
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .ok();
-    let Some((structured, md)) = row else { return Ok(None) };
+    let Some((structured, md)) = row else {
+        return Ok(None);
+    };
 
     let mut out: Vec<String> = Vec::new();
 
@@ -416,7 +510,12 @@ fn flatten_structured(prefix: &str, v: &serde_json::Value, out: &mut Vec<String>
                     serde_json::Value::Number(n) => parts.push(n.to_string()),
                     serde_json::Value::Object(m) => {
                         // DEV-0059.2 §3：对象数组 → 递归读取 text/kind/source 为可读事实行
-                        let text = m.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+                        let text = m
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
                         if !text.is_empty() {
                             let kind = m.get("kind").and_then(|k| k.as_str()).unwrap_or("");
                             let source = m.get("source").and_then(|s| s.as_str()).unwrap_or("");
@@ -463,7 +562,10 @@ fn md_sections(md: &str, query: &str) -> String {
     let mut cur_body = String::new();
     for line in md.lines() {
         if line.starts_with("## ") {
-            if !cur_title.is_empty() && tokens.is_empty() == false && section_match_tokens(&cur_body, &tokens) {
+            if !cur_title.is_empty()
+                && tokens.is_empty() == false
+                && section_match_tokens(&cur_body, &tokens)
+            {
                 hits.push(format!("{}\n{}", cur_title, cur_body.trim()));
             }
             cur_title = line.to_string();
@@ -517,7 +619,10 @@ fn bigrams(s: &str) -> Vec<String> {
     if chars.len() < 2 {
         return Vec::new();
     }
-    chars.windows(2).map(|w| w.iter().collect::<String>()).collect()
+    chars
+        .windows(2)
+        .map(|w| w.iter().collect::<String>())
+        .collect()
 }
 
 fn section_match_tokens(body: &str, tokens: &[String]) -> bool {
@@ -527,12 +632,8 @@ fn section_match_tokens(body: &str, tokens: &[String]) -> bool {
 
 /// L3：FTS 检索 + 实体摘要（不注入全文）。
 fn search_and_summarize(conn: &Connection, profile_id: i64, query: &str) -> Result<String, String> {
-    let hits = crate::repository::search::SearchRepository::new(conn).search(
-        profile_id,
-        query,
-        None,
-        12,
-    )?;
+    let hits = crate::repository::search::SearchRepository::new(conn)
+        .search(profile_id, query, None, 12)?;
     if hits.is_empty() {
         return Ok(String::new());
     }
@@ -551,7 +652,10 @@ fn search_and_summarize(conn: &Connection, profile_id: i64, query: &str) -> Resu
             _ => "条目",
         };
         let brief: String = h.snippet.chars().take(200).collect();
-        lines.push(format!("- {}「{}」（{}）：{}", label, h.title, h.deep_link, brief));
+        lines.push(format!(
+            "- {}「{}」（{}）：{}",
+            label, h.title, h.deep_link, brief
+        ));
     }
     Ok(lines.join("\n"))
 }

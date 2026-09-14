@@ -15,8 +15,7 @@
 
 use app_lib::db::DbState;
 use app_lib::repository::{
-    evaluation::EvaluationRepository, goal::GoalRepository,
-    learning_item::LearningItemRepository,
+    evaluation::EvaluationRepository, goal::GoalRepository, learning_item::LearningItemRepository,
 };
 use rusqlite::Connection;
 
@@ -31,7 +30,12 @@ fn create_default_profile(conn: &Connection) -> i64 {
 
 /// v013 Profile First：Evaluation.create 需要显式 profile_id，由 goal 反查所属档案。
 fn profile_of_goal(conn: &Connection, goal_id: i64) -> i64 {
-    conn.query_row("SELECT profile_id FROM goals WHERE id = ?1", [goal_id], |r| r.get(0)).unwrap()
+    conn.query_row(
+        "SELECT profile_id FROM goals WHERE id = ?1",
+        [goal_id],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 /// 在内存数据库中初始化 schema（执行所有 Migration 含 v004）。
@@ -61,7 +65,9 @@ fn setup_kaoyan(conn: &Connection) -> (i64, i64, i64, i64) {
     let goal_repo = GoalRepository::new(conn);
     let item_repo = LearningItemRepository::new(conn);
 
-    let goal = goal_repo.create(create_default_profile(conn), "2027 考研", None).unwrap();
+    let goal = goal_repo
+        .create(create_default_profile(conn), "2027 考研", None)
+        .unwrap();
 
     let math = item_repo.create_root(goal.id, "数学", None).unwrap();
     let calc = item_repo
@@ -97,7 +103,13 @@ fn test_migration_v004_schema_version_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
+    );
 
     // evaluations 表存在
     let tables: Vec<String> = {
@@ -181,7 +193,13 @@ fn test_migration_v003_to_v004_preserves_old_data() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
+    );
 
     let goal_repo = GoalRepository::new(&conn);
     let item_repo = LearningItemRepository::new(&conn);
@@ -724,11 +742,11 @@ fn test_evaluation_recall_no_counts_no_scores() {
             "recall",
             None,
             None,
-            None,   // total_items = NULL
-            None,   // correct_items = NULL
-            None,   // incorrect_items = NULL
-            None,   // score = NULL
-            None,   // max_score = NULL
+            None, // total_items = NULL
+            None, // correct_items = NULL
+            None, // incorrect_items = NULL
+            None, // score = NULL
+            None, // max_score = NULL
             Some("partial"),
             Some("多级反馈队列还说不完整"),
         )
@@ -853,9 +871,8 @@ fn test_full_scenario_limit_test_with_scores() {
     assert_eq!(path, "数学 > 高等数学 > 极限");
 
     // 前端自动计算正确率 70%
-    let acc = (reloaded.correct_items.unwrap() as f64)
-        / (reloaded.total_items.unwrap() as f64)
-        * 100.0;
+    let acc =
+        (reloaded.correct_items.unwrap() as f64) / (reloaded.total_items.unwrap() as f64) * 100.0;
     assert!((acc - 70.0).abs() < 0.0001);
 }
 
@@ -902,7 +919,8 @@ fn test_full_scenario_recall_without_counts() {
 
 #[test]
 fn test_evaluation_persistence_across_reopen() {
-    let temp_dir = std::env::temp_dir().join(format!("higher_eval_v004_test_{}", std::process::id()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("higher_eval_v004_test_{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).unwrap();
     let db_path = temp_dir.join("higher.db");
 

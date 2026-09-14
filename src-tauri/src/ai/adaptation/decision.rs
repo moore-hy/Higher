@@ -38,7 +38,9 @@ pub enum DeviationType {
     NoMeaningfulDeviation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum DeviationSeverity {
     Low,
     Medium,
@@ -143,20 +145,37 @@ pub fn detect_adaptation_intent(user_message: &str) -> Option<AdaptationEntry> {
     if m.is_empty() {
         return None;
     }
-    let has_review = m.contains("复盘") || m.contains("回顾") || m.contains("执行情况")
-        || m.contains("最近的学习") || m.contains("学习情况") || m.contains("调整")
-        || m.contains("计划调") || m.contains("改计划") || m.contains("规划调");
+    let has_review = m.contains("复盘")
+        || m.contains("回顾")
+        || m.contains("执行情况")
+        || m.contains("最近的学习")
+        || m.contains("学习情况")
+        || m.contains("调整")
+        || m.contains("计划调")
+        || m.contains("改计划")
+        || m.contains("规划调");
     if !has_review {
         return None;
     }
     // §二十二 A：明确执行意图（要求把调整写进去）→ Explicit
-    let explicit_apply = m.contains("帮我调整") || m.contains("调整一下") || m.contains("调整并")
-        || m.contains("改合理") || m.contains("更新我的计划") || m.contains("写进去")
-        || m.contains("改一下计划") || m.contains("调整计划") || m.contains("调整后续计划")
-        || m.contains("调整规划") || m.contains("计划调") || m.contains("把计划改");
+    let explicit_apply = m.contains("帮我调整")
+        || m.contains("调整一下")
+        || m.contains("调整并")
+        || m.contains("改合理")
+        || m.contains("更新我的计划")
+        || m.contains("写进去")
+        || m.contains("改一下计划")
+        || m.contains("调整计划")
+        || m.contains("调整后续计划")
+        || m.contains("调整规划")
+        || m.contains("计划调")
+        || m.contains("把计划改");
     // §二十二 B：只问「需要调整吗」（验收场景 A）→ Proactive
-    let question_only = m.contains("需要调整") || m.contains("要不要调整") || m.contains("需要修改")
-        || m.contains("要不要调") || m.contains("需要调");
+    let question_only = m.contains("需要调整")
+        || m.contains("要不要调整")
+        || m.contains("需要修改")
+        || m.contains("要不要调")
+        || m.contains("需要调");
     if explicit_apply && !question_only {
         Some(AdaptationEntry::Explicit)
     } else {

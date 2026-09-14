@@ -14,11 +14,8 @@
 //! 运行：`cargo test --manifest-path src-tauri/Cargo.toml --test knowledge_workspace`
 
 use app_lib::repository::{
-    evaluation::EvaluationRepository,
-    goal::GoalRepository,
-    learning_item::LearningItemRepository,
-    study_profile::StudyProfileRepository,
-    study_session::StudySessionRepository,
+    evaluation::EvaluationRepository, goal::GoalRepository, learning_item::LearningItemRepository,
+    study_profile::StudyProfileRepository, study_session::StudySessionRepository,
 };
 use rusqlite::Connection;
 
@@ -67,7 +64,13 @@ fn test_migration_v006_schema_version_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
+    );
 
     // learning_items 有 content 列
     let columns: Vec<String> = {
@@ -116,11 +119,8 @@ fn test_migration_v005_to_v006_preserves_old_items_with_empty_content() {
     }
 
     // v005 时代写入旧数据（此时无 content 列，用裸 SQL 模拟真实旧库）
-    conn.execute(
-        "INSERT INTO study_profiles (name) VALUES ('旧档案')",
-        [],
-    )
-    .unwrap();
+    conn.execute("INSERT INTO study_profiles (name) VALUES ('旧档案')", [])
+        .unwrap();
     let profile_id = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO goals (name, profile_id) VALUES ('旧 Goal', ?1)",
@@ -147,7 +147,13 @@ fn test_migration_v005_to_v006_preserves_old_items_with_empty_content() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    assert_eq!(
+        versions,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            25, 26, 27, 28, 29
+        ]
+    );
 
     // 旧 Item 保留 + content 默认空串
     let repo = LearningItemRepository::new(&conn);
@@ -249,16 +255,24 @@ fn test_content_profile_isolation() {
     let item_repo = LearningItemRepository::new(&conn);
 
     // Profile A：Linux > Process，content = A 内容
-    let pa = profile_repo.create("Linux 内核学习", None, None, None, None, None).unwrap();
+    let pa = profile_repo
+        .create("Linux 内核学习", None, None, None, None, None)
+        .unwrap();
     let goal_a = goal_repo.create(pa.id, "Linux", None).unwrap();
     let linux = item_repo.create_root(goal_a.id, "Process", None).unwrap();
-    item_repo.update_content(linux.id, "A 档案：进程调度笔记").unwrap();
+    item_repo
+        .update_content(linux.id, "A 档案：进程调度笔记")
+        .unwrap();
 
     // Profile B：考研 > 极限，content = B 内容
-    let pb = profile_repo.create("2027 考研", None, None, None, None, None).unwrap();
+    let pb = profile_repo
+        .create("2027 考研", None, None, None, None, None)
+        .unwrap();
     let goal_b = goal_repo.create(pb.id, "数学", None).unwrap();
     let limit = item_repo.create_root(goal_b.id, "极限", None).unwrap();
-    item_repo.update_content(limit.id, "B 档案：我的极限学习总结").unwrap();
+    item_repo
+        .update_content(limit.id, "B 档案：我的极限学习总结")
+        .unwrap();
 
     // A 的档案范围只能看到 A 的节点与内容
     let items_a = item_repo.list_by_profile(pa.id).unwrap();
@@ -306,8 +320,22 @@ fn test_learning_item_stats_aggregation() {
 
     // 一次 Evaluation
     eval_repo
-        .create(profile_id, Some(goal.id), Some(limit.id), "极限小测", "test", None, None,
-                Some(10), Some(8), Some(2), Some(80.0), Some(100.0), Some("passed"), None)
+        .create(
+            profile_id,
+            Some(goal.id),
+            Some(limit.id),
+            "极限小测",
+            "test",
+            None,
+            None,
+            Some(10),
+            Some(8),
+            Some(2),
+            Some(80.0),
+            Some(100.0),
+            Some("passed"),
+            None,
+        )
         .unwrap();
 
     let stats = item_repo.stats(limit.id).unwrap();
@@ -351,7 +379,8 @@ fn test_safe_delete_still_blocked_by_business_refs() {
         .unwrap();
     let repo = LearningItemRepository::new(&conn);
     let parent = repo.create_root(goal.id, "父节点", None).unwrap();
-    repo.create_child(goal.id, parent.id, "子节点", None).unwrap();
+    repo.create_child(goal.id, parent.id, "子节点", None)
+        .unwrap();
     repo.update_content(parent.id, "父节点内容").unwrap();
 
     let result = repo.safe_delete(parent.id);

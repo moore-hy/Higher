@@ -124,18 +124,16 @@ pub fn intent_summary(it: &AdjustmentIntent) -> String {
                 .map(|t| format!("「{t}」"))
                 .unwrap_or_default()
         ),
-        "UpdatePlanningPhase" => format!(
-            "阶段「{}」边界调整",
-            it.phase_key.as_deref().unwrap_or("?")
-        ),
+        "UpdatePlanningPhase" => {
+            format!("阶段「{}」边界调整", it.phase_key.as_deref().unwrap_or("?"))
+        }
         "UpdatePlanningMilestone" => format!(
             "里程碑「{}」日期调整",
             it.milestone_key.as_deref().unwrap_or("?")
         ),
-        "SuggestGoalTreeAdjustment" => format!(
-            "目标树建议：{}",
-            it.suggestion.as_deref().unwrap_or("")
-        ),
+        "SuggestGoalTreeAdjustment" => {
+            format!("目标树建议：{}", it.suggestion.as_deref().unwrap_or(""))
+        }
         other => other.to_string(),
     }
 }
@@ -176,8 +174,9 @@ pub fn write_proposal(
     conversation_id: i64,
     proposal: &AdaptationProposal,
 ) -> Result<(), String> {
-    let (_, mut payload) = crate::ai::workflow::read_workflow_payload(conn, profile_id, conversation_id)
-        .unwrap_or_default();
+    let (_, mut payload) =
+        crate::ai::workflow::read_workflow_payload(conn, profile_id, conversation_id)
+            .unwrap_or_default();
     let raw = serde_json::to_string(proposal).map_err(|e| e.to_string())?;
     payload
         .collected_user_information
@@ -213,10 +212,14 @@ fn validate_target(
     proposal_run_id: &str,
 ) -> Result<(), String> {
     if proposal.profile_id != profile_id {
-        return Err(format!("proposal_stale：{STALE_HINT}（跨档案隔离：该建议不属于当前学习档案）"));
+        return Err(format!(
+            "proposal_stale：{STALE_HINT}（跨档案隔离：该建议不属于当前学习档案）"
+        ));
     }
     if proposal.conversation_id != conversation_id {
-        return Err(format!("proposal_stale：{STALE_HINT}（会话隔离：该建议不属于当前会话）"));
+        return Err(format!(
+            "proposal_stale：{STALE_HINT}（会话隔离：该建议不属于当前会话）"
+        ));
     }
     if proposal.run_id != proposal_run_id {
         return Err(format!("proposal_stale：{STALE_HINT}（run 不匹配）"));
@@ -246,17 +249,22 @@ pub fn apply_proposal(
     proposal_run_id: &str,
     today: &str,
 ) -> Result<ProposalApplyOutcome, String> {
-    let proposal = load_proposal(conn, profile_id, conversation_id)
-        .ok_or("当前会话没有待处理的调整建议")?;
+    let proposal =
+        load_proposal(conn, profile_id, conversation_id).ok_or("当前会话没有待处理的调整建议")?;
     validate_target(&proposal, profile_id, conversation_id, proposal_run_id)?;
     if proposal.state != "pending" {
-        let word = if proposal.state == "applied" { "应用" } else { "暂不调整" };
+        let word = if proposal.state == "applied" {
+            "应用"
+        } else {
+            "暂不调整"
+        };
         return Err(format!("该建议已经{word}过（终态，不能重复应用）"));
     }
     // §九步骤 8 + §十：当前 local_date 重新 preflight（compiler 内置
     // completed/past 拒绝、future-only、唯一匹配；不匹配即 stale）
-    let compiled = super::compiler::compile_intents(conn, profile_id, today, &proposal.adjustment_intents)
-        .map_err(|e| format!("proposal_stale：{STALE_HINT}（{e}）"))?;
+    let compiled =
+        super::compiler::compile_intents(conn, profile_id, today, &proposal.adjustment_intents)
+            .map_err(|e| format!("proposal_stale：{STALE_HINT}（{e}）"))?;
     if compiled.actions.is_empty() {
         return Err("proposal_stale：建议均为参考类，没有可执行的调整项".to_string());
     }
@@ -289,7 +297,11 @@ pub fn apply_proposal(
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
-    let verified = result.json.get("verified").and_then(|x| x.as_bool()).unwrap_or(false);
+    let verified = result
+        .json
+        .get("verified")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
     if !(status == "applied" && verified) {
         let msg = result
             .json
@@ -301,7 +313,13 @@ pub fn apply_proposal(
     // 步骤 14：成功 → applied（§八终态；防双击/重复 ChangeSet）
     let mut applied = proposal.clone();
     applied.state = "applied".to_string();
-    write_proposal(conn, &proposal.run_id, profile_id, conversation_id, &applied)?;
+    write_proposal(
+        conn,
+        &proposal.run_id,
+        profile_id,
+        conversation_id,
+        &applied,
+    )?;
     // 步骤 15
     let mut summary = String::from("本次修改：\n");
     for n in &compiled.plan_notes {
@@ -324,13 +342,19 @@ pub fn dismiss_proposal(
     conversation_id: i64,
     proposal_run_id: &str,
 ) -> Result<(), String> {
-    let proposal = load_proposal(conn, profile_id, conversation_id)
-        .ok_or("当前会话没有待处理的调整建议")?;
+    let proposal =
+        load_proposal(conn, profile_id, conversation_id).ok_or("当前会话没有待处理的调整建议")?;
     validate_target(&proposal, profile_id, conversation_id, proposal_run_id)?;
     if proposal.state != "pending" {
         return Err("仅 pending 状态的建议可以暂不调整".to_string());
     }
     let mut dismissed = proposal.clone();
     dismissed.state = "dismissed".to_string();
-    write_proposal(conn, &proposal.run_id, profile_id, conversation_id, &dismissed)
+    write_proposal(
+        conn,
+        &proposal.run_id,
+        profile_id,
+        conversation_id,
+        &dismissed,
+    )
 }

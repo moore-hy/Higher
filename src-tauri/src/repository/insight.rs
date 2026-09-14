@@ -207,24 +207,34 @@ impl<'a> InsightRepository<'a> {
         m.week_total = wt;
 
         // 当前阶段时间进度（active 优先）
-        let stage: Option<(String, String, String, String)> = self.conn.query_row(
-            "SELECT ss.name, COALESCE(ss.start_date,''), COALESCE(ss.end_date,''), ss.status
+        let stage: Option<(String, String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT ss.name, COALESCE(ss.start_date,''), COALESCE(ss.end_date,''), ss.status
              FROM study_stages ss JOIN goals g ON ss.goal_id = g.id
              WHERE g.profile_id = ?1 AND ss.status = 'active'
              ORDER BY ss.id DESC LIMIT 1",
-            params![profile_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        ).ok();
+                params![profile_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .ok();
         if let Some((name, start, end, _)) = stage {
             if !start.is_empty() && !end.is_empty() && end > start {
                 m.stage_name = Some(name);
-                let (s, e, t) = match (parse_date(&start), parse_date(&end), parse_date(today_date)) {
+                let (s, e, t) = match (parse_date(&start), parse_date(&end), parse_date(today_date))
+                {
                     (Some(a), Some(b), Some(c)) => (a, b, c),
                     _ => (0i64, 0i64, 0i64),
                 };
                 if e > s {
                     let total = e - s; // 含首尾两端的近似天数差
-                    let elapsed = if t <= s { 0 } else if t >= e { total } else { t - s };
+                    let elapsed = if t <= s {
+                        0
+                    } else if t >= e {
+                        total
+                    } else {
+                        t - s
+                    };
                     m.stage_total_days = total;
                     m.stage_elapsed_days = elapsed;
                 }

@@ -182,7 +182,11 @@ pub fn build_day_detail(
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(rusqlite::params![profile_id, date], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })
             .map_err(|e| e.to_string())?;
         for row in rows {

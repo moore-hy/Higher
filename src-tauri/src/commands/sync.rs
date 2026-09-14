@@ -54,7 +54,10 @@ pub fn sync_pair_via_qr(
 
 /// DEV-SYNC-003 §九：解除配对——删除 peer trust/token，业务数据保留。
 #[tauri::command]
-pub fn sync_unpair(state: tauri::State<'_, db::DbState>, peer_device_id: String) -> Result<(), String> {
+pub fn sync_unpair(
+    state: tauri::State<'_, db::DbState>,
+    peer_device_id: String,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     sync::client::unpair(&conn, &peer_device_id)
 }
@@ -170,8 +173,9 @@ pub fn sync_client_sync_now(
 
 /// 配对摘要状态（peer / 最后同步 / per-peer 待发送 / 冲突数）。
 #[tauri::command]
-pub fn sync_client_status(state: tauri::State<'_, db::DbState>) -> Result<sync::client::ClientStatus, String> {
+pub fn sync_client_status(
+    state: tauri::State<'_, db::DbState>,
+) -> Result<sync::client::ClientStatus, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     sync::client::client_status(&conn).map_err(|e| e.to_string())
 }
-

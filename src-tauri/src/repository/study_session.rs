@@ -75,7 +75,11 @@ impl<'a> StudySessionRepository<'a> {
 
     /// Quick Study（§39）：只要求 profile_id；task/goal/item 全 NULL；title="快速学习"。
     /// DEV-0053 §29：activity_kind = unplanned（用户可后续重新分类）。
-    pub fn start_quick(&self, profile_id: i64, task_id: Option<i64>) -> rusqlite::Result<StudySession> {
+    pub fn start_quick(
+        &self,
+        profile_id: i64,
+        task_id: Option<i64>,
+    ) -> rusqlite::Result<StudySession> {
         self.start_full(profile_id, None, None, task_id, "快速学习", "unplanned")
     }
 
@@ -89,15 +93,7 @@ impl<'a> StudySessionRepository<'a> {
                 "SELECT title, goal_id, learning_item_id, task_kind, priority
                  FROM tasks WHERE id = ?1 AND profile_id = ?2",
                 params![task_id, profile_id],
-                |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                    ))
-                },
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .ok();
         let (title, goal_id, item_id, kind) = match task {
@@ -118,17 +114,32 @@ impl<'a> StudySessionRepository<'a> {
 
     /// 从 Knowledge 开始（§41）：默认 title=item.name；activity_kind=unplanned
     /// （知识自由学不属于当日计划；可在结束/历史中重新分类）。
-    pub fn start_for_item(&self, learning_item_id: i64, task_id: Option<i64>) -> rusqlite::Result<StudySession> {
+    pub fn start_for_item(
+        &self,
+        learning_item_id: i64,
+        task_id: Option<i64>,
+    ) -> rusqlite::Result<StudySession> {
         let (profile_id, goal_id, name): (i64, Option<i64>, String) = self.conn.query_row(
             "SELECT profile_id, goal_id, name FROM learning_items WHERE id = ?1",
             params![learning_item_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
-        self.start_full(profile_id, goal_id, Some(learning_item_id), task_id, &name, "unplanned")
+        self.start_full(
+            profile_id,
+            goal_id,
+            Some(learning_item_id),
+            task_id,
+            &name,
+            "unplanned",
+        )
     }
 
     /// 兼容旧调用：start(item_id, task_id)。
-    pub fn start(&self, learning_item_id: i64, task_id: Option<i64>) -> rusqlite::Result<StudySession> {
+    pub fn start(
+        &self,
+        learning_item_id: i64,
+        task_id: Option<i64>,
+    ) -> rusqlite::Result<StudySession> {
         self.start_for_item(learning_item_id, task_id)
     }
 
@@ -189,7 +200,12 @@ impl<'a> StudySessionRepository<'a> {
 
     /// DEV-0053 §35/§52：整理进知识（只改 learning_item_id 关联，不复制 Note）。
     /// 目标 item 必须与 Session 同 profile。
-    pub fn set_learning_item(&self, id: i64, profile_id: i64, learning_item_id: Option<i64>) -> Result<(), String> {
+    pub fn set_learning_item(
+        &self,
+        id: i64,
+        profile_id: i64,
+        learning_item_id: Option<i64>,
+    ) -> Result<(), String> {
         if let Some(item) = learning_item_id {
             let item_profile: Option<i64> = self
                 .conn
@@ -218,7 +234,12 @@ impl<'a> StudySessionRepository<'a> {
     }
 
     /// DEV-0053 §46：Goal 学习记录（Day 直接 goal_id；Month/Annual/Final 经 descendant）。
-    pub fn list_by_goal(&self, profile_id: i64, goal_id: i64, limit: i64) -> Result<Vec<StudySession>, String> {
+    pub fn list_by_goal(
+        &self,
+        profile_id: i64,
+        goal_id: i64,
+        limit: i64,
+    ) -> Result<Vec<StudySession>, String> {
         let mut stmt = self
             .conn
             .prepare(&format!(
@@ -235,13 +256,21 @@ impl<'a> StudySessionRepository<'a> {
             ))
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![profile_id, goal_id, limit.clamp(1, 200)], parse_session)
+            .query_map(
+                params![profile_id, goal_id, limit.clamp(1, 200)],
+                parse_session,
+            )
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// DEV-0053 §50-51：未归类学习（learning_item_id IS NULL）。
-    pub fn list_unassigned(&self, profile_id: i64, limit: i64) -> Result<Vec<StudySession>, String> {
+    pub fn list_unassigned(
+        &self,
+        profile_id: i64,
+        limit: i64,
+    ) -> Result<Vec<StudySession>, String> {
         let mut stmt = self
             .conn
             .prepare(&format!(
@@ -255,7 +284,8 @@ impl<'a> StudySessionRepository<'a> {
         let rows = stmt
             .query_map(params![profile_id, limit.clamp(1, 200)], parse_session)
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 结束归档：把本次学习挂到知识 / 任务（均可空=仅保留学习记录）。
@@ -376,21 +406,26 @@ impl<'a> StudySessionRepository<'a> {
     /// 删除 Session（§70）：确认由前端负责；附件物理文件由 command 层按
     /// list_session_attachment_paths 的结果清理；Knowledge 正文不动。
     pub fn delete(&self, id: i64) -> rusqlite::Result<()> {
-        self.conn.execute("DELETE FROM study_sessions WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM study_sessions WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     /// 删除前取该 Session 附件的 relative_path 列表（仅属于该 Session 的）。
     pub fn list_session_attachment_paths(&self, id: i64) -> rusqlite::Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT relative_path FROM learning_attachments WHERE session_id = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT relative_path FROM learning_attachments WHERE session_id = ?1")?;
         let rows = stmt.query_map(params![id], |r| r.get(0))?;
         rows.collect()
     }
 
     /// 某知识节点的学习记录（最新在前）。
-    pub fn list_by_learning_item(&self, learning_item_id: i64, limit: i64) -> rusqlite::Result<Vec<StudySession>> {
+    pub fn list_by_learning_item(
+        &self,
+        learning_item_id: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<StudySession>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {} FROM study_sessions WHERE learning_item_id = ?1
              ORDER BY id DESC LIMIT ?2",

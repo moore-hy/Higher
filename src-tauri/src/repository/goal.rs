@@ -116,7 +116,12 @@ impl<'a> GoalRepository<'a> {
     // =============== 既有接口（保留） ===============
 
     /// 创建 Goal（旧接口：无层级信息 → legacy；仅测试/兼容用）。
-    pub fn create(&self, profile_id: i64, name: &str, description: Option<&str>) -> rusqlite::Result<Goal> {
+    pub fn create(
+        &self,
+        profile_id: i64,
+        name: &str,
+        description: Option<&str>,
+    ) -> rusqlite::Result<Goal> {
         self.conn
             .execute(
                 "INSERT INTO goals (name, description, profile_id, goal_level) VALUES (?1, ?2, ?3, 'legacy')",
@@ -127,10 +132,9 @@ impl<'a> GoalRepository<'a> {
     }
 
     pub fn list(&self) -> rusqlite::Result<Vec<Goal>> {
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {} FROM goals ORDER BY id",
-            GOAL_COLS
-        ))?;
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {} FROM goals ORDER BY id", GOAL_COLS))?;
         let rows = stmt.query_map([], parse_goal)?;
         rows.collect()
     }
@@ -261,7 +265,8 @@ impl<'a> GoalRepository<'a> {
             if let Some(d) = prof_desc.as_deref() {
                 let d = d.trim();
                 if !d.is_empty() && d != brief.outcome.trim() && !d.contains(&brief.outcome) {
-                    conflicts.push("目标描述存在两个不同版本（最终目标 vs 档案目标描述）".to_string());
+                    conflicts
+                        .push("目标描述存在两个不同版本（最终目标 vs 档案目标描述）".to_string());
                 }
             }
             if let Some(g) = goal_desc.as_deref() {
@@ -337,13 +342,18 @@ impl<'a> GoalRepository<'a> {
                 if parent_goal_id.is_some() {
                     return Err("最终目标不能有父目标".to_string());
                 }
-                if self.final_of(profile_id).map_err(|e| e.to_string())?.is_some() {
+                if self
+                    .final_of(profile_id)
+                    .map_err(|e| e.to_string())?
+                    .is_some()
+                {
                     return Err("该档案已有最终目标（每档案只能有一个）".to_string());
                 }
                 (None, None, None)
             }
             "year" => {
-                let parent = Self::expect_parent(self, parent_goal_id, "year", "final", profile_id)?;
+                let parent =
+                    Self::expect_parent(self, parent_goal_id, "year", "final", profile_id)?;
                 // DEV-0057 §32-36：Year Goal = 长周期规划阶段，允许跨自然年。
                 // 双格式统一（与 AI/ChangeSet 链一致）："YYYY-MM-DD..YYYY-MM-DD" 区间 或 "YYYY"（自然年=区间特例）。
                 let p = period.ok_or_else(|| {
@@ -351,7 +361,9 @@ impl<'a> GoalRepository<'a> {
                 })?;
                 let (start, end) = if let Some(idx) = p.find("..") {
                     let (s, e) = (&p[..idx], &p[idx + 2..]);
-                    let ok = |x: &str| x.len() == 10 && x.as_bytes()[4] == b'-' && x.as_bytes()[7] == b'-';
+                    let ok = |x: &str| {
+                        x.len() == 10 && x.as_bytes()[4] == b'-' && x.as_bytes()[7] == b'-'
+                    };
                     if !ok(s) || !ok(e) || s >= e {
                         return Err(format!("年目标周期区间非法：{p}"));
                     }
@@ -366,7 +378,8 @@ impl<'a> GoalRepository<'a> {
                 (Some(start), Some(end), Some(parent))
             }
             "month" => {
-                let parent = Self::expect_parent(self, parent_goal_id, "month", "year", profile_id)?;
+                let parent =
+                    Self::expect_parent(self, parent_goal_id, "month", "year", profile_id)?;
                 let ym = period
                     .filter(|s| s.len() == 7 && s.as_bytes()[4] == b'-')
                     .ok_or_else(|| "月目标需要月份，如 2026-08".to_string())?;
@@ -403,10 +416,11 @@ impl<'a> GoalRepository<'a> {
                     .filter(|s| s.len() == 10 && s.as_bytes()[4] == b'-' && s.as_bytes()[7] == b'-')
                     .ok_or_else(|| "日目标需要日期，如 2026-08-16".to_string())?;
                 // 日期必须属于 parent Month（§24）
-                let (ps_m, pe_m) = match (parent.period_start.as_deref(), parent.period_end.as_deref()) {
-                    (Some(s), Some(e)) => (s, e),
-                    _ => return Err("父月目标缺少周期".to_string()),
-                };
+                let (ps_m, pe_m) =
+                    match (parent.period_start.as_deref(), parent.period_end.as_deref()) {
+                        (Some(s), Some(e)) => (s, e),
+                        _ => return Err("父月目标缺少周期".to_string()),
+                    };
                 if d < ps_m || d > pe_m {
                     return Err("日目标日期必须属于其父月目标".to_string());
                 }
@@ -485,13 +499,20 @@ impl<'a> GoalRepository<'a> {
             .ok_or("该档案没有最终目标")?;
         Ok(GoalTree {
             final_goal: build_node(final_goal, &all),
-            legacy_goals: all.iter().filter(|g| g.goal_level == "legacy").cloned().collect(),
+            legacy_goals: all
+                .iter()
+                .filter(|g| g.goal_level == "legacy")
+                .cloned()
+                .collect(),
         })
     }
 
     /// 删除目标（§27）：final 禁删；有子目标禁删（不自动提升/级联）；Task 保留（goal_id 由 FK SET NULL 置空）。
     pub fn delete_tree_node(&self, id: i64) -> Result<(), String> {
-        let g = self.get(id).map_err(|e| e.to_string())?.ok_or("目标不存在")?;
+        let g = self
+            .get(id)
+            .map_err(|e| e.to_string())?
+            .ok_or("目标不存在")?;
         if g.goal_level == "final" {
             return Err("最终目标不能删除，只能编辑".to_string());
         }

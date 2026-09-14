@@ -68,7 +68,9 @@ fn test_final_unique_and_no_parent() {
     let repo = GoalRepository::new(&conn);
     let f = repo.ensure_final(p).unwrap();
     // 第二个 final 拒绝
-    assert!(repo.create_tree_node(p, "final", None, "第二个", None, None).is_err());
+    assert!(repo
+        .create_tree_node(p, "final", None, "第二个", None, None)
+        .is_err());
     // final 带父拒绝
     assert!(repo
         .create_tree_node(p, "final", Some(f.id), "带父的final", None, None)
@@ -83,18 +85,34 @@ fn test_hierarchy_year_month_day_and_rejects() {
     let (f, y, m, _d) = build_tree(&conn, p);
 
     // year 的父必须是 final
-    assert!(repo.create_tree_node(p, "year", Some(y), "错", None, Some("2027")).is_err());
-    assert!(repo.create_tree_node(p, "year", Some(m), "错", None, Some("2027")).is_err());
+    assert!(repo
+        .create_tree_node(p, "year", Some(y), "错", None, Some("2027"))
+        .is_err());
+    assert!(repo
+        .create_tree_node(p, "year", Some(m), "错", None, Some("2027"))
+        .is_err());
     // month 的父必须是 year
-    assert!(repo.create_tree_node(p, "month", Some(f), "错", None, Some("2026-08")).is_err());
-    assert!(repo.create_tree_node(p, "month", Some(m), "错", None, Some("2026-09")).is_err());
+    assert!(repo
+        .create_tree_node(p, "month", Some(f), "错", None, Some("2026-08"))
+        .is_err());
+    assert!(repo
+        .create_tree_node(p, "month", Some(m), "错", None, Some("2026-09"))
+        .is_err());
     // day 的父必须是 month
-    assert!(repo.create_tree_node(p, "day", Some(y), "错", None, Some("2026-08-17")).is_err());
-    assert!(repo.create_tree_node(p, "day", Some(f), "错", None, Some("2026-08-17")).is_err());
+    assert!(repo
+        .create_tree_node(p, "day", Some(y), "错", None, Some("2026-08-17"))
+        .is_err());
+    assert!(repo
+        .create_tree_node(p, "day", Some(f), "错", None, Some("2026-08-17"))
+        .is_err());
     // 无父拒绝
-    assert!(repo.create_tree_node(p, "year", None, "错", None, Some("2027")).is_err());
+    assert!(repo
+        .create_tree_node(p, "year", None, "错", None, Some("2027"))
+        .is_err());
     // 非法层级
-    assert!(repo.create_tree_node(p, "week", Some(m), "周", None, Some("2026-08")).is_err());
+    assert!(repo
+        .create_tree_node(p, "week", Some(m), "周", None, Some("2026-08"))
+        .is_err());
 }
 
 #[test]
@@ -110,7 +128,9 @@ fn test_cross_profile_parent_rejected() {
         .create_tree_node(pb, "year", Some(ya), "跨档案", None, Some("2026"))
         .is_err());
     // pb 的 year 挂 pb 的 final 正常
-    assert!(repo.create_tree_node(pb, "year", Some(fb.id), "正常", None, Some("2026")).is_ok());
+    assert!(repo
+        .create_tree_node(pb, "year", Some(fb.id), "正常", None, Some("2026"))
+        .is_ok());
 }
 
 #[test]
@@ -143,16 +163,26 @@ fn test_month_must_belong_to_parent_year_and_day_to_month() {
     let p = mk_profile(&conn);
     let repo = GoalRepository::new(&conn);
     let f = repo.ensure_final(p).unwrap();
-    let y2026 = repo.create_tree_node(p, "year", Some(f.id), "2026", None, Some("2026")).unwrap();
+    let y2026 = repo
+        .create_tree_node(p, "year", Some(f.id), "2026", None, Some("2026"))
+        .unwrap();
     // 2027 的月挂在 2026 年下 → 拒
     assert!(repo
         .create_tree_node(p, "month", Some(y2026.id), "错月", None, Some("2027-01"))
         .is_err());
-    let m8 = repo.create_tree_node(p, "month", Some(y2026.id), "8月", None, Some("2026-08")).unwrap();
+    let m8 = repo
+        .create_tree_node(p, "month", Some(y2026.id), "8月", None, Some("2026-08"))
+        .unwrap();
     // 8 月外的日期 → 拒
-    assert!(repo.create_tree_node(p, "day", Some(m8.id), "错日", None, Some("2026-08-31")).is_ok());
-    assert!(repo.create_tree_node(p, "day", Some(m8.id), "错日", None, Some("2026-09-01")).is_err());
-    assert!(repo.create_tree_node(p, "day", Some(m8.id), "错日", None, Some("2026-07-31")).is_err());
+    assert!(repo
+        .create_tree_node(p, "day", Some(m8.id), "错日", None, Some("2026-08-31"))
+        .is_ok());
+    assert!(repo
+        .create_tree_node(p, "day", Some(m8.id), "错日", None, Some("2026-09-01"))
+        .is_err());
+    assert!(repo
+        .create_tree_node(p, "day", Some(m8.id), "错日", None, Some("2026-07-31"))
+        .is_err());
     // 周期推导
     assert_eq!(m8.period_start.as_deref(), Some("2026-08-01"));
     assert_eq!(m8.period_end.as_deref(), Some("2026-08-31"));
@@ -270,9 +300,11 @@ fn test_v015_migration_old_goal_profiles() {
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
 
     let lvl = |gid: i64| -> String {
-        conn.query_row("SELECT goal_level FROM goals WHERE id=?1", rusqlite::params![gid], |r| {
-            r.get(0)
-        })
+        conn.query_row(
+            "SELECT goal_level FROM goals WHERE id=?1",
+            rusqlite::params![gid],
+            |r| r.get(0),
+        )
         .unwrap()
     };
     // 0 goal → 新建占位 final
@@ -291,7 +323,9 @@ fn test_v015_migration_old_goal_profiles() {
     assert_eq!(lvl(21), "legacy");
     assert_eq!(lvl(22), "legacy");
     let names: i64 = conn
-        .query_row("SELECT COUNT(*) FROM goals WHERE profile_id=3", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM goals WHERE profile_id=3", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(names, 3, "legacy goals 不删除");
     // mastery 表存在
@@ -390,8 +424,16 @@ fn test_trend_buckets_from_command_helper() {
     let p = mk_profile(&conn);
     insert_ended_session(&conn, p, "2026-08-15 16:05:00", 268);
     let buckets = vec![
-        ("08-15".to_string(), "2026-08-15".to_string(), "2026-08-15".to_string()),
-        ("08-16".to_string(), "2026-08-16".to_string(), "2026-08-16".to_string()),
+        (
+            "08-15".to_string(),
+            "2026-08-15".to_string(),
+            "2026-08-15".to_string(),
+        ),
+        (
+            "08-16".to_string(),
+            "2026-08-16".to_string(),
+            "2026-08-16".to_string(),
+        ),
     ];
     let t = LearningDataRepository::new(&conn)
         .trend(p, &buckets, &[])
@@ -412,9 +454,17 @@ fn sample(p: i64, scored: bool) -> MasteryAssessment {
         period_type: "week".into(),
         period_start: "2026-08-10".into(),
         period_end: "2026-08-16".into(),
-        status: if scored { "scored".into() } else { "insufficient_evidence".into() },
+        status: if scored {
+            "scored".into()
+        } else {
+            "insufficient_evidence".into()
+        },
         score: if scored { Some(78) } else { None },
-        confidence: if scored { "medium".into() } else { "low".into() },
+        confidence: if scored {
+            "medium".into()
+        } else {
+            "low".into()
+        },
         summary: "测试".into(),
         understanding_score: if scored { Some(32) } else { None },
         coverage_score: if scored { Some(24) } else { None },
@@ -435,7 +485,10 @@ fn test_mastery_scored_and_validation() {
     let repo = MasteryRepository::new(&conn);
 
     let id = repo.insert(&sample(p, true)).unwrap();
-    let got = repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap();
+    let got = repo
+        .latest(p, "week", "2026-08-10", "2026-08-16")
+        .unwrap()
+        .unwrap();
     assert_eq!(got.id, id);
     assert_eq!(got.score, Some(78));
     assert_eq!(got.understanding_score, Some(32));
@@ -466,7 +519,10 @@ fn test_mastery_insufficient_and_history_and_latest() {
     let p = mk_profile(&conn);
     let repo = MasteryRepository::new(&conn);
     repo.insert(&sample(p, false)).unwrap();
-    let a = repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap();
+    let a = repo
+        .latest(p, "week", "2026-08-10", "2026-08-16")
+        .unwrap()
+        .unwrap();
     assert_eq!(a.status, "insufficient_evidence");
     assert_eq!(a.score, None);
 
@@ -475,9 +531,17 @@ fn test_mastery_insufficient_and_history_and_latest() {
     let mut again = sample(p, true);
     again.score = Some(85);
     repo.insert(&again).unwrap();
-    let hist = repo.list_history(p, "week", "2026-08-10", "2026-08-16").unwrap();
+    let hist = repo
+        .list_history(p, "week", "2026-08-10", "2026-08-16")
+        .unwrap();
     assert_eq!(hist.len(), 2, "历史 assessment 保留");
-    assert_eq!(repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap().score, Some(85));
+    assert_eq!(
+        repo.latest(p, "week", "2026-08-10", "2026-08-16")
+            .unwrap()
+            .unwrap()
+            .score,
+        Some(85)
+    );
 }
 
 #[test]
@@ -487,7 +551,10 @@ fn test_mastery_profile_isolation() {
     let pb = mk_profile(&conn);
     let repo = MasteryRepository::new(&conn);
     repo.insert(&sample(pa, true)).unwrap();
-    assert!(repo.latest(pb, "week", "2026-08-10", "2026-08-16").unwrap().is_none());
+    assert!(repo
+        .latest(pb, "week", "2026-08-10", "2026-08-16")
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -497,7 +564,10 @@ fn test_mastery_stale_after_new_session_and_evaluation() {
     let repo = MasteryRepository::new(&conn);
     insert_ended_session(&conn, p, "2026-08-11 02:00:00", 600);
     let id = repo.insert(&sample(p, true)).unwrap();
-    let a = repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap();
+    let a = repo
+        .latest(p, "week", "2026-08-10", "2026-08-16")
+        .unwrap()
+        .unwrap();
     assert_eq!(a.id, id);
     // DEV-0058：把评估 created_at 固定到窗口早期（08-16 01:00），后续新增记录只需
     // 落在窗口内且晚于它即可 stale——消除跨日运行的时间敏感性
@@ -506,9 +576,14 @@ fn test_mastery_stale_after_new_session_and_evaluation() {
         rusqlite::params![id],
     )
     .unwrap();
-    let a = repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap();
+    let a = repo
+        .latest(p, "week", "2026-08-10", "2026-08-16")
+        .unwrap()
+        .unwrap();
     // 评估之后无新记录 → 不 stale
-    assert!(!repo.stale_since(p, "2026-08-10", "2026-08-16", &a.created_at).unwrap());
+    assert!(!repo
+        .stale_since(p, "2026-08-10", "2026-08-16", &a.created_at)
+        .unwrap());
 
     // 新增 ended Session（评估之后）→ stale（started_at 窗口内 + ended_at > created_at）
     conn.execute(
@@ -517,12 +592,32 @@ fn test_mastery_stale_after_new_session_and_evaluation() {
         rusqlite::params![p],
     )
     .unwrap();
-    assert!(repo.stale_since(p, "2026-08-10", "2026-08-16", &a.created_at).unwrap());
+    assert!(repo
+        .stale_since(p, "2026-08-10", "2026-08-16", &a.created_at)
+        .unwrap());
 
     // 新增 Evaluation 同样 stale（occurred_at 固定窗口内 08-16，且 > created_at）
-    let a2 = repo.latest(p, "week", "2026-08-10", "2026-08-16").unwrap().unwrap();
+    let a2 = repo
+        .latest(p, "week", "2026-08-10", "2026-08-16")
+        .unwrap()
+        .unwrap();
     app_lib::repository::evaluation::EvaluationRepository::new(&conn)
-        .create(p, None, None, "新验证", "test", None, None, None, None, None, None, None, Some("passed"), None)
+        .create(
+            p,
+            None,
+            None,
+            "新验证",
+            "test",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("passed"),
+            None,
+        )
         .unwrap();
     // DEV-0058：评估 occurred_at 默认 now（可能已落 08-17 窗外）→ 固定回窗口内并晚于 a2
     conn.execute(
@@ -530,7 +625,9 @@ fn test_mastery_stale_after_new_session_and_evaluation() {
         rusqlite::params![p],
     )
     .unwrap();
-    assert!(repo.stale_since(p, "2026-08-10", "2026-08-16", &a2.created_at).unwrap());
+    assert!(repo
+        .stale_since(p, "2026-08-10", "2026-08-16", &a2.created_at)
+        .unwrap());
 }
 
 #[test]
@@ -561,7 +658,10 @@ fn test_ai_write_tools_still_zero() {
     for name in allow {
         let n = name.to_lowercase();
         assert!(
-            !n.contains("create") && !n.contains("update") && !n.contains("delete") && !n.contains("write"),
+            !n.contains("create")
+                && !n.contains("update")
+                && !n.contains("delete")
+                && !n.contains("write"),
             "写工具泄漏：{name}"
         );
     }

@@ -10,7 +10,11 @@ use rusqlite::{params, Connection};
 use serde_json::{json, Value as J};
 
 /// 构建概览 JSON 字符串。`date` = 任务统计基准日（YYYY-MM-DD）。
-pub fn build_higher_overview(conn: &Connection, profile_id: i64, date: &str) -> Result<String, String> {
+pub fn build_higher_overview(
+    conn: &Connection,
+    profile_id: i64,
+    date: &str,
+) -> Result<String, String> {
     let profile = profile_block(conn, profile_id);
     let personalization = personalization_block(conn, profile_id)?;
     let goal_targets = goal_targets_block(conn, profile_id)?;
@@ -66,7 +70,11 @@ fn profile_block(conn: &Connection, profile_id: i64) -> J {
 fn personalization_block(conn: &Connection, profile_id: i64) -> Result<J, String> {
     let repo = crate::repository::personalization::PersonalizationRepository::new(conn);
     let confirmed = repo.get_confirmed_profile(profile_id)?;
-    let draft = if confirmed.is_some() { None } else { repo.get_draft_profile(profile_id)? };
+    let draft = if confirmed.is_some() {
+        None
+    } else {
+        repo.get_draft_profile(profile_id)?
+    };
     let source_count = repo.list_sources(profile_id)?.len() as i64;
     let version_row = confirmed.as_ref().or(draft.as_ref());
     Ok(json!({
@@ -83,9 +91,7 @@ fn goal_targets_block(conn: &Connection, profile_id: i64) -> Result<J, String> {
     let targets = crate::repository::goal_target::GoalTargetRepository::new(conn)
         .list_active(profile_id, None, None)
         .unwrap_or_default();
-    let brief = |t: &crate::repository::goal_target::GoalTarget| {
-        json!({ "id": t.id, "role": t.role, "title": t.title, "target_date": t.target_date, "scenario_type": t.scenario_type })
-    };
+    let brief = |t: &crate::repository::goal_target::GoalTarget| json!({ "id": t.id, "role": t.role, "title": t.title, "target_date": t.target_date, "scenario_type": t.scenario_type });
     let reach = targets.iter().find(|t| t.role == "reach").map(brief);
     let safety = targets.iter().find(|t| t.role == "safety").map(brief);
     Ok(json!({
@@ -117,7 +123,12 @@ fn goal_tree_block(conn: &Connection, profile_id: i64) -> Result<(J, J), String>
             Ok::<Vec<(String, i64)>, rusqlite::Error>(it.filter_map(|v| v.ok()).collect())
         })
         .map_err(|e| e.to_string())?;
-    let count = |lvl: &str| rows.iter().find(|(l, _)| l == lvl).map(|(_, n)| *n).unwrap_or(0);
+    let count = |lvl: &str| {
+        rows.iter()
+            .find(|(l, _)| l == lvl)
+            .map(|(_, n)| *n)
+            .unwrap_or(0)
+    };
     // DEV-0066 Phase B 收口：正式 Goal Tree 严格为 final → year → month → day。
     // 历史 week 数据只作 legacy/diagnostic 计数（不进正常层级、不计入 total_active、
     // 禁止 Agent 把 week 当正式层级或创建 week goal）。
@@ -149,8 +160,7 @@ fn goal_tree_block(conn: &Connection, profile_id: i64) -> Result<(J, J), String>
 // ---- active Blueprint 摘要（不返回 content_md/phases 全文） ----
 
 fn blueprint_block(conn: &Connection, profile_id: i64) -> Result<J, String> {
-    let bp = crate::repository::planning::PlanningRepository::new(conn)
-        .get_active(profile_id)?;
+    let bp = crate::repository::planning::PlanningRepository::new(conn).get_active(profile_id)?;
     Ok(match bp {
         Some(b) => {
             let phases = crate::repository::planning::PlanningRepository::new(conn)
@@ -179,11 +189,7 @@ fn blueprint_block(conn: &Connection, profile_id: i64) -> Result<J, String> {
 
 fn recent_tasks_block(conn: &Connection, profile_id: i64, date: &str) -> Result<J, String> {
     let next7: String = conn
-        .query_row(
-            "SELECT date(?1, '+7 days')",
-            params![date],
-            |r| r.get(0),
-        )
+        .query_row("SELECT date(?1, '+7 days')", params![date], |r| r.get(0))
         .unwrap_or_default();
     let (today_pending, today_completed): (i64, i64) = conn
         .query_row(
@@ -234,10 +240,7 @@ fn knowledge_block(conn: &Connection, profile_id: i64) -> J {
         collected
     };
     let total: i64 = rows.iter().map(|(_, n)| n).sum();
-    let by: serde_json::Map<String, J> = rows
-        .into_iter()
-        .map(|(k, n)| (k, json!(n)))
-        .collect();
+    let by: serde_json::Map<String, J> = rows.into_iter().map(|(k, n)| (k, json!(n))).collect();
     json!({ "items": total, "by_mastery": by })
 }
 
@@ -276,13 +279,26 @@ fn gaps_block(
     } else if personalization.get("confirmed").and_then(|c| c.as_bool()) != Some(true) {
         gaps.push("私人档案未确认（仅有 draft，不作为正式事实）".into());
     }
-    if goal_targets.get("count").and_then(|c| c.as_i64()).unwrap_or(0) == 0 {
+    if goal_targets
+        .get("count")
+        .and_then(|c| c.as_i64())
+        .unwrap_or(0)
+        == 0
+    {
         gaps.push("无正式 GoalTarget（REACH/SAFETY 均未设置）".into());
     } else {
-        if goal_targets.get("reach").map(|r| r.is_null()).unwrap_or(true) {
+        if goal_targets
+            .get("reach")
+            .map(|r| r.is_null())
+            .unwrap_or(true)
+        {
             gaps.push("REACH 目标缺失".into());
         }
-        if goal_targets.get("safety").map(|s| s.is_null()).unwrap_or(true) {
+        if goal_targets
+            .get("safety")
+            .map(|s| s.is_null())
+            .unwrap_or(true)
+        {
             gaps.push("SAFETY 目标缺失".into());
         }
     }
@@ -292,8 +308,16 @@ fn gaps_block(
     if blueprint.get("exists").and_then(|e| e.as_bool()) != Some(true) {
         gaps.push("无 active 规划蓝图（Blueprint）".into());
     }
-    if recent_tasks.get("next_7d_pending").and_then(|n| n.as_i64()).unwrap_or(0) == 0
-        && recent_tasks.get("today_pending").and_then(|n| n.as_i64()).unwrap_or(0) == 0
+    if recent_tasks
+        .get("next_7d_pending")
+        .and_then(|n| n.as_i64())
+        .unwrap_or(0)
+        == 0
+        && recent_tasks
+            .get("today_pending")
+            .and_then(|n| n.as_i64())
+            .unwrap_or(0)
+            == 0
     {
         gaps.push("未来 7 天无已安排任务".into());
     }

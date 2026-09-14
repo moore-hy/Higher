@@ -20,7 +20,9 @@ fn read_manifest(rel: &str) -> String {
 }
 
 fn read_root(rel: &str) -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(rel);
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
@@ -135,8 +137,14 @@ fn cargo_lock_app_version(text: &str) -> String {
 #[test]
 fn r01_product_identity_permanent() {
     let conf = json_of(&read_manifest("tauri.conf.json"));
-    assert_eq!(conf["productName"], "Higher", "R01: productName = Higher（§3 永久身份）");
-    assert_eq!(conf["identifier"], "com.higher.desktop", "R01: identifier = com.higher.desktop（§3 生产数据身份）");
+    assert_eq!(
+        conf["productName"], "Higher",
+        "R01: productName = Higher（§3 永久身份）"
+    );
+    assert_eq!(
+        conf["identifier"], "com.higher.desktop",
+        "R01: identifier = com.higher.desktop（§3 生产数据身份）"
+    );
 }
 
 #[test]
@@ -150,15 +158,29 @@ fn r02_version_alignment() {
     assert_eq!(conf["version"], "1.0.0", "R02: tauri.conf.json = 1.0.0");
     assert_eq!(pkg["version"], "1.0.0", "R02: package.json = 1.0.0");
     assert_eq!(lock["version"], "1.0.0", "R02: package-lock root = 1.0.0");
-    assert_eq!(lock["packages"][""]["version"], "1.0.0", "R02: package-lock packages.\"\" = 1.0.0");
-    assert_eq!(cargo_pkg_version(&cargo), "1.0.0", "R02: Cargo.toml package.version = 1.0.0");
-    assert_eq!(cargo_lock_app_version(&cargo_lock), "1.0.0", "R02: Cargo.lock app 包 = 1.0.0");
+    assert_eq!(
+        lock["packages"][""]["version"], "1.0.0",
+        "R02: package-lock packages.\"\" = 1.0.0"
+    );
+    assert_eq!(
+        cargo_pkg_version(&cargo),
+        "1.0.0",
+        "R02: Cargo.toml package.version = 1.0.0"
+    );
+    assert_eq!(
+        cargo_lock_app_version(&cargo_lock),
+        "1.0.0",
+        "R02: Cargo.lock app 包 = 1.0.0"
+    );
 }
 
 #[test]
 fn r03_higher_exe_main_binary() {
     let conf = json_of(&read_manifest("tauri.conf.json"));
-    assert_eq!(conf["mainBinaryName"], "Higher", "R03: mainBinaryName = Higher（§5 用户面主二进制）");
+    assert_eq!(
+        conf["mainBinaryName"], "Higher",
+        "R03: mainBinaryName = Higher（§5 用户面主二进制）"
+    );
     assert!(
         !read_manifest("tauri.conf.json").contains("app.exe"),
         "R03: 配置不得出现用户面 app.exe"
@@ -170,27 +192,45 @@ fn r03_higher_exe_main_binary() {
 #[test]
 fn r04_nsis_only() {
     let targets = json_of(&read_manifest("tauri.conf.json"))["bundle"]["targets"].clone();
-    assert_eq!(targets, serde_json::json!(["nsis"]), "R04: bundle targets = nsis only（§6 不做 MSI）");
+    assert_eq!(
+        targets,
+        serde_json::json!(["nsis"]),
+        "R04: bundle targets = nsis only（§6 不做 MSI）"
+    );
 }
 
 #[test]
 fn r05_current_user_install() {
     let nsis = json_of(&read_manifest("tauri.conf.json"))["bundle"]["windows"]["nsis"].clone();
-    assert_eq!(nsis["installMode"], "currentUser", "R05: installMode = currentUser（§6 无需管理员）");
+    assert_eq!(
+        nsis["installMode"], "currentUser",
+        "R05: installMode = currentUser（§6 无需管理员）"
+    );
 }
 
 #[test]
 fn r06_simplified_chinese() {
     let nsis = json_of(&read_manifest("tauri.conf.json"))["bundle"]["windows"]["nsis"].clone();
-    assert_eq!(nsis["languages"], serde_json::json!(["SimpChinese"]), "R06: languages = SimpChinese");
-    assert_eq!(nsis["startMenuFolder"], "Higher", "R06: Start Menu folder = Higher（§31）");
+    assert_eq!(
+        nsis["languages"],
+        serde_json::json!(["SimpChinese"]),
+        "R06: languages = SimpChinese"
+    );
+    assert_eq!(
+        nsis["startMenuFolder"], "Higher",
+        "R06: Start Menu folder = Higher（§31）"
+    );
 }
 
 #[test]
 fn r07_webview2_download_bootstrapper() {
     // DEV-0065.4 §4/§29 授权更新：冻结发布期望 offlineInstaller → downloadBootstrapper（轻量发布）。
-    let wv = json_of(&read_manifest("tauri.conf.json"))["bundle"]["windows"]["webviewInstallMode"].clone();
-    assert_eq!(wv["type"], "downloadBootstrapper", "R07: WebView2 = downloadBootstrapper（v1.0.0 轻量决策）");
+    let wv = json_of(&read_manifest("tauri.conf.json"))["bundle"]["windows"]["webviewInstallMode"]
+        .clone();
+    assert_eq!(
+        wv["type"], "downloadBootstrapper",
+        "R07: WebView2 = downloadBootstrapper（v1.0.0 轻量决策）"
+    );
 }
 
 // ==================== R08 · 动态主窗口不变 ====================
@@ -198,14 +238,21 @@ fn r07_webview2_download_bootstrapper() {
 #[test]
 fn r08_dynamic_main_window_unchanged() {
     let conf = json_of(&read_manifest("tauri.conf.json"));
-    assert_eq!(conf["app"]["windows"], serde_json::json!([]), "R08: app.windows = []（不新增第二窗口）");
+    assert_eq!(
+        conf["app"]["windows"],
+        serde_json::json!([]),
+        "R08: app.windows = []（不新增第二窗口）"
+    );
     // DEV-MOBILE-001 §40-42：主窗口创建迁移至 src/platform/window.rs（Windows 语义不变）
     let win = read_manifest("src/platform/window.rs");
     assert!(
         win.contains("WebviewWindowBuilder::new"),
         "R08: main 仍由 Rust WebviewWindowBuilder 动态创建"
     );
-    assert!(win.contains(".decorations(false)"), "R08: 自定义标题栏契约保留（65.1）");
+    assert!(
+        win.contains(".decorations(false)"),
+        "R08: 自定义标题栏契约保留（65.1）"
+    );
 }
 
 // ==================== R09-R11 · AppLocalData 生产数据根 ====================
@@ -271,7 +318,9 @@ fn r11_attachments_vault_backups_same_root() {
         storage.contains(".join(\"backups\")"),
         "R11: backups 与 DB 同根（§15）"
     );
-    let scope = json_of(&read_manifest("tauri.conf.json"))["app"]["security"]["assetProtocol"]["scope"].clone();
+    let scope = json_of(&read_manifest("tauri.conf.json"))["app"]["security"]["assetProtocol"]
+        ["scope"]
+        .clone();
     let scope_txt = scope.to_string();
     assert!(
         scope_txt.contains("$LOCALDATA/com.higher.desktop/attachments/**"),
@@ -417,15 +466,15 @@ fn r17_build_script_safety() {
     let s = read_root("scripts/Build-Higher-Release.ps1");
     assert!(!s.is_empty(), "R17: Build-Higher-Release.ps1 存在（§21）");
     for marker in [
-        "git status --porcelain",   // verify clean worktree
-        "rev-parse HEAD",           // print HEAD
-        "tsc --noEmit",             // tsc
-        "npm run build",            // frontend build
-        "cargo check",              // cargo check
-        "batch0652_release",        // release tests
-        "tauri build",              // tauri build
-        "bundle\\nsis",             // locate NSIS installer
-        "Get-FileHash",             // SHA256
+        "git status --porcelain",      // verify clean worktree
+        "rev-parse HEAD",              // print HEAD
+        "tsc --noEmit",                // tsc
+        "npm run build",               // frontend build
+        "cargo check",                 // cargo check
+        "batch0652_release",           // release tests
+        "tauri build",                 // tauri build
+        "bundle\\nsis",                // locate NSIS installer
+        "Get-FileHash",                // SHA256
         "Higher_${Version}_Setup.exe", // copy to release\
     ] {
         assert!(s.contains(marker), "R17: 构建脚本缺步骤标记 {marker}");
@@ -446,7 +495,9 @@ fn r18_no_dev_data_migration_script() {
         !migrated.exists(),
         "R18: 不得创建 scripts/Migrate-DevData-ToRelease.ps1（§8 已废止）"
     );
-    let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("scripts");
+    let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("scripts");
     if let Ok(entries) = std::fs::read_dir(scripts) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();

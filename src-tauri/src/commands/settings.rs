@@ -78,4 +78,3 @@ pub fn notifications_setting_enabled(conn: &Connection) -> bool {
         .map(|v| v != "0")
         .unwrap_or(true)
 }
-

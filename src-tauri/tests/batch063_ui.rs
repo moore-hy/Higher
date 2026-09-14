@@ -23,7 +23,10 @@ fn u01_visible_menu_edit_delete_only() {
     assert!(pop.contains("编辑"), "U01: 编辑存在");
     assert!(pop.contains("删除"), "U01: 删除存在");
     assert!(
-        !pop.contains("调整日期") && !pop.contains("调整目标") && !pop.contains("调整知识") && !pop.contains("修改类型"),
+        !pop.contains("调整日期")
+            && !pop.contains("调整目标")
+            && !pop.contains("调整知识")
+            && !pop.contains("修改类型"),
         "U01: 旧四项快捷入口不得继续作为独立 visible menu item"
     );
     assert!(pop.contains("taskmenu__sep"), "U01: 分组分隔线");
@@ -37,10 +40,22 @@ fn u02_edit_handler_modal_path_preserved() {
         sec.contains("setMenuFor(null); setEditing(t);"),
         "U02: 菜单编辑走 setEditing 原路径"
     );
-    assert!(sec.contains("TaskFormModal"), "U02: 原编辑 Modal 组件仍被使用");
+    assert!(
+        sec.contains("TaskFormModal"),
+        "U02: 原编辑 Modal 组件仍被使用"
+    );
     assert!(sec.contains("mode=\"edit\""), "U02: edit 模式存在");
     // 编辑 Modal 内全部既有字段继续可编辑（§23）
-    for field in ["任务名称", "日期", "时间", "预计分钟", "任务类型", "优先级", "目标（可选）", "关联知识"] {
+    for field in [
+        "任务名称",
+        "日期",
+        "时间",
+        "预计分钟",
+        "任务类型",
+        "优先级",
+        "目标（可选）",
+        "关联知识",
+    ] {
         assert!(sec.contains(field), "U02: 编辑 Modal 字段存在：{field}");
     }
     assert!(sec.contains("updateTaskV2"), "U02: 原 update API 保留");
@@ -57,7 +72,10 @@ fn u03_delete_handler_confirm_path_preserved() {
     assert!(sec.contains("删除「"), "U03: 删除确认 Modal 存在");
     assert!(sec.contains("取消"), "U03: 取消按钮存在");
     assert!(sec.contains("handleDelete"), "U03: 原删除 handler 保留");
-    assert!(sec.contains("deleteTask") && sec.contains("archiveTask"), "U03: 原 API 链保留");
+    assert!(
+        sec.contains("deleteTask") && sec.contains("archiveTask"),
+        "U03: 原 API 链保留"
+    );
 }
 
 // ==================== U04-U07 · Proposal Truth（§46/§32-§33） ====================
@@ -76,7 +94,10 @@ fn u04_update_diff_candidates_from_after_keys() {
     // update 分支不遍历 before keys（唯一锚点 function diffRows，避免 line83 统计处误命中）
     let upd = csr.split("function diffRows").nth(1).unwrap_or_default();
     let upd = upd.split("// create / delete").next().unwrap_or_default();
-    assert!(!upd.contains("Object.keys(before)"), "U04: update 不用 before keys 做候选");
+    assert!(
+        !upd.contains("Object.keys(before)"),
+        "U04: update 不用 before keys 做候选"
+    );
 }
 
 #[test]
@@ -113,7 +134,10 @@ fn u07_same_value_hidden() {
 #[test]
 fn u08_proposal_trigger_from_changeset_event() {
     let panel = read_src("../src/components/ai/AiPanel.tsx");
-    assert!(panel.contains("ai://changeset"), "U08: Proposal 仍由真实 ai://changeset 驱动");
+    assert!(
+        panel.contains("ai://changeset"),
+        "U08: Proposal 仍由真实 ai://changeset 驱动"
+    );
 }
 
 #[test]
@@ -132,30 +156,48 @@ fn u09_no_prose_inferred_proposal() {
 #[test]
 fn u10_send_handler_exists() {
     let panel = read_src("../src/components/ai/AiPanel.tsx");
-    assert!(panel.contains("aiStartRun"), "U10: Send 主路径 aiStartRun 保留");
+    assert!(
+        panel.contains("aiStartRun"),
+        "U10: Send 主路径 aiStartRun 保留"
+    );
 }
 
 #[test]
 fn u11_task_start_handler_exists() {
     let sec = read_src("../src/components/DailyTasksSection.tsx");
-    assert!(sec.contains("startTaskSession"), "U11: Task Start 原 API 保留");
+    assert!(
+        sec.contains("startTaskSession"),
+        "U11: Task Start 原 API 保留"
+    );
 }
 
 #[test]
 fn u12_current_session_continue_end_handlers_exist() {
     let today = read_src("../src/pages/Today.tsx");
-    assert!(today.contains("endSession"), "U12: 结束 handler（endSession）保留");
-    assert!(today.contains("navigate(`/learn/${active.id}`)"), "U12: 继续 handler（navigate /learn）保留");
+    assert!(
+        today.contains("endSession"),
+        "U12: 结束 handler（endSession）保留"
+    );
+    assert!(
+        today.contains("navigate(`/learn/${active.id}`)"),
+        "U12: 继续 handler（navigate /learn）保留"
+    );
     assert!(today.contains("today-hero"), "U12: Hero 区域存在（§20）");
 }
 
 #[test]
 fn u13_planning_month_navigation_handlers_exist() {
     let cal = read_src("../src/components/PlanningCalendar.tsx");
-    assert!(cal.contains("shiftMonth(-1)") && cal.contains("shiftMonth(1)"), "U13: 上/下个月 handler 保留");
+    assert!(
+        cal.contains("shiftMonth(-1)") && cal.contains("shiftMonth(1)"),
+        "U13: 上/下个月 handler 保留"
+    );
     assert!(cal.contains("goToday"), "U13: 今天 handler 保留");
     // §27：today/selected 视觉 state class 保留
-    assert!(cal.contains("pcal__cell--today") || read_src("../src/styles.css").contains(".pcal__cell--today"));
+    assert!(
+        cal.contains("pcal__cell--today")
+            || read_src("../src/styles.css").contains(".pcal__cell--today")
+    );
 }
 
 // ==================== 附加 · Design System / 冻结面契约 ====================
@@ -180,7 +222,10 @@ fn u15_zindex_contract() {
     let css = read_src("../src/styles.css");
     // §13 层级（Modal 900/910 > AI Panel 200 > Menu 100 > Sidebar 20）
     let modal_overlay = css.split(".modal-overlay {").nth(1).unwrap_or_default();
-    assert!(modal_overlay.contains("z-index: 900"), "U15: modal-overlay=900");
+    assert!(
+        modal_overlay.contains("z-index: 900"),
+        "U15: modal-overlay=900"
+    );
     let menu = css.split(".taskmenu__pop {").nth(1).unwrap_or_default();
     assert!(menu.contains("z-index: 100"), "U15: menu=100");
     let toast = css.split(".toast {").nth(1).unwrap_or_default();
@@ -191,7 +236,13 @@ fn u15_zindex_contract() {
 fn u16_no_new_important() {
     // 本轮禁止新增 !important：本轮涉及 selector 不得出现
     let css = read_src("../src/styles.css");
-    for sel in [".today-hero", ".today-banner--quiet", ".taskmenu__sep", ".csr__diff-row--clear", ".layout__nav-group"] {
+    for sel in [
+        ".today-hero",
+        ".today-banner--quiet",
+        ".taskmenu__sep",
+        ".csr__diff-row--clear",
+        ".layout__nav-group",
+    ] {
         let block = css.split(sel).nth(1).unwrap_or_default();
         let block = block.split('}').next().unwrap_or_default();
         assert!(!block.contains("!important"), "U16: {sel} 无 !important");
@@ -203,8 +254,16 @@ fn u17_frontend_business_freeze() {
     // api.ts / types.ts 未参与本轮 diff 由 Forbidden Diff Audit 保证；
     // 这里锁定 AI Panel 关键 runtime 调用未被重写
     let panel = read_src("../src/components/ai/AiPanel.tsx");
-    for contract in ["ai://delta", "ai://run-status", "createAiConversation", "setActiveAiProfiles"] {
-        assert!(panel.contains(contract), "U17: AI Panel runtime 契约保留：{contract}");
+    for contract in [
+        "ai://delta",
+        "ai://run-status",
+        "createAiConversation",
+        "setActiveAiProfiles",
+    ] {
+        assert!(
+            panel.contains(contract),
+            "U17: AI Panel runtime 契约保留：{contract}"
+        );
     }
 }
 

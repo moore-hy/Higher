@@ -122,8 +122,16 @@ impl<'a> RecurringRuleRepository<'a> {
         end_date: Option<&str>,
     ) -> Result<RecurringRule, String> {
         self.create_with_semantics(
-            profile_id, goal_id, learning_item_id, title, repeat_type, weekdays, time_of_day,
-            start_date, end_date, &RuleSemantics::default(),
+            profile_id,
+            goal_id,
+            learning_item_id,
+            title,
+            repeat_type,
+            weekdays,
+            time_of_day,
+            start_date,
+            end_date,
+            &RuleSemantics::default(),
         )
     }
 
@@ -201,7 +209,8 @@ impl<'a> RecurringRuleRepository<'a> {
         let rows = stmt
             .query_map(params![profile_id], |r| parse_rule(r))
             .map_err(|e| e.to_string())?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
     }
 
     /// 编辑规则（只影响未来 materialization，不重写历史 Task）。
@@ -219,7 +228,14 @@ impl<'a> RecurringRuleRepository<'a> {
         learning_item_id: Option<i64>,
     ) -> Result<(), String> {
         self.update_with_semantics(
-            id, title, repeat_type, weekdays, time_of_day, start_date, end_date, learning_item_id,
+            id,
+            title,
+            repeat_type,
+            weekdays,
+            time_of_day,
+            start_date,
+            end_date,
+            learning_item_id,
             &RuleSemantics::default(),
         )
     }
@@ -373,9 +389,10 @@ pub fn rule_matches_date(rule: &RecurringRule, date: &str) -> bool {
     match rule.repeat_type.as_str() {
         "daily" => true,
         "weekly" => {
-            let weekdays: Vec<u32> =
-                serde_json::from_str(&rule.weekdays_json).unwrap_or_default();
-            weekday_of(date).map(|w| weekdays.contains(&w)).unwrap_or(false)
+            let weekdays: Vec<u32> = serde_json::from_str(&rule.weekdays_json).unwrap_or_default();
+            weekday_of(date)
+                .map(|w| weekdays.contains(&w))
+                .unwrap_or(false)
         }
         _ => false,
     }
@@ -484,7 +501,9 @@ pub fn materialize_recurring_tasks_range(
         )
         .map_err(|er| er.to_string())?;
     if span > MAX_RANGE_DAYS {
-        return Err(format!("materialize range 超出有界上限（{span} 天 > {MAX_RANGE_DAYS}）"));
+        return Err(format!(
+            "materialize range 超出有界上限（{span} 天 > {MAX_RANGE_DAYS}）"
+        ));
     }
     let mut created = 0i64;
     let mut d = s.clone();

@@ -51,7 +51,10 @@ impl ConnProvider for DbStateProvider {
 }
 
 /// DEV-SYNC-002 §九：构造 sync://completed 事件 payload（两端共用）。
-pub fn completed_payload(peer_device_id: &str, outcome: &super::apply::ApplyOutcome) -> serde_json::Value {
+pub fn completed_payload(
+    peer_device_id: &str,
+    outcome: &super::apply::ApplyOutcome,
+) -> serde_json::Value {
     serde_json::json!({
         "peer_device_id": peer_device_id,
         "profiles_changed": outcome.profiles_changed.total(),
@@ -282,13 +285,15 @@ fn accept_loop(listener: TcpListener, provider: Arc<dyn ConnProvider>, shared: A
             Ok((mut stream, _addr)) => {
                 let provider = provider.clone();
                 let shared = shared.clone();
-                let _ = std::thread::Builder::new().name("higher-sync-conn".into()).spawn(move || {
-                    let _ = stream.set_nonblocking(false);
-                    let _ = stream.set_read_timeout(Some(CONN_TIMEOUT));
-                    let _ = stream.set_write_timeout(Some(CONN_TIMEOUT));
-                    let _ = stream.set_nodelay(true);
-                    serve_connection(&mut stream, &provider, &shared);
-                });
+                let _ = std::thread::Builder::new()
+                    .name("higher-sync-conn".into())
+                    .spawn(move || {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(CONN_TIMEOUT));
+                        let _ = stream.set_write_timeout(Some(CONN_TIMEOUT));
+                        let _ = stream.set_nodelay(true);
+                        serve_connection(&mut stream, &provider, &shared);
+                    });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(120));
@@ -301,7 +306,11 @@ fn accept_loop(listener: TcpListener, provider: Arc<dyn ConnProvider>, shared: A
 }
 
 /// 单连接：请求-应答循环，直至对端断开 / 出错 / 服务器停止。
-fn serve_connection(stream: &mut TcpStream, provider: &Arc<dyn ConnProvider>, shared: &Arc<ServerShared>) {
+fn serve_connection(
+    stream: &mut TcpStream,
+    provider: &Arc<dyn ConnProvider>,
+    shared: &Arc<ServerShared>,
+) {
     while shared.running.load(Ordering::SeqCst) {
         let msg = match read_message(stream) {
             Ok(m) => m,
@@ -318,7 +327,11 @@ fn serve_connection(stream: &mut TcpStream, provider: &Arc<dyn ConnProvider>, sh
 }
 
 /// 单条 wire 消息处理（服务器侧）。
-fn handle_wire(provider: &Arc<dyn ConnProvider>, msg: WireMessage, shared: &Arc<ServerShared>) -> WireMessage {
+fn handle_wire(
+    provider: &Arc<dyn ConnProvider>,
+    msg: WireMessage,
+    shared: &Arc<ServerShared>,
+) -> WireMessage {
     let mut msg = Some(msg);
     let mut result: Option<WireMessage> = None;
     let mut emit: Option<serde_json::Value> = None;
@@ -349,14 +362,26 @@ fn process_wire(
             client_listen_addr,
         } => {
             // DEV-SYNC-003 §七：验证高熵一次性 token（过期/错误/已用 → 拒绝）
-            if !shared.running.load(Ordering::SeqCst) || !shared.verify_pairing_token(&pairing_token) {
-                return (pair_reject("配对二维码无效或已过期，请在电脑上刷新二维码"), None);
+            if !shared.running.load(Ordering::SeqCst)
+                || !shared.verify_pairing_token(&pairing_token)
+            {
+                return (
+                    pair_reject("配对二维码无效或已过期，请在电脑上刷新二维码"),
+                    None,
+                );
             }
 
             let token = uuid::Uuid::new_v4().to_string();
             let device = match local_device(conn) {
                 Ok(d) => d,
-                Err(e) => return (WireMessage::Error { message: format!("服务器数据库错误：{e}") }, None),
+                Err(e) => {
+                    return (
+                        WireMessage::Error {
+                            message: format!("服务器数据库错误：{e}"),
+                        },
+                        None,
+                    )
+                }
             };
             // §七：记录对端监听地址（本端此后可主动反向「立即同步」）
             if let Err(e) = upsert_peer(
@@ -367,7 +392,12 @@ fn process_wire(
                 client_listen_addr.as_deref(),
                 &token,
             ) {
-                return (WireMessage::Error { message: format!("保存配对信息失败：{e}") }, None);
+                return (
+                    WireMessage::Error {
+                        message: format!("保存配对信息失败：{e}"),
+                    },
+                    None,
+                );
             }
             let bootstrap = export_bootstrap(conn).unwrap_or_default();
             // Bootstrap 快照已表达这些实体的当前状态 → 视为已交付，
@@ -418,24 +448,25 @@ fn process_wire(
             let _ = update_peer_addr(conn, &device_id, client_listen_addr.as_deref());
 
             // 1) 应用客户端变更（guard 防回声 + 冲突守卫）
-            let outcome = match apply_remote_changes(conn, &device_id, &changes, ApplyOptions::default()) {
-                Ok(o) => o,
-                Err(e) => {
-                    return (
-                        WireMessage::SyncResponse {
-                            ok: false,
-                            acked_change_id: 0,
-                            changes: Vec::new(),
-                            applied: 0,
-                            conflicts: 0,
-                            deferred: 0,
-                            outcome: Default::default(),
-                            reason: Some(format!("应用变更失败：{e}")),
-                        },
-                        None,
-                    )
-                }
-            };
+            let outcome =
+                match apply_remote_changes(conn, &device_id, &changes, ApplyOptions::default()) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        return (
+                            WireMessage::SyncResponse {
+                                ok: false,
+                                acked_change_id: 0,
+                                changes: Vec::new(),
+                                applied: 0,
+                                conflicts: 0,
+                                deferred: 0,
+                                outcome: Default::default(),
+                                reason: Some(format!("应用变更失败：{e}")),
+                            },
+                            None,
+                        )
+                    }
+                };
             // 2) 消费客户端 ack（推进本机 outbox 游标 + 清理全员已 ack 的条目）
             if acked_change_id > 0 {
                 let _ = advance_acked_cursor(conn, &device_id, acked_change_id);
@@ -450,7 +481,9 @@ fn process_wire(
                 .unwrap_or(acked_change_id);
             let out = export_outbox_changes(conn, cursor).unwrap_or_default();
             let applied = outcome.total_changed();
-            let emit = outcome.any_change().then(|| completed_payload(&device_id, &outcome));
+            let emit = outcome
+                .any_change()
+                .then(|| completed_payload(&device_id, &outcome));
             (
                 WireMessage::SyncResponse {
                     ok: true,
@@ -493,7 +526,10 @@ fn process_wire(
             let _ = touch_peer_sync(conn, &device_id);
             // pending 归零也属于状态变化：广播刷新本机各页面（Sync 页 / Mobile 摘要）
             (
-                WireMessage::SyncAckResponse { ok: true, reason: None },
+                WireMessage::SyncAckResponse {
+                    ok: true,
+                    reason: None,
+                },
                 Some(completed_payload(&device_id, &Default::default())),
             )
         }
@@ -564,13 +600,14 @@ pub fn lan_ip() -> Option<String> {
 pub fn server_status(handle: &SyncServerHandle, conn: &Connection) -> ServerStatus {
     let peers = load_peer_rows(conn);
     // 全部 peer 已 ack 的最小游标（未配对 = 全量）
-    let min_acked: Option<i64> = peers
-        .iter()
-        .map(|p| p.last_acked_local_change_id)
-        .min();
+    let min_acked: Option<i64> = peers.iter().map(|p| p.last_acked_local_change_id).min();
     let pending = match min_acked {
         Some(c) => conn
-            .query_row("SELECT COUNT(*) FROM sync_outbox WHERE id > ?1", rusqlite::params![c], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sync_outbox WHERE id > ?1",
+                rusqlite::params![c],
+                |r| r.get(0),
+            )
             .unwrap_or(0),
         None => pending_outbox_count(conn).unwrap_or(0),
     };
@@ -592,7 +629,9 @@ pub fn server_status(handle: &SyncServerHandle, conn: &Connection) -> ServerStat
             .collect(),
         pending_outbox: pending,
         pending_conflicts: pending_conflicts_count(conn).unwrap_or(0),
-        device_name: local_device(conn).map(|d| d.device_name).unwrap_or_default(),
+        device_name: local_device(conn)
+            .map(|d| d.device_name)
+            .unwrap_or_default(),
     }
 }
 
@@ -665,6 +704,8 @@ pub fn workspace_status(handle: &SyncServerHandle, conn: &Connection) -> Workspa
         listen_port: handle.current_port(),
         peers,
         pending_conflicts: pending_conflicts_count(conn).unwrap_or(0),
-        device_name: local_device(conn).map(|d| d.device_name).unwrap_or_default(),
+        device_name: local_device(conn)
+            .map(|d| d.device_name)
+            .unwrap_or_default(),
     }
 }

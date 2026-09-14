@@ -43,8 +43,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0066c_{}_{}", name, std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0066c_{}_{}", name, std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -173,7 +177,16 @@ fn run_pack(
     actions: &[J],
 ) -> J {
     execute_higher_action_pack(
-        None, conn, vault, p, c, RUN_ID, &envelope(p, c), "测试指令", title, actions,
+        None,
+        conn,
+        vault,
+        p,
+        c,
+        RUN_ID,
+        &envelope(p, c),
+        "测试指令",
+        title,
+        actions,
     )
     .json
 }
@@ -209,7 +222,15 @@ fn p01_level1_pack_auto_applies_one_changeset_and_verifies() {
         final_answer("已创建明天的数学（60 分钟）和英语（30 分钟）任务。"),
     ];
 
-    let out = run_turn(&state, &vault, p, c, m, "明天安排 60 分钟数学和 30 分钟英语", scripted);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "明天安排 60 分钟数学和 30 分钟英语",
+        scripted,
+    );
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
@@ -225,7 +246,11 @@ fn p01_level1_pack_auto_applies_one_changeset_and_verifies() {
         assert_eq!(n, 1, "{title} 必须真实写入");
     }
     // 一个 Pack = 一个 ChangeSet（AI-GND-014）
-    assert_eq!(count(&conn, "ai_change_sets"), 1, "多 action 必须合并为一个 ChangeSet");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        1,
+        "多 action 必须合并为一个 ChangeSet"
+    );
     let (cs_id, cs_status, op_count): (i64, String, i64) = conn
         .query_row(
             "SELECT cs.id, cs.status, (SELECT COUNT(*) FROM ai_change_operations o WHERE o.change_set_id=cs.id)
@@ -238,7 +263,11 @@ fn p01_level1_pack_auto_applies_one_changeset_and_verifies() {
     assert_eq!(op_count, 2, "一个 ChangeSet 含两个操作");
     // workflow 记账
     let (_, payload) = app_lib::ai::workflow::read_workflow_payload(&conn, p, c).unwrap();
-    assert!(payload.applied_changeset_ids.contains(&cs_id), "workflow.applied_changeset_ids：{:?}", payload.applied_changeset_ids);
+    assert!(
+        payload.applied_changeset_ids.contains(&cs_id),
+        "workflow.applied_changeset_ids：{:?}",
+        payload.applied_changeset_ids
+    );
 }
 
 // =============== P02 · Level 2 confirmation_required（T12） ===============
@@ -266,10 +295,20 @@ fn p02_level2_bulk_delete_requires_confirmation_zero_mutation() {
                 ]
             }),
         ),
-        final_answer("这是破坏性操作，我已生成待确认的删除清单（3 个任务），请你在确认界面决定是否执行。"),
+        final_answer(
+            "这是破坏性操作，我已生成待确认的删除清单（3 个任务），请你在确认界面决定是否执行。",
+        ),
     ];
 
-    let out = run_turn(&state, &vault, p, c, m, "把我今天所有的任务全部删掉", scripted);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "把我今天所有的任务全部删掉",
+        scripted,
+    );
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
@@ -282,7 +321,10 @@ fn p02_level2_bulk_delete_requires_confirmation_zero_mutation() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(cs_status, "waiting_approval", "Level 2 必须 confirmation_required");
+    assert_eq!(
+        cs_status, "waiting_approval",
+        "Level 2 必须 confirmation_required"
+    );
     assert_eq!(op_count, 3, "3 个删除操作待确认");
     // 0 mutation：3 个任务原样存在
     let n: i64 = conn
@@ -295,7 +337,11 @@ fn p02_level2_bulk_delete_requires_confirmation_zero_mutation() {
     assert_eq!(n, 3, "确认前不得删除任何任务");
     // 确认后（模拟用户在 UI 点 Apply）：共享 Apply 生效 → 任务删除
     let cs_id: i64 = conn
-        .query_row("SELECT id FROM ai_change_sets WHERE profile_id=?1", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM ai_change_sets WHERE profile_id=?1",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     app_lib::ai::commands::apply_change_set_with_side_effects(
         None, &conn, &vault, p, cs_id, false, "user",
@@ -308,7 +354,10 @@ fn p02_level2_bulk_delete_requires_confirmation_zero_mutation() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(n2, 0, "用户确认后删除生效（source=user，与 Agent 共享同一 Apply）");
+    assert_eq!(
+        n2, 0,
+        "用户确认后删除生效（source=user，与 Agent 共享同一 Apply）"
+    );
 }
 
 // =============== P03 · Level 3 防御（T13） ===============
@@ -335,22 +384,48 @@ fn p03_level3_system_capability_rejected_and_never_exposed() {
         final_answer("我没有修改程序代码或执行数据库命令的能力。"),
     ];
 
-    let out = run_turn(&state, &vault, p, c, m, "把 Higher 设置页面代码改一下", scripted);
+    let out = run_turn(
+        &state,
+        &vault,
+        p,
+        c,
+        m,
+        "把 Higher 设置页面代码改一下",
+        scripted,
+    );
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "未知系统级 type 必须 0 ChangeSet");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "未知系统级 type 必须 0 ChangeSet"
+    );
     // 工具面（web 开/关两态）永不出现系统级能力
     for web in [false, true] {
         let names = app_lib::ai::agent_tools::agent_tool_names(web);
-        for banned in ["run_sql", "exec_shell", "shell", "run_command", "write_file", "edit_source", "drop_table"] {
+        for banned in [
+            "run_sql",
+            "exec_shell",
+            "shell",
+            "run_command",
+            "write_file",
+            "edit_source",
+            "drop_table",
+        ] {
             assert!(
                 !names.iter().any(|n| n.contains(banned)),
                 "工具面不得出现系统级能力 {banned}（web={web}）"
             );
         }
-        assert!(names.contains(&"execute_higher_actions".to_string()), "统一写入口必须在（web={web}）");
-        assert!(!names.contains(&"execute_task_action".to_string()), "Phase A 临时工具必须已被替换（web={web}）");
+        assert!(
+            names.contains(&"execute_higher_actions".to_string()),
+            "统一写入口必须在（web={web}）"
+        );
+        assert!(
+            !names.contains(&"execute_task_action".to_string()),
+            "Phase A 临时工具必须已被替换（web={web}）"
+        );
     }
 }
 
@@ -368,11 +443,20 @@ fn p04_goal_target_insufficient_information() {
     };
     let conn = state.0.lock().unwrap();
     let out = run_pack(
-        &conn, &vault, p, c, "设置 REACH",
-        &[json!({ "type": "set_goal_target", "role": "reach", "scenario_type": "postgraduate", "title": "华中科技大学" })],
+        &conn,
+        &vault,
+        p,
+        c,
+        "设置 REACH",
+        &[
+            json!({ "type": "set_goal_target", "role": "reach", "scenario_type": "postgraduate", "title": "华中科技大学" }),
+        ],
     );
     // postgraduate 需要院校+专业；title 无「·」分隔 → 无法解析专业 → 拒绝
-    assert_eq!(out["status"], "insufficient_information", "缺专业信息必须拒绝：{out}");
+    assert_eq!(
+        out["status"], "insufficient_information",
+        "缺专业信息必须拒绝：{out}"
+    );
     assert_eq!(out["formal_mutations"], 0);
     assert_eq!(count(&conn, "ai_change_sets"), 0, "0 ChangeSet");
     assert_eq!(count(&conn, "goal_targets"), 0, "goal_targets 0 mutation");
@@ -390,7 +474,11 @@ fn p05_pack_failure_rolls_back_everything() {
     };
     let conn = state.0.lock().unwrap();
     let out = run_pack(
-        &conn, &vault, p, c, "混合操作",
+        &conn,
+        &vault,
+        p,
+        c,
+        "混合操作",
         &[
             json!({ "type": "create_task", "title": "数学", "date": { "kind": "tomorrow" }, "estimated_minutes": 60 }),
             json!({ "type": "update_task", "target": { "title_hint": "根本不存在的任务" }, "patch": { "title": "改名" } }),
@@ -402,9 +490,17 @@ fn p05_pack_failure_rolls_back_everything() {
         "not_executed",
         "目标不存在的 action 必须整包拒绝：{out}"
     );
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "T15：不得产生半成功 ChangeSet");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "T15：不得产生半成功 ChangeSet"
+    );
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='数学'", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='数学'",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 0, "前序 create 也不得执行（全包 rollback 语义）");
 }
@@ -421,7 +517,11 @@ fn p06_create_goal_week_level_rejected() {
     };
     let conn = state.0.lock().unwrap();
     let out = run_pack(
-        &conn, &vault, p, c, "创建周目标",
+        &conn,
+        &vault,
+        p,
+        c,
+        "创建周目标",
         &[json!({ "type": "create_goal", "level": "week", "name": "第34周计划" })],
     );
     assert_eq!(out["status"], "invalid_action", "week 层级必须拒绝：{out}");
@@ -489,23 +589,41 @@ fn p08_undo_rolls_back_level1_apply() {
     };
     let conn = state.0.lock().unwrap();
     let out = run_pack(
-        &conn, &vault, p, c, "安排明天数学",
-        &[json!({ "type": "create_task", "title": "数学", "date": { "kind": "tomorrow" }, "estimated_minutes": 60 })],
+        &conn,
+        &vault,
+        p,
+        c,
+        "安排明天数学",
+        &[
+            json!({ "type": "create_task", "title": "数学", "date": { "kind": "tomorrow" }, "estimated_minutes": 60 }),
+        ],
     );
     assert_eq!(out["status"], "applied");
     let cs_id = out["change_set_id"].as_i64().unwrap();
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='数学'", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='数学'",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 1, "Apply 后任务存在");
     // Undo（用户撤销路径；与 Apply 同一 ChangeSet 事务边界）
     ChangeSetRepository::new(&conn).undo(cs_id, p).unwrap();
     let n2: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='数学'", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='数学'",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n2, 0, "Undo 后任务必须回滚");
     let status: String = conn
-        .query_row("SELECT status FROM ai_change_sets WHERE id=?1", params![cs_id], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM ai_change_sets WHERE id=?1",
+            params![cs_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(status, "undone");
 }
@@ -524,7 +642,11 @@ fn p09_level2_cannot_mix_with_normal_actions() {
     };
     let conn = state.0.lock().unwrap();
     let out = run_pack(
-        &conn, &vault, p, c, "删除并新建",
+        &conn,
+        &vault,
+        p,
+        c,
+        "删除并新建",
         &[
             json!({ "type": "bulk_delete_tasks", "filter": { "date": { "kind": "today" } } }),
             json!({ "type": "create_task", "title": "新任务", "date": { "kind": "tomorrow" } }),
@@ -533,7 +655,11 @@ fn p09_level2_cannot_mix_with_normal_actions() {
     assert_eq!(out["status"], "invalid_pack", "混包必须拒绝：{out}");
     assert_eq!(count(&conn, "ai_change_sets"), 0, "0 ChangeSet");
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1", params![p], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1",
+            params![p],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 1, "旧任务原样、新任务未建（0 mutation）");
 }
@@ -545,17 +671,46 @@ fn p09_level2_cannot_mix_with_normal_actions() {
 fn p10_permission_levels() {
     // Level 1：Task 域全部 + Phase D 正常业务写入
     for t in app_lib::ai::permission::TASK_ACTION_TYPES {
-        assert_eq!(action_level(t), PermissionLevel::Level1AutoApply, "{t} 应为 Level 1");
+        assert_eq!(
+            action_level(t),
+            PermissionLevel::Level1AutoApply,
+            "{t} 应为 Level 1"
+        );
     }
-    for t in ["set_goal_target", "set_final_goal_brief", "create_goal", "set_planning_blueprint"] {
-        assert_eq!(action_level(t), PermissionLevel::Level1AutoApply, "{t} 业务级别 Level 1（开放与否由 Validator 管）");
+    for t in [
+        "set_goal_target",
+        "set_final_goal_brief",
+        "create_goal",
+        "set_planning_blueprint",
+    ] {
+        assert_eq!(
+            action_level(t),
+            PermissionLevel::Level1AutoApply,
+            "{t} 业务级别 Level 1（开放与否由 Validator 管）"
+        );
     }
     // Level 2：破坏性
     for t in ["bulk_delete_tasks", "clear_planning", "reset_profile"] {
-        assert_eq!(action_level(t), PermissionLevel::Level2ConfirmRequired, "{t} 应为 Level 2");
+        assert_eq!(
+            action_level(t),
+            PermissionLevel::Level2ConfirmRequired,
+            "{t} 应为 Level 2"
+        );
     }
     // Level 3：系统级/未知（模型编造）
-    for t in ["run_sql", "exec_shell", "write_file", "edit_source", "drop_database", "未知类型", ""] {
-        assert_eq!(action_level(t), PermissionLevel::Level3Blocked, "{t} 应为 Level 3");
+    for t in [
+        "run_sql",
+        "exec_shell",
+        "write_file",
+        "edit_source",
+        "drop_database",
+        "未知类型",
+        "",
+    ] {
+        assert_eq!(
+            action_level(t),
+            PermissionLevel::Level3Blocked,
+            "{t} 应为 Level 3"
+        );
     }
 }

@@ -40,8 +40,11 @@ fn temp_db(tag: &str) -> Connection {
 }
 
 fn insert_profile(conn: &Connection, name: &str) -> i64 {
-    conn.execute("INSERT INTO study_profiles (name) VALUES (?1)", params![name])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO study_profiles (name) VALUES (?1)",
+        params![name],
+    )
+    .unwrap();
     conn.last_insert_rowid()
 }
 
@@ -55,12 +58,17 @@ fn insert_task(conn: &Connection, profile: i64, title: &str) -> i64 {
 }
 
 fn task_count(conn: &Connection, title: &str) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM tasks WHERE title = ?1", params![title], |r| r.get(0))
-        .unwrap()
+    conn.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE title = ?1",
+        params![title],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 fn outbox_rows(conn: &Connection) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0)).unwrap()
+    conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |r| r.get(0))
+        .unwrap()
 }
 
 struct TestConnProvider(Arc<Mutex<Connection>>);
@@ -95,16 +103,24 @@ fn paired_pair_seeded(
     let b = temp_db(&format!("{tag}b"));
     seed_b(&b);
     // B 模拟 Android（平台影响离线文案分支与 peer.platform 记录）
-    b.execute("UPDATE sync_local_device SET platform = 'android'", []).unwrap();
+    b.execute("UPDATE sync_local_device SET platform = 'android'", [])
+        .unwrap();
 
     let a_device = local_device(&a).unwrap().device_id;
     let b_shared = Arc::new(Mutex::new(b));
-    let b_device = { let g = b_shared.lock().unwrap(); local_device(&g).unwrap().device_id };
+    let b_device = {
+        let g = b_shared.lock().unwrap();
+        local_device(&g).unwrap().device_id
+    };
     let ha = SyncServerHandle::new();
     let hb = SyncServerHandle::new();
     let a_shared = Arc::new(Mutex::new(a));
-    let a_port = ha.start(Arc::new(TestConnProvider(a_shared.clone()))).unwrap();
-    let b_port = hb.start(Arc::new(TestConnProvider(b_shared.clone()))).unwrap();
+    let a_port = ha
+        .start(Arc::new(TestConnProvider(a_shared.clone())))
+        .unwrap();
+    let b_port = hb
+        .start(Arc::new(TestConnProvider(b_shared.clone())))
+        .unwrap();
 
     // B（Android 模拟）扫码配对 A，并上报自己的监听地址
     let token = ha.new_pairing_session().0;
@@ -114,7 +130,12 @@ fn paired_pair_seeded(
         .unwrap_or(0)
         + 600;
     let payload = build_payload_json(
-        &a_device, "Higher Windows", a_port, vec!["127.0.0.1".to_string()], &token, expires,
+        &a_device,
+        "Higher Windows",
+        a_port,
+        vec!["127.0.0.1".to_string()],
+        &token,
+        expires,
     )
     .unwrap();
     {
@@ -123,8 +144,18 @@ fn paired_pair_seeded(
     }
 
     (
-        Node { conn: a_shared, handle: ha, port: a_port, device_id: a_device },
-        Node { conn: b_shared, handle: hb, port: b_port, device_id: b_device },
+        Node {
+            conn: a_shared,
+            handle: ha,
+            port: a_port,
+            device_id: a_device,
+        },
+        Node {
+            conn: b_shared,
+            handle: hb,
+            port: b_port,
+            device_id: b_device,
+        },
     )
 }
 
@@ -178,15 +209,35 @@ fn tc01_tc06_android_initiated_one_click_convergence() {
 
     // 只点 Android「立即同步」——Windows 不做任何操作
     let summary = sync_from(&b);
-    assert!(summary.pushed >= 1, "Android → Windows 推送：pushed={}", summary.pushed);
-    assert!(summary.pulled >= 1, "Windows → Android 拉取：pulled={}", summary.pulled);
-    assert!(summary.applied >= 1, "Android 应用 Windows 变更：applied={}", summary.applied);
+    assert!(
+        summary.pushed >= 1,
+        "Android → Windows 推送：pushed={}",
+        summary.pushed
+    );
+    assert!(
+        summary.pulled >= 1,
+        "Windows → Android 拉取：pulled={}",
+        summary.pulled
+    );
+    assert!(
+        summary.applied >= 1,
+        "Android 应用 Windows 变更：applied={}",
+        summary.applied
+    );
 
     // 双向数据到达
     let ag = a.conn.lock().unwrap();
     let bg = b.conn.lock().unwrap();
-    assert_eq!(task_count(&ag, "ANDROID-ONECLICK-001"), 1, "Windows 收到 Android 变更");
-    assert_eq!(task_count(&bg, "WIN-ONECLICK-001"), 1, "Android 收到 Windows 变更");
+    assert_eq!(
+        task_count(&ag, "ANDROID-ONECLICK-001"),
+        1,
+        "Windows 收到 Android 变更"
+    );
+    assert_eq!(
+        task_count(&bg, "WIN-ONECLICK-001"),
+        1,
+        "Android 收到 Windows 变更"
+    );
 
     // F3 核心断言：双方 pending 在本 session 内双双归零（同连接反向 ACK）
     let pa = pending(&ag, &b.device_id);
@@ -205,11 +256,19 @@ fn tc02_tc05_windows_initiated_one_click_convergence() {
     add_task(&b, "2028考研", "AND-B3-001");
     add_task(&b, "2028考研", "AND-B3-002");
     add_task(&b, "2028考研", "AND-B3-003");
-    assert!(b.handle.is_running(), "Android listener 在线（MVP：设备同步页打开）");
+    assert!(
+        b.handle.is_running(),
+        "Android listener 在线（MVP：设备同步页打开）"
+    );
 
     // 只点 Windows「立即同步」
     let summary = sync_from(&a);
-    assert!(summary.pushed >= 1 && summary.pulled >= 1, "双向交换：pushed={} pulled={}", summary.pushed, summary.pulled);
+    assert!(
+        summary.pushed >= 1 && summary.pulled >= 1,
+        "双向交换：pushed={} pulled={}",
+        summary.pushed,
+        summary.pulled
+    );
 
     let ag = a.conn.lock().unwrap();
     let bg = b.conn.lock().unwrap();
@@ -269,7 +328,10 @@ fn tc04_second_sync_is_noop() {
     assert_eq!(second.applied, 0, "二轮 applied=0");
 
     let third = sync_from(&a);
-    assert!(third.pushed == 0 && third.pulled == 0 && third.applied == 0, "三轮仍为 no-op");
+    assert!(
+        third.pushed == 0 && third.pulled == 0 && third.applied == 0,
+        "三轮仍为 no-op"
+    );
 }
 
 // ---------------- TC07：Android listener 离线，Windows 发起 → 明确错误 ----------------
@@ -283,7 +345,10 @@ fn tc07_android_offline_windows_initiates_explicit_error() {
     let ag = a.conn.lock().unwrap();
     let err = sync_now(&ag, Some(&format!("127.0.0.1:{}", a.port))).expect_err("离线不得返回成功");
     drop(ag);
-    assert!(err.contains("Higher Android 当前未在线"), "针对性指引：{err}");
+    assert!(
+        err.contains("Higher Android 当前未在线"),
+        "针对性指引：{err}"
+    );
     assert!(!err.is_empty());
     // 未半成功伪装：A 的 pending 保持原值（数据未丢）
     let ag = a.conn.lock().unwrap();
@@ -301,7 +366,10 @@ fn tc08_windows_offline_android_initiates_explicit_error() {
     let bg = b.conn.lock().unwrap();
     let err = sync_now(&bg, Some(&format!("127.0.0.1:{}", b.port))).expect_err("离线不得返回成功");
     drop(bg);
-    assert!(err.contains("Higher Windows 当前不可连接"), "针对性指引：{err}");
+    assert!(
+        err.contains("Higher Windows 当前不可连接"),
+        "针对性指引：{err}"
+    );
 }
 
 // ---------------- TC09：pending 一致性（Sync 页 / Mobile 摘要同源） ----------------
@@ -318,7 +386,10 @@ fn tc09_pending_consistency_across_views() {
         let ag = a.conn.lock().unwrap();
         workspace_status(&a.handle, &ag)
     };
-    let peer_row = ws.peers.iter().find(|p| p.peer_device_id == b.device_id)
+    let peer_row = ws
+        .peers
+        .iter()
+        .find(|p| p.peer_device_id == b.device_id)
         .unwrap_or_else(|| panic!("工作台应有 peer"));
     // Android 客户端摘要 pending_outbox
     let cb = {
@@ -326,6 +397,9 @@ fn tc09_pending_consistency_across_views() {
         client_status(&bg).unwrap()
     };
     assert_eq!(peer_row.pending_send, 0, "Sync 页 待发送=0");
-    assert_eq!(cb.pending_outbox, 0, "我的/设备同步摘要 待发送=0（与详情一致）");
+    assert_eq!(
+        cb.pending_outbox, 0,
+        "我的/设备同步摘要 待发送=0（与详情一致）"
+    );
     let _ = app_unix_now(); // 占位保持工具函数被引用
 }

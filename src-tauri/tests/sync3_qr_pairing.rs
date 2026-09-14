@@ -48,8 +48,11 @@ fn device(conn: &Connection) -> LocalDevice {
 }
 
 fn insert_profile(conn: &Connection, name: &str) -> i64 {
-    conn.execute("INSERT INTO study_profiles (name) VALUES (?1)", params![name])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO study_profiles (name) VALUES (?1)",
+        params![name],
+    )
+    .unwrap();
     conn.last_insert_rowid()
 }
 
@@ -71,7 +74,11 @@ fn task_count(conn: &Connection, title: &str) -> i64 {
 }
 
 fn profile_count(conn: &Connection, name: &str) -> i64 {
-    count(conn, "SELECT COUNT(*) FROM study_profiles WHERE name LIKE ?1", name)
+    count(
+        conn,
+        "SELECT COUNT(*) FROM study_profiles WHERE name LIKE ?1",
+        name,
+    )
 }
 
 struct TestConnProvider(Arc<Mutex<Connection>>);
@@ -97,7 +104,9 @@ fn pc_with_payload(tag: &str, seed: impl FnOnce(&Connection), ips: Vec<&str>) ->
     let a_device = device(&a).device_id;
     let shared = Arc::new(Mutex::new(a));
     let handle = SyncServerHandle::new();
-    let port = handle.start(Arc::new(TestConnProvider(shared.clone()))).unwrap();
+    let port = handle
+        .start(Arc::new(TestConnProvider(shared.clone())))
+        .unwrap();
     let token = handle.new_pairing_session().0;
     let expires = app_unix_now() + 600;
     let payload = build_payload_json(
@@ -110,7 +119,12 @@ fn pc_with_payload(tag: &str, seed: impl FnOnce(&Connection), ips: Vec<&str>) ->
     )
     .unwrap();
     (
-        Pc { a: shared, handle, port, a_device: a_device.clone() },
+        Pc {
+            a: shared,
+            handle,
+            port,
+            a_device: a_device.clone(),
+        },
         payload,
     )
 }
@@ -124,7 +138,9 @@ fn app_unix_now() -> i64 {
 
 /// 读取仓库相对路径源码（UI 契约断言用；src-tauri 的上级 = 仓库根）。
 fn read_src(rel: &str) -> String {
-    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel);
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(rel);
     std::fs::read_to_string(p).unwrap_or_default()
 }
 
@@ -152,10 +168,16 @@ fn qr_tc001_payload_roundtrip_fields_equal() {
     assert_eq!(decoded.platform, "windows");
     assert_eq!(decoded.port, 42828);
     assert_eq!(decoded.candidate_ips, ips);
-    assert_eq!(decoded.pairing_token, "0197c2a1-1111-4222-8333-444455556666");
+    assert_eq!(
+        decoded.pairing_token,
+        "0197c2a1-1111-4222-8333-444455556666"
+    );
     // §四：payload 禁止出现任何密钥/密码/正文类字段
     for banned in ["api_key", "apiKey", "password", "brave", "provider_key"] {
-        assert!(!json.to_lowercase().contains(banned), "payload 禁含 {banned}");
+        assert!(
+            !json.to_lowercase().contains(banned),
+            "payload 禁含 {banned}"
+        );
     }
 }
 
@@ -165,7 +187,12 @@ fn qr_tc001_payload_roundtrip_fields_equal() {
 fn qr_tc002_expired_token_rejected() {
     // 客户端：扫码侧直接拒绝（§六 验证 token 未过期）
     let expired = build_payload_json(
-        "pc-1", "PC", 42828, vec!["192.168.1.8".to_string()], "tok-expired", app_unix_now() - 1,
+        "pc-1",
+        "PC",
+        42828,
+        vec!["192.168.1.8".to_string()],
+        "tok-expired",
+        app_unix_now() - 1,
     )
     .unwrap();
     let err = parse_payload(&expired).expect_err("过期必须拒绝");
@@ -184,17 +211,49 @@ fn qr_tc002_expired_token_rejected() {
 
 #[test]
 fn qr_tc003_benchmark_range_excluded_from_candidates() {
-    assert_eq!(classify_candidate(&"198.18.7.7".parse().unwrap()), None, "198.18/15 排除");
-    assert_eq!(classify_candidate(&"198.19.200.1".parse().unwrap()), None, "198.18.0.0/15 覆盖 198.19");
+    assert_eq!(
+        classify_candidate(&"198.18.7.7".parse().unwrap()),
+        None,
+        "198.18/15 排除"
+    );
+    assert_eq!(
+        classify_candidate(&"198.19.200.1".parse().unwrap()),
+        None,
+        "198.18.0.0/15 覆盖 198.19"
+    );
     // 其它必须排除项
-    for ip in ["127.0.0.1", "0.0.0.0", "169.254.5.5", "224.0.0.9", "255.255.255.255", "8.8.8.8", "100.100.1.1"] {
-        assert_eq!(classify_candidate(&ip.parse().unwrap()), None, "{ip} 应排除");
+    for ip in [
+        "127.0.0.1",
+        "0.0.0.0",
+        "169.254.5.5",
+        "224.0.0.9",
+        "255.255.255.255",
+        "8.8.8.8",
+        "100.100.1.1",
+    ] {
+        assert_eq!(
+            classify_candidate(&ip.parse().unwrap()),
+            None,
+            "{ip} 应排除"
+        );
     }
     // 私网三类进入候选且按优先级 192.168 > 10 > 172.16 排序
     let list = filter_candidates(vec![
-        "172.20.1.9", "198.18.0.1", "10.0.0.5", "192.168.1.5", "10.0.0.5", "198.19.255.5",
+        "172.20.1.9",
+        "198.18.0.1",
+        "10.0.0.5",
+        "192.168.1.5",
+        "10.0.0.5",
+        "198.19.255.5",
     ]);
-    assert_eq!(list, vec!["192.168.1.5".to_string(), "10.0.0.5".to_string(), "172.20.1.9".to_string()]);
+    assert_eq!(
+        list,
+        vec![
+            "192.168.1.5".to_string(),
+            "10.0.0.5".to_string(),
+            "172.20.1.9".to_string()
+        ]
+    );
 }
 
 // ---------------- QR-TC004：第一个候选不可达 → 自动连第二个 ----------------
@@ -207,7 +266,10 @@ fn qr_tc004_first_unreachable_second_reachable_auto_connect() {
     let r = pair_via_qr(&b, &payload, None).expect("应自动尝试并连接第二个候选");
     // peer 地址 = 第二个候选（第一个失败后继续，成功后立即停止尝试其它地址）
     let peer = first_peer(&b).unwrap().expect("peer 建立");
-    assert_eq!(peer.peer_addr.as_deref(), Some(format!("127.0.0.1:{}", pc.port).as_str()));
+    assert_eq!(
+        peer.peer_addr.as_deref(),
+        Some(format!("127.0.0.1:{}", pc.port).as_str())
+    );
     assert_eq!(r.server_device_id, pc.a_device);
     pc.handle.stop();
 }
@@ -218,7 +280,8 @@ fn qr_tc004_first_unreachable_second_reachable_auto_connect() {
 fn qr_tc005_invalid_qr_classified_error() {
     let b = temp_db("tc05phone");
     // 非 JSON（例如普通网页/文本二维码）
-    let err = pair_via_qr(&b, "https://example.com/not-higher", None).expect_err("非 Higher 码必须拒绝");
+    let err =
+        pair_via_qr(&b, "https://example.com/not-higher", None).expect_err("非 Higher 码必须拒绝");
     assert!(err.contains("二维码格式错误"), "分类消息：{err}");
     // JSON 但协议不符
     let alien = format!(
@@ -259,8 +322,14 @@ fn qr_tc006_correct_qr_builds_shared_peer() {
         let guard = pc.a.lock().unwrap();
         peer_row(&guard, &b_device).unwrap().expect("电脑侧 peer")
     };
-    assert_eq!(b_peer.shared_token, a_peer.shared_token, "shared_token 双端一致");
-    assert!(b_peer.shared_token.as_deref().unwrap_or("").len() >= 32, "高熵 shared token");
+    assert_eq!(
+        b_peer.shared_token, a_peer.shared_token,
+        "shared_token 双端一致"
+    );
+    assert!(
+        b_peer.shared_token.as_deref().unwrap_or("").len() >= 32,
+        "高熵 shared token"
+    );
     pc.handle.stop();
 }
 
@@ -305,14 +374,20 @@ fn qr_tc008_peer_survives_app_restart() {
     // 无需重新扫码即可继续双向同步（电脑→手机增量）
     let a_profile: i64 = {
         let guard = pc.a.lock().unwrap();
-        guard.query_row("SELECT MAX(id) FROM study_profiles", [], |r| r.get(0)).unwrap()
+        guard
+            .query_row("SELECT MAX(id) FROM study_profiles", [], |r| r.get(0))
+            .unwrap()
     };
     {
         let guard = pc.a.lock().unwrap();
         insert_task(&guard, a_profile, "AFTER-RESTART");
     }
     let summary = sync_now(&b2, None).expect("重启后直接同步成功（无需扫码）");
-    assert!(summary.pulled >= 1, "拉到电脑新增：pulled={}", summary.pulled);
+    assert!(
+        summary.pulled >= 1,
+        "拉到电脑新增：pulled={}",
+        summary.pulled
+    );
     assert_eq!(task_count(&b2, "AFTER-RESTART"), 1);
     pc.handle.stop();
 }
@@ -344,7 +419,11 @@ fn qr_tc009_unpair_keeps_business_data() {
     // 重新扫码即可重建（token 已用 → 需要电脑刷新二维码；新会话可重新配对）
     let token = pc.handle.new_pairing_session().0;
     let payload2 = build_payload_json(
-        &pc.a_device, "Higher Windows", pc.port, vec!["127.0.0.1".to_string()], &token,
+        &pc.a_device,
+        "Higher Windows",
+        pc.port,
+        vec!["127.0.0.1".to_string()],
+        &token,
         app_unix_now() + 600,
     )
     .unwrap();
@@ -378,7 +457,10 @@ fn qr_tc010_auto_first_bidirectional_sync() {
         let guard = pc.a.lock().unwrap();
         task_count(&guard, "PHONE-TASK")
     };
-    assert_eq!(a_got, 1, "电脑应收到 PHONE-TASK（双向，非单向 Windows→Android）");
+    assert_eq!(
+        a_got, 1,
+        "电脑应收到 PHONE-TASK（双向，非单向 Windows→Android）"
+    );
     // 手机收到电脑的档案与任务（电脑 → 手机）
     assert!(profile_count(&b, "%PC-PROFILE%") >= 1);
     assert_eq!(task_count(&b, "PC-TASK"), 1);
@@ -394,10 +476,16 @@ fn qr_tc011_camera_permission_denied_recovery_contract() {
     let s = read_src("src/pages/Settings.tsx");
     assert!(s.contains("permDenied"), "存在权限拒绝态");
     assert!(s.contains("需要相机权限才能扫描二维码"), "权限说明文案");
-    assert!(s.contains("openAppSettings"), "[去开启] 打开系统设置恢复路径");
+    assert!(
+        s.contains("openAppSettings"),
+        "[去开启] 打开系统设置恢复路径"
+    );
     assert!(s.contains("requestPermissions"), "先查后申请权限流程");
     // 拒绝后不阻断后续操作：仍在未配对分支内渲染（无 throw / 无 while 阻塞）
-    assert!(!s.contains("throw new Error(\"camera"), "权限拒绝不抛异常崩溃");
+    assert!(
+        !s.contains("throw new Error(\"camera"),
+        "权限拒绝不抛异常崩溃"
+    );
 }
 
 // ---------------- QR-TC012：所有候选不可达 → 超时恢复，页面可再次扫码 ----------------
@@ -405,11 +493,7 @@ fn qr_tc011_camera_permission_denied_recovery_contract() {
 #[test]
 fn qr_tc012_all_candidates_unreachable_recovers() {
     // 两个不可达候选（10.255.255.x 黑洞）→ 逐个 2.5s 超时后返回可恢复错误
-    let (pc, payload) = pc_with_payload(
-        "tc12",
-        |_| {},
-        vec!["10.255.255.1", "10.255.255.2"],
-    );
+    let (pc, payload) = pc_with_payload("tc12", |_| {}, vec!["10.255.255.1", "10.255.255.2"]);
     let b = temp_db("tc12phone");
     let t0 = std::time::Instant::now();
     let err = pair_via_qr(&b, &payload, None).expect_err("全不可达必须返回错误");

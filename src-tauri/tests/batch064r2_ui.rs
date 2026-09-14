@@ -39,7 +39,10 @@ fn block_of<'a>(css: &'a str, selector: &str) -> &'a str {
 #[test]
 fn r2_u01_wallpaper_layers_at_app_root() {
     let app = read_src("../src/App.tsx");
-    assert!(app.contains("<WallpaperLayers />"), "R2-U01: WallpaperLayers 挂在 App 根");
+    assert!(
+        app.contains("<WallpaperLayers />"),
+        "R2-U01: WallpaperLayers 挂在 App 根"
+    );
 }
 
 #[test]
@@ -50,7 +53,10 @@ fn r2_u02_wallpaper_fixed_inset_pointer_none() {
         let b = block_of(&css, sel);
         assert!(b.contains("position: fixed"), "R2-U02: {sel} fixed");
         assert!(b.contains("inset: 0"), "R2-U02: {sel} inset 0");
-        assert!(b.contains("pointer-events: none"), "R2-U02: {sel} pointer-events none");
+        assert!(
+            b.contains("pointer-events: none"),
+            "R2-U02: {sel} pointer-events none"
+        );
     }
 }
 
@@ -58,8 +64,13 @@ fn r2_u02_wallpaper_fixed_inset_pointer_none() {
 fn r2_u03_no_per_region_wallpaper_image() {
     let css = read_src("../src/styles.css");
     // 唯一允许的两处消费者：壁纸层 + Settings 预览（§2/§62）
-    let n = css.matches("background-image: var(--h-wallpaper-image").count();
-    assert_eq!(n, 2, "R2-U03: --h-wallpaper-image 只允许 壁纸层+预览 两处（当前 {n}）");
+    let n = css
+        .matches("background-image: var(--h-wallpaper-image")
+        .count();
+    assert_eq!(
+        n, 2,
+        "R2-U03: --h-wallpaper-image 只允许 壁纸层+预览 两处（当前 {n}）"
+    );
     // Sidebar / Main / AI / Knowledge / Editor / Modal 不得自己铺图
     for sel in [
         ".layout__sidebar",
@@ -90,7 +101,10 @@ fn r2_u04_wallpaper_fit_cover_center_no_repeat() {
 fn r2_u05_no_hidden_brightness() {
     let css = read_src("../src/styles.css");
     let b = block_of(&css, ".h-wallpaper-layer {");
-    assert!(!b.contains("brightness("), "R2-U05: 壁纸层无 brightness（§18）");
+    assert!(
+        !b.contains("brightness("),
+        "R2-U05: 壁纸层无 brightness（§18）"
+    );
     assert!(b.contains("saturate("), "R2-U05: 壁纸层保留 saturate");
 }
 
@@ -123,14 +137,20 @@ fn r2_u07_solid_tokens_exist() {
         "--h-surface-2-solid",
         "--h-surface-3-solid",
     ] {
-        assert!(css.contains(&format!("{tok}:")), "R2-U07: {tok} 存在于 :root");
+        assert!(
+            css.contains(&format!("{tok}:")),
+            "R2-U07: {tok} 存在于 :root"
+        );
     }
 }
 
 #[test]
 fn r2_u08_theme_writes_solid_only() {
     let app = read_src("../src/appearance/appearance.ts");
-    let f = app.split("export function applyAppearance").nth(1).unwrap_or_default();
+    let f = app
+        .split("export function applyAppearance")
+        .nth(1)
+        .unwrap_or_default();
     for tok in [
         "--h-bg-solid",
         "--h-sidebar-solid",
@@ -144,7 +164,13 @@ fn r2_u08_theme_writes_solid_only() {
         );
     }
     // 禁止 inline 写 Effective Background Tokens（交给 CSS 按 data-h-wallpaper 决定 §24）
-    for tok in ["--h-bg\",", "--h-sidebar\",", "--h-surface-1\",", "--h-surface-2\",", "--h-surface-3\","] {
+    for tok in [
+        "--h-bg\",",
+        "--h-sidebar\",",
+        "--h-surface-1\",",
+        "--h-surface-2\",",
+        "--h-surface-3\",",
+    ] {
         assert!(
             !f.contains(&format!("setProperty(\"{tok}")),
             "R2-U08: 禁止 setProperty(\"{tok}…)"
@@ -155,7 +181,10 @@ fn r2_u08_theme_writes_solid_only() {
 #[test]
 fn r2_u09_effective_wallpaper_tokens() {
     let css = read_src("../src/styles.css");
-    let on = css.split("html[data-h-wallpaper=\"on\"] {").nth(1).unwrap_or_default();
+    let on = css
+        .split("html[data-h-wallpaper=\"on\"] {")
+        .nth(1)
+        .unwrap_or_default();
     let on = on.split('}').next().unwrap_or_default();
     for expect in [
         "var(--h-bg-solid) 68%",
@@ -172,9 +201,14 @@ fn r2_u09_effective_wallpaper_tokens() {
 fn r2_u10_body_transparent_under_wallpaper() {
     let css = read_src("../src/styles.css");
     let b = css
-        .split("html[data-h-wallpaper=\"on\"] body").nth(1).unwrap_or_default();
+        .split("html[data-h-wallpaper=\"on\"] body")
+        .nth(1)
+        .unwrap_or_default();
     let b = b.split('}').next().unwrap_or_default();
-    assert!(b.contains("background: transparent"), "R2-U10: body/#root 壁纸时透明");
+    assert!(
+        b.contains("background: transparent"),
+        "R2-U10: body/#root 壁纸时透明"
+    );
 }
 
 #[test]
@@ -197,7 +231,8 @@ fn r2_u12_form_controls_78() {
     let css = read_src("../src/styles.css");
     let b = css
         .split("html[data-h-wallpaper=\"on\"] :is(input, textarea, select)")
-        .nth(1).unwrap_or_default();
+        .nth(1)
+        .unwrap_or_default();
     let b = b.split('}').next().unwrap_or_default();
     assert!(
         b.contains("var(--h-bg-solid) 78%"),
@@ -223,7 +258,10 @@ fn r2_u13_modal_76_overlay_28() {
 #[test]
 fn r2_u14_popover_elevated_84() {
     let css = read_src("../src/styles.css");
-    let on = css.split("html[data-h-wallpaper=\"on\"] {").nth(1).unwrap_or_default();
+    let on = css
+        .split("html[data-h-wallpaper=\"on\"] {")
+        .nth(1)
+        .unwrap_or_default();
     let on = on.split('}').next().unwrap_or_default();
     assert!(
         on.contains("--bg-elevated") && on.contains("var(--h-surface-2-solid) 84%"),
@@ -249,7 +287,8 @@ fn r2_u16_richdoc_72_78_86() {
     let d = block_of(&css, "html[data-h-wallpaper=\"on\"] .hdoc");
     assert!(d.contains("#1b1e24 72%"), "R2-U16: hdoc = 72%");
     let t = css
-        .split("html[data-h-wallpaper=\"on\"] .hdoc__toolbar").nth(1)
+        .split("html[data-h-wallpaper=\"on\"] .hdoc__toolbar")
+        .nth(1)
         .unwrap_or_default();
     assert!(t.contains("#22262e 78%"), "R2-U16: toolbar/codebar = 78%");
     let cb = block_of(&css, "html[data-h-wallpaper=\"on\"] .hdoc__codeblock");
@@ -278,18 +317,42 @@ fn r2_u17_ai_message_input_surfaces() {
 #[test]
 fn r2_u18_preview_truth() {
     let css = read_src("../src/styles.css");
-    let before = css.split(".appearance__preview::before").nth(1).unwrap_or_default();
+    let before = css
+        .split(".appearance__preview::before")
+        .nth(1)
+        .unwrap_or_default();
     let before = before.split('}').next().unwrap_or_default();
-    assert!(before.contains("var(--h-wallpaper-image"), "R2-U18: 预览图片层");
-    assert!(before.contains("var(--h-wallpaper-visibility"), "R2-U18: 预览=同强度");
-    assert!(before.contains("var(--h-wallpaper-saturation"), "R2-U18: 预览=同饱和");
-    let after = css.split(".appearance__preview::after").nth(1).unwrap_or_default();
+    assert!(
+        before.contains("var(--h-wallpaper-image"),
+        "R2-U18: 预览图片层"
+    );
+    assert!(
+        before.contains("var(--h-wallpaper-visibility"),
+        "R2-U18: 预览=同强度"
+    );
+    assert!(
+        before.contains("var(--h-wallpaper-saturation"),
+        "R2-U18: 预览=同饱和"
+    );
+    let after = css
+        .split(".appearance__preview::after")
+        .nth(1)
+        .unwrap_or_default();
     let after = after.split('}').next().unwrap_or_default();
-    assert!(after.contains("var(--h-wallpaper-overlay"), "R2-U18: 预览=同压暗");
+    assert!(
+        after.contains("var(--h-wallpaper-overlay"),
+        "R2-U18: 预览=同压暗"
+    );
     // §65 示例 Surface（JSX + CSS）
     let s = read_src("../src/pages/Settings.tsx");
-    assert!(s.contains("appearance__preview-sample"), "R2-U18: 示例 Surface 块存在");
-    assert!(css.contains(".appearance__preview-sample"), "R2-U18: 示例 Surface 样式存在");
+    assert!(
+        s.contains("appearance__preview-sample"),
+        "R2-U18: 示例 Surface 块存在"
+    );
+    assert!(
+        css.contains(".appearance__preview-sample"),
+        "R2-U18: 示例 Surface 样式存在"
+    );
 }
 
 #[test]
@@ -300,10 +363,15 @@ fn r2_u19_recommended_effect_no_wallpaper_removal() {
     let f = s.split("function onRecommended").nth(1).unwrap_or_default();
     let f = f.split("function onReset").next().unwrap_or_default();
     assert!(
-        f.contains("LIMITS.visibility.def") && f.contains("LIMITS.saturation.def") && f.contains("LIMITS.overlay.def"),
+        f.contains("LIMITS.visibility.def")
+            && f.contains("LIMITS.saturation.def")
+            && f.contains("LIMITS.overlay.def"),
         "R2-U19: 推荐值走 LIMITS def（=70/70/45）"
     );
-    assert!(!f.contains("removeWallpaper"), "R2-U19: 恢复推荐效果不删壁纸");
+    assert!(
+        !f.contains("removeWallpaper"),
+        "R2-U19: 恢复推荐效果不删壁纸"
+    );
 }
 
 #[test]
@@ -312,7 +380,10 @@ fn r2_u20_default_reset_full() {
     let f = s.split("function onReset").nth(1).unwrap_or_default();
     let f = f.split("return (").next().unwrap_or_default();
     assert!(f.contains("removeWallpaper"), "R2-U20: 恢复默认删除壁纸");
-    assert!(f.contains("DEFAULT_PREFS"), "R2-U20: 恢复默认走 DEFAULT_PREFS（default 主题 + 70/70/45）");
+    assert!(
+        f.contains("DEFAULT_PREFS"),
+        "R2-U20: 恢复默认走 DEFAULT_PREFS（default 主题 + 70/70/45）"
+    );
     let app = read_src("../src/appearance/appearance.ts");
     assert!(
         app.contains("theme: \"default\""),
@@ -330,7 +401,10 @@ fn r2_u21_strictmode_cleanup() {
     let wl = read_src("../src/components/WallpaperLayers.tsx");
     let eff = wl.split("useEffect(() => {").nth(1).unwrap_or_default();
     let eff = eff.split("}, []);").next().unwrap_or_default();
-    assert!(eff.contains("return unregister"), "R2-U21: effect 返回 unregister");
+    assert!(
+        eff.contains("return unregister"),
+        "R2-U21: effect 返回 unregister"
+    );
 }
 
 // ==================== R2-U22-U27 · Freeze 契约 ====================
@@ -436,10 +510,7 @@ fn r2_u23_backend_freeze() {
     );
     // DEV-0070 §10 授权：api.ts 新增 getUserProfileTemplate（types.ts 仍零 diff）
     let api = git_diff(&["../src/api.ts", "../src/types.ts"]);
-    let api_filtered: Vec<&str> = api
-        .lines()
-        .filter(|f| !f.ends_with("src/api.ts"))
-        .collect();
+    let api_filtered: Vec<&str> = api.lines().filter(|f| !f.ends_with("src/api.ts")).collect();
     assert!(
         api_filtered.is_empty(),
         "R2-U23: types.ts 零 diff；api.ts 仅限 DEV-0070 §10 授权（发现：{api_filtered:?}）"
@@ -498,11 +569,25 @@ fn r2_u24_dependency_freeze() {
             .filter(|d| !head.contains(d) && !allowed.contains(&d.as_str()))
             .cloned()
             .collect();
-        assert!(extra.is_empty(), "R2-U24: {label} 依赖新增超出 DEV-SYNC-003 授权（{extra:?}）");
-        let removed: Vec<String> = head.iter().filter(|d| !current.contains(d)).cloned().collect();
-        assert!(removed.is_empty(), "R2-U24: {label} 依赖不得移除（{removed:?}）");
+        assert!(
+            extra.is_empty(),
+            "R2-U24: {label} 依赖新增超出 DEV-SYNC-003 授权（{extra:?}）"
+        );
+        let removed: Vec<String> = head
+            .iter()
+            .filter(|d| !current.contains(d))
+            .cloned()
+            .collect();
+        assert!(
+            removed.is_empty(),
+            "R2-U24: {label} 依赖不得移除（{removed:?}）"
+        );
     }
-    const QR_NPM: [&str; 3] = ["qrcode", "@types/qrcode", "@tauri-apps/plugin-barcode-scanner"];
+    const QR_NPM: [&str; 3] = [
+        "qrcode",
+        "@types/qrcode",
+        "@tauri-apps/plugin-barcode-scanner",
+    ];
     const QR_CARGO: [&str; 1] = ["tauri-plugin-barcode-scanner"];
     assert_dep_delta(
         npm_deps(&read_src("../package.json")),
@@ -546,10 +631,12 @@ fn r2_u26_task_menu_locked_by_batch063() {
 fn r2_u27_proposal_truth_locked() {
     let b064 = read_src("tests/batch064_ui.rs");
     assert!(
-        b064.contains("u23_proposal_changeset_preserved")
-            && b064.contains("Object.keys(after)"),
+        b064.contains("u23_proposal_changeset_preserved") && b064.contains("Object.keys(after)"),
         "R2-U27: Proposal ai://changeset + Patch Truth 继续锁定"
     );
     let csr = read_src("../src/components/ChangeSetReview.tsx");
-    assert!(csr.contains("Object.keys(after)"), "R2-U27: Diff 真值源码保留");
+    assert!(
+        csr.contains("Object.keys(after)"),
+        "R2-U27: Diff 真值源码保留"
+    );
 }

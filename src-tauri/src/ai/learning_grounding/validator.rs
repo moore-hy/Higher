@@ -5,7 +5,9 @@
 
 use std::collections::HashSet;
 
-use super::types::{GroundingCompleteness, LearningUnitDraft, TaskGroundingDraft, TaskGroundingMode};
+use super::types::{
+    GroundingCompleteness, LearningUnitDraft, TaskGroundingDraft, TaskGroundingMode,
+};
 
 /// §四十一：Task 原子性。Learning → 恰 1 unit；Meta → 0 unit。
 /// 返回 Err(人类可读修复指令素材)。
@@ -108,7 +110,10 @@ fn is_dated_activity_name(name: &str) -> bool {
 
 /// §四一+§九十六：一批 Task grounding 的统一校验（unit_refs 必须指向 Draft units）。
 pub fn validate_task_groundings(
-    tasks: &[( /* title */ String, /* grounding */ Option<&TaskGroundingDraft>)],
+    tasks: &[(
+        /* title */ String,
+        /* grounding */ Option<&TaskGroundingDraft>,
+    )],
     units: &[LearningUnitDraft],
 ) -> Vec<String> {
     let mut errors = Vec::new();
@@ -136,9 +141,7 @@ pub fn validate_task_groundings(
 }
 
 /// §四〇：Grounding Completeness（pure，自 Draft 统计）。
-pub fn grounding_completeness(
-    tasks: &[( /* grounding */ Option<&TaskGroundingDraft>)],
-) -> GroundingCompleteness {
+pub fn grounding_completeness(tasks: &[(Option<&TaskGroundingDraft>)]) -> GroundingCompleteness {
     let mut c = GroundingCompleteness::default();
     for g in tasks {
         match g {

@@ -36,7 +36,10 @@ fn setup(name: &str) -> (DbState, VaultState) {
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
     let vault_dir = std::env::temp_dir().join(format!("higher_f2a2_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -163,8 +166,11 @@ fn run_turn(
 }
 
 fn mk_profile(conn: &Connection, tag: &str) -> i64 {
-    conn.execute("INSERT INTO study_profiles (name) VALUES (?1)", params![tag])
-        .unwrap();
+    conn.execute(
+        "INSERT INTO study_profiles (name) VALUES (?1)",
+        params![tag],
+    )
+    .unwrap();
     conn.last_insert_rowid()
 }
 
@@ -223,14 +229,32 @@ fn seed_task(conn: &Connection, p: i64, title: &str, date: &str, status: &str) -
 
 /// §九八 DB seed：5 复合 + 1 meta（未来）+ 保护组（completed/有session/手改/窗外/过去）。
 fn seed_legacy_tasks(conn: &Connection, p: i64) {
-    for (i, d) in ["2026-08-28", "2026-08-29", "2026-08-30", "2026-08-31", "2026-09-01"]
-        .iter()
-        .enumerate()
+    for (i, d) in [
+        "2026-08-28",
+        "2026-08-29",
+        "2026-08-30",
+        "2026-08-31",
+        "2026-09-01",
+    ]
+    .iter()
+    .enumerate()
     {
         let n = i + 1;
-        seed_task(conn, p, &format!("高数第{n}章+英语单词200词+408数据结构结论（旧复合{n}）"), d, "pending");
+        seed_task(
+            conn,
+            p,
+            &format!("高数第{n}章+英语单词200词+408数据结构结论（旧复合{n}）"),
+            d,
+            "pending",
+        );
     }
-    seed_task(conn, p, "周复盘：本周完成度核对+错题整理（旧meta）", "2026-09-02", "pending");
+    seed_task(
+        conn,
+        p,
+        "周复盘：本周完成度核对+错题整理（旧meta）",
+        "2026-09-02",
+        "pending",
+    );
     // 保护组
     seed_task(conn, p, "窗口内已完成任务", "2026-08-29", "completed");
     let with_session = seed_task(conn, p, "窗口内有学习记录任务", "2026-08-30", "pending");
@@ -297,16 +321,19 @@ fn five_questions() -> Vec<J> {
 }
 
 fn t2_full_answer_tool() -> Completion {
-    tool_call("request_user_input", json!({
-        "collected": {
-            "daily_time": "每天可以学习约11小时",
-            "math_material": "数学跟武忠祥基础和李永乐线代",
-            "cs_material": "408用王道四本",
-            "eng_material": "英语暂时没有固定教材",
-            "replace_scope": "用新生成的计划替换现有旧任务"
-        },
-        "questions": []
-    }))
+    tool_call(
+        "request_user_input",
+        json!({
+            "collected": {
+                "daily_time": "每天可以学习约11小时",
+                "math_material": "数学跟武忠祥基础和李永乐线代",
+                "cs_material": "408用王道四本",
+                "eng_material": "英语暂时没有固定教材",
+                "replace_scope": "用新生成的计划替换现有旧任务"
+            },
+            "questions": []
+        }),
+    )
 }
 
 /// 两 Turn 主链（§九二-§九六）：Turn 1 五问挂起；Turn 2 轮首 Decision 仍未
@@ -325,9 +352,17 @@ fn two_turn_e2e(name: &str, with_memory: bool) -> (DbState, VaultState, i64, i64
     // ---- Turn 1：五问 → waiting_user ----
     let required = five_questions();
     let out1 = run_turn(
-        &state, &vault, "f2-t1", pid, cid, T1_MSG,
+        &state,
+        &vault,
+        "f2-t1",
+        pid,
+        cid,
+        T1_MSG,
         vec![goal_json(json!(required))],
-        vec![tool_call("request_user_input", json!({ "questions": five_questions() }))],
+        vec![tool_call(
+            "request_user_input",
+            json!({ "questions": five_questions() }),
+        )],
     )
     .unwrap();
     assert_eq!(out1, "needs_user_input", "E2E T1：五问挂起");
@@ -346,12 +381,23 @@ fn two_turn_e2e(name: &str, with_memory: bool) -> (DbState, VaultState, i64, i64
         intel2.push(memory_json());
     }
     let out2 = run_turn(
-        &state, &vault, "f2-t2", pid, cid, T2_MSG,
+        &state,
+        &vault,
+        "f2-t2",
+        pid,
+        cid,
+        T2_MSG,
         intel2,
-        vec![t2_full_answer_tool(), text_completion(&new_plan_draft().to_string())],
+        vec![
+            t2_full_answer_tool(),
+            text_completion(&new_plan_draft().to_string()),
+        ],
     )
     .unwrap();
-    assert_eq!(out2, "completed", "E2E T2：同 Turn 自动继续并收口（禁 Turn 3）");
+    assert_eq!(
+        out2, "completed",
+        "E2E T2：同 Turn 自动继续并收口（禁 Turn 3）"
+    );
     (state, vault, pid, cid)
 }
 
@@ -367,9 +413,17 @@ fn f2_tc001_partial_answer_keeps_waiting() {
         (pid, new_conv(&conn, pid))
     };
     run_turn(
-        &state, &vault, "t1a", pid, cid, T1_MSG,
+        &state,
+        &vault,
+        "t1a",
+        pid,
+        cid,
+        T1_MSG,
         vec![goal_json(json!(five_questions()))],
-        vec![tool_call("request_user_input", json!({ "questions": five_questions() }))],
+        vec![tool_call(
+            "request_user_input",
+            json!({ "questions": five_questions() }),
+        )],
     )
     .unwrap();
     // Turn 2：只回答 2 项 → 剩 3 问继续 waiting_user
@@ -393,7 +447,11 @@ fn f2_tc001_partial_answer_keeps_waiting() {
     let conn = state.0.lock().unwrap();
     assert_eq!(pending_count(&conn, pid, cid), 3, "TC001：remaining=3");
     assert_eq!(workflow_state(&conn, pid, cid), "waiting_user");
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "TC001：0 planning mutation");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "TC001：0 planning mutation"
+    );
 }
 
 // ==================== F2-TC002/003/004/013/015/017/018 · 两 Turn E2E 主链 ====================
@@ -410,23 +468,44 @@ fn f2_tc002_full_answer_auto_continue() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("TC002：Turn 2 必须交付 Planning ChangeSet");
-    assert_eq!(status, "waiting_approval", "TC002/TC015：Replacement → 现有正式确认语义");
+    assert_eq!(
+        status, "waiting_approval",
+        "TC002/TC015：Replacement → 现有正式确认语义"
+    );
     let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(n, 1, "TC013/TC017：ONE ChangeSet（Repair/Replacement 不另开包）");
+    assert_eq!(
+        n, 1,
+        "TC013/TC017：ONE ChangeSet（Repair/Replacement 不另开包）"
+    );
     // 确认前 0 mutation（§三七）：旧任务原样、新任务未落库
     let archived: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NOT NULL", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NOT NULL",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(archived, 0, "TC015：确认前 0 business mutation（旧任务未动）");
+    assert_eq!(
+        archived, 0,
+        "TC015：确认前 0 business mutation（旧任务未动）"
+    );
     let new_n: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title LIKE '%极限基础题%'",
-            params![pid], |r| r.get(0),
+            params![pid],
+            |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(new_n, 0, "TC015：确认前新任务未落库（整体生效，无 partial apply）");
+    assert_eq!(
+        new_n, 0,
+        "TC015：确认前新任务未落库（整体生效，无 partial apply）"
+    );
     // §五八：ReadyForPlanning 后 pending 收口为空
     assert_eq!(pending_count(&conn, pid, _cid), 0, "TC002：pending 收口 []");
 }
@@ -449,7 +528,9 @@ fn f2_tc003_original_request_preserved() {
 fn f2_tc004_no_generic_fallback() {
     let (state, _vault, pid, cid) = two_turn_e2e("tc004", false);
     let conn = state.0.lock().unwrap();
-    let all = ConversationRepository::new(&conn).list_messages(cid, pid, 50, 0).unwrap();
+    let all = ConversationRepository::new(&conn)
+        .list_messages(cid, pid, 50, 0)
+        .unwrap();
     let joined = all
         .iter()
         .filter(|m| m.role == "assistant")
@@ -481,7 +562,11 @@ fn f2_tc005_memory_non_blocking() {
     assert_eq!(mem_n, 3, "TC005：3 条 Memory Proposal 待确认");
     // 同时 Planning 已交付（解耦证明：未点任何确认）
     let cs: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(cs, 1, "TC005：Memory pending 不阻塞 Planning 交付");
     let _ = cid;
@@ -500,7 +585,11 @@ fn f2_tc006_ignore_memory_still_plans() {
         .unwrap();
     assert_eq!(still_pending, 3, "TC006：忽略不改变 Memory 状态");
     let cs: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(cs, 1, "TC006：Planning 结果不受 Memory 影响");
 }
@@ -516,7 +605,11 @@ fn f2_tc007_no_memory_action_still_plans() {
         "TC007：无 Memory 提取（前置）"
     );
     let cs: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(cs, 1, "TC007：Planning 正常完成");
 }
@@ -531,12 +624,29 @@ fn f2_tc008_replacement_window_selector() {
     let p = mk_profile(&conn, "F2T8");
     seed_legacy_tasks(&conn, p);
     let (ws, we) = replacement_window(LOCAL_DATE);
-    assert_eq!((ws.as_str(), we.as_str()), ("2026-08-27", "2026-09-09"), "TC008：窗口 [today, today+13]");
+    assert_eq!(
+        (ws.as_str(), we.as_str()),
+        ("2026-08-27", "2026-09-09"),
+        "TC008：窗口 [today, today+13]"
+    );
     let selected = select_replaceable_future_tasks(&conn, p, &ws, &we);
     let titles: Vec<&str> = selected.iter().map(|(_, t, _)| t.as_str()).collect();
-    assert_eq!(selected.len(), 6, "TC008：只选中 5 复合 + 1 meta（{titles:?}）");
-    assert!(titles.iter().all(|t| t.contains("旧")), "TC008：选中者均为旧未来任务");
-    for forbidden in ["窗口内已完成任务", "窗口内有学习记录任务", "窗口内手工修改任务", "30天外未来任务", "过去任务"] {
+    assert_eq!(
+        selected.len(),
+        6,
+        "TC008：只选中 5 复合 + 1 meta（{titles:?}）"
+    );
+    assert!(
+        titles.iter().all(|t| t.contains("旧")),
+        "TC008：选中者均为旧未来任务"
+    );
+    for forbidden in [
+        "窗口内已完成任务",
+        "窗口内有学习记录任务",
+        "窗口内手工修改任务",
+        "30天外未来任务",
+        "过去任务",
+    ] {
         assert!(!titles.contains(&forbidden), "TC008：{forbidden} 不得选中");
     }
     // 只读证明：selection 后 0 mutation
@@ -564,7 +674,9 @@ fn applied_e2e(name: &str) -> (DbState, VaultState, i64, i64, i64) {
     // 正式确认（现有 ChangeSet apply 通道；source="user"）
     {
         let conn = state.0.lock().unwrap();
-        ChangeSetRepository::new(&conn).apply(cs_id, pid, false).expect("确认后 Apply 成功");
+        ChangeSetRepository::new(&conn)
+            .apply(cs_id, pid, false)
+            .expect("确认后 Apply 成功");
     }
     (state, vault, pid, cid, cs_id)
 }
@@ -598,17 +710,30 @@ fn f2_tc010_session_preserved() {
         .unwrap();
     assert_eq!(n, 1, "TC010：有 Session 的任务保留");
     assert_eq!(archived, None, "TC010：不因 replacement 归档");
-    assert_eq!(count(&conn, "study_sessions"), 1, "TC010：历史 Session 0 mutation");
+    assert_eq!(
+        count(&conn, "study_sessions"),
+        1,
+        "TC010：历史 Session 0 mutation"
+    );
 }
 
 #[test]
 fn f2_tc011_new_tasks_atomic() {
     let (state, _vault, pid, _cid, _cs) = applied_e2e("tc011");
     let conn = state.0.lock().unwrap();
-    let new_titles = ["高数：极限基础题 15题", "线代：行列式计算 10题", "英语：考研词汇 List 1-2", "408：数据结构链表基础"];
+    let new_titles = [
+        "高数：极限基础题 15题",
+        "线代：行列式计算 10题",
+        "英语：考研词汇 List 1-2",
+        "408：数据结构链表基础",
+    ];
     for t in new_titles {
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title=?2", params![pid, t], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title=?2",
+                params![pid, t],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 1, "TC011：新 atomic 任务存在（{t}）");
     }
@@ -674,7 +799,9 @@ fn f2_tc016_readback() {
         .unwrap();
     assert_eq!(in_window, 4, "TC016：新任务日期均在窗口内且 grounded");
     // 引擎 ReadBack 通道核验
-    let written = ChangeSetRepository::new(&conn).list_operations(cs, pid).unwrap();
+    let written = ChangeSetRepository::new(&conn)
+        .list_operations(cs, pid)
+        .unwrap();
     let (ok, fail) = app_lib::ai::higher_action::verify_written_ops(&conn, pid, &written);
     assert!(ok, "TC016：ReadBack 失败 {fail:?}");
 }
@@ -685,13 +812,26 @@ fn f2_tc017_idempotency() {
     {
         // 块作用域释放锁 guard（run_turn 内部需再次 lock；std Mutex 同线程重入=死锁）
         let conn = state.0.lock().unwrap();
-        assert_eq!(count(&conn, "ai_change_sets"), 1, "TC017：single effective proposal");
+        assert_eq!(
+            count(&conn, "ai_change_sets"),
+            1,
+            "TC017：single effective proposal"
+        );
     }
     // 「下一步」类消息不得再触发第二套规划（§七一：非特殊字符串修复）
     let out3 = run_turn(
-        &state, &vault, "f2-t3", pid, _cid, "下一步",
-        vec![text_completion(r#"{"goal":"","goal_type":"other","planning_required":false,"required_information":[]}"#)],
-        vec![text_completion("上一步规划提案仍在审查面板等待确认，确认后即会替换旧任务。")],
+        &state,
+        &vault,
+        "f2-t3",
+        pid,
+        _cid,
+        "下一步",
+        vec![text_completion(
+            r#"{"goal":"","goal_type":"other","planning_required":false,"required_information":[]}"#,
+        )],
+        vec![text_completion(
+            "上一步规划提案仍在审查面板等待确认，确认后即会替换旧任务。",
+        )],
     );
     assert_eq!(out3.unwrap(), "completed");
     let conn = state.0.lock().unwrap();
@@ -708,7 +848,11 @@ fn f2_tc018_restart() {
     // 「重启视角」：新的只读查询（无任何前置动作）直接取到已应用状态
     let conn = state.0.lock().unwrap();
     let status: String = conn
-        .query_row("SELECT status FROM ai_change_sets WHERE id=?1", params![cs], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM ai_change_sets WHERE id=?1",
+            params![cs],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(status, "applied", "TC018：重启后 ChangeSet applied 可读");
     let active_new: i64 = conn
@@ -734,9 +878,17 @@ fn f2_tc014_failure_preserves_old_plan() {
         (pid, new_conv(&conn, pid))
     };
     run_turn(
-        &state, &vault, "t14a", pid, cid, T1_MSG,
+        &state,
+        &vault,
+        "t14a",
+        pid,
+        cid,
+        T1_MSG,
         vec![goal_json(json!(five_questions()))],
-        vec![tool_call("request_user_input", json!({ "questions": five_questions() }))],
+        vec![tool_call(
+            "request_user_input",
+            json!({ "questions": five_questions() }),
+        )],
     )
     .unwrap();
     // Turn 2：模型两次都输出无 grounding 复合任务（invalid + repair 失败）
@@ -758,19 +910,38 @@ fn f2_tc014_failure_preserves_old_plan() {
         "assumptions": [], "unresolved": []
     });
     let out2 = run_turn(
-        &state, &vault, "t14b", pid, cid, T2_MSG,
-        vec![goal_json(json!([])), text_completion(&bad_repair.to_string())],
-        vec![t2_full_answer_tool(), text_completion(&bad_draft.to_string())],
+        &state,
+        &vault,
+        "t14b",
+        pid,
+        cid,
+        T2_MSG,
+        vec![
+            goal_json(json!([])),
+            text_completion(&bad_repair.to_string()),
+        ],
+        vec![
+            t2_full_answer_tool(),
+            text_completion(&bad_draft.to_string()),
+        ],
     )
     .unwrap();
     assert_eq!(out2, "completed", "TC014：以失败文案收口");
     let conn = state.0.lock().unwrap();
     // 旧计划完整保留：0 归档、0 新任务、0 ChangeSet
     let archived: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NOT NULL", params![pid], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NOT NULL",
+            params![pid],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(archived, 0, "TC014：旧 future plan 全部保留");
-    assert_eq!(count(&conn, "ai_change_sets"), 0, "TC014：0 replacement mutation");
+    assert_eq!(
+        count(&conn, "ai_change_sets"),
+        0,
+        "TC014：0 replacement mutation"
+    );
     let reply = last_assistant(&conn, cid, pid);
     assert!(
         reply.contains("未通过学习关联校验") && reply.contains("正式数据未变化"),
@@ -790,9 +961,17 @@ fn fallback_guard_blocks_generic_on_active_continuation() {
         (pid, new_conv(&conn, pid))
     };
     run_turn(
-        &state, &vault, "g1", pid, cid, T1_MSG,
+        &state,
+        &vault,
+        "g1",
+        pid,
+        cid,
+        T1_MSG,
         vec![goal_json(json!(five_questions()))],
-        vec![tool_call("request_user_input", json!({ "questions": five_questions() }))],
+        vec![tool_call(
+            "request_user_input",
+            json!({ "questions": five_questions() }),
+        )],
     )
     .unwrap();
     // Turn 2：模型只调读工具、不提交答案、不追问 → 轮次耗尽（原 generic fallback 场景）
@@ -804,23 +983,41 @@ fn fallback_guard_blocks_generic_on_active_continuation() {
         main.push(tool_call("get_higher_overview", json!({})));
     }
     let out2 = run_turn(
-        &state, &vault, "g2", pid, cid, T2_MSG,
+        &state,
+        &vault,
+        "g2",
+        pid,
+        cid,
+        T2_MSG,
         vec![goal_json(json!(five_questions()))],
         main,
     )
     .unwrap();
-    assert_eq!(out2, "failed", "Guard：planning continuation 不完整 → run failed（不假装 completed）");
+    assert_eq!(
+        out2, "failed",
+        "Guard：planning continuation 不完整 → run failed（不假装 completed）"
+    );
     let conn = state.0.lock().unwrap();
     let err: String = conn
-        .query_row("SELECT COALESCE(error,'') FROM ai_runs WHERE id='g2'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COALESCE(error,'') FROM ai_runs WHERE id='g2'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
-    assert_eq!(err, "planning_continuation_incomplete", "Guard：durable 错误码");
+    assert_eq!(
+        err, "planning_continuation_incomplete",
+        "Guard：durable 错误码"
+    );
     let reply = last_assistant(&conn, cid, pid);
     assert!(
         !reply.contains("告诉我下一步") && !reply.contains("如需继续"),
         "Guard：generic fallback 禁用（{reply}）"
     );
-    assert!(reply.contains("没有修改现有计划"), "Guard：如实告知（{reply}）");
+    assert!(
+        reply.contains("没有修改现有计划"),
+        "Guard：如实告知（{reply}）"
+    );
 }
 
 // ==================== 补充 · Replacement Intent 单元（§二九/§三十） ====================
@@ -830,7 +1027,10 @@ fn replacement_intent_detection() {
     assert!(is_replacement_intent("新计划替换目前的旧任务"));
     assert!(is_replacement_intent("用新生成的计划替换现有旧任务"));
     assert!(is_replacement_intent("重新生成未来14天考研学习任务"));
-    assert!(!is_replacement_intent("帮我规划未来14天数学英语408学习计划"), "普通规划请求 ≠ 替换意图");
+    assert!(
+        !is_replacement_intent("帮我规划未来14天数学英语408学习计划"),
+        "普通规划请求 ≠ 替换意图"
+    );
     assert!(!is_replacement_intent("今天天气如何"));
     assert!(!is_replacement_intent(""));
 }

@@ -1,11 +1,11 @@
 // Foundation 2.0 §6: StudyProfile + profile-scoped read commands.
 use crate::db;
-use crate::repository::CountPair;
 use crate::repository::evaluation::{Evaluation, EvaluationRepository, EvaluationStats};
 use crate::repository::goal::GoalRepository;
 use crate::repository::learning_item::LearningItemRepository;
 use crate::repository::study_profile::{ProfileCalendarDay, StudyProfile, StudyProfileRepository};
 use crate::repository::study_session::{StudySession, StudySessionRepository};
+use crate::repository::CountPair;
 
 // =============== StudyProfile ===============
 
@@ -31,7 +31,9 @@ pub fn create_study_profile(
         )
         .map_err(|e| e.to_string())?;
     // DEV-0050 §20：新档案自动创建唯一 Final（占位「未设置最终目标」）
-    let _ = GoalRepository::new(&conn).ensure_final(p.id).map_err(|e| e.to_string())?;
+    let _ = GoalRepository::new(&conn)
+        .ensure_final(p.id)
+        .map_err(|e| e.to_string())?;
     Ok(p)
 }
 

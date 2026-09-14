@@ -17,7 +17,9 @@ pub struct SessionExecutor<'a> {
 impl ActionExecutor for SessionExecutor<'_> {
     fn execute(&self, action: HigherAction) -> Result<(), String> {
         match action.action_type {
-            HigherActionType::CreateSession => create_session(self.conn, self.profile_id, &action.payload),
+            HigherActionType::CreateSession => {
+                create_session(self.conn, self.profile_id, &action.payload)
+            }
             HigherActionType::WriteNote => write_note(self.conn, self.profile_id, &action.payload),
             other => Err(format!("SessionExecutor 不处理 {}", other.as_str())),
         }
@@ -29,7 +31,11 @@ impl ActionExecutor for SessionExecutor<'_> {
 /// `start_for_task`——task_id 存在 → snapshot Task truth（title/goal_id/
 /// learning_item_id/activity_kind）；无 task_id → unplanned（start_quick，
 /// learning_item_id 合法 NULL，§四十）。禁止按 Task 标题猜 Session LearningItem（§四二）。
-pub fn create_session(conn: &Connection, profile_id: i64, payload: &serde_json::Value) -> Result<(), String> {
+pub fn create_session(
+    conn: &Connection,
+    profile_id: i64,
+    payload: &serde_json::Value,
+) -> Result<(), String> {
     let task_id = payload
         .get("task_id")
         .and_then(|x| x.as_str())
@@ -48,7 +54,11 @@ pub fn create_session(conn: &Connection, profile_id: i64, payload: &serde_json::
 }
 
 /// §十一 `write_note`：向指定 session 写学习笔记。
-pub fn write_note(conn: &Connection, _profile_id: i64, payload: &serde_json::Value) -> Result<(), String> {
+pub fn write_note(
+    conn: &Connection,
+    _profile_id: i64,
+    payload: &serde_json::Value,
+) -> Result<(), String> {
     let sid = payload
         .get("session_id")
         .and_then(|x| x.as_str())

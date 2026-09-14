@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{Completion, Usage};
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::runtime_events::{kind, stage, AiEventSink, TestAiEventSink, PROTOCOL_VERSION};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
@@ -39,7 +41,10 @@ fn setup(name: &str) -> (DbState, VaultState) {
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
     let vault_dir = std::env::temp_dir().join(format!("higher_r3_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
@@ -96,7 +101,10 @@ fn mk_profile(conn: &Connection, tag: &str) -> i64 {
 }
 
 fn new_conv(conn: &Connection, pid: i64) -> i64 {
-    ConversationRepository::new(conn).create(pid, "assistant", "R3").unwrap().id
+    ConversationRepository::new(conn)
+        .create(pid, "assistant", "R3")
+        .unwrap()
+        .id
 }
 
 /// 闲聊级 intel（goal="" → 不进 planner；第二个给 Memory 提取用）。
@@ -154,7 +162,9 @@ fn run_turn_sink(
 
 fn assistant_messages(conn: &Connection, run_id: &str) -> Vec<(i64, String)> {
     let mut stmt = conn
-        .prepare("SELECT id, content FROM ai_messages WHERE run_id=?1 AND role='assistant' ORDER BY id")
+        .prepare(
+            "SELECT id, content FROM ai_messages WHERE run_id=?1 AND role='assistant' ORDER BY id",
+        )
         .unwrap();
     stmt.query_map(params![run_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap()
@@ -163,8 +173,12 @@ fn assistant_messages(conn: &Connection, run_id: &str) -> Vec<(i64, String)> {
 }
 
 fn run_status(conn: &Connection, run_id: &str) -> String {
-    conn.query_row("SELECT status FROM ai_runs WHERE id=?1", params![run_id], |r| r.get(0))
-        .unwrap()
+    conn.query_row(
+        "SELECT status FROM ai_runs WHERE id=?1",
+        params![run_id],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 fn seq_of(e: &J) -> u64 {
@@ -186,18 +200,28 @@ fn runtime_tc001_events_carry_common_fields_and_tc002_seq_strictly_increasing() 
         (pid, new_conv(&conn, pid))
     };
     let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(chat_intel(vec![text_completion(r#"{"memories":[]}"#)]))),
-        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion("我是 Higher，专注你的学习。")])),
+        intel: std::sync::Mutex::new(VecDeque::from(chat_intel(vec![text_completion(
+            r#"{"memories":[]}"#,
+        )]))),
+        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion(
+            "我是 Higher，专注你的学习。",
+        )])),
         capture: None,
     };
     let (out, sink) = run_turn_sink(&state, &vault, "r3-tc001", pid, cid, CHAT_MSG, responder);
     assert_eq!(out.unwrap(), "completed");
     let events = sink.events.lock().unwrap().clone();
-    assert!(events.len() >= 4, "run_started/stage/committed/terminal 至少 4 事件");
+    assert!(
+        events.len() >= 4,
+        "run_started/stage/committed/terminal 至少 4 事件"
+    );
     let mut prev = 0u64;
     for e in &events {
         // TC001：公共字段齐备（§七）
-        assert_eq!(e.get("version").and_then(|x| x.as_u64()), Some(PROTOCOL_VERSION as u64));
+        assert_eq!(
+            e.get("version").and_then(|x| x.as_u64()),
+            Some(PROTOCOL_VERSION as u64)
+        );
         assert_eq!(e.get("client_turn_id").and_then(|x| x.as_str()), Some(CTID));
         assert_eq!(e.get("run_id").and_then(|x| x.as_str()), Some("r3-tc001"));
         assert_eq!(e.get("profile_id").and_then(|x| x.as_i64()), Some(pid));
@@ -213,7 +237,10 @@ fn runtime_tc001_events_carry_common_fields_and_tc002_seq_strictly_increasing() 
     for e in &events {
         let k = e.get("kind").and_then(|x| x.as_str()).unwrap();
         assert!(
-            matches!(k, "run_started" | "stage" | "delta" | "message_committed" | "terminal" | "error"),
+            matches!(
+                k,
+                "run_started" | "stage" | "delta" | "message_committed" | "terminal" | "error"
+            ),
             "非法 kind：{k}"
         );
     }
@@ -241,9 +268,18 @@ fn runtime_tc003_true_streaming_per_chunk_delta() {
     let deltas: Vec<String> = sink
         .of_kind(kind::DELTA)
         .iter()
-        .map(|e| e.get("delta").and_then(|x| x.as_str()).unwrap_or("").to_string())
+        .map(|e| {
+            e.get("delta")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string()
+        })
         .collect();
-    assert_eq!(deltas, vec!["你", "好", "。"], "必须逐 chunk 流式，而非一次性全文");
+    assert_eq!(
+        deltas,
+        vec!["你", "好", "。"],
+        "必须逐 chunk 流式，而非一次性全文"
+    );
     // §二十七：已流式轮不得再 legacy 全文重发（双通道防双份）
     let legacy_delta_texts: Vec<String> = {
         let guard = sink.side_events.lock().unwrap();
@@ -259,7 +295,10 @@ fn runtime_tc003_true_streaming_per_chunk_delta() {
             })
             .collect()
     };
-    assert!(legacy_delta_texts.is_empty(), "流式轮禁止全文重发：{legacy_delta_texts:?}");
+    assert!(
+        legacy_delta_texts.is_empty(),
+        "流式轮禁止全文重发：{legacy_delta_texts:?}"
+    );
     // 落库消息与流内容一致（One Message Truth）
     let msgs = assistant_messages(&state.0.lock().unwrap(), "r3-tc003");
     assert_eq!(msgs.len(), 1);
@@ -293,11 +332,17 @@ fn runtime_tc004_reasoning_never_emitted() {
     // Runtime 只能出现「你好」；reasoning 全文检索禁止命中
     for e in sink.events.lock().unwrap().iter() {
         let s = e.to_string();
-        assert!(!s.contains("内部思考过程"), "reasoning 泄漏进 runtime 事件：{s}");
+        assert!(
+            !s.contains("内部思考过程"),
+            "reasoning 泄漏进 runtime 事件：{s}"
+        );
     }
     for (_, p) in sink.side_events.lock().unwrap().iter() {
         let s = p.to_string();
-        assert!(!s.contains("内部思考过程"), "reasoning 泄漏进 side-effect 事件：{s}");
+        assert!(
+            !s.contains("内部思考过程"),
+            "reasoning 泄漏进 side-effect 事件：{s}"
+        );
     }
     let msgs = assistant_messages(&state.0.lock().unwrap(), "r3-tc004");
     assert_eq!(msgs.len(), 1);
@@ -360,26 +405,52 @@ fn runtime_tc005_planner_json_never_streamed_as_delta() {
     // Proactive（用户未明确要求执行）→ proposal only；planner 轮输出 plan_draft JSON
     let responder = ModelResponder::ScriptedIntel {
         intel: std::sync::Mutex::new(VecDeque::from(planner_intel())),
-        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion(&plan_draft_json().to_string())])),
+        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion(
+            &plan_draft_json().to_string(),
+        )])),
         capture: None,
     };
-    let (out, sink) = run_turn_sink(&state, &vault, "r3-tc005", pid, cid, "帮我看看我的学习安排", responder);
+    let (out, sink) = run_turn_sink(
+        &state,
+        &vault,
+        "r3-tc005",
+        pid,
+        cid,
+        "帮我看看我的学习安排",
+        responder,
+    );
     assert_eq!(out.unwrap(), "completed");
     // 结构化 Planner JSON 严禁逐字出现在任何 delta 通道（§六十八/§二十四）
     for e in sink.of_kind(kind::DELTA) {
         let s = e.to_string();
-        assert!(!s.contains("plan_draft"), "Planner JSON 泄漏进 canonical delta：{s}");
-        assert!(!s.contains("future_tasks"), "Planner JSON 泄漏进 canonical delta：{s}");
+        assert!(
+            !s.contains("plan_draft"),
+            "Planner JSON 泄漏进 canonical delta：{s}"
+        );
+        assert!(
+            !s.contains("future_tasks"),
+            "Planner JSON 泄漏进 canonical delta：{s}"
+        );
     }
     for (_, p) in sink.side_events.lock().unwrap().iter() {
         let s = p.to_string();
-        assert!(!s.contains("plan_draft"), "Planner JSON 泄漏进 legacy 事件：{s}");
-        assert!(!s.contains("future_tasks"), "Planner JSON 泄漏进 legacy 事件：{s}");
+        assert!(
+            !s.contains("plan_draft"),
+            "Planner JSON 泄漏进 legacy 事件：{s}"
+        );
+        assert!(
+            !s.contains("future_tasks"),
+            "Planner JSON 泄漏进 legacy 事件：{s}"
+        );
     }
     // 用户可见的最终文案是自然语言（含 ChangeSet 提示），而非 JSON
     let msgs = assistant_messages(&state.0.lock().unwrap(), "r3-tc005");
     assert_eq!(msgs.len(), 1);
-    assert!(!msgs[0].1.contains("\"type\""), "落库文案不得是原始 JSON：{}", msgs[0].1);
+    assert!(
+        !msgs[0].1.contains("\"type\""),
+        "落库文案不得是原始 JSON：{}",
+        msgs[0].1
+    );
 }
 
 // =============== TC006 · Message DB commit 先于 terminal ===============
@@ -393,7 +464,9 @@ fn runtime_tc006_message_db_commit_before_terminal() {
         (pid, new_conv(&conn, pid))
     };
     let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(chat_intel(vec![text_completion(r#"{"memories":[]}"#)]))),
+        intel: std::sync::Mutex::new(VecDeque::from(chat_intel(vec![text_completion(
+            r#"{"memories":[]}"#,
+        )]))),
         main: std::sync::Mutex::new(VecDeque::from(vec![text_completion("完成。")])),
         capture: None,
     };
@@ -402,12 +475,18 @@ fn runtime_tc006_message_db_commit_before_terminal() {
     let tl = sink.timeline();
     let committed = kind_index(&tl, kind::MESSAGE_COMMITTED).expect("必须有 message_committed");
     let terminal = kind_index(&tl, kind::TERMINAL).expect("必须有 terminal");
-    assert!(committed < terminal, "§三十三：message_committed 必须先于 terminal：{tl:?}");
+    assert!(
+        committed < terminal,
+        "§三十三：message_committed 必须先于 terminal：{tl:?}"
+    );
     // terminal 事件携带 message_id（commit 已完成的凭据）
     let m_ev = sink.of_kind(kind::MESSAGE_COMMITTED);
     let mid = m_ev[0].get("message_id").and_then(|x| x.as_i64()).unwrap();
     let msgs = assistant_messages(&state.0.lock().unwrap(), "r3-tc006");
-    assert!(msgs.iter().any(|(id, _)| *id == mid), "committed message_id 必须真实存在于 DB");
+    assert!(
+        msgs.iter().any(|(id, _)| *id == mid),
+        "committed message_id 必须真实存在于 DB"
+    );
 }
 
 // =============== TC007 · EventSink 全失败 → Truth 不受影响 ===============
@@ -421,7 +500,8 @@ fn runtime_tc007_total_event_loss_run_still_completes_and_persists() {
         (pid, new_conv(&conn, pid))
     };
     let sink = TestAiEventSink::new();
-    sink.fail_all.store(true, std::sync::atomic::Ordering::Relaxed);
+    sink.fail_all
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     let token = tokio_util::sync::CancellationToken::new();
     let cfg = runtime_cfg(pid);
     let args = AgentTurnArgs {
@@ -446,7 +526,9 @@ fn runtime_tc007_total_event_loss_run_still_completes_and_persists() {
     };
     let responder = ModelResponder::ScriptedIntel {
         intel: std::sync::Mutex::new(VecDeque::from(chat_intel(Vec::new()))),
-        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion("事件全丢也照常完成。")])),
+        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion(
+            "事件全丢也照常完成。",
+        )])),
         capture: None,
     };
     {
@@ -455,11 +537,20 @@ fn runtime_tc007_total_event_loss_run_still_completes_and_persists() {
             .add_message(cid, pid, "user", CHAT_MSG, None)
             .unwrap();
     }
-    let out = tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
-    assert_eq!(out.unwrap(), "completed", "事件全失败不得导致 Run 失败（§十三）");
+    let out =
+        tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
+    assert_eq!(
+        out.unwrap(),
+        "completed",
+        "事件全失败不得导致 Run 失败（§十三）"
+    );
     assert!(sink.events.lock().unwrap().is_empty());
     let conn = state.0.lock().unwrap();
-    assert_eq!(assistant_messages(&conn, "r3-tc007").len(), 1, "Assistant Message 仍真实落库");
+    assert_eq!(
+        assistant_messages(&conn, "r3-tc007").len(),
+        1,
+        "Assistant Message 仍真实落库"
+    );
     assert_eq!(run_status(&conn, "r3-tc007"), "completed");
 }
 
@@ -486,19 +577,37 @@ fn runtime_tc008_needs_user_input_question_committed_before_terminal() {
         )])),
         capture: None,
     };
-    let (out, sink) = run_turn_sink(&state, &vault, "r3-tc008", pid, cid, "帮我规划考研", responder);
+    let (out, sink) = run_turn_sink(
+        &state,
+        &vault,
+        "r3-tc008",
+        pid,
+        cid,
+        "帮我规划考研",
+        responder,
+    );
     assert_eq!(out.unwrap(), "needs_user_input");
     let tl = sink.timeline();
     let committed = kind_index(&tl, kind::MESSAGE_COMMITTED).expect("问题消息必须先 commit");
     let terminal = kind_index(&tl, kind::TERMINAL).expect("必须有 terminal");
-    assert!(committed < terminal, "§三十四：问题 Message DB commit → message_committed → terminal：{tl:?}");
+    assert!(
+        committed < terminal,
+        "§三十四：问题 Message DB commit → message_committed → terminal：{tl:?}"
+    );
     let t = sink.of_kind(kind::TERMINAL);
-    assert_eq!(t[0].get("status").and_then(|x| x.as_str()), Some("needs_user_input"));
+    assert_eq!(
+        t[0].get("status").and_then(|x| x.as_str()),
+        Some("needs_user_input")
+    );
     let conn = state.0.lock().unwrap();
     // 问题文本当轮可见（不等待下一轮）
     let msgs = assistant_messages(&conn, "r3-tc008");
     assert_eq!(msgs.len(), 1);
-    assert!(msgs[0].1.contains("每天能学几小时"), "问题原文必须落库：{}", msgs[0].1);
+    assert!(
+        msgs[0].1.contains("每天能学几小时"),
+        "问题原文必须落库：{}",
+        msgs[0].1
+    );
     // DB 侧用既有 waiting_user 词（§三十四：事件层统一语义，无 Schema 变更）
     assert_eq!(run_status(&conn, "r3-tc008"), "waiting_user");
 }
@@ -518,9 +627,17 @@ fn runtime_tc009_memory_failure_main_run_still_completed() {
         text_completion("主回答已完成。"),
     ])));
     let (out, sink) = run_turn_sink(&state, &vault, "r3-tc009", pid, cid, CHAT_MSG, responder);
-    assert_eq!(out.unwrap(), "completed", "§三十八：Memory 失败只降级，主回答 completed");
+    assert_eq!(
+        out.unwrap(),
+        "completed",
+        "§三十八：Memory 失败只降级，主回答 completed"
+    );
     let conn = state.0.lock().unwrap();
-    assert_eq!(assistant_messages(&conn, "r3-tc009").len(), 1, "Assistant Message 正常存在");
+    assert_eq!(
+        assistant_messages(&conn, "r3-tc009").len(),
+        1,
+        "Assistant Message 正常存在"
+    );
     assert_eq!(run_status(&conn, "r3-tc009"), "completed");
     let tl = sink.timeline();
     assert!(kind_index(&tl, kind::TERMINAL).is_some());
@@ -546,12 +663,18 @@ fn runtime_tc010_memory_blocking_does_not_delay_terminal() {
     }
     // intel 通道：goal 分析立即返回；Memory 提取在 gate 取消前永久阻塞
     let intel_q = VecDeque::from(vec![
-        text_completion(r#"{"goal":"考研数学复习","goal_type":"education","planning_required":false,"required_information":[]}"#),
-        text_completion(r#"{"memories":[{"kind":"explicit","memory_type":"user_fact","category":"学习","key":"备考科目","value":"考研数学二","excerpt":"我最近在准备考研数学二","importance":4,"confidence":"high"}]}"#),
+        text_completion(
+            r#"{"goal":"考研数学复习","goal_type":"education","planning_required":false,"required_information":[]}"#,
+        ),
+        text_completion(
+            r#"{"memories":[{"kind":"explicit","memory_type":"user_fact","category":"学习","key":"备考科目","value":"考研数学二","excerpt":"我最近在准备考研数学二","importance":4,"confidence":"high"}]}"#,
+        ),
     ]);
     let responder = ModelResponder::ScriptedIntelGate {
         intel: std::sync::Mutex::new(intel_q),
-        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion("已记录你的备考方向。")])),
+        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion(
+            "已记录你的备考方向。",
+        )])),
         gate: gate.clone(),
         intel_calls: std::sync::atomic::AtomicU32::new(0),
     };
@@ -589,16 +712,30 @@ fn runtime_tc010_memory_blocking_does_not_delay_terminal() {
         if got_terminal {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "Memory 阻塞期间 terminal 迟迟未到（Main Run 被阻塞，违反 §三十七）");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Memory 阻塞期间 terminal 迟迟未到（Main Run 被阻塞，违反 §三十七）"
+        );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     let t = sink.of_kind(kind::TERMINAL);
-    assert_eq!(t[0].get("status").and_then(|x| x.as_str()), Some("completed"));
+    assert_eq!(
+        t[0].get("status").and_then(|x| x.as_str()),
+        Some("completed")
+    );
     // Main Run 已 completed（DB Truth 先行）而 Memory 仍阻塞
     {
         let conn = state_ref.0.lock().unwrap();
-        assert_eq!(run_status(&conn, "r3-tc010"), "completed", "terminal 先于 Memory 完成");
-        assert_eq!(assistant_messages(&conn, "r3-tc010").len(), 1, "主回答已持久化");
+        assert_eq!(
+            run_status(&conn, "r3-tc010"),
+            "completed",
+            "terminal 先于 Memory 完成"
+        );
+        assert_eq!(
+            assistant_messages(&conn, "r3-tc010").len(),
+            1,
+            "主回答已持久化"
+        );
     }
     // 释放 gate → Memory 完成 → turn 收口返回
     gate.cancel();
@@ -643,23 +780,39 @@ fn runtime_tc011_adaptation_uses_same_finalize_contract() {
         capture: None,
     };
     let (out, sink) = run_turn_sink(
-        &state, &vault, "r3-tc011", pid, cid,
+        &state,
+        &vault,
+        "r3-tc011",
+        pid,
+        cid,
         "帮我看看最近学习情况，后面的计划需要调整吗？",
         responder,
     );
     assert_eq!(out.unwrap(), "completed");
     let tl = sink.timeline();
     // §五十一：reviewing → message commit → message_committed → terminal（同一协议）
-    assert!(tl.iter().any(|(k, s, _)| k == kind::STAGE && s == stage::REVIEWING), "Adaptation 必须 emit reviewing：{tl:?}");
-    let committed = kind_index(&tl, kind::MESSAGE_COMMITTED).expect("Adaptation 必须 message_committed");
+    assert!(
+        tl.iter()
+            .any(|(k, s, _)| k == kind::STAGE && s == stage::REVIEWING),
+        "Adaptation 必须 emit reviewing：{tl:?}"
+    );
+    let committed =
+        kind_index(&tl, kind::MESSAGE_COMMITTED).expect("Adaptation 必须 message_committed");
     let terminal = kind_index(&tl, kind::TERMINAL).expect("Adaptation 必须 terminal");
     assert!(committed < terminal, "同一 finalize ordering：{tl:?}");
     let t = sink.of_kind(kind::TERMINAL);
-    assert_eq!(t[0].get("status").and_then(|x| x.as_str()), Some("completed"));
+    assert_eq!(
+        t[0].get("status").and_then(|x| x.as_str()),
+        Some("completed")
+    );
     let conn = state.0.lock().unwrap();
     let msgs = assistant_messages(&conn, "r3-tc011");
     assert_eq!(msgs.len(), 1);
-    assert!(msgs[0].1.contains("没有足够证据"), "Adaptation 文案落库：{}", msgs[0].1);
+    assert!(
+        msgs[0].1.contains("没有足够证据"),
+        "Adaptation 文案落库：{}",
+        msgs[0].1
+    );
 }
 
 // =============== TC012 · Provider Error → 先 message 后 terminal failed ===============
@@ -680,13 +833,20 @@ fn runtime_tc012_provider_error_message_committed_before_terminal_failed() {
     let err = kind_index(&tl, kind::ERROR).expect("必须有 kind=error（§五十二）");
     let committed = kind_index(&tl, kind::MESSAGE_COMMITTED).expect("错误消息必须先落库");
     let terminal = kind_index(&tl, kind::TERMINAL).expect("必须有 terminal");
-    assert!(err < committed && committed < terminal, "禁止 failed first / message later：{tl:?}");
+    assert!(
+        err < committed && committed < terminal,
+        "禁止 failed first / message later：{tl:?}"
+    );
     let t = sink.of_kind(kind::TERMINAL);
     assert_eq!(t[0].get("status").and_then(|x| x.as_str()), Some("failed"));
     let conn = state.0.lock().unwrap();
     let msgs = assistant_messages(&conn, "r3-tc012");
     assert_eq!(msgs.len(), 1, "安全错误文本当轮入库");
-    assert!(msgs[0].1.starts_with("[出错]"), "错误消息形态：{}", msgs[0].1);
+    assert!(
+        msgs[0].1.starts_with("[出错]"),
+        "错误消息形态：{}",
+        msgs[0].1
+    );
     assert_eq!(run_status(&conn, "r3-tc012"), "failed");
 }
 
@@ -737,14 +897,21 @@ fn runtime_tc013_cancelled_partial_content_preserved() {
             .add_message(cid, pid, "user", CHAT_MSG, None)
             .unwrap();
     }
-    let out = tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
+    let out =
+        tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args));
     assert_eq!(out.unwrap(), "cancelled");
     let tl = sink.timeline();
     let committed = kind_index(&tl, kind::MESSAGE_COMMITTED).expect("partial 必须 commit");
     let terminal = kind_index(&tl, kind::TERMINAL).expect("必须有 terminal");
-    assert!(committed < terminal, "取消路径同一 finalize ordering：{tl:?}");
+    assert!(
+        committed < terminal,
+        "取消路径同一 finalize ordering：{tl:?}"
+    );
     let t = sink.of_kind(kind::TERMINAL);
-    assert_eq!(t[0].get("status").and_then(|x| x.as_str()), Some("cancelled"));
+    assert_eq!(
+        t[0].get("status").and_then(|x| x.as_str()),
+        Some("cancelled")
+    );
     let conn = state.0.lock().unwrap();
     let msgs = assistant_messages(&conn, "r3-tc013");
     assert_eq!(msgs.len(), 1, "partial message 不消失（§三十六）");
@@ -763,7 +930,9 @@ fn runtime_tc014_stale_duplicate_events_do_not_mutate_db() {
         (pid, new_conv(&conn, pid))
     };
     let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(chat_intel(vec![text_completion(r#"{"memories":[]}"#)]))),
+        intel: std::sync::Mutex::new(VecDeque::from(chat_intel(vec![text_completion(
+            r#"{"memories":[]}"#,
+        )]))),
         main: std::sync::Mutex::new(VecDeque::from(vec![text_completion("完成。")])),
         capture: None,
     };
@@ -794,7 +963,10 @@ fn runtime_tc014_stale_duplicate_events_do_not_mutate_db() {
         let conn = state.0.lock().unwrap();
         snapshot(&conn)
     };
-    assert_eq!(before, after, "Stale/duplicate Runtime Event 不得改变正式 DB（§三）");
+    assert_eq!(
+        before, after,
+        "Stale/duplicate Runtime Event 不得改变正式 DB（§三）"
+    );
 }
 
 // =============== TC015 · 治理：生产模块禁止直发三协议事件（静态补充） ===============
@@ -821,7 +993,9 @@ fn runtime_tc015_governance_no_direct_emit_in_production_ai_modules() {
     // lib.rs：主入口 ai_start_run 区域不得直发（legacy run_chat_turn 已死代码：
     // 零调用者，其残留 emit 不在生产链上——断言死代码确无调用者）
     let lib_src = std::fs::read_to_string(root.join("src/lib.rs")).unwrap();
-    let start = lib_src.find("async fn ai_start_run").expect("ai_start_run 必须存在");
+    let start = lib_src
+        .find("async fn ai_start_run")
+        .expect("ai_start_run 必须存在");
     let end = lib_src[start..]
         .find("\nasync fn ")
         .map(|i| start + i)
@@ -834,5 +1008,8 @@ fn runtime_tc015_governance_no_direct_emit_in_production_ai_modules() {
         );
     }
     let callers = lib_src.matches("run_chat_turn(").count();
-    assert_eq!(callers, 1, "run_chat_turn 只允许定义（死代码 legacy），不得有调用者：found {callers}");
+    assert_eq!(
+        callers, 1,
+        "run_chat_turn 只允许定义（死代码 legacy），不得有调用者：found {callers}"
+    );
 }

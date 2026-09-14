@@ -26,23 +26,22 @@ pub fn create_recurring_rule(
 ) -> Result<RecurringRule, String> {
     let rule = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        RecurringRuleRepository::new(&conn)
-            .create_with_semantics(
-                profile_id,
-                goal_id,
-                learning_item_id,
-                &title,
-                &repeat_type,
-                &weekdays,
-                time_of_day.as_deref(),
-                &start_date,
-                end_date.as_deref(),
-                &RuleSemantics {
-                    estimated_minutes,
-                    task_kind,
-                    priority,
-                },
-            )?
+        RecurringRuleRepository::new(&conn).create_with_semantics(
+            profile_id,
+            goal_id,
+            learning_item_id,
+            &title,
+            &repeat_type,
+            &weekdays,
+            time_of_day.as_deref(),
+            &start_date,
+            end_date.as_deref(),
+            &RuleSemantics {
+                estimated_minutes,
+                task_kind,
+                priority,
+            },
+        )?
     };
     notifications::resync(&app);
     Ok(rule)
@@ -156,7 +155,10 @@ pub fn materialize_recurring_tasks_range(
     let created = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         crate::repository::recurring_rule::materialize_recurring_tasks_range(
-            &conn, profile_id, &start_date, &end_date,
+            &conn,
+            profile_id,
+            &start_date,
+            &end_date,
         )?
     };
     if created > 0 {

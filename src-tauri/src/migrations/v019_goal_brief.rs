@@ -11,9 +11,7 @@ pub fn up(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         |r| r.get(0),
     )?;
     if has == 0 {
-        conn.execute_batch(
-            "ALTER TABLE goals ADD COLUMN goal_brief_json TEXT NULL;",
-        )?;
+        conn.execute_batch("ALTER TABLE goals ADD COLUMN goal_brief_json TEXT NULL;")?;
     }
     Ok(())
 }

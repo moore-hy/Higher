@@ -14,7 +14,9 @@ use std::collections::VecDeque;
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{ChatMessage, Completion, Usage};
 use app_lib::ai::intelligence::{self, memory as pi_memory, profile as pi_profile};
-use app_lib::ai::provider::{AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode};
+use app_lib::ai::provider::{
+    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+};
 use app_lib::ai::vault::VaultState;
 use app_lib::db::DbState;
 use app_lib::repository::conversation::ConversationRepository;
@@ -29,7 +31,13 @@ const LOCAL_DATE: &str = "2026-08-24";
 fn uc_from(v: serde_json::Value) -> intelligence::user_context::UserContext {
     let mut v = v;
     let obj = v.as_object_mut().unwrap();
-    for k in ["abilities", "resources", "constraints", "preferences", "long_term_goals"] {
+    for k in [
+        "abilities",
+        "resources",
+        "constraints",
+        "preferences",
+        "long_term_goals",
+    ] {
         obj.entry(k.to_string()).or_insert_with(|| json!([]));
     }
     for k in ["basic_information", "current_status"] {
@@ -44,8 +52,12 @@ fn setup(name: &str) -> (DbState, VaultState) {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
-    let vault_dir = std::env::temp_dir().join(format!("higher_dev0075_{name}_{}", std::process::id()));
-    (DbState(std::sync::Mutex::new(conn)), VaultState::new(vault_dir))
+    let vault_dir =
+        std::env::temp_dir().join(format!("higher_dev0075_{name}_{}", std::process::id()));
+    (
+        DbState(std::sync::Mutex::new(conn)),
+        VaultState::new(vault_dir),
+    )
 }
 
 fn mk_profile(conn: &Connection) -> i64 {
@@ -110,7 +122,10 @@ fn run_turn_capture(
     user_message: &str,
     intel_scripted: Vec<Completion>,
     main_scripted: Vec<Completion>,
-) -> (Result<&'static str, String>, std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>) {
+) -> (
+    Result<&'static str, String>,
+    std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>,
+) {
     let token = tokio_util::sync::CancellationToken::new();
     let cfg = runtime_cfg(profile_id);
     let cap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -150,7 +165,10 @@ fn run_turn_capture(
 #[test]
 fn pi_at001_profile_facade_crud() {
     let (state, _vault) = setup("at001");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
 
     let conn = state.0.lock().unwrap();
     // 空档案 → 默认
@@ -165,7 +183,9 @@ fn pi_at001_profile_facade_crud() {
     let draft_id = pi_profile::propose_profile_update(&conn, profile_id, &uc).unwrap();
     assert!(draft_id > 0);
     // draft 存在但无 confirmed → 读到 draft（v021 兜底语义）
-    assert!(pi_profile::load_profile(&conn, profile_id).basic_information.is_some());
+    assert!(pi_profile::load_profile(&conn, profile_id)
+        .basic_information
+        .is_some());
 
     // 更新：再提一案（更高 version draft）
     let uc2 = uc_from(json!({
@@ -178,7 +198,11 @@ fn pi_at001_profile_facade_crud() {
     // 确认：最新 draft → confirmed
     pi_profile::confirm_profile(&conn, profile_id).unwrap();
     let loaded = pi_profile::load_profile(&conn, profile_id);
-    assert_eq!(loaded.basic_information.as_deref(), Some("AI Agent工程师，5年经验"), "confirm 后读取最新提案");
+    assert_eq!(
+        loaded.basic_information.as_deref(),
+        Some("AI Agent工程师，5年经验"),
+        "confirm 后读取最新提案"
+    );
 }
 
 // =============== PI-AT002 · Memory 存储 ===============
@@ -197,10 +221,17 @@ fn pi_at002_memory_extraction_persists() {
         {"kind":"derived","memory_type":"goal_context","category":"方向","key":"长期关注","value":"用户长期关注AI创业","importance":3,"confidence":"medium"}
     ]});
     let (out, _cap) = run_turn_capture(
-        &state, &vault, "pi-at002-run", profile_id, conv, msg,
+        &state,
+        &vault,
+        "pi-at002-run",
+        profile_id,
+        conv,
+        msg,
         "我最近准备考研数学二，我长期关注AI创业",
         vec![
-            text_completion(r#"{"goal":"考研数学二复习","goal_type":"education","planning_required":true,"required_information":[]}"#),
+            text_completion(
+                r#"{"goal":"考研数学二复习","goal_type":"education","planning_required":true,"required_information":[]}"#,
+            ),
             text_completion(&extraction.to_string()),
         ],
         vec![text_completion("已记录你的备考方向。")],
@@ -214,14 +245,26 @@ fn pi_at002_memory_extraction_persists() {
     let pending = repo.list_pending(profile_id).unwrap();
     assert_eq!(pending.len(), 2, "两条 memory 候选进入待确认");
     // explicit：user_fact + 原话 excerpt 保留（可追溯 §原则3）
-    let explicit = pending.iter().find(|r| r.memory_type == "user_fact").expect("explicit 候选");
+    let explicit = pending
+        .iter()
+        .find(|r| r.memory_type == "user_fact")
+        .expect("explicit 候选");
     assert_eq!(explicit.source_kind, "user_message");
-    assert!(explicit.source_excerpt.contains("我最近准备考研数学二"), "用户原话必须保留");
+    assert!(
+        explicit.source_excerpt.contains("我最近准备考研数学二"),
+        "用户原话必须保留"
+    );
     // derived：类型强制 ai_inference（不得冒充用户事实）
-    let derived = pending.iter().find(|r| r.memory_type == "ai_inference").expect("derived 候选");
+    let derived = pending
+        .iter()
+        .find(|r| r.memory_type == "ai_inference")
+        .expect("derived 候选");
     assert_eq!(derived.source_kind, "ai_inference");
     assert_eq!(derived.memory_value, "用户长期关注AI创业");
-    assert!(repo.list_confirmed(profile_id).unwrap().is_empty(), "未确认不进入 AI 长期读取");
+    assert!(
+        repo.list_confirmed(profile_id).unwrap().is_empty(),
+        "未确认不进入 AI 长期读取"
+    );
 }
 
 // =============== PI-AT003 · Insight 注入（PI-004 决策增强） ===============
@@ -244,12 +287,22 @@ fn pi_at003_insight_injection_personalizes_decision() {
         f
     };
     let (out, cap) = run_turn_capture(
-        &state, &vault, "pi-at003-run", profile_id, conv, msg, "我要学习Python",
+        &state,
+        &vault,
+        "pi-at003-run",
+        profile_id,
+        conv,
+        msg,
+        "我要学习Python",
         vec![
-            text_completion(r#"{"goal":"","goal_type":"other","planning_required":false,"required_information":[]}"#),
+            text_completion(
+                r#"{"goal":"","goal_type":"other","planning_required":false,"required_information":[]}"#,
+            ),
             text_completion(r#"{"memories":[]}"#), // 闲聊级请求无新记忆
         ],
-        vec![text_completion("结合你的 AI Agent 方向，建议优先学 FastAPI + 工程化。")],
+        vec![text_completion(
+            "结合你的 AI Agent 方向，建议优先学 FastAPI + 工程化。",
+        )],
     );
     assert_eq!(out.unwrap(), "completed");
 
@@ -264,7 +317,10 @@ fn pi_at003_insight_injection_personalizes_decision() {
             .collect::<Vec<_>>()
             .join("\n---\n")
     };
-    assert!(main_system.contains("Personal Intelligence"), "注入块缺失：{main_system}");
+    assert!(
+        main_system.contains("Personal Intelligence"),
+        "注入块缺失：{main_system}"
+    );
     assert!(main_system.contains("AI Agent工程师"), "长期画像未注入");
     assert!(main_system.contains("成为AI创业者"), "长期目标未注入");
     assert!(main_system.contains("工作时间有限"), "硬约束未注入");
@@ -278,7 +334,10 @@ fn pi_at003_insight_injection_personalizes_decision() {
 #[test]
 fn pi_at004_unconfirmed_never_enters_profile() {
     let (state, _vault) = setup("at004");
-    let profile_id = { let conn = state.0.lock().unwrap(); mk_profile(&conn) };
+    let profile_id = {
+        let conn = state.0.lock().unwrap();
+        mk_profile(&conn)
+    };
     let conn = state.0.lock().unwrap();
 
     // confirmed 正式档案
@@ -301,7 +360,11 @@ fn pi_at004_unconfirmed_never_enters_profile() {
     let outcome = intelligence::intelligence_builder::post_turn_apply(&conn, profile_id, &items);
     assert_eq!(outcome.memories_stored, 1);
     assert!(!outcome.profile_proposed, "derived 单独不触发 Profile 提案");
-    assert_eq!(pi_profile::load_profile(&conn, profile_id), before, "derived 不改变正式档案");
+    assert_eq!(
+        pi_profile::load_profile(&conn, profile_id),
+        before,
+        "derived 不改变正式档案"
+    );
 
     // ② draft 提案存在（含更强信息）→ confirmed 读取仍不变
     let merged = uc_from(json!({
@@ -311,13 +374,22 @@ fn pi_at004_unconfirmed_never_enters_profile() {
     pi_profile::propose_profile_update(&conn, profile_id, &merged).unwrap();
     assert!(pi_profile::has_pending_proposal(&conn, profile_id));
     let loaded = pi_profile::load_profile(&conn, profile_id);
-    assert_eq!(loaded, before, "未确认提案对 Decision 不可见（confirmed 优先）");
-    assert!(loaded.long_term_goals.is_empty(), "提案内容不得泄漏进正式读取");
+    assert_eq!(
+        loaded, before,
+        "未确认提案对 Decision 不可见（confirmed 优先）"
+    );
+    assert!(
+        loaded.long_term_goals.is_empty(),
+        "提案内容不得泄漏进正式读取"
+    );
 
     // ③ 用户确认后才进入
     pi_profile::confirm_profile(&conn, profile_id).unwrap();
     let after = pi_profile::load_profile(&conn, profile_id);
-    assert!(after.long_term_goals.iter().any(|g| g.contains("AI创业")), "确认后进入 Profile");
+    assert!(
+        after.long_term_goals.iter().any(|g| g.contains("AI创业")),
+        "确认后进入 Profile"
+    );
 
     // ④ ai_inference 记录仍以待确认身份存在（类型隔离可追溯）
     let n: i64 = conn

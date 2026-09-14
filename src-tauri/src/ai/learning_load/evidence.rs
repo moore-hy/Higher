@@ -122,7 +122,8 @@ pub fn build_learning_load_evidence(
                 })
             })
             .map_err(|e| format!("learning_items 读取失败: {e}"))?;
-        rows.collect::<Result<_, _>>().map_err(|e| format!("learning_items 读取失败: {e}"))?
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| format!("learning_items 读取失败: {e}"))?
     };
     let item_ids: BTreeSet<i64> = items.iter().map(|i| i.id).collect();
     let item_by_id: HashMap<i64, &ItemRow> = items.iter().map(|i| (i.id, i)).collect();
@@ -155,14 +156,19 @@ pub fn build_learning_load_evidence(
                     status: r.get(3)?,
                     planned_date: {
                         let d: String = r.get(4)?;
-                        if d.is_empty() { None } else { Some(d) }
+                        if d.is_empty() {
+                            None
+                        } else {
+                            Some(d)
+                        }
                     },
                     title: r.get(5)?,
                     archived: r.get(6)?,
                 })
             })
             .map_err(|e| format!("tasks 读取失败: {e}"))?;
-        rows.collect::<Result<_, _>>().map_err(|e| format!("tasks 读取失败: {e}"))?
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| format!("tasks 读取失败: {e}"))?
     };
 
     // ---- ③ StudySessions（§十三/§十四：仅 completed & duration>0 计 actual；
@@ -201,7 +207,8 @@ pub fn build_learning_load_evidence(
                 })
             })
             .map_err(|e| format!("study_sessions 读取失败: {e}"))?;
-        rows.collect::<Result<_, _>>().map_err(|e| format!("study_sessions 读取失败: {e}"))?
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| format!("study_sessions 读取失败: {e}"))?
     };
 
     // ---- ④ Evaluations（§二十六：按 learning_item_id 聚合；近期窗口）----
@@ -237,7 +244,8 @@ pub fn build_learning_load_evidence(
                 })
             })
             .map_err(|e| format!("evaluations 读取失败: {e}"))?;
-        rows.collect::<Result<_, _>>().map_err(|e| format!("evaluations 读取失败: {e}"))?
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| format!("evaluations 读取失败: {e}"))?
     };
 
     // ---- ⑤ Feedbacks（§二十九：直连 learning_item_id 或 evaluation→item；
@@ -276,7 +284,8 @@ pub fn build_learning_load_evidence(
                 })
             })
             .map_err(|e| format!("feedbacks 读取失败: {e}"))?;
-        rows.collect::<Result<_, _>>().map_err(|e| format!("feedbacks 读取失败: {e}"))?
+        rows.collect::<Result<_, _>>()
+            .map_err(|e| format!("feedbacks 读取失败: {e}"))?
     };
     // evaluation_id → learning_item_id 推导表（确定性关系推导，非文本猜测）。
     let eval_item: HashMap<i64, i64> = evals
@@ -322,9 +331,7 @@ pub fn build_learning_load_evidence(
             available: true,
             latest_score: row.as_ref().and_then(|r| r.0),
             latest_confidence: row.as_ref().map(|r| r.1.clone()),
-            latest_period: row.as_ref().map(|r| {
-                format!("{}@{}", r.2, r.3)
-            }),
+            latest_period: row.as_ref().map(|r| format!("{}@{}", r.2, r.3)),
             note: String::from(
                 "Unit 级 mastery 读 learning_items.mastery_status（真实值）；\
                  mastery_assessments 为 goal/period 级 AI 评估证据，不回写 mastery。",
@@ -486,7 +493,9 @@ pub fn build_learning_load_evidence(
     let mut all_pace_samples: Vec<PaceSample> = Vec::new();
     let mut session_without_estimate = 0i64;
     for t in &tasks {
-        let Some(actual) = task_actual.get(&t.id) else { continue };
+        let Some(actual) = task_actual.get(&t.id) else {
+            continue;
+        };
         match t.estimated_minutes {
             None => {
                 // §五十八：actual 有了但 Task 无 estimate → 不进 calibration
@@ -502,16 +511,15 @@ pub fn build_learning_load_evidence(
                 if t.status != "completed" {
                     continue;
                 }
-                if let Some(sample) = PaceSample::new(
-                    t.id,
-                    t.learning_item_id,
-                    est,
-                    actual.0,
-                    actual.1,
-                ) {
+                if let Some(sample) =
+                    PaceSample::new(t.id, t.learning_item_id, est, actual.0, actual.1)
+                {
                     if let Some(item) = t.learning_item_id {
                         if item_ids.contains(&item) {
-                            unit_pace_samples.entry(item).or_default().push(sample.clone());
+                            unit_pace_samples
+                                .entry(item)
+                                .or_default()
+                                .push(sample.clone());
                         }
                     }
                     all_pace_samples.push(sample);
@@ -561,9 +569,17 @@ pub fn build_learning_load_evidence(
     let mut fb_agg: BTreeMap<i64, Vec<(i64, String, String, String, String)>> = BTreeMap::new();
     for f in &feedbacks {
         summary.feedback_count += 1;
-        let owner = f.learning_item_id.filter(|i| item_ids.contains(i)).or_else(|| {
-            f.evaluation_id.and_then(|eid| eval_item.get(&eid).copied().filter(|i| item_ids.contains(i)))
-        });
+        let owner = f
+            .learning_item_id
+            .filter(|i| item_ids.contains(i))
+            .or_else(|| {
+                f.evaluation_id.and_then(|eid| {
+                    eval_item
+                        .get(&eid)
+                        .copied()
+                        .filter(|i| item_ids.contains(i))
+                })
+            });
         if let Some(i) = owner {
             fb_agg.entry(i).or_default().push((
                 f.id,
@@ -576,10 +592,7 @@ pub fn build_learning_load_evidence(
     }
 
     // Subject 归属（§二十四：LearningItem Tree 顶层 root；防环）
-    fn subject_root<'a>(
-        start: i64,
-        by_id: &HashMap<i64, &'a ItemRow>,
-    ) -> (Option<i64>, &'a str) {
+    fn subject_root<'a>(start: i64, by_id: &HashMap<i64, &'a ItemRow>) -> (Option<i64>, &'a str) {
         let mut cur = start;
         let mut visited = BTreeSet::new();
         let mut name: &str = "unknown";

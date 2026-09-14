@@ -1,14 +1,14 @@
 // Foundation 2.0 §6: data-domain commands (cleanup / export / distributions).
 use crate::ai;
+use crate::commands::agent::chrono_now;
+use crate::commands::agent::primary_client;
 use crate::db;
 use crate::platform;
 use crate::repository;
-use crate::commands::agent::chrono_now;
-use crate::commands::agent::primary_client;
+use crate::repository::setting::SettingRepository;
 use crate::sandbox;
 use crate::AttachmentDir;
 use tauri::Manager;
-use crate::repository::setting::SettingRepository;
 
 // =============== Profile Data Cleanup（DEV-0030） ===============
 
@@ -29,7 +29,10 @@ pub(crate) fn runtime_db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
 }
 
 /// 备份数据库 → higher-YYYYMMDD-HHmmss.db；保留最近 10 个（只操作 Higher 自己的 backups 目录）。
-pub fn backup_database(app: &tauri::AppHandle, db_path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+pub fn backup_database(
+    app: &tauri::AppHandle,
+    db_path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
     let dir = backups_dir(app)?;
     // 本地时间命名（无 chrono：用系统命令获取不可行；用 UTC 近似——由 Rust 标准库 SystemTime 转换）
     let now = std::time::SystemTime::now()
@@ -88,12 +91,10 @@ pub fn preview_profile_cleanup(
     scope: String,
     today: String,
 ) -> Result<repository::cleanup::CleanupPreview, String> {
-    let scope = repository::cleanup::CleanupScope::from_str(&scope)
-        .ok_or("未知的清理范围")?;
+    let scope = repository::cleanup::CleanupScope::from_str(&scope).ok_or("未知的清理范围")?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::cleanup::CleanupRepository::new(&conn).preview(profile_id, scope, &today)
 }
-
 
 // =============== Learning Data + AI Mastery（DEV-0050 PHASE D；Section 6 increment 10） ===============
 // =============== Learning Data（DEV-0050 / PHASE D §42-45,58-60） ===============
@@ -107,8 +108,11 @@ pub fn get_learning_stats(
     period_end: String,
 ) -> Result<repository::learning_data::LearningStats, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::learning_data::LearningDataRepository::new(&conn)
-        .stats(profile_id, &period_start, &period_end)
+    repository::learning_data::LearningDataRepository::new(&conn).stats(
+        profile_id,
+        &period_start,
+        &period_end,
+    )
 }
 
 /// 趋势序列（§58：day=14 / week=8(周一起) / month=12 / year=5；以当前 UTC+8 周期收尾）。
@@ -154,7 +158,11 @@ pub fn period_buckets(bucket: &str) -> Result<Vec<(String, String, String)>, Str
             for i in (0..8).rev() {
                 let mon = shift_date(&this_mon, -(i as i64) * 7);
                 let sun = shift_date(&mon, 6);
-                let label = format!("{}~{}", &mon[5..].replace('-', "/"), &sun[5..].replace('-', "/"));
+                let label = format!(
+                    "{}~{}",
+                    &mon[5..].replace('-', "/"),
+                    &sun[5..].replace('-', "/")
+                );
                 out.push((label, mon, sun));
             }
         }
@@ -298,7 +306,10 @@ pub fn get_latest_mastery(
             .map_err(|e| e.to_string())?,
         None => false,
     };
-    Ok(MasteryView { assessment: a, stale })
+    Ok(MasteryView {
+        assessment: a,
+        stale,
+    })
 }
 
 /// 评估历史（详情用）。
@@ -354,7 +365,11 @@ pub async fn assess_mastery(
 
     // 2) 单次调用（不进工具循环；一次结构修复重试）
     let client = primary_client(&state)?;
-    let base = format!("{}\n\n{}", context, ai::prompts::user_instruction(ai::AiAction::MasteryAssessment));
+    let base = format!(
+        "{}\n\n{}",
+        context,
+        ai::prompts::user_instruction(ai::AiAction::MasteryAssessment)
+    );
     let mut messages = vec![
         ai::client::ChatMessage::system(ai::prompts::SYSTEM_PROMPT),
         ai::client::ChatMessage::user(base),
@@ -386,7 +401,8 @@ pub async fn assess_mastery(
     }
 
     // 3) 映射 + 服务端校验（§50/§53）
-    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| format!("评估结果解析失败：{e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("评估结果解析失败：{e}"))?;
     let str_list = |key: &str| -> Vec<String> {
         v.get(key)
             .and_then(|x| x.as_array())
@@ -398,7 +414,9 @@ pub async fn assess_mastery(
             .unwrap_or_default()
     };
     let dim = |key: &str| -> Option<i64> {
-        v.get(key).and_then(|d| d.get("score")).and_then(|s| s.as_i64())
+        v.get(key)
+            .and_then(|d| d.get("score"))
+            .and_then(|s| s.as_i64())
     };
     let status = v
         .get("status")
@@ -428,9 +446,21 @@ pub async fn assess_mastery(
         } else {
             None
         },
-        understanding_score: if status == "scored" { dim("understanding") } else { None },
-        coverage_score: if status == "scored" { dim("coverage") } else { None },
-        verification_score: if status == "scored" { dim("verification") } else { None },
+        understanding_score: if status == "scored" {
+            dim("understanding")
+        } else {
+            None
+        },
+        coverage_score: if status == "scored" {
+            dim("coverage")
+        } else {
+            None
+        },
+        verification_score: if status == "scored" {
+            dim("verification")
+        } else {
+            None
+        },
         strengths: str_list("strengths"),
         gaps: str_list("gaps"),
         evidence: str_list("evidence"),
@@ -460,7 +490,6 @@ pub fn ai_setting_model(state: &tauri::State<'_, db::DbState>) -> Result<String,
     Ok(s.model)
 }
 
-
 // =============== DEV-0059 Versioning / GoalTarget / Planning / Review（Section 6 increment 13） ===============
 // =============== DEV-0059 · PersonalProfile Versioning / GoalTarget / Planning / Review ===============
 
@@ -471,7 +500,8 @@ pub fn list_personalization_profile_versions(
     profile_id: i64,
 ) -> Result<Vec<repository::personalization::PersonalizationProfile>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::personalization::PersonalizationRepository::new(&conn).list_profile_versions(profile_id)
+    repository::personalization::PersonalizationRepository::new(&conn)
+        .list_profile_versions(profile_id)
 }
 
 /// DEV-0059.1 §6：某 PersonalProfile 版本使用的 Personal Source snapshot（只读）。
@@ -501,9 +531,16 @@ pub fn create_goal_target(
     status: String,
 ) -> Result<repository::goal_target::GoalTarget, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::goal_target::GoalTargetRepository::new(&conn)
-        .create(profile_id, &scenario_type, &role, &title, target_date.as_deref(),
-            &data_json, &provenance_json, &status)
+    repository::goal_target::GoalTargetRepository::new(&conn).create(
+        profile_id,
+        &scenario_type,
+        &role,
+        &title,
+        target_date.as_deref(),
+        &data_json,
+        &provenance_json,
+        &status,
+    )
 }
 
 #[tauri::command]
@@ -523,8 +560,11 @@ pub fn list_active_goal_targets(
     role: Option<String>,
 ) -> Result<Vec<repository::goal_target::GoalTarget>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::goal_target::GoalTargetRepository::new(&conn)
-        .list_active(profile_id, scenario_type.as_deref(), role.as_deref())
+    repository::goal_target::GoalTargetRepository::new(&conn).list_active(
+        profile_id,
+        scenario_type.as_deref(),
+        role.as_deref(),
+    )
 }
 
 /// §11.3：激活（同 scenario+role 其他 active → historical）。
@@ -550,8 +590,14 @@ pub fn replace_goal_target(
     provenance_json: String,
 ) -> Result<repository::goal_target::GoalTarget, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::goal_target::GoalTargetRepository::new(&conn)
-        .replace_with(profile_id, id, &title, target_date.as_deref(), &data_json, &provenance_json)
+    repository::goal_target::GoalTargetRepository::new(&conn).replace_with(
+        profile_id,
+        id,
+        &title,
+        target_date.as_deref(),
+        &data_json,
+        &provenance_json,
+    )
 }
 
 #[tauri::command]
@@ -589,9 +635,16 @@ pub fn create_planning_blueprint(
     review_interval_days: i64,
 ) -> Result<repository::planning::PlanningBlueprint, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning::PlanningRepository::new(&conn)
-        .create_blueprint(profile_id, &scenario_type, &title, &content_md,
-            structured_json.as_deref(), &source_snapshot_json, &provenance_json, review_interval_days)
+    repository::planning::PlanningRepository::new(&conn).create_blueprint(
+        profile_id,
+        &scenario_type,
+        &title,
+        &content_md,
+        structured_json.as_deref(),
+        &source_snapshot_json,
+        &provenance_json,
+        review_interval_days,
+    )
 }
 
 #[tauri::command]
@@ -646,9 +699,15 @@ pub fn add_planning_phase(
     sort_order: i64,
 ) -> Result<i64, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning::PlanningRepository::new(&conn)
-        .add_phase(blueprint_id, &phase_key, &title, start_date.as_deref(), end_date.as_deref(),
-            &objective_md, sort_order)
+    repository::planning::PlanningRepository::new(&conn).add_phase(
+        blueprint_id,
+        &phase_key,
+        &title,
+        start_date.as_deref(),
+        end_date.as_deref(),
+        &objective_md,
+        sort_order,
+    )
 }
 
 #[tauri::command]
@@ -674,9 +733,17 @@ pub fn add_planning_milestone(
     provenance_json: String,
 ) -> Result<i64, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning::PlanningRepository::new(&conn)
-        .add_milestone(blueprint_id, phase_id, &milestone_key, &title, start_date.as_deref(),
-            end_date.as_deref(), &date_precision, &date_status, &provenance_json)
+    repository::planning::PlanningRepository::new(&conn).add_milestone(
+        blueprint_id,
+        phase_id,
+        &milestone_key,
+        &title,
+        start_date.as_deref(),
+        end_date.as_deref(),
+        &date_precision,
+        &date_status,
+        &provenance_json,
+    )
 }
 
 #[tauri::command]
@@ -700,8 +767,12 @@ pub fn update_planning_blueprint_meta(
     content_md: String,
 ) -> Result<repository::planning::PlanningBlueprint, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning::PlanningRepository::new(&conn)
-        .update_blueprint_meta(profile_id, id, &title, &content_md)
+    repository::planning::PlanningRepository::new(&conn).update_blueprint_meta(
+        profile_id,
+        id,
+        &title,
+        &content_md,
+    )
 }
 
 /// §11：Review Cadence——只改 review_enabled / review_interval_days / next_review_at（不调 AI）。
@@ -714,8 +785,12 @@ pub fn update_planning_review_cadence(
     review_interval_days: Option<i64>,
 ) -> Result<repository::planning::PlanningBlueprint, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning::PlanningRepository::new(&conn)
-        .update_review_cadence(profile_id, id, review_enabled, review_interval_days)
+    repository::planning::PlanningRepository::new(&conn).update_review_cadence(
+        profile_id,
+        id,
+        review_enabled,
+        review_interval_days,
+    )
 }
 
 /// §10：Phase 更新。
@@ -731,8 +806,15 @@ pub fn update_planning_phase(
     sort_order: i64,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning::PlanningRepository::new(&conn)
-        .update_phase(blueprint_id, phase_id, &title, start_date.as_deref(), end_date.as_deref(), &objective_md, sort_order)
+    repository::planning::PlanningRepository::new(&conn).update_phase(
+        blueprint_id,
+        phase_id,
+        &title,
+        start_date.as_deref(),
+        end_date.as_deref(),
+        &objective_md,
+        sort_order,
+    )
 }
 
 /// §10：Phase 删除。
@@ -759,9 +841,15 @@ pub fn update_planning_milestone(
     date_status: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning::PlanningRepository::new(&conn)
-        .update_milestone(blueprint_id, milestone_id, &title, start_date.as_deref(),
-            end_date.as_deref(), &date_precision, &date_status)
+    repository::planning::PlanningRepository::new(&conn).update_milestone(
+        blueprint_id,
+        milestone_id,
+        &title,
+        start_date.as_deref(),
+        end_date.as_deref(),
+        &date_precision,
+        &date_status,
+    )
 }
 
 /// §10：Milestone 删除。
@@ -772,7 +860,8 @@ pub fn delete_planning_milestone(
     milestone_id: i64,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning::PlanningRepository::new(&conn).delete_milestone(blueprint_id, milestone_id)
+    repository::planning::PlanningRepository::new(&conn)
+        .delete_milestone(blueprint_id, milestone_id)
 }
 
 // ---- PlanningReview（§17-18/§39） ----
@@ -787,8 +876,13 @@ pub fn create_planning_review_due(
     trigger_type: String,
 ) -> Result<i64, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning_review::PlanningReviewRepository::new(&conn)
-        .create_due(profile_id, blueprint_id, &period_start, &period_end, &trigger_type)
+    repository::planning_review::PlanningReviewRepository::new(&conn).create_due(
+        profile_id,
+        blueprint_id,
+        &period_start,
+        &period_end,
+        &trigger_type,
+    )
 }
 
 #[tauri::command]
@@ -808,7 +902,8 @@ pub fn set_planning_review_status(
     status: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning_review::PlanningReviewRepository::new(&conn).set_status(id, profile_id, &status)
+    repository::planning_review::PlanningReviewRepository::new(&conn)
+        .set_status(id, profile_id, &status)
 }
 
 /// §18：是否该进行阶段复盘了（只读，不调 AI）。
@@ -819,7 +914,8 @@ pub fn is_planning_review_due(
 ) -> Result<bool, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let today = chrono_today();
-    repository::planning_review::PlanningReviewRepository::new(&conn).is_review_due(profile_id, &today)
+    repository::planning_review::PlanningReviewRepository::new(&conn)
+        .is_review_due(profile_id, &today)
 }
 
 /// §30：最新已确认 Review 的 risk_state（Today 风险 Banner；启动只读）。
@@ -870,9 +966,16 @@ pub fn prepare_planning_review_ai(
 ) -> Result<serde_json::Value, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let repo = repository::planning_review::PlanningReviewRepository::new(&conn);
-    let rev = repo.get(review_id, profile_id)?.ok_or("复盘记录不存在或不属于当前档案")?;
+    let rev = repo
+        .get(review_id, profile_id)?
+        .ok_or("复盘记录不存在或不属于当前档案")?;
     let snapshot = repository::planning_review::PlanningReviewRepository::build_snapshot(
-        &conn, profile_id, rev.blueprint_id, &rev.period_start, &rev.period_end)?;
+        &conn,
+        profile_id,
+        rev.blueprint_id,
+        &rev.period_start,
+        &rev.period_end,
+    )?;
     repo.prepare_running(review_id, profile_id, &snapshot)?;
     serde_json::from_str(&snapshot).map_err(|e| e.to_string())
 }
@@ -897,7 +1000,10 @@ pub async fn run_planning_review_ai(
             .get(review_id, profile_id)?
             .ok_or("复盘记录不存在或不属于当前档案")?;
         if rev.status != "running" {
-            return Err(format!("复盘当前状态为 {}，请先准备后再启动 AI 评估", rev.status));
+            return Err(format!(
+                "复盘当前状态为 {}，请先准备后再启动 AI 评估",
+                rev.status
+            ));
         }
         if rev.evidence_snapshot_json.trim().is_empty() {
             return Err("复盘缺少证据快照，请先准备".to_string());
@@ -936,15 +1042,21 @@ pub async fn run_planning_review_ai(
         crate::repository::planning::today_utc8(),
         snapshot_json
     );
-    let messages = vec![ChatMessage::system(system.to_string()), ChatMessage::user(user)];
-    let completion = client.chat(messages, true, None, Some(4096)).await.map_err(|e| {
-        // Provider 失败 → review failed，正式数据不变
-        if let Ok(conn) = state.0.lock() {
-            let _ = repository::planning_review::PlanningReviewRepository::new(&conn)
-                .set_status(review_id, profile_id, "failed");
-        }
-        format!("AI 评估失败：{}", e)
-    })?;
+    let messages = vec![
+        ChatMessage::system(system.to_string()),
+        ChatMessage::user(user),
+    ];
+    let completion = client
+        .chat(messages, true, None, Some(4096))
+        .await
+        .map_err(|e| {
+            // Provider 失败 → review failed，正式数据不变
+            if let Ok(conn) = state.0.lock() {
+                let _ = repository::planning_review::PlanningReviewRepository::new(&conn)
+                    .set_status(review_id, profile_id, "failed");
+            }
+            format!("AI 评估失败：{}", e)
+        })?;
     let raw = completion.content.unwrap_or_default();
     // 4) 应用 AI 评估输出（NO_CHANGE → completed；ADJUSTMENT_PROPOSAL → ChangeSet waiting_approval；
     //    输出不可用 → review failed；本函数 Provider 无关，测试可直测）
@@ -969,11 +1081,23 @@ pub fn import_planning_source(
     use sha2::{Digest, Sha256};
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let src = sandbox::resolve_import_source(&path)?;
-    let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("source").to_string();
-    let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+    let name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("source")
+        .to_string();
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
     let ftype = match ext.as_str() {
         "txt" | "md" | "docx" | "pdf" | "xlsx" => ext,
-        _ => return Err(format!("不支持的规划资料格式：{ext}（支持 txt/md/docx/pdf/xlsx）")),
+        _ => {
+            return Err(format!(
+                "不支持的规划资料格式：{ext}（支持 txt/md/docx/pdf/xlsx）"
+            ))
+        }
     };
     // 复制原件到附件沙箱
     let root = adir.0.join("planning_sources").join(profile_id.to_string());
@@ -996,10 +1120,19 @@ pub fn import_planning_source(
         return Err("无法从该文件中提取文字（扫描版 PDF 请先 OCR 后另存为文本）".to_string());
     }
     let repo = repository::planning_source::PlanningSourceRepository::new(&conn);
-    let sid = repo.insert(profile_id, &source_kind, &name, &ftype, &stored.to_string_lossy(), &sha)?;
+    let sid = repo.insert(
+        profile_id,
+        &source_kind,
+        &name,
+        &ftype,
+        &stored.to_string_lossy(),
+        &sha,
+    )?;
     repo.store_chunks(sid, profile_id, &text)?;
     repo.set_status(sid, "ready")?;
-    Ok(serde_json::json!({ "id": sid, "name": name, "file_type": ftype, "sha256": sha, "chars": text.chars().count() }))
+    Ok(
+        serde_json::json!({ "id": sid, "name": name, "file_type": ftype, "sha256": sha, "chars": text.chars().count() }),
+    )
 }
 
 #[tauri::command]
@@ -1018,7 +1151,8 @@ pub fn get_planning_source_text(
     source_id: i64,
 ) -> Result<String, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::planning_source::PlanningSourceRepository::new(&conn).joined_text(profile_id, source_id)
+    repository::planning_source::PlanningSourceRepository::new(&conn)
+        .joined_text(profile_id, source_id)
 }
 
 // ---- Import/Export（§31.3：用户明确 save path；只写所选路径） ----
@@ -1027,7 +1161,11 @@ pub fn get_planning_source_text(
 pub fn write_export_file(path: String, content_base64: String) -> Result<(), String> {
     use base64::Engine as _;
     let p = std::path::PathBuf::from(&path);
-    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    let name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
     if name.is_empty() {
         return Err("未指定有效导出路径".to_string());
     }
@@ -1041,12 +1179,22 @@ pub fn write_export_file(path: String, content_base64: String) -> Result<(), Str
 // ---------- Web（PHASE K） ----------
 
 #[tauri::command]
-pub fn get_web_search_settings(state: tauri::State<'_, db::DbState>) -> Result<(bool, bool), String> {
+pub fn get_web_search_settings(
+    state: tauri::State<'_, db::DbState>,
+) -> Result<(bool, bool), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let enabled = SettingRepository::new(&conn).get("websearch.enabled").ok().flatten()
-        .map(|v| v == "true").unwrap_or(false);
-    let has_key = SettingRepository::new(&conn).get("websearch.brave_key").ok().flatten()
-        .map(|v| !v.trim().is_empty()).unwrap_or(false);
+    let enabled = SettingRepository::new(&conn)
+        .get("websearch.enabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    let has_key = SettingRepository::new(&conn)
+        .get("websearch.brave_key")
+        .ok()
+        .flatten()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
     Ok((enabled, has_key))
 }
 
@@ -1058,9 +1206,11 @@ pub fn set_web_search_settings(
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let repo = SettingRepository::new(&conn);
-    repo.set("websearch.enabled", if enabled { "true" } else { "false" }).map_err(|e| e.to_string())?;
+    repo.set("websearch.enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
     if let Some(k) = brave_key {
-        repo.set("websearch.brave_key", k.trim()).map_err(|e| e.to_string())?;
+        repo.set("websearch.brave_key", k.trim())
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1068,7 +1218,9 @@ pub fn set_web_search_settings(
 // ---------- Vault（PHASE U） ----------
 
 #[tauri::command]
-pub fn vault_status(vault: tauri::State<'_, crate::ai::vault::VaultState>) -> Result<serde_json::Value, String> {
+pub fn vault_status(
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+) -> Result<serde_json::Value, String> {
     let locked = vault.is_locked();
     let stats = if locked { None } else { vault.stats().ok() };
     Ok(serde_json::json!({
@@ -1079,7 +1231,10 @@ pub fn vault_status(vault: tauri::State<'_, crate::ai::vault::VaultState>) -> Re
 }
 
 #[tauri::command]
-pub fn vault_unlock(vault: tauri::State<'_, crate::ai::vault::VaultState>, password: String) -> Result<(), String> {
+pub fn vault_unlock(
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+    password: String,
+) -> Result<(), String> {
     vault.unlock(&password)
 }
 
@@ -1098,7 +1253,9 @@ pub fn vault_list_events(
 }
 
 #[tauri::command]
-pub fn vault_list_snapshots(vault: tauri::State<'_, crate::ai::vault::VaultState>) -> Result<Vec<(i64, String, i64, String)>, String> {
+pub fn vault_list_snapshots(
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+) -> Result<Vec<(i64, String, i64, String)>, String> {
     vault.list_snapshots()
 }
 
@@ -1109,12 +1266,18 @@ pub fn vault_create_snapshot(
 ) -> Result<i64, String> {
     // DEV-0057 §164：真实运行 DB 路径（prod 不再恒 size=0）
     let db_path = runtime_db_path(&app);
-    let real = if db_path.exists() { Some(db_path.as_path()) } else { None };
+    let real = if db_path.exists() {
+        Some(db_path.as_path())
+    } else {
+        None
+    };
     vault.snapshot("manual", real)
 }
 
 #[tauri::command]
-pub fn vault_export_events(vault: tauri::State<'_, crate::ai::vault::VaultState>) -> Result<String, String> {
+pub fn vault_export_events(
+    vault: tauri::State<'_, crate::ai::vault::VaultState>,
+) -> Result<String, String> {
     vault.export_events_json()
 }
 
@@ -1160,9 +1323,17 @@ pub async fn ai_start_run(
                 .flatten()
                 .unwrap_or_else(|| "readonly".to_string())
         });
-        let we = SettingRepository::new(&conn).get("websearch.enabled").ok().flatten()
-            .map(|v| v == "true").unwrap_or(false);
-        let bk = SettingRepository::new(&conn).get("websearch.brave_key").ok().flatten().unwrap_or_default();
+        let we = SettingRepository::new(&conn)
+            .get("websearch.enabled")
+            .ok()
+            .flatten()
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let bk = SettingRepository::new(&conn)
+            .get("websearch.brave_key")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         (resolved, m, we, bk)
     };
     // DEV-0061R §34：Unified Higher AI——mode 仅 legacy 读取（不再参与 run_chat_turn 判定）
@@ -1193,15 +1364,31 @@ pub async fn ai_start_run(
         let runs = app_handle.state::<ai::run::RunManager>();
         let vault = app_handle.state::<crate::ai::vault::VaultState>();
         let result = ai::agent::run_agent_turn(
-            &app_handle, &state, &vault, profile_id, conversation_id, &run_id_clone, &token,
-            current_message_id, &user_message, profiles.primary.clone(),
-            &page_label, knowledge_path.as_deref(),
-            session_title.as_deref(), date.as_deref(), web_enabled, &brave_key,
+            &app_handle,
+            &state,
+            &vault,
+            profile_id,
+            conversation_id,
+            &run_id_clone,
+            &token,
+            current_message_id,
+            &user_message,
+            profiles.primary.clone(),
+            &page_label,
+            knowledge_path.as_deref(),
+            session_title.as_deref(),
+            date.as_deref(),
+            web_enabled,
+            &brave_key,
             local_date.as_deref().map(String::from).unwrap_or_default(),
-            local_datetime.as_deref().map(String::from).unwrap_or_default(),
+            local_datetime
+                .as_deref()
+                .map(String::from)
+                .unwrap_or_default(),
             timezone_offset_minutes.unwrap_or(480),
             &turn_client_id,
-        ).await;
+        )
+        .await;
         runs.finish(&run_id_clone);
         if let Err(e) = result {
             eprintln!("[AI-RUNTIME] run_failed_converged run_id={run_id_clone} err={e}");
@@ -1256,9 +1443,17 @@ pub async fn run_chat_turn(
                 ?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(id) DO NOTHING",
             rusqlite::params![
-                run_id, profile_id, conversation_id,
-                primary.profile_id, primary.display_name, primary.adapter_kind.as_str(), primary.model,
-                control.profile_id, control.display_name, control.adapter_kind.as_str(), control.model,
+                run_id,
+                profile_id,
+                conversation_id,
+                primary.profile_id,
+                primary.display_name,
+                primary.adapter_kind.as_str(),
+                primary.model,
+                control.profile_id,
+                control.display_name,
+                control.adapter_kind.as_str(),
+                control.model,
             ],
         );
         trace.turn_started(&conn, page_label);
@@ -1410,13 +1605,22 @@ pub async fn run_chat_turn(
         if let Some((_pid, pending_status, text, cs_id)) = gate.flatten() {
             let made_changeset = cs_id.is_some();
             if let Some(cs_id) = cs_id {
-                ai::run::emit(Some(app), "ai://changeset", run_id,
-                    serde_json::json!({ "change_set_id": cs_id }));
+                ai::run::emit(
+                    Some(app),
+                    "ai://changeset",
+                    run_id,
+                    serde_json::json!({ "change_set_id": cs_id }),
+                );
             }
             {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                let _ = repository::conversation::ConversationRepository::new(&conn)
-                    .add_message(conversation_id, profile_id, "assistant", &text, Some(run_id));
+                let _ = repository::conversation::ConversationRepository::new(&conn).add_message(
+                    conversation_id,
+                    profile_id,
+                    "assistant",
+                    &text,
+                    Some(run_id),
+                );
                 let _ = conn.execute(
                     "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                      VALUES (?1,?2,?3,'assistant','pending_action',?4,?5)
@@ -1425,10 +1629,21 @@ pub async fn run_chat_turn(
                         if made_changeset { "waiting_approval" } else { "completed" },
                         format!("pending:{pending_status}")],
                 );
-                trace.run_finished(&conn, if made_changeset { "waiting_approval" } else { "completed" });
+                trace.run_finished(
+                    &conn,
+                    if made_changeset {
+                        "waiting_approval"
+                    } else {
+                        "completed"
+                    },
+                );
             }
             vault.record_ai("run_completed", run_id, "pending_action");
-            return Ok(if made_changeset { "waiting_approval" } else { "completed" });
+            return Ok(if made_changeset {
+                "waiting_approval"
+            } else {
+                "completed"
+            });
         }
     }
 
@@ -1439,7 +1654,9 @@ pub async fn run_chat_turn(
             .list_messages(conversation_id, profile_id, 1, 0)
             .unwrap_or_default()
             .into_iter()
-            .find(|m| m.role == "assistant" && !m.content.trim().is_empty() && m.id != current_message_id)
+            .find(|m| {
+                m.role == "assistant" && !m.content.trim().is_empty() && m.id != current_message_id
+            })
             .map(|m| m.content)
             .unwrap_or_default();
         match ai::planner::read_workflow_payload(&conn, profile_id, conversation_id) {
@@ -1473,22 +1690,33 @@ pub async fn run_chat_turn(
         && !ai::planner::is_workflow_exit_intent(user_message);
     // Context Purpose 预判（Router 之后才最终定 route；planning 语境先按 planning 装载，
     // SemanticAction 路径不消费该 context，FastChat 只用 bounded history）
-    let maybe_planning = legacy_clarification
-        || workflow_is_active
-        || gate == ai::planner::PlanningGate::Planning;
+    let maybe_planning =
+        legacy_clarification || workflow_is_active || gate == ai::planner::PlanningGate::Planning;
 
     // ---- DEV-0060 PART I：用户明确取消规划（不调 AI；workflow→cancelled；无 ChangeSet） ----
-    if matches!(continuing_decision, ai::planner::PlanningContinuation::Cancel) {
+    if matches!(
+        continuing_decision,
+        ai::planner::PlanningContinuation::Cancel
+    ) {
         let msg = "已退出这次规划流程。你可以继续问其他问题。";
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            let _ = repository::conversation::ConversationRepository::new(&conn)
-                .add_message(conversation_id, profile_id, "assistant", msg, Some(run_id));
+            let _ = repository::conversation::ConversationRepository::new(&conn).add_message(
+                conversation_id,
+                profile_id,
+                "assistant",
+                msg,
+                Some(run_id),
+            );
             let mut payload = workflow_payload.clone();
             payload.updated_by_user_turn = user_message.to_string();
             ai::planner::set_workflow_payload(
-                &conn, run_id, profile_id, conversation_id,
-                ai::planner::WORKFLOW_STATE_CANCELLED, &payload,
+                &conn,
+                run_id,
+                profile_id,
+                conversation_id,
+                ai::planner::WORKFLOW_STATE_CANCELLED,
+                &payload,
             );
         }
         vault.record_ai("run_completed", run_id, "planner_cancelled");
@@ -1505,15 +1733,23 @@ pub async fn run_chat_turn(
             date: date.map(String::from),
             conversation_id: Some(conversation_id),
         };
-        let purpose = ai::context_builder::detect_context_purpose(user_message, &page, maybe_planning);
-        let report = ai::context_builder::build(&conn, profile_id, user_message, &page,
-            "assistant", purpose)?;
-        let recent: Vec<(i64, String, String)> = repository::conversation::ConversationRepository::new(&conn)
-            .list_messages(conversation_id, profile_id, 20, 0)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|m| (m.id, m.role, m.content))
-            .collect();
+        let purpose =
+            ai::context_builder::detect_context_purpose(user_message, &page, maybe_planning);
+        let report = ai::context_builder::build(
+            &conn,
+            profile_id,
+            user_message,
+            &page,
+            "assistant",
+            purpose,
+        )?;
+        let recent: Vec<(i64, String, String)> =
+            repository::conversation::ConversationRepository::new(&conn)
+                .list_messages(conversation_id, profile_id, 20, 0)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| (m.id, m.role, m.content))
+                .collect();
         (report, recent, purpose)
     };
     let context_text = context_pack
@@ -1590,7 +1826,14 @@ pub async fn run_chat_turn(
             {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
                 // §27/§28：Interpreter = CONTROL AI（trace 带 ai_role + provider snapshot）
-                trace.provider_request_started_role(&conn, 1, "secondary", 0, "control", Some(&control));
+                trace.provider_request_started_role(
+                    &conn,
+                    1,
+                    "secondary",
+                    0,
+                    "control",
+                    Some(&control),
+                );
             }
             let raw = control_client
                 .chat_with_temperature(
@@ -1618,7 +1861,14 @@ pub async fn run_chat_turn(
                 );
                 {
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
-                    trace.provider_request_started_role(&conn, 2, "secondary", 0, "control", Some(&control));
+                    trace.provider_request_started_role(
+                        &conn,
+                        2,
+                        "secondary",
+                        0,
+                        "control",
+                        Some(&control),
+                    );
                 }
                 let raw2 = control_client
                     .chat_with_temperature(
@@ -1635,7 +1885,14 @@ pub async fn run_chat_turn(
                 {
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                     trace.provider_request_finished(&conn, 2, "secondary");
-                    trace.semantic_action_repaired(&conn, if raw2.trim().is_empty() { "failed" } else { "repaired" });
+                    trace.semantic_action_repaired(
+                        &conn,
+                        if raw2.trim().is_empty() {
+                            "failed"
+                        } else {
+                            "repaired"
+                        },
+                    );
                 }
                 decision = ai::runtime::parse_turn_decision(&raw2);
             }
@@ -1662,14 +1919,15 @@ pub async fn run_chat_turn(
         ai::runtime::TurnDecision::Clarification { .. } => "clarification".into(),
     };
     // §11：active Planner 被新意图接管 → paused（旧规划不再劫持后续轮次）
-    if workflow_is_active
-        && route != "planner_continuation"
-        && route != "planning_gate"
-    {
+    if workflow_is_active && route != "planner_continuation" && route != "planning_gate" {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         ai::planner::set_workflow_payload(
-            &conn, run_id, profile_id, conversation_id,
-            ai::planner::WORKFLOW_STATE_PAUSED, &workflow_payload,
+            &conn,
+            run_id,
+            profile_id,
+            conversation_id,
+            ai::planner::WORKFLOW_STATE_PAUSED,
+            &workflow_payload,
         );
     }
     // route → planning 管线变量（payload 记账 / instruction 构建）
@@ -1680,13 +1938,21 @@ pub async fn run_chat_turn(
         trace.route_decided(
             &conn,
             &route,
-            if route == "fast_chat" || is_planning_request { "local" } else { "semantic" },
+            if route == "fast_chat" || is_planning_request {
+                "local"
+            } else {
+                "semantic"
+            },
             &router_skills,
         );
         trace.turn_decided(
             &conn,
             &route,
-            if route == "fast_chat" || is_planning_request { "local" } else { "interpreter" },
+            if route == "fast_chat" || is_planning_request {
+                "local"
+            } else {
+                "interpreter"
+            },
         );
     }
 
@@ -1698,8 +1964,13 @@ pub async fn run_chat_turn(
             let msg = ai::provider::primary_basic_error(&primary.display_name);
             {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                let _ = repository::conversation::ConversationRepository::new(&conn)
-                    .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+                let _ = repository::conversation::ConversationRepository::new(&conn).add_message(
+                    conversation_id,
+                    profile_id,
+                    "assistant",
+                    &msg,
+                    Some(run_id),
+                );
                 let _ = conn.execute(
                     "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                      VALUES (?1,?2,?3,'assistant','fast_chat','completed','primary_basic_guard')
@@ -1718,12 +1989,22 @@ pub async fn run_chat_turn(
             envelope.prompt_block()
         ))];
         for (_id, r, c) in hist {
-            msgs.push(ChatMessage { role: r, content: c, tool_calls: None, tool_call_id: None, name: None });
+            msgs.push(ChatMessage {
+                role: r,
+                content: c,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            });
         }
         msgs.push(ChatMessage::user(user_message.to_string()));
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            trace.context_built(&conn, msgs.iter().map(|m| m.content.chars().count()).sum(), &["fast_chat".into()]);
+            trace.context_built(
+                &conn,
+                msgs.iter().map(|m| m.content.chars().count()).sum(),
+                &["fast_chat".into()],
+            );
             trace.provider_request_started_role(&conn, 1, "main", 0, "primary", Some(&primary));
         }
         // DEV-0062 §24 Streaming Degradation：streaming=false（已知）→ 直接单次 non-stream
@@ -1734,10 +2015,21 @@ pub async fn run_chat_turn(
             Err("streaming_disabled".to_string())
         } else {
             client
-                .chat_stream(msgs.clone(), Some(2048), 0.3, |d| {
-                    first_delta = true;
-                    ai::run::emit(Some(app), "ai://delta", run_id, serde_json::json!({ "delta": d }));
-                }, token.clone())
+                .chat_stream(
+                    msgs.clone(),
+                    Some(2048),
+                    0.3,
+                    |d| {
+                        first_delta = true;
+                        ai::run::emit(
+                            Some(app),
+                            "ai://delta",
+                            run_id,
+                            serde_json::json!({ "delta": d }),
+                        );
+                    },
+                    token.clone(),
+                )
                 .await
         };
         let (final_text, usage) = match streamed {
@@ -1758,14 +2050,18 @@ pub async fn run_chat_turn(
         let _ = usage;
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            repository::conversation::ConversationRepository::new(&conn)
-                .add_message(conversation_id, profile_id, "assistant", &final_text, Some(run_id))?;
+            repository::conversation::ConversationRepository::new(&conn).add_message(
+                conversation_id,
+                profile_id,
+                "assistant",
+                &final_text,
+                Some(run_id),
+            )?;
             let _ = conn.execute(
                 "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                  VALUES (?1,?2,?3,?4,'fast_chat','completed','')
                  ON CONFLICT(id) DO UPDATE SET status='completed', updated_at=datetime('now')",
-                rusqlite::params![run_id, profile_id, conversation_id,
-                    "assistant"],
+                rusqlite::params![run_id, profile_id, conversation_id, "assistant"],
             );
             trace.run_finished(&conn, "completed");
         }
@@ -1794,181 +2090,236 @@ pub async fn run_chat_turn(
                     let conn = state.0.lock().ok()?;
                     trace.grounding_started(&conn, etype);
                     if hint.recency_hint.is_some() {
-                        return ai::grounding::resolve_recent(&conn, profile_id, conversation_id, hint).ok();
+                        return ai::grounding::resolve_recent(
+                            &conn,
+                            profile_id,
+                            conversation_id,
+                            hint,
+                        )
+                        .ok();
                     }
                     let cands = if etype == "task" {
-                                ai::grounding::retrieve_task_candidates(&conn, profile_id, hint, &envelope).ok()?
-                            } else {
-                                ai::grounding::retrieve_rule_candidates(&conn, profile_id, hint).ok()?
-                            };
-                            trace.candidates_retrieved(&conn, etype, cands.len());
-                            if cands.is_empty() {
-                                trace.grounding_not_found(&conn, etype);
-                                return Some(ai::grounding::GroundingOutcome::NotFound(String::new()));
-                            }
-                            if cands.len() == 1 {
-                                // AI-GND-006：候选唯一直接 Ground，0 额外 Provider Call
-                                trace.grounding_resolved(&conn, etype, false);
-                                return Some(ai::grounding::GroundingOutcome::Resolved(cands[0].real_id));
-                            }
-                            trace.grounding_ambiguous(&conn, cands.len());
-                            Some(ai::grounding::GroundingOutcome::Ambiguous(cands))
-                        })();
-                        let grounded = match retrieved {
-                            Some(ai::grounding::GroundingOutcome::Ambiguous(cands))
-                                if (2..=ai::grounding::MAX_CANDIDATES).contains(&cands.len()) =>
-                            {
-                                // AI-GND-007/008：一次 Candidate Selection；只允许从 candidate_id 中选
-                                let prompt =
-                                    ai::grounding::selection_prompt(user_message, hint, &cands);
-                                {
-                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                    trace.candidate_selection_started(&conn, cands.len());
-                                    trace.provider_request_started_role(&conn, 2, "secondary", 0, "control", Some(&control));
-                                }
-                                let raw = control_client
-                                    .chat_with_temperature(
-                                        vec![ChatMessage::system(prompt)],
-                                        true,
-                                        None,
-                                        Some(300),
-                                        0.0, // §11：Candidate Selection deterministic
-                                    )
-                                    .await
-                                    .ok()
-                                    .and_then(|c| c.content)
-                                    .unwrap_or_default();
-                                {
-                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                    trace.provider_request_finished(&conn, 2, "secondary");
-                                }
-                                let sel = ai::grounding::parse_selection(&raw, &cands);
-                                {
-                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                    trace.candidate_selection_finished(
-                                        &conn,
-                                        match &sel {
-                                            ai::grounding::SelectionOutcome::Selected(_) => "selected",
-                                            ai::grounding::SelectionOutcome::Ambiguous(_) => "ambiguous",
-                                            ai::grounding::SelectionOutcome::NoneFound => "none",
-                                            ai::grounding::SelectionOutcome::Invalid => "invalid",
-                                        },
-                                    );
-                                }
-                                input.selection = Some(sel.clone());
-                                input.selection_called = true;
-                                let desc = hint.title_hint.trim().to_string();
-                                let out =
-                                    ai::grounding::ground_single(&desc, cands, Some(&sel));
-                                {
-                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                    match &out {
-                                        ai::grounding::GroundingOutcome::Resolved(_) => {
-                                            trace.grounding_resolved(&conn, etype, true)
-                                        }
-                                        ai::grounding::GroundingOutcome::Ambiguous(c) => {
-                                            trace.grounding_ambiguous(&conn, c.len())
-                                        }
-                                        _ => trace.grounding_not_found(&conn, etype),
-                                    }
-                                }
-                                Some(out)
-                            }
-                            other => other,
-                        };
-                        if etype == "task" {
-                            input.pre_task = grounded;
-                        } else {
-                            input.pre_rule = grounded;
-                        }
-                    }
-                    // ---- Grounded Action Plan（plan_action：多 op 仍 ONE ChangeSet）----
-                    let planned = {
-                        let conn = state.0.lock().map_err(|e| e.to_string())?;
-                        ai::action::plan_action(&conn, profile_id, &envelope, &input, &act)
+                        ai::grounding::retrieve_task_candidates(&conn, profile_id, hint, &envelope)
+                            .ok()?
+                    } else {
+                        ai::grounding::retrieve_rule_candidates(&conn, profile_id, hint).ok()?
                     };
-                    match planned {
-                        Err(e) => format!("{e}\n\n（正式数据没有变化。）"),
-                        Ok(ai::action::ActionOutcome::ProposalReady { ops, title, summary, .. }) => {
-                            // Empty Plan Guard（AI-GND-010/011）：0 op 绝不调 ChangeSetRepository::create，
-                            // 用户绝不见内部错误文案
-                            if ops.is_empty() {
-                                {
-                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                    trace.empty_plan_guarded(&conn, "zero_operations");
+                    trace.candidates_retrieved(&conn, etype, cands.len());
+                    if cands.is_empty() {
+                        trace.grounding_not_found(&conn, etype);
+                        return Some(ai::grounding::GroundingOutcome::NotFound(String::new()));
+                    }
+                    if cands.len() == 1 {
+                        // AI-GND-006：候选唯一直接 Ground，0 额外 Provider Call
+                        trace.grounding_resolved(&conn, etype, false);
+                        return Some(ai::grounding::GroundingOutcome::Resolved(cands[0].real_id));
+                    }
+                    trace.grounding_ambiguous(&conn, cands.len());
+                    Some(ai::grounding::GroundingOutcome::Ambiguous(cands))
+                })();
+                let grounded = match retrieved {
+                    Some(ai::grounding::GroundingOutcome::Ambiguous(cands))
+                        if (2..=ai::grounding::MAX_CANDIDATES).contains(&cands.len()) =>
+                    {
+                        // AI-GND-007/008：一次 Candidate Selection；只允许从 candidate_id 中选
+                        let prompt = ai::grounding::selection_prompt(user_message, hint, &cands);
+                        {
+                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                            trace.candidate_selection_started(&conn, cands.len());
+                            trace.provider_request_started_role(
+                                &conn,
+                                2,
+                                "secondary",
+                                0,
+                                "control",
+                                Some(&control),
+                            );
+                        }
+                        let raw = control_client
+                            .chat_with_temperature(
+                                vec![ChatMessage::system(prompt)],
+                                true,
+                                None,
+                                Some(300),
+                                0.0, // §11：Candidate Selection deterministic
+                            )
+                            .await
+                            .ok()
+                            .and_then(|c| c.content)
+                            .unwrap_or_default();
+                        {
+                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                            trace.provider_request_finished(&conn, 2, "secondary");
+                        }
+                        let sel = ai::grounding::parse_selection(&raw, &cands);
+                        {
+                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                            trace.candidate_selection_finished(
+                                &conn,
+                                match &sel {
+                                    ai::grounding::SelectionOutcome::Selected(_) => "selected",
+                                    ai::grounding::SelectionOutcome::Ambiguous(_) => "ambiguous",
+                                    ai::grounding::SelectionOutcome::NoneFound => "none",
+                                    ai::grounding::SelectionOutcome::Invalid => "invalid",
+                                },
+                            );
+                        }
+                        input.selection = Some(sel.clone());
+                        input.selection_called = true;
+                        let desc = hint.title_hint.trim().to_string();
+                        let out = ai::grounding::ground_single(&desc, cands, Some(&sel));
+                        {
+                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                            match &out {
+                                ai::grounding::GroundingOutcome::Resolved(_) => {
+                                    trace.grounding_resolved(&conn, etype, true)
                                 }
-                                "没有产生可执行的修改。正式数据没有变化。".to_string()
-                            } else if let Err(e) = ai::action::validate_ops(&envelope, &act, &ops) {
-                                format!("{e}\n\n（正式数据没有变化。）")
-                            } else {
-                                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                trace.action_plan_compiled(&conn, ops.len());
-                                match repository::changeset::ChangeSetRepository::new(&conn)
-                                    .create(profile_id, Some(conversation_id), Some(run_id),
-                                        &title, &summary, &ops)
-                                {
-                                    Ok(cs_id) => {
-                                        made_changeset = true;
-                                        ai::run::emit(Some(app), "ai://changeset", run_id,
-                                            serde_json::json!({ "change_set_id": cs_id, "title": title, "count": ops.len() }));
-                                        // §25.2：backend deterministic 总结（禁止再调模型写漂亮总结）
-                                        format!(
+                                ai::grounding::GroundingOutcome::Ambiguous(c) => {
+                                    trace.grounding_ambiguous(&conn, c.len())
+                                }
+                                _ => trace.grounding_not_found(&conn, etype),
+                            }
+                        }
+                        Some(out)
+                    }
+                    other => other,
+                };
+                if etype == "task" {
+                    input.pre_task = grounded;
+                } else {
+                    input.pre_rule = grounded;
+                }
+            }
+            // ---- Grounded Action Plan（plan_action：多 op 仍 ONE ChangeSet）----
+            let planned = {
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                ai::action::plan_action(&conn, profile_id, &envelope, &input, &act)
+            };
+            match planned {
+                Err(e) => format!("{e}\n\n（正式数据没有变化。）"),
+                Ok(ai::action::ActionOutcome::ProposalReady {
+                    ops,
+                    title,
+                    summary,
+                    ..
+                }) => {
+                    // Empty Plan Guard（AI-GND-010/011）：0 op 绝不调 ChangeSetRepository::create，
+                    // 用户绝不见内部错误文案
+                    if ops.is_empty() {
+                        {
+                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                            trace.empty_plan_guarded(&conn, "zero_operations");
+                        }
+                        "没有产生可执行的修改。正式数据没有变化。".to_string()
+                    } else if let Err(e) = ai::action::validate_ops(&envelope, &act, &ops) {
+                        format!("{e}\n\n（正式数据没有变化。）")
+                    } else {
+                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                        trace.action_plan_compiled(&conn, ops.len());
+                        match repository::changeset::ChangeSetRepository::new(&conn).create(
+                            profile_id,
+                            Some(conversation_id),
+                            Some(run_id),
+                            &title,
+                            &summary,
+                            &ops,
+                        ) {
+                            Ok(cs_id) => {
+                                made_changeset = true;
+                                ai::run::emit(
+                                    Some(app),
+                                    "ai://changeset",
+                                    run_id,
+                                    serde_json::json!({ "change_set_id": cs_id, "title": title, "count": ops.len() }),
+                                );
+                                // §25.2：backend deterministic 总结（禁止再调模型写漂亮总结）
+                                format!(
                                             "已经准备好修改提案：{title}（{summary}）。共 {} 项操作。\n点击「查看计划」审查后应用；未应用前 Higher 数据不会变化。",
                                             ops.len()
                                         )
-                                    }
-                                    Err(e) => format!("提案生成失败：{e}\n\n（正式数据没有变化。）"),
-                                }
                             }
+                            Err(e) => format!("提案生成失败：{e}\n\n（正式数据没有变化。）"),
                         }
-                        Ok(ai::action::ActionOutcome::NothingToChange(msg)) => {
-                            let conn = state.0.lock().map_err(|e| e.to_string())?;
-                            trace.empty_plan_guarded(&conn, "nothing_to_change");
-                            msg
-                        }
-                        Ok(ai::action::ActionOutcome::Clarification { message, candidates }) => {
-                            // DEV-0062 §43：Ambiguous 澄清 → 持久化 Control State（ai_pending_actions
-                            // active；同会话旧 pending 先 cancelled；restart 可续；0 ChangeSet）
-                            if !candidates.is_empty() {
-                                let pending_cands: Vec<repository::ai_pending_action::PendingCandidate> =
-                                    candidates.iter()
-                                        .map(repository::ai_pending_action::PendingCandidate::from_grounding)
-                                        .collect();
-                                let action_json =
-                                    serde_json::to_string(&act).unwrap_or_default();
-                                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                let _ = repository::ai_pending_action::AiPendingActionRepository::new(&conn)
-                                    .create_or_replace(
-                                        profile_id,
-                                        conversation_id,
-                                        Some(run_id),
-                                        &action_json,
-                                        &pending_cands,
-                                        &message,
-                                    );
-                            }
-                            message
-                        }
-                        Ok(ai::action::ActionOutcome::NotFound(msg))
-                        | Ok(ai::action::ActionOutcome::Unsupported(msg))
-                        | Ok(ai::action::ActionOutcome::ContractFailure(msg)) => msg,
+                    }
                 }
+                Ok(ai::action::ActionOutcome::NothingToChange(msg)) => {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    trace.empty_plan_guarded(&conn, "nothing_to_change");
+                    msg
+                }
+                Ok(ai::action::ActionOutcome::Clarification {
+                    message,
+                    candidates,
+                }) => {
+                    // DEV-0062 §43：Ambiguous 澄清 → 持久化 Control State（ai_pending_actions
+                    // active；同会话旧 pending 先 cancelled；restart 可续；0 ChangeSet）
+                    if !candidates.is_empty() {
+                        let pending_cands: Vec<repository::ai_pending_action::PendingCandidate> =
+                            candidates
+                                .iter()
+                                .map(
+                                    repository::ai_pending_action::PendingCandidate::from_grounding,
+                                )
+                                .collect();
+                        let action_json = serde_json::to_string(&act).unwrap_or_default();
+                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                        let _ =
+                            repository::ai_pending_action::AiPendingActionRepository::new(&conn)
+                                .create_or_replace(
+                                    profile_id,
+                                    conversation_id,
+                                    Some(run_id),
+                                    &action_json,
+                                    &pending_cands,
+                                    &message,
+                                );
+                    }
+                    message
+                }
+                Ok(ai::action::ActionOutcome::NotFound(msg))
+                | Ok(ai::action::ActionOutcome::Unsupported(msg))
+                | Ok(ai::action::ActionOutcome::ContractFailure(msg)) => msg,
+            }
         };
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            repository::conversation::ConversationRepository::new(&conn)
-                .add_message(conversation_id, profile_id, "assistant", &final_text, Some(run_id))?;
+            repository::conversation::ConversationRepository::new(&conn).add_message(
+                conversation_id,
+                profile_id,
+                "assistant",
+                &final_text,
+                Some(run_id),
+            )?;
             let _ = conn.execute(
                 "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                  VALUES (?1,?2,?3,'assistant','semantic_action',?4,'')
                  ON CONFLICT(id) DO UPDATE SET status=?4, updated_at=datetime('now')",
-                rusqlite::params![run_id, profile_id, conversation_id,
-                    if made_changeset { "waiting_approval" } else { "completed" }],
+                rusqlite::params![
+                    run_id,
+                    profile_id,
+                    conversation_id,
+                    if made_changeset {
+                        "waiting_approval"
+                    } else {
+                        "completed"
+                    }
+                ],
             );
-            trace.run_finished(&conn, if made_changeset { "waiting_approval" } else { "completed" });
+            trace.run_finished(
+                &conn,
+                if made_changeset {
+                    "waiting_approval"
+                } else {
+                    "completed"
+                },
+            );
         }
         vault.record_ai("run_completed", run_id, "semantic_action");
-        return Ok(if made_changeset { "waiting_approval" } else { "completed" });
+        return Ok(if made_changeset {
+            "waiting_approval"
+        } else {
+            "completed"
+        });
     }
 
     // ---- DEV-0061R §9 · Clarification（陈述 vs 执行；Interpreter 直接给出确认问题） ----
@@ -1976,13 +2327,21 @@ pub async fn run_chat_turn(
         let question = if question.trim().is_empty() {
             "你的意思是希望我把它加入 Higher 吗？（例如设成每日任务/创建任务）如果想执行，请直接说「帮我创建…」；正式数据目前没有变化。".to_string()
         } else {
-            format!("{}\n（正式数据目前没有变化；如需执行请直接确认。）", question.trim())
+            format!(
+                "{}\n（正式数据目前没有变化；如需执行请直接确认。）",
+                question.trim()
+            )
         };
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
             trace.semantic_action_parsed(&conn, "router_clarification");
-            let _ = repository::conversation::ConversationRepository::new(&conn)
-                .add_message(conversation_id, profile_id, "assistant", &question, Some(run_id));
+            let _ = repository::conversation::ConversationRepository::new(&conn).add_message(
+                conversation_id,
+                profile_id,
+                "assistant",
+                &question,
+                Some(run_id),
+            );
             trace.run_finished(&conn, "clarification");
         }
         vault.record_ai("run_completed", run_id, "clarification");
@@ -2003,8 +2362,13 @@ pub async fn run_chat_turn(
         let msg = ai::provider::primary_basic_error(&primary.display_name);
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            let _ = repository::conversation::ConversationRepository::new(&conn)
-                .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+            let _ = repository::conversation::ConversationRepository::new(&conn).add_message(
+                conversation_id,
+                profile_id,
+                "assistant",
+                &msg,
+                Some(run_id),
+            );
             let _ = conn.execute(
                 "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                  VALUES (?1,?2,?3,'assistant',?4,'completed','primary_basic_guard')
@@ -2021,8 +2385,13 @@ pub async fn run_chat_turn(
         let msg = ai::provider::primary_tools_error(&primary.display_name);
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            let _ = repository::conversation::ConversationRepository::new(&conn)
-                .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+            let _ = repository::conversation::ConversationRepository::new(&conn).add_message(
+                conversation_id,
+                profile_id,
+                "assistant",
+                &msg,
+                Some(run_id),
+            );
             let _ = conn.execute(
                 "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                  VALUES (?1,?2,?3,'assistant',?4,'completed','primary_capability_guard')
@@ -2038,8 +2407,13 @@ pub async fn run_chat_turn(
         let msg = ai::provider::primary_json_error(&primary.display_name);
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            let _ = repository::conversation::ConversationRepository::new(&conn)
-                .add_message(conversation_id, profile_id, "assistant", &msg, Some(run_id));
+            let _ = repository::conversation::ConversationRepository::new(&conn).add_message(
+                conversation_id,
+                profile_id,
+                "assistant",
+                &msg,
+                Some(run_id),
+            );
             let _ = conn.execute(
                 "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                  VALUES (?1,?2,?3,'assistant',?4,'completed','primary_capability_guard')
@@ -2104,20 +2478,39 @@ pub async fn run_chat_turn(
     const MAX_ROUNDS: usize = 6;
     // DEV-0060.1 PART J（§21.2）：按 route 动态裁剪工具——禁止每轮全量 21 tools。
     // planning（含续跑）→ planning+web；读路径 → personal/task/knowledge/read。
-    let route_for_tools = if is_planning_request { "planning" } else { "higher_read" };
-    let tools = ai::tools::tool_definitions_for_scopes(&ai::tools::scopes_for_route(route_for_tools));
+    let route_for_tools = if is_planning_request {
+        "planning"
+    } else {
+        "higher_read"
+    };
+    let tools =
+        ai::tools::tool_definitions_for_scopes(&ai::tools::scopes_for_route(route_for_tools));
     let mut final_text = String::new();
     let mut cancelled = false;
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        trace.context_built(&conn, context_text.chars().count(), &context_pack.chips.clone());
+        trace.context_built(
+            &conn,
+            context_text.chars().count(),
+            &context_pack.chips.clone(),
+        );
     }
     'outer: for _round in 0..MAX_ROUNDS {
-        if token.is_cancelled() { cancelled = true; break; }
+        if token.is_cancelled() {
+            cancelled = true;
+            break;
+        }
         // 工具循环轮用非流式（需要 tool_calls）；最终轮流式
         {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            trace.provider_request_started_role(&conn, _round as i64 + 1, "main", tools.as_array().map(|a| a.len()).unwrap_or(0), "primary", Some(&primary));
+            trace.provider_request_started_role(
+                &conn,
+                _round as i64 + 1,
+                "main",
+                tools.as_array().map(|a| a.len()).unwrap_or(0),
+                "primary",
+                Some(&primary),
+            );
         }
         let completion = client
             .chat(messages.clone(), false, Some(tools.clone()), Some(4096))
@@ -2129,13 +2522,21 @@ pub async fn run_chat_turn(
         usage_total.prompt_tokens += completion.usage.prompt_tokens;
         usage_total.completion_tokens += completion.usage.completion_tokens;
         usage_total.total_tokens += completion.usage.total_tokens;
-        let tool_calls = match ai::planner::classify_tool_round(completion.tool_calls.as_ref(), completion.content.as_deref()) {
+        let tool_calls = match ai::planner::classify_tool_round(
+            completion.tool_calls.as_ref(),
+            completion.content.as_deref(),
+        ) {
             ai::planner::ToolRoundOutcome::FinalAnswer(text) => {
                 // DEV-0060 §6.1（PART B）：无 tool_calls → completion.content 即本轮最终回答。
                 // 直接采用并通过 ai://delta 发送完整文本；**不得再次请求 Provider**
                 // （旧的 assistant-only 二次 chat_stream 已删除：避免回复漂移/指令丢失/双倍 token）。
                 final_text = text;
-                ai::run::emit(Some(app), "ai://delta", run_id, serde_json::json!({ "delta": final_text }));
+                ai::run::emit(
+                    Some(app),
+                    "ai://delta",
+                    run_id,
+                    serde_json::json!({ "delta": final_text }),
+                );
                 break 'outer;
             }
             ai::planner::ToolRoundOutcome::ExecuteTools(tc) => tc,
@@ -2149,15 +2550,34 @@ pub async fn run_chat_turn(
             name: None,
         });
         for tc in tool_calls.as_array().cloned().unwrap_or_default() {
-            if token.is_cancelled() { cancelled = true; break 'outer; }
-            let fname = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).unwrap_or("");
-            let fid = tc.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-            let args_str = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).unwrap_or("{}");
-            let args: serde_json::Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+            if token.is_cancelled() {
+                cancelled = true;
+                break 'outer;
+            }
+            let fname = tc
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
+            let fid = tc
+                .get("id")
+                .and_then(|i| i.as_str())
+                .unwrap_or("")
+                .to_string();
+            let args_str = tc
+                .get("function")
+                .and_then(|f| f.get("arguments"))
+                .and_then(|a| a.as_str())
+                .unwrap_or("{}");
+            let args: serde_json::Value =
+                serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
             if !ai::tools::TOOL_ALLOWLIST.contains(&fname) {
                 messages.push(ChatMessage {
-                    role: "tool".into(), content: format!("未知工具 {}（拒绝）", fname),
-                    tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                    role: "tool".into(),
+                    content: format!("未知工具 {}（拒绝）", fname),
+                    tool_calls: None,
+                    tool_call_id: Some(fid),
+                    name: Some(fname.to_string()),
                 });
                 continue;
             }
@@ -2165,19 +2585,33 @@ pub async fn run_chat_turn(
             // 只产生 ChangeSet Draft，正式写入仍走用户 Approval）
             // web 门（未启用 → 明确提示）
             if (fname == "web_search" || fname == "web_open") && !web_enabled {
-                tool_trace.push(ai::tools::ToolTraceEntry { tool: fname.into(), label: ai::tools::tool_label(fname).into(), status: "error".into() });
+                tool_trace.push(ai::tools::ToolTraceEntry {
+                    tool: fname.into(),
+                    label: ai::tools::tool_label(fname).into(),
+                    status: "error".into(),
+                });
                 messages.push(ChatMessage {
-                    role: "tool".into(), content: "联网搜索未启用（设置 → 联网搜索）".into(),
-                    tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                    role: "tool".into(),
+                    content: "联网搜索未启用（设置 → 联网搜索）".into(),
+                    tool_calls: None,
+                    tool_call_id: Some(fid),
+                    name: Some(fname.to_string()),
                 });
                 continue;
             }
             let result: Result<String, String> = match fname {
                 "web_search" => {
                     used_web = true;
-                    let q = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let q = args
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let count = args.get("count").and_then(|v| v.as_i64()).unwrap_or(5) as u32;
-                    let fresh = args.get("freshness").and_then(|v| v.as_str()).map(String::from);
+                    let fresh = args
+                        .get("freshness")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                     let res = ai::web::brave_search(brave_key, &q, count, fresh.as_deref()).await;
                     match res {
                         Ok(items) => {
@@ -2193,7 +2627,12 @@ pub async fn run_chat_turn(
                                     source_type: "web".into(),
                                     retrieved_at: chrono_now(),
                                 };
-                                ai::run::emit(Some(app), "ai://source", run_id, serde_json::to_value(&ws).unwrap_or_default());
+                                ai::run::emit(
+                                    Some(app),
+                                    "ai://source",
+                                    run_id,
+                                    serde_json::to_value(&ws).unwrap_or_default(),
+                                );
                                 out_items.push(serde_json::json!({ "sid": sid, "title": title, "url": url, "snippet": snippet }));
                                 sources.push(ws);
                             }
@@ -2205,8 +2644,13 @@ pub async fn run_chat_turn(
                 "web_open" => {
                     used_web = true;
                     let url = if let Some(sid) = args.get("sid").and_then(|v| v.as_str()) {
-                        sources.iter().find(|s| s.sid == sid).map(|s| s.url.clone())
-                            .ok_or_else(|| format!("来源 {} 不存在（只能打开 web_search 返回过的来源）", sid))?
+                        sources
+                            .iter()
+                            .find(|s| s.sid == sid)
+                            .map(|s| s.url.clone())
+                            .ok_or_else(|| {
+                                format!("来源 {} 不存在（只能打开 web_search 返回过的来源）", sid)
+                            })?
                     } else if let Some(u) = args.get("url").and_then(|v| v.as_str()) {
                         u.to_string()
                     } else {
@@ -2215,17 +2659,40 @@ pub async fn run_chat_turn(
                     ai::web::web_open(&url).await
                 }
                 "propose_change_set" => {
-                    let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("修改提案").to_string();
-                    let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let ops_json = args.get("operations").cloned().unwrap_or(serde_json::json!([]));
+                    let title = args
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("修改提案")
+                        .to_string();
+                    let summary = args
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let ops_json = args
+                        .get("operations")
+                        .cloned()
+                        .unwrap_or(serde_json::json!([]));
                     let ops: Vec<repository::changeset::ProposedOp> =
-                        serde_json::from_value(ops_json).map_err(|e| format!("提案格式错误：{e}"))?;
+                        serde_json::from_value(ops_json)
+                            .map_err(|e| format!("提案格式错误：{e}"))?;
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
-                    let cs_id = repository::changeset::ChangeSetRepository::new(&conn)
-                        .create(profile_id, Some(conversation_id), Some(run_id), &title, &summary, &ops)?;
+                    let cs_id = repository::changeset::ChangeSetRepository::new(&conn).create(
+                        profile_id,
+                        Some(conversation_id),
+                        Some(run_id),
+                        &title,
+                        &summary,
+                        &ops,
+                    )?;
                     changeset_ids.push(cs_id);
                     vault.record_ai("changeset_proposed", run_id, &title);
-                    ai::run::emit(Some(app), "ai://changeset", run_id, serde_json::json!({ "change_set_id": cs_id, "title": title, "count": ops.len() }));
+                    ai::run::emit(
+                        Some(app),
+                        "ai://changeset",
+                        run_id,
+                        serde_json::json!({ "change_set_id": cs_id, "title": title, "count": ops.len() }),
+                    );
                     Ok(serde_json::json!({ "ok": true, "change_set_id": cs_id, "note": "提案已生成，等待用户审查" }).to_string())
                 }
                 _ => {
@@ -2235,17 +2702,31 @@ pub async fn run_chat_turn(
             };
             match result {
                 Ok(out) => {
-                    tool_trace.push(ai::tools::ToolTraceEntry { tool: fname.into(), label: ai::tools::tool_label(fname).into(), status: "success".into() });
+                    tool_trace.push(ai::tools::ToolTraceEntry {
+                        tool: fname.into(),
+                        label: ai::tools::tool_label(fname).into(),
+                        status: "success".into(),
+                    });
                     messages.push(ChatMessage {
-                        role: "tool".into(), content: out.chars().take(20_000).collect(),
-                        tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                        role: "tool".into(),
+                        content: out.chars().take(20_000).collect(),
+                        tool_calls: None,
+                        tool_call_id: Some(fid),
+                        name: Some(fname.to_string()),
                     });
                 }
                 Err(e) => {
-                    tool_trace.push(ai::tools::ToolTraceEntry { tool: fname.into(), label: ai::tools::tool_label(fname).into(), status: "error".into() });
+                    tool_trace.push(ai::tools::ToolTraceEntry {
+                        tool: fname.into(),
+                        label: ai::tools::tool_label(fname).into(),
+                        status: "error".into(),
+                    });
                     messages.push(ChatMessage {
-                        role: "tool".into(), content: format!("[错误] {}", e),
-                        tool_calls: None, tool_call_id: Some(fid), name: Some(fname.to_string()),
+                        role: "tool".into(),
+                        content: format!("[错误] {}", e),
+                        tool_calls: None,
+                        tool_call_id: Some(fid),
+                        name: Some(fname.to_string()),
                     });
                 }
             }
@@ -2254,9 +2735,20 @@ pub async fn run_chat_turn(
     if cancelled {
         // §19-20：保留已产出；数据 0 修改（ChangeSet 未 apply 本就不动数据）
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let _ = repository::conversation::ConversationRepository::new(&conn)
-            .add_message(conversation_id, profile_id, "assistant",
-                &format!("（已停止。已生成内容：{}）", if final_text.is_empty() { "无" } else { &final_text }), Some(run_id));
+        let _ = repository::conversation::ConversationRepository::new(&conn).add_message(
+            conversation_id,
+            profile_id,
+            "assistant",
+            &format!(
+                "（已停止。已生成内容：{}）",
+                if final_text.is_empty() {
+                    "无"
+                } else {
+                    &final_text
+                }
+            ),
+            Some(run_id),
+        );
         vault.record_ai("run_cancelled", run_id, "");
         return Ok("cancelled");
     }
@@ -2272,12 +2764,13 @@ pub async fn run_chat_turn(
             .trim_end_matches("```")
             .trim();
         // DEV-0060 §12：先按 PlannerTurnResult 协议解析；失败回退直接 PlanDraft（兼容旧输出）
-        let turn: Option<(String, serde_json::Value)> = serde_json::from_str::<serde_json::Value>(trimmed)
-            .ok()
-            .and_then(|v| {
-                let t = v.get("type").and_then(|t| t.as_str()).map(String::from);
-                t.map(|t| (t, v))
-            });
+        let turn: Option<(String, serde_json::Value)> =
+            serde_json::from_str::<serde_json::Value>(trimmed)
+                .ok()
+                .and_then(|v| {
+                    let t = v.get("type").and_then(|t| t.as_str()).map(String::from);
+                    t.map(|t| (t, v))
+                });
         if let Some((t, v)) = &turn {
             if t == "clarification" {
                 // TYPE A：解析 questions（≤5）→ 过滤已回答字段（T10）→ workflow=clarifying
@@ -2291,12 +2784,19 @@ pub async fn run_chat_turn(
                             .collect()
                     })
                     .unwrap_or_default();
-                let remaining = ai::planner::filter_pending_questions(qs, &planning_payload.answered);
+                let remaining =
+                    ai::planner::filter_pending_questions(qs, &planning_payload.answered);
                 let reply = ai::planner::format_clarification_reply(&remaining);
                 {
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                     let _ = repository::conversation::ConversationRepository::new(&conn)
-                        .add_message(conversation_id, profile_id, "assistant", &reply, Some(run_id));
+                        .add_message(
+                            conversation_id,
+                            profile_id,
+                            "assistant",
+                            &reply,
+                            Some(run_id),
+                        );
                     let _ = conn.execute(
                         "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                          VALUES (?1,?2,?3,'assistant','planning','completed','clarification')
@@ -2306,8 +2806,12 @@ pub async fn run_chat_turn(
                     let mut payload = planning_payload.clone();
                     payload.pending_questions = remaining;
                     ai::planner::set_workflow_payload(
-                        &conn, run_id, profile_id, conversation_id,
-                        ai::planner::WORKFLOW_STATE_CLARIFYING, &payload,
+                        &conn,
+                        run_id,
+                        profile_id,
+                        conversation_id,
+                        ai::planner::WORKFLOW_STATE_CLARIFYING,
+                        &payload,
                     );
                 }
                 vault.record_ai("run_completed", run_id, "clarification");
@@ -2316,22 +2820,35 @@ pub async fn run_chat_turn(
             if t == "handoff_chat" {
                 // TYPE C §12：用户当前消息不是继续本规划 → workflow=paused（inactive），
                 // 以 Provider 给出的正常回复完成本轮（不被旧 Planner 劫持）
-                let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                let msg = v
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if !msg.is_empty() {
                     final_text = msg;
                 }
                 {
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                     ai::planner::set_workflow_payload(
-                        &conn, run_id, profile_id, conversation_id,
-                        ai::planner::WORKFLOW_STATE_PAUSED, &planning_payload,
+                        &conn,
+                        run_id,
+                        profile_id,
+                        conversation_id,
+                        ai::planner::WORKFLOW_STATE_PAUSED,
+                        &planning_payload,
                     );
                 }
                 // 落库 + 返回（跳过 plan_draft 管线）
                 {
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
-                    repository::conversation::ConversationRepository::new(&conn)
-                        .add_message(conversation_id, profile_id, "assistant", &final_text, Some(run_id))?;
+                    repository::conversation::ConversationRepository::new(&conn).add_message(
+                        conversation_id,
+                        profile_id,
+                        "assistant",
+                        &final_text,
+                        Some(run_id),
+                    )?;
                     let _ = conn.execute(
                         "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                          VALUES (?1,?2,?3,?4,'planning','completed','handoff_chat')
@@ -2372,11 +2889,12 @@ pub async fn run_chat_turn(
                     );
                     messages.push(ChatMessage::assistant(trimmed.to_string()));
                     messages.push(ChatMessage::user(retry_prompt));
-                    if token.is_cancelled() { cancelled = true; }
+                    if token.is_cancelled() {
+                        cancelled = true;
+                    }
                     if !cancelled {
-                        if let Ok(retry) = client
-                            .chat(messages.clone(), false, None, Some(4096))
-                            .await
+                        if let Ok(retry) =
+                            client.chat(messages.clone(), false, None, Some(4096)).await
                         {
                             usage_total.prompt_tokens += retry.usage.prompt_tokens;
                             usage_total.completion_tokens += retry.usage.completion_tokens;
@@ -2395,8 +2913,9 @@ pub async fn run_chat_turn(
                                 validation = {
                                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                                     if let Some(bp) = draft.blueprint.as_mut() {
-                                        bp.scenario_type =
-                                            ai::planner::resolve_blueprint_scenario(&conn, profile_id, bp, false);
+                                        bp.scenario_type = ai::planner::resolve_blueprint_scenario(
+                                            &conn, profile_id, bp, false,
+                                        );
                                     }
                                     ai::planner::validate_plan_draft(&conn, profile_id, &draft)
                                 };
@@ -2441,7 +2960,13 @@ pub async fn run_chat_turn(
                     );
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                     let _ = repository::conversation::ConversationRepository::new(&conn)
-                        .add_message(conversation_id, profile_id, "assistant", &final_text, Some(run_id));
+                        .add_message(
+                            conversation_id,
+                            profile_id,
+                            "assistant",
+                            &final_text,
+                            Some(run_id),
+                        );
                     let _ = conn.execute(
                         "INSERT INTO ai_runs (id, profile_id, conversation_id, mode, action, status, error)
                          VALUES (?1,?2,?3,'assistant','planning','failed','plan_validation')
@@ -2450,8 +2975,12 @@ pub async fn run_chat_turn(
                     );
                     // §6.8：校验失败 → workflow failed（用户回复"重新生成"将重开规划）
                     ai::planner::set_workflow_state(
-                        &conn, run_id, profile_id, conversation_id,
-                        ai::planner::WORKFLOW_STATE_FAILED, None,
+                        &conn,
+                        run_id,
+                        profile_id,
+                        conversation_id,
+                        ai::planner::WORKFLOW_STATE_FAILED,
+                        None,
                     );
                     vault.record_ai("run_completed", run_id, "plan_validation_failed");
                     return Ok("plan_validation_failed");
@@ -2459,17 +2988,30 @@ pub async fn run_chat_turn(
                 if !validation.overloaded_days.is_empty() {
                     // §57 OVERLOADED：标记提示（本轮接受一次降载重试不可行——直接告知）
                     let od = validation.overloaded_days.join("；");
-                    final_text.push_str(&format!("\n\n（部分日期计划量超出可用时间：{}。可在审查中取消超载任务。）", od));
+                    final_text.push_str(&format!(
+                        "\n\n（部分日期计划量超出可用时间：{}。可在审查中取消超载任务。）",
+                        od
+                    ));
                 }
                 if !ai::planner::ops_within_limit(&ops) {
                     final_text = "生成的计划规模过大（超过单次修改上限 120 项）。长期计划会随着学习进度变化，建议按月或 14 天滚动生成。".to_string();
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
                     let _ = repository::conversation::ConversationRepository::new(&conn)
-                        .add_message(conversation_id, profile_id, "assistant", &final_text, Some(run_id));
+                        .add_message(
+                            conversation_id,
+                            profile_id,
+                            "assistant",
+                            &final_text,
+                            Some(run_id),
+                        );
                     // §6.8：超限 → workflow failed
                     ai::planner::set_workflow_state(
-                        &conn, run_id, profile_id, conversation_id,
-                        ai::planner::WORKFLOW_STATE_FAILED, None,
+                        &conn,
+                        run_id,
+                        profile_id,
+                        conversation_id,
+                        ai::planner::WORKFLOW_STATE_FAILED,
+                        None,
                     );
                     vault.record_ai("run_completed", run_id, "plan_too_large");
                     return Ok("plan_too_large");
@@ -2504,14 +3046,21 @@ pub async fn run_chat_turn(
                 plan_dates.sort_unstable();
                 plan_dates.dedup();
                 let range_line = match (plan_dates.first(), plan_dates.last()) {
-                    (Some(a), Some(b)) if a != b => format!("计划范围：{} → {}", fmt_md(a), fmt_md(b)),
+                    (Some(a), Some(b)) if a != b => {
+                        format!("计划范围：{} → {}", fmt_md(a), fmt_md(b))
+                    }
                     (Some(a), _) => format!("计划范围：{}", fmt_md(a)),
                     _ => String::new(),
                 };
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                match repository::changeset::ChangeSetRepository::new(&conn)
-                    .create(profile_id, Some(conversation_id), Some(run_id), &cs_title, &summary, &ops)
-                {
+                match repository::changeset::ChangeSetRepository::new(&conn).create(
+                    profile_id,
+                    Some(conversation_id),
+                    Some(run_id),
+                    &cs_title,
+                    &summary,
+                    &ops,
+                ) {
                     Ok(cs_id) => {
                         changeset_ids.push(cs_id);
                         // §66/§106：AI 只能说"已准备好计划"，不说"已加入"；零项行不展示（§104）
@@ -2532,11 +3081,18 @@ pub async fn run_chat_turn(
                         if rest_count > 0 {
                             lines.push(format!("包含 {} 个休息日", rest_count));
                         }
-                        lines.push("点击「查看计划」审查后应用；未应用前 Higher 数据不会变化。".into());
+                        lines.push(
+                            "点击「查看计划」审查后应用；未应用前 Higher 数据不会变化。".into(),
+                        );
                         final_text = lines.join("\n");
-                        ai::run::emit(Some(app), "ai://changeset", run_id, serde_json::json!({
-                            "change_set_id": cs_id, "title": cs_title, "count": ops.len()
-                        }));
+                        ai::run::emit(
+                            Some(app),
+                            "ai://changeset",
+                            run_id,
+                            serde_json::json!({
+                                "change_set_id": cs_id, "title": cs_title, "count": ops.len()
+                            }),
+                        );
                     }
                     Err(e) => {
                         final_text = format!("计划转换失败：{e}\n\n请回复「重新生成」。");
@@ -2564,10 +3120,16 @@ pub async fn run_chat_turn(
                 bad.push(id);
             }
         }
-        let has_any = valid_ids.iter().any(|id| final_text.contains(&format!("[[{}]]", id)));
+        let has_any = valid_ids
+            .iter()
+            .any(|id| final_text.contains(&format!("[[{}]]", id)));
         if (!bad.is_empty() || !has_any) && !final_text.is_empty() {
             // §116 一次 Citation Repair（只加引用不加事实）
-            let listed = valid_ids.iter().map(|s| format!("[[{}]]", s)).collect::<Vec<_>>().join(" ");
+            let listed = valid_ids
+                .iter()
+                .map(|s| format!("[[{}]]", s))
+                .collect::<Vec<_>>()
+                .join(" ");
             let repair_prompt = format!(
                 "你刚才的回答{}。请只在原回答基础上为依赖网络信息的句子添加已有来源引用（{}），不得新增任何事实或删改内容；原样输出修改后的完整回答。",
                 if bad.is_empty() { "没有任何来源引用" } else { "包含不存在的来源引用" },
@@ -2577,8 +3139,15 @@ pub async fn run_chat_turn(
             messages.push(ChatMessage::user(repair_prompt));
             if let Ok(c) = client.chat(messages.clone(), false, None, Some(4096)).await {
                 if let Some(t) = c.content {
-                    let valid_now = valid_ids.iter().any(|id| t.contains(&format!("[[{}]]", id)));
-                    if valid_now && citation_re(&t).find_iter(&t).iter().all(|m| valid_ids.contains(&m.1.to_string())) {
+                    let valid_now = valid_ids
+                        .iter()
+                        .any(|id| t.contains(&format!("[[{}]]", id)));
+                    if valid_now
+                        && citation_re(&t)
+                            .find_iter(&t)
+                            .iter()
+                            .all(|m| valid_ids.contains(&m.1.to_string()))
+                    {
                         final_text = t;
                     } else {
                         citation_warning = Some("本次联网回答的来源关联不完整，请谨慎参考。");
@@ -2608,8 +3177,13 @@ pub async fn run_chat_turn(
         if let Some(w) = &citation_warning {
             save.push_str(&format!("\n\n（{}）", w));
         }
-        repository::conversation::ConversationRepository::new(&conn)
-            .add_message(conversation_id, profile_id, "assistant", &save, Some(run_id))?;
+        repository::conversation::ConversationRepository::new(&conn).add_message(
+            conversation_id,
+            profile_id,
+            "assistant",
+            &save,
+            Some(run_id),
+        )?;
         // ai_sources 落库（run 结束释放 RAM，历史进 DB §180）
         for s in &sources {
             let _ = conn.execute(
@@ -2631,19 +3205,32 @@ pub async fn run_chat_turn(
         // §6.8：规划成功生成 ChangeSet → workflow waiting_approval（用户应用后 → applied）
         if is_planning_request && !changeset_ids.is_empty() {
             ai::planner::set_workflow_payload(
-                &conn, run_id, profile_id, conversation_id,
-                ai::planner::WORKFLOW_STATE_WAITING_APPROVAL, &planning_payload,
+                &conn,
+                run_id,
+                profile_id,
+                conversation_id,
+                ai::planner::WORKFLOW_STATE_WAITING_APPROVAL,
+                &planning_payload,
             );
         }
     }
-    vault.record_ai("run_completed", run_id, &format!("tokens={}", usage_total.total_tokens));
+    vault.record_ai(
+        "run_completed",
+        run_id,
+        &format!("tokens={}", usage_total.total_tokens),
+    );
 
     // ---- §9：guard → 通知前端显示 [重新生成修改方案] ----
     if guard_appended {
-        ai::run::emit(Some(app), "ai://run-status", run_id, serde_json::json!({
-            "status": "no_changeset",
-            "message": "Higher AI 没有生成可审批的修改方案，正式数据没有发生变化。",
-        }));
+        ai::run::emit(
+            Some(app),
+            "ai://run-status",
+            run_id,
+            serde_json::json!({
+                "status": "no_changeset",
+                "message": "Higher AI 没有生成可审批的修改方案，正式数据没有发生变化。",
+            }),
+        );
     }
 
     // DEV-0061R §34：旧「需要助手模式」前端通知已删除（Unified Higher AI）。
@@ -2651,7 +3238,8 @@ pub async fn run_chat_turn(
     // ---- Memory Extract（§36-38：run 完成后轻量二次调用） ----
     // DEV-0060 §6.4：Generic Chat（如「1+1」「你好」「解释概念」）无长期用户事实 →
     // 跳过 Memory Extract（secondary operation 也按需；Personal/Planning 保持原逻辑）。
-    if !user_message.trim().is_empty() && !final_text.is_empty()
+    if !user_message.trim().is_empty()
+        && !final_text.is_empty()
         && context_purpose != ai::context_builder::ContextPurpose::Generic
     {
         let extract = client
@@ -2662,12 +3250,19 @@ pub async fn run_chat_turn(
                     user_message.chars().take(4000).collect::<String>(),
                     final_text.chars().take(4000).collect::<String>()
                 ))],
-                true, None, Some(1000),
+                true,
+                None,
+                Some(1000),
             )
             .await;
         if let Ok(c) = extract {
             let raw = c.content.unwrap_or_default();
-            let t2 = raw.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+            let t2 = raw
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(t2) {
                 if let Some(arr) = v.get("memories").and_then(|m| m.as_array()) {
                     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -2676,34 +3271,66 @@ pub async fn run_chat_turn(
                     for m in arr.iter().take(5) {
                         // DEV-0057 §209/§214：新 Extractor 只生成实际支持类型
                         //（system_observation / goal_context 无 writer → 不入库，§42-43）
-                        let mtype_raw = m.get("memory_type").and_then(|x| x.as_str()).unwrap_or("user_fact");
+                        let mtype_raw = m
+                            .get("memory_type")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("user_fact");
                         let mtype = match mtype_raw {
-                            "user_fact" | "user_opinion" | "user_preference" | "user_constraint" | "ai_inference" => mtype_raw,
+                            "user_fact" | "user_opinion" | "user_preference"
+                            | "user_constraint" | "ai_inference" => mtype_raw,
                             _ => "user_fact",
                         };
                         // DEV-0057 §214-215：key 不再由模型自由决定——
                         // category + normalized subject 稳定生成（去空白/标点/小写截断），
                         // 同一事实重复 → supersede 而非无限重复。
                         let category = m.get("category").and_then(|x| x.as_str()).unwrap_or("chat");
-                        let subject = m
-                            .get("memory_key")
-                            .and_then(|x| x.as_str())
-                            .unwrap_or_else(|| m.get("memory_value").and_then(|x| x.as_str()).unwrap_or(""));
+                        let subject =
+                            m.get("memory_key")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or_else(|| {
+                                    m.get("memory_value").and_then(|x| x.as_str()).unwrap_or("")
+                                });
                         let normalized_key = normalize_memory_key(category, subject);
                         let rec = repository::memory::MemoryRecord {
-                            id: 0, profile_id,
+                            id: 0,
+                            profile_id,
                             memory_type: mtype.to_string(),
                             category: category.to_string(),
                             memory_key: normalized_key,
-                            memory_value: m.get("memory_value").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                            source_kind: if mtype == "ai_inference" { "ai_inference" } else { "user_message" }.to_string(),
+                            memory_value: m
+                                .get("memory_value")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            source_kind: if mtype == "ai_inference" {
+                                "ai_inference"
+                            } else {
+                                "user_message"
+                            }
+                            .to_string(),
                             source_ref: format!("conversation:{}", conversation_id),
-                            source_excerpt: m.get("source_excerpt").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                            importance: m.get("importance").and_then(|x| x.as_i64()).unwrap_or(3).clamp(1, 5),
-                            confidence: m.get("confidence").and_then(|x| x.as_str()).unwrap_or("medium").to_string(),
+                            source_excerpt: m
+                                .get("source_excerpt")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            importance: m
+                                .get("importance")
+                                .and_then(|x| x.as_i64())
+                                .unwrap_or(3)
+                                .clamp(1, 5),
+                            confidence: m
+                                .get("confidence")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("medium")
+                                .to_string(),
                             status: "active".into(),
-                            valid_from: None, valid_to: None, supersedes_id: None,
-                            created_at: String::new(), updated_at: String::new(), last_used_at: None,
+                            valid_from: None,
+                            valid_to: None,
+                            supersedes_id: None,
+                            created_at: String::new(),
+                            updated_at: String::new(),
+                            last_used_at: None,
                         };
                         if !rec.memory_value.is_empty() {
                             // DEV-0076 §七：AI 生成的记忆候选必须 pending_confirmation
@@ -2714,7 +3341,8 @@ pub async fn run_chat_turn(
                     // §87-88：新长期信息 → dirty
                     let after_count = repo.count_since(profile_id, "2000-01-01").unwrap_or(0);
                     if after_count > before_count {
-                        let _ = repository::personalization::PersonalizationRepository::new(&conn).mark_dirty(profile_id);
+                        let _ = repository::personalization::PersonalizationRepository::new(&conn)
+                            .mark_dirty(profile_id);
                     }
                 }
             }
@@ -2725,7 +3353,9 @@ pub async fn run_chat_turn(
 
 /// §110 citation 正则替代（手工扫描 [[Sx]]）。
 pub struct CitationIter;
-pub fn citation_re(_s: &str) -> CitationIter { CitationIter }
+pub fn citation_re(_s: &str) -> CitationIter {
+    CitationIter
+}
 
 /// DEV-0057 §214：memory_key 归一——`{category}::{subject 规范化}`。
 /// 规范化：小写 + 仅保留字母数字（标点/空白直接删除）+ 截断 60 字符。
@@ -2804,7 +3434,10 @@ impl CitationIter {
 
 /// §18 取消。
 #[tauri::command]
-pub fn ai_cancel_run(runs: tauri::State<'_, ai::run::RunManager>, run_id: String) -> Result<bool, String> {
+pub fn ai_cancel_run(
+    runs: tauri::State<'_, ai::run::RunManager>,
+    run_id: String,
+) -> Result<bool, String> {
     Ok(runs.cancel(&run_id))
 }
 
@@ -2844,7 +3477,6 @@ pub fn ai_get_run_snapshot(
     )
     .map_err(|e| format!("run_not_found: {e}"))
 }
-
 
 // =============== /data 聚合 + Reliability（DEV-0055/0057；Section 6 increment 14） ===============
 // =============== DEV-0055 · /data 聚合（PART 26-33，Backend aggregate §163） ===============
@@ -2946,11 +3578,15 @@ pub fn get_knowledge_time_distribution(
             Some(_) => "SELECT id, name FROM learning_items WHERE profile_id=?1 AND parent_id=?2 ORDER BY sort_order, id",
         };
         let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
-        let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, String)> { Ok((r.get(0)?, r.get(1)?)) };
+        let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, String)> {
+            Ok((r.get(0)?, r.get(1)?))
+        };
         let rows = if let Some(p) = parent_item_id {
-            stmt.query_map(rusqlite::params![profile_id, p], map).map_err(|e| e.to_string())?
+            stmt.query_map(rusqlite::params![profile_id, p], map)
+                .map_err(|e| e.to_string())?
         } else {
-            stmt.query_map(rusqlite::params![profile_id], map).map_err(|e| e.to_string())?
+            stmt.query_map(rusqlite::params![profile_id], map)
+                .map_err(|e| e.to_string())?
         };
         rows.filter_map(|x| x.ok()).collect()
     };
@@ -2993,7 +3629,12 @@ pub fn get_knowledge_time_distribution(
     for (id, name) in children {
         let secs = secs_map.get(&id).copied().unwrap_or(0);
         let cc = cc_map.get(&id).copied().unwrap_or(0);
-        out.push(KnowledgeTimeSlice { name, seconds: secs, item_id: id, child_count: cc });
+        out.push(KnowledgeTimeSlice {
+            name,
+            seconds: secs,
+            item_id: id,
+            child_count: cc,
+        });
     }
     // 未归类（同样排除 needs_review）
     let unassigned: i64 = conn
@@ -3088,8 +3729,9 @@ pub fn next_date(d: &str) -> String {
     if p.len() != 3 {
         return d.to_string();
     }
-    let epoch = ai::planner::sqlite_dt_to_epoch(&format!("{:04}-{:02}-{:02} 00:00:00", p[0], p[1], p[2]))
-        .unwrap_or(0);
+    let epoch =
+        ai::planner::sqlite_dt_to_epoch(&format!("{:04}-{:02}-{:02} 00:00:00", p[0], p[1], p[2]))
+            .unwrap_or(0);
     days_to_iso(epoch / 86400 + 1)
 }
 
@@ -3132,7 +3774,8 @@ pub fn list_learning_items_light(
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// §133-136 媒体安全 URL：返回沙箱内附件的绝对路径（前端 convertFileSrc → 按需加载，
@@ -3157,7 +3800,6 @@ pub fn get_attachment_asset_path(
         .map(|s| s.to_string())
         .ok_or_else(|| "附件路径非法".to_string())
 }
-
 
 #[tauri::command]
 pub fn ai_active_run_count(runs: tauri::State<'_, ai::run::RunManager>) -> Result<usize, String> {
@@ -3193,4 +3835,3 @@ pub async fn open_external_url(
         .open_url(url, None::<&str>)
         .map_err(|e| format!("打开网页失败：{e}"))
 }
-

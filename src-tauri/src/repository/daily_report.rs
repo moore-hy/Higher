@@ -116,7 +116,10 @@ impl<'a> DailyReportRepository<'a> {
         let tasks: Vec<DailyTaskRow> = rows_collect(task_rows)?;
 
         let planned_minutes: i64 = tasks.iter().filter_map(|t| t.estimated_minutes).sum();
-        let unestimated_task_count = tasks.iter().filter(|t| t.estimated_minutes.is_none()).count() as i64;
+        let unestimated_task_count = tasks
+            .iter()
+            .filter(|t| t.estimated_minutes.is_none())
+            .count() as i64;
         let task_total = tasks.len() as i64;
         let task_completed = tasks.iter().filter(|t| t.status == "completed").count() as i64;
         let task_completion_rate = if task_total > 0 {
@@ -243,7 +246,8 @@ impl<'a> DailyReportRepository<'a> {
 
         // §65（DEV-0054 修正）：综合效率最低证据要求——至少两个有效维度才计算。
         // 仅任务完成率一个维度（无有效时间执行度 + 无 Day Goal）→ None（前端显示"暂不可计算"）。
-        let overall_efficiency = compute_efficiency(task_completion_rate, time_execution_rate, day_goal_progress);
+        let overall_efficiency =
+            compute_efficiency(task_completion_rate, time_execution_rate, day_goal_progress);
         let learning_status = match overall_efficiency {
             Some(e) if e >= 85.0 => "计划执行稳定".to_string(),
             Some(e) if e >= 60.0 => "部分偏离计划".to_string(),
@@ -274,8 +278,11 @@ impl<'a> DailyReportRepository<'a> {
     }
 }
 
-fn rows_collect<T>(rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>) -> Result<Vec<T>, String> {
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+fn rows_collect<T>(
+    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
+) -> Result<Vec<T>, String> {
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// §65/§67-69（DEV-0054）：三维度 40/30/30；缺失重归一；

@@ -88,34 +88,56 @@ impl<'a> PersonalizationRepository<'a> {
         let rows = stmt
             .query_map(params![profile_id], parse_src)
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
-    pub fn get_source(&self, id: i64, profile_id: i64) -> Result<Option<PersonalizationSource>, String> {
+    pub fn get_source(
+        &self,
+        id: i64,
+        profile_id: i64,
+    ) -> Result<Option<PersonalizationSource>, String> {
         let mut stmt = self
             .conn
             .prepare("SELECT id, profile_id, file_name, file_type, relative_path, sha256, extracted_text_path, status, created_at, updated_at
                       FROM personalization_sources WHERE id=?1 AND profile_id=?2")
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query_map(params![id, profile_id], parse_src).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![id, profile_id], parse_src)
+            .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
     pub fn delete_source(&self, id: i64, profile_id: i64) -> Result<(), String> {
-        self.get_source(id, profile_id)?.ok_or("资料不存在或不属于当前档案")?;
+        self.get_source(id, profile_id)?
+            .ok_or("资料不存在或不属于当前档案")?;
         self.conn
-            .execute("DELETE FROM personalization_source_chunks WHERE source_id=?1", params![id])
+            .execute(
+                "DELETE FROM personalization_source_chunks WHERE source_id=?1",
+                params![id],
+            )
             .map_err(|e| e.to_string())?;
         self.conn
-            .execute("DELETE FROM personalization_sources WHERE id=?1", params![id])
+            .execute(
+                "DELETE FROM personalization_sources WHERE id=?1",
+                params![id],
+            )
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     /// 分块写入（§67-68：chunk ≤ 256KB 文本）+ FTS。
-    pub fn store_chunks(&self, source_id: i64, profile_id: i64, text: &str) -> Result<usize, String> {
+    pub fn store_chunks(
+        &self,
+        source_id: i64,
+        profile_id: i64,
+        text: &str,
+    ) -> Result<usize, String> {
         self.conn
-            .execute("DELETE FROM personalization_source_chunks WHERE source_id=?1", params![source_id])
+            .execute(
+                "DELETE FROM personalization_source_chunks WHERE source_id=?1",
+                params![source_id],
+            )
             .map_err(|e| e.to_string())?;
         let cap = 256 * 1024;
         let mut idx = 0i64;
@@ -151,7 +173,8 @@ impl<'a> PersonalizationRepository<'a> {
         let rows = stmt
             .query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     // ---- Profile（DEV-0059 §8：version rows） ----
@@ -165,7 +188,10 @@ impl<'a> PersonalizationRepository<'a> {
     }
 
     /// 当前正式（confirmed）版本。
-    pub fn get_confirmed_profile(&self, profile_id: i64) -> Result<Option<PersonalizationProfile>, String> {
+    pub fn get_confirmed_profile(
+        &self,
+        profile_id: i64,
+    ) -> Result<Option<PersonalizationProfile>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -173,12 +199,17 @@ impl<'a> PersonalizationRepository<'a> {
                  FROM personalization_profiles WHERE profile_id=?1 AND status='confirmed' ORDER BY version DESC LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query_map(params![profile_id], parse_profile).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![profile_id], parse_profile)
+            .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
     /// 当前 draft 版本（每 profile 最多 1 条，v021 partial unique 约束）。
-    pub fn get_draft_profile(&self, profile_id: i64) -> Result<Option<PersonalizationProfile>, String> {
+    pub fn get_draft_profile(
+        &self,
+        profile_id: i64,
+    ) -> Result<Option<PersonalizationProfile>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -186,12 +217,17 @@ impl<'a> PersonalizationRepository<'a> {
                  FROM personalization_profiles WHERE profile_id=?1 AND status='draft' ORDER BY version DESC LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query_map(params![profile_id], parse_profile).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map(params![profile_id], parse_profile)
+            .map_err(|e| e.to_string())?;
         rows.next().transpose().map_err(|e| e.to_string())
     }
 
     /// 全部版本（含 superseded；历史可查）。
-    pub fn list_profile_versions(&self, profile_id: i64) -> Result<Vec<PersonalizationProfile>, String> {
+    pub fn list_profile_versions(
+        &self,
+        profile_id: i64,
+    ) -> Result<Vec<PersonalizationProfile>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -199,14 +235,25 @@ impl<'a> PersonalizationRepository<'a> {
                  FROM personalization_profiles WHERE profile_id=?1 ORDER BY version DESC",
             )
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![profile_id], parse_profile).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![profile_id], parse_profile)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
 
     /// §8/§10.1：保存 Draft——已有 draft 则原地更新；否则新建 vN+1
     /// （based_on_version_id = 当前 confirmed id；旧 confirmed 不动）。
-    pub fn save_draft(&self, profile_id: i64, md: &str, structured: Option<&str>) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    pub fn save_draft(
+        &self,
+        profile_id: i64,
+        md: &str,
+        structured: Option<&str>,
+    ) -> Result<(), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         let existing_draft: Option<i64> = tx
             .query_row(
                 "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='draft'",
@@ -252,7 +299,10 @@ impl<'a> PersonalizationRepository<'a> {
     /// §8/§25.2：Draft 确认 → 正式（一个 transaction）：
     /// old confirmed → superseded；new draft → confirmed + confirmed_at。
     pub fn confirm(&self, profile_id: i64) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         let draft_id: Option<i64> = tx
             .query_row(
                 "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='draft' ORDER BY version DESC LIMIT 1",
@@ -289,7 +339,10 @@ impl<'a> PersonalizationRepository<'a> {
         structured: Option<&str>,
         source_ids: &[i64],
     ) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         let existing_draft: Option<i64> = tx
             .query_row(
                 "SELECT id FROM personalization_profiles WHERE profile_id=?1 AND status='draft'",
@@ -374,11 +427,17 @@ impl<'a> PersonalizationRepository<'a> {
                  WHERE ps.profile_version_id=?1 ORDER BY s.id",
             )
             .map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![version_id], parse_src).map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = stmt
+            .query_map(params![version_id], parse_src)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
     }
     pub fn user_edit(&self, profile_id: i64, md: &str) -> Result<(), String> {
-        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         let _ = user_edit_in_tx(&tx, profile_id, md)?;
         tx.commit().map_err(|e| e.to_string())?;
         // DEV-0076 §十二：用户亲手编辑 = 用户事实（非 AI 推断）→ 直接 confirmed
@@ -550,9 +609,12 @@ fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, ()> {
 pub fn extract_docx(path: &Path) -> Result<String, String> {
     let mut f = std::fs::File::open(path).map_err(|e| format!("打开 DOCX 失败：{e}"))?;
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf).map_err(|e| format!("读取 DOCX 失败：{e}"))?;
+    f.read_to_end(&mut buf)
+        .map_err(|e| format!("读取 DOCX 失败：{e}"))?;
     if buf.len() < 4 || &buf[..2] != b"PK" {
-        return Err("这不是有效的 .docx 文件（旧版 .doc 请先转换为 .docx / .pdf / .txt）".to_string());
+        return Err(
+            "这不是有效的 .docx 文件（旧版 .doc 请先转换为 .docx / .pdf / .txt）".to_string(),
+        );
     }
     let mut pos = 0usize;
     while pos + 30 <= buf.len() {
@@ -560,7 +622,8 @@ pub fn extract_docx(path: &Path) -> Result<String, String> {
             break;
         }
         let method = u16::from_le_bytes([buf[pos + 8], buf[pos + 9]]);
-        let csize = u32::from_le_bytes([buf[pos + 18], buf[pos + 19], buf[pos + 20], buf[pos + 21]]) as usize;
+        let csize = u32::from_le_bytes([buf[pos + 18], buf[pos + 19], buf[pos + 20], buf[pos + 21]])
+            as usize;
         let nlen = u16::from_le_bytes([buf[pos + 26], buf[pos + 27]]) as usize;
         let elen = u16::from_le_bytes([buf[pos + 28], buf[pos + 29]]) as usize;
         let name_start = pos + 30;
@@ -573,7 +636,8 @@ pub fn extract_docx(path: &Path) -> Result<String, String> {
         if name == "word/document.xml" {
             let xml_bytes = match method {
                 0 => raw.to_vec(),
-                8 => inflate_raw(raw).map_err(|_| "DOCX 内部数据解压失败（文件可能已损坏）".to_string())?,
+                8 => inflate_raw(raw)
+                    .map_err(|_| "DOCX 内部数据解压失败（文件可能已损坏）".to_string())?,
                 m => return Err(format!("DOCX 使用了不支持的压缩方式（{m}）")),
             };
             let xml = String::from_utf8_lossy(&xml_bytes).to_string();
@@ -669,7 +733,8 @@ fn xml_entities(s: &str) -> String {
 pub fn extract_pdf(path: &Path) -> Result<String, String> {
     let mut f = std::fs::File::open(path).map_err(|e| format!("打开 PDF 失败：{e}"))?;
     let mut buf = Vec::new();
-    f.read_to_end(&mut buf).map_err(|e| format!("读取 PDF 失败：{e}"))?;
+    f.read_to_end(&mut buf)
+        .map_err(|e| format!("读取 PDF 失败：{e}"))?;
     if !buf.starts_with(b"%PDF") {
         return Err("这不是有效的 PDF 文件".to_string());
     }
@@ -682,7 +747,9 @@ pub fn extract_pdf(path: &Path) -> Result<String, String> {
         } else if start < buf.len() && buf[start] == b'\n' {
             start += 1;
         }
-        let Some(end_rel) = find_sub(&buf, b"endstream", start) else { break };
+        let Some(end_rel) = find_sub(&buf, b"endstream", start) else {
+            break;
+        };
         let data = &buf[start..end_rel];
         let obj_start = find_sub_rev(&buf[..rel], b"<<").map(|x| x + 2).unwrap_or(0);
         let dict = String::from_utf8_lossy(&buf[obj_start..rel]).to_string();
@@ -745,7 +812,10 @@ fn extract_pdf_text_ops(content: &str) -> String {
                                         let mut val = 0u32;
                                         let mut k = j + 1;
                                         let mut cnt = 0;
-                                        while k < b.len() && cnt < 3 && (b'0'..=b'7').contains(&b[k]) {
+                                        while k < b.len()
+                                            && cnt < 3
+                                            && (b'0'..=b'7').contains(&b[k])
+                                        {
                                             val = val * 8 + (b[k] - b'0') as u32;
                                             k += 1;
                                             cnt += 1;
@@ -788,7 +858,10 @@ fn extract_pdf_text_ops(content: &str) -> String {
             }
             b'T' | b'E' => {
                 if collected {
-                    if b[i..].starts_with(b"Td") || b[i..].starts_with(b"TD") || b[i..].starts_with(b"T*") {
+                    if b[i..].starts_with(b"Td")
+                        || b[i..].starts_with(b"TD")
+                        || b[i..].starts_with(b"T*")
+                    {
                         out.push('\n');
                         collected = false;
                         i += 2;
@@ -869,7 +942,10 @@ pub const PERSONAL_STRUCTURED_SCHEMA_VERSION: i64 = 1;
 ///
 /// 无法可靠归类的条目进 unresolved；冲突/待确认进 unresolved（extra）；禁止猜值。
 /// Markdown（md_content）仍保留完整人类可读档案；本函数只产出机器输入。
-pub fn build_personal_structured(facts: &[serde_json::Value], unresolved_extra: &[String]) -> String {
+pub fn build_personal_structured(
+    facts: &[serde_json::Value],
+    unresolved_extra: &[String],
+) -> String {
     let mut basic_info: Vec<serde_json::Value> = Vec::new();
     let mut capabilities: Vec<serde_json::Value> = Vec::new();
     let mut strengths: Vec<serde_json::Value> = Vec::new();
@@ -881,18 +957,39 @@ pub fn build_personal_structured(facts: &[serde_json::Value], unresolved_extra: 
     let mut state: Vec<serde_json::Value> = Vec::new();
     let mut progress: Vec<serde_json::Value> = Vec::new();
     let mut unresolved: Vec<serde_json::Value> = Vec::new();
-    let mut provenance: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut provenance: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
 
     for f in facts {
-        let section = f.get("section").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let text = f.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-        let kind = f.get("kind").and_then(|x| x.as_str()).unwrap_or("fact").to_string();
-        let source = f.get("source").and_then(|x| x.as_str()).unwrap_or("?").to_string();
+        let section = f
+            .get("section")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let text = f
+            .get("text")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let kind = f
+            .get("kind")
+            .and_then(|x| x.as_str())
+            .unwrap_or("fact")
+            .to_string();
+        let source = f
+            .get("source")
+            .and_then(|x| x.as_str())
+            .unwrap_or("?")
+            .to_string();
         if text.is_empty() {
             continue;
         }
         let item = serde_json::json!({ "text": text, "kind": kind, "source": source.clone() });
-        provenance.entry(section.clone()).or_default().push(source.clone());
+        provenance
+            .entry(section.clone())
+            .or_default()
+            .push(source.clone());
         match section.as_str() {
             "基本情况" => basic_info.push(item),
             // DEV-0059.2 §4：个人资料中的目标描述只能作为 source observation / candidate，
