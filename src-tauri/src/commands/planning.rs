@@ -14,6 +14,12 @@ use crate::repository::insight::InsightRepository;
 use crate::repository::plan::PlanRepository;
 use crate::repository::study_session::StudySessionRepository;
 use crate::repository::study_stage::StudyStageRepository;
+use crate::repository::changeset::ChangeSetRepository;
+use crate::repository::cleanup::CleanupRepository;
+use crate::repository::daily_report::DailyReportRepository;
+use crate::repository::search::SearchRepository;
+use crate::sandbox;
+use crate::commands::data::{backup_database, backups_dir, runtime_db_path};
 use rusqlite::Connection;
 use crate::AttachmentDir;
 use crate::repository::learning_item::{KnowledgeNodeStats, LearningItem, LearningItemRepository};
@@ -1683,5 +1689,336 @@ pub fn save_final_goal_brief(
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::goal::GoalRepository::new(&conn).set_final_brief(profile_id, &brief)
+}
+
+
+// =============== Daily & Dual-Tree Loop（DEV-0053；Section 6 increment 15） ===============
+// =============== DEV-0053 · Daily & Dual-Tree Loop ===============
+
+/// §90：统一日报查询（Today=今天；Calendar=选中日期）。
+#[tauri::command]
+pub fn get_daily_learning_report(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    date: String,
+) -> Result<repository::daily_report::DailyReport, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::daily_report::DailyReportRepository::new(&conn).get(profile_id, &date)
+}
+
+/// §52：未归类学习列表。
+#[tauri::command]
+pub fn list_unassigned_sessions(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<repository::study_session::StudySession>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::study_session::StudySessionRepository::new(&conn)
+        .list_unassigned(profile_id, limit.unwrap_or(50))
+}
+
+/// §52：整理进知识（只改 learning_item_id 关联）。
+#[tauri::command]
+pub fn organize_session_into_knowledge(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    session_id: i64,
+    learning_item_id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::study_session::StudySessionRepository::new(&conn)
+        .set_learning_item(session_id, profile_id, Some(learning_item_id))?;
+    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
+        "session",
+        session_id,
+        profile_id,
+        "session",
+        "",
+        None,
+    );
+    // 刷新索引标题
+    if let Ok(s) = repository::study_session::StudySessionRepository::new(&conn).get(session_id) {
+        if let Some(sess) = s {
+            let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
+                "session",
+                session_id,
+                profile_id,
+                &sess.title,
+                sess.note.as_deref().unwrap_or(""),
+                Some(&sess.started_at),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// §35：修改活动分类。
+#[tauri::command]
+pub fn set_session_activity_kind(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    session_id: i64,
+    activity_kind: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::study_session::StudySessionRepository::new(&conn)
+        .set_activity_kind(session_id, profile_id, &activity_kind)
+}
+
+/// §35：修改 Session 目标关联。
+#[tauri::command]
+pub fn set_session_goal(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    session_id: i64,
+    goal_id: Option<i64>,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let n = conn
+        .execute(
+            "UPDATE study_sessions SET goal_id = ?1, updated_at = datetime('now')
+             WHERE id = ?2 AND profile_id = ?3",
+            rusqlite::params![goal_id, session_id, profile_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err("学习记录不存在或不属于当前档案".to_string());
+    }
+    Ok(())
+}
+
+/// §36：从 Activity 生成后续任务（新建 Task；原 Activity 保留）。
+#[tauri::command]
+pub fn create_followup_task_from_session(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    session_id: i64,
+    planned_date: Option<String>,
+    estimated_minutes: Option<i64>,
+) -> Result<repository::task::Task, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let sess = repository::study_session::StudySessionRepository::new(&conn)
+        .get(session_id)
+        .map_err(|e| e.to_string())?
+        .filter(|s| s.profile_id == profile_id)
+        .ok_or("学习记录不存在或不属于当前档案")?;
+    let title = if sess.title.trim().is_empty() {
+        format!("学习记录 #{}", sess.id)
+    } else {
+        format!("继续：{}", sess.title)
+    };
+    repository::task::TaskRepository::new(&conn).create_v2(
+        profile_id,
+        sess.goal_id,
+        &title,
+        planned_date.as_deref(),
+        None,
+        sess.learning_item_id,
+        estimated_minutes,
+        "structured",
+        "normal",
+    )
+}
+
+/// §45：Goal Detail 学习记录（Day 直查；Month/Annual/Final 经 descendant）。
+#[tauri::command]
+pub fn list_sessions_by_goal(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    goal_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<repository::study_session::StudySession>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::study_session::StudySessionRepository::new(&conn)
+        .list_by_goal(profile_id, goal_id, limit.unwrap_or(50))
+}
+
+/// §23：Task V2 全字段创建。
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn create_task_v2(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    title: String,
+    planned_date: Option<String>,
+    planned_time: Option<String>,
+    goal_id: Option<i64>,
+    learning_item_id: Option<i64>,
+    estimated_minutes: Option<i64>,
+    task_kind: Option<String>,
+    priority: Option<String>,
+) -> Result<repository::task::Task, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let t = repository::task::TaskRepository::new(&conn).create_v2(
+        profile_id,
+        goal_id,
+        &title,
+        planned_date.as_deref(),
+        planned_time.as_deref(),
+        learning_item_id,
+        estimated_minutes,
+        task_kind.as_deref().unwrap_or("structured"),
+        priority.as_deref().unwrap_or("normal"),
+    )?;
+    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
+        "task",
+        t.id,
+        profile_id,
+        &t.title,
+        &t.title,
+        None,
+    );
+    Ok(t)
+}
+
+/// §23：Task V2 全字段编辑。
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn update_task_v2(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    title: String,
+    planned_date: Option<String>,
+    planned_time: Option<String>,
+    goal_id: Option<i64>,
+    learning_item_id: Option<i64>,
+    estimated_minutes: Option<i64>,
+    task_kind: Option<String>,
+    priority: Option<String>,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::task::TaskRepository::new(&conn).update_v2(
+        id,
+        &title,
+        planned_date.as_deref(),
+        planned_time.as_deref(),
+        learning_item_id,
+        goal_id,
+        estimated_minutes,
+        task_kind.as_deref().unwrap_or("structured"),
+        priority.as_deref().unwrap_or("normal"),
+    )?;
+    let _ = crate::repository::search::SearchRepository::new(&conn).upsert(
+        "task",
+        id,
+        profile_id,
+        &title,
+        &title,
+        None,
+    );
+    Ok(())
+}
+
+/// §11：Apply 成功反馈数据（前端生成 ✓ 已应用 X 项消息，不由模型生成）。
+#[tauri::command]
+pub fn get_change_set_apply_summary(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    change_set_id: i64,
+) -> Result<Vec<String>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let cs = repository::changeset::ChangeSetRepository::new(&conn)
+        .get(change_set_id, profile_id)?
+        .ok_or("ChangeSet 不存在或不属于当前档案")?;
+    if cs.status != "applied" {
+        return Ok(vec![]);
+    }
+    let ops = repository::changeset::ChangeSetRepository::new(&conn)
+        .list_operations(change_set_id, profile_id)?;
+    let mut lines = Vec::new();
+    for op in ops.iter().filter(|o| o.selected) {
+        let entity_label = match op.entity_type.as_str() {
+            "goal" => "目标",
+            "task" => "任务",
+            "knowledge" => "知识节点",
+            "document" => "文档",
+            "session" => "学习记录",
+            "evaluation" => "验证",
+            "personalization" => "私人档案",
+            _ => "条目",
+        };
+        let title = op
+            .after_json
+            .get("title")
+            .or_else(|| op.after_json.get("name"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("");
+        match op.action.as_str() {
+            "create" => lines.push(format!("✓ 已创建{}「{}」", entity_label, title)),
+            "update" => lines.push(format!("✓ 已修改{}「{}」", entity_label, title)),
+            "delete" => lines.push(format!("✓ 已删除{}", entity_label)),
+            "status_change" => lines.push(format!("✓ 已调整{}「{}」", entity_label, title)),
+            "move" => lines.push(format!("✓ 已移动{}", entity_label)),
+            _ => lines.push(format!("✓ 已应用{}", entity_label)),
+        }
+    }
+    if lines.is_empty() {
+        lines.push("✓ 已应用修改".to_string());
+    }
+    Ok(lines)
+}
+
+/// 最近备份列表（DEV-0036 §108：仅显示；不做恢复 API）。
+#[tauri::command]
+pub fn list_backups(app: tauri::AppHandle) -> Result<Vec<repository::BackupInfo>, String> {
+    let dir = backups_dir(&app)?;
+    let mut out: Vec<repository::BackupInfo> = std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !(name.starts_with("higher-") && name.ends_with(".db")) {
+                return None;
+            }
+            let size = e.metadata().ok().map(|m| m.len()).unwrap_or(0);
+            Some(repository::BackupInfo {
+                name: name.clone(),
+                size_bytes: size,
+                path: e.path().to_string_lossy().to_string(),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.name.cmp(&a.name));
+    out.truncate(10);
+    Ok(out)
+}
+
+/// 执行清理：先备份（失败则取消）→ 单事务删除 → 事务成功后删 Sandbox 附件文件。
+#[tauri::command]
+pub fn execute_profile_cleanup(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    scope: String,
+    today: String,
+) -> Result<repository::cleanup::CleanupPreview, String> {
+    let scope = repository::cleanup::CleanupScope::from_str(&scope)
+        .ok_or("未知的清理范围")?;
+    // 1) 备份（失败 → 禁止删除）
+    // DEV-MOBILE-001 §38：改经 AppHandle 真实运行路径（Android = App Sandbox）；
+    // Windows 与原 db::DbState::database_path() 同指（dev = .data，prod = AppLocalData）。
+    let db_path = {
+        let _conn = state.0.lock().map_err(|e| e.to_string())?;
+        runtime_db_path(&app)
+    };
+    let _backup = backup_database(&app, &db_path)?;
+
+    // 2) 事务删除 + 收集附件 relative_path
+    let (preview, files) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        repository::cleanup::CleanupRepository::new(&conn)
+            .execute_collecting(profile_id, scope, &today)?
+    };
+
+    // 3) DB 成功后删除 Sandbox 文件（Path Guard 阻止越界；失败不回滚 DB，仅跳过）
+    for rel in files {
+        if let Ok(path) = sandbox::resolve_in_sandbox(&adir.0, &rel) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(preview)
 }
 
