@@ -428,6 +428,25 @@ fn r2_u23_backend_freeze() {
                 && !f.ends_with("src/repository/personalization.rs")
                 && !f.ends_with("src/ai/client.rs")
                 && !f.ends_with("src/ai/run.rs")
+                // DEV-0077.4-A.1 F1 追加授权：session_actions.rs（P1-03 快照路由）。
+                && !f.ends_with("src/ai/actions/session_actions.rs")
+                // DEV-AI-CORE-001 F2.4 追加授权（前序任务直接后果，回归补录）：
+                // adaptation/{mod,analyzer,decision}.rs + runtime_events.rs。
+                && !f.ends_with("src/ai/adaptation/mod.rs")
+                && !f.ends_with("src/ai/adaptation/analyzer.rs")
+                && !f.ends_with("src/ai/adaptation/decision.rs")
+                && !f.ends_with("src/ai/runtime_events.rs")
+                // DEV-AI-ARCH-001 追加授权（Global Agent Planning Convergence）：
+                // intelligence/goal_understanding.rs（execution_requested 字段）/
+                // action.rs（create_task 幂等）；planning_context.rs 新文件
+                // untracked 不入 diff。
+                && !f.ends_with("src/ai/intelligence/goal_understanding.rs")
+                && !f.ends_with("src/ai/action.rs")
+                // DEV-AI-ARCH-001-F1.2 追加授权（Mission-Scoped Planning Atomic
+                // Closure）：adaptation/proposal.rs（pack mission gate 参数）/
+                // intelligence/tests.rs（analyze 拆参同步——P0-6）。
+                && !f.ends_with("src/ai/adaptation/proposal.rs")
+                && !f.ends_with("src/ai/intelligence/tests.rs")
         })
         .collect();
     assert!(

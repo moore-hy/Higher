@@ -78,7 +78,7 @@ WORKING_RULES → ENVIRONMENT → TASK → 涉及模块源码 → TRAE_RUN 初�
 4. AI Optional
 5. Session Single Artifact
 6. Goal × Knowledge Dual Tree
-7. AI Direct Write = 0
+7. AI Raw Direct Write = 0（AI 不得绕过 HigherAction / ChangeSet；DEV-AI-ARCH-001 定义）
 8. Formal AI changes → ChangeSet → User Approval
 9. Local First
 10. No Decorative Data
@@ -88,11 +88,17 @@ WORKING_RULES → ENVIRONMENT → TASK → 涉及模块源码 → TRAE_RUN 初�
 14. 无数据不堆 0
 15. 用户永远可以 Quick Study
 
-# PART 5 · Permanent AI Architecture Invariants（DEV-0060.1 起永久）
+# PART 5 · Permanent AI Architecture Invariants（DEV-0060.1 起永久；DEV-AI-ARCH-001 收敛）
 
+AI-INV-000 Normal AI Main Runtime = Global Agent（DEV-AI-ARCH-001）：唯一生产入口 ai_start_run → run_agent_turn；Turn Interpreter（run_chat_turn）= Legacy compatibility（死代码，零调用者）；Dedicated Planner（plan_draft JSON 协议）= Legacy compatibility（生产不可达，planner.rs 保留供 legacy 测试）；GLOBAL_AGENT_LIVE_REACHABILITY = 0。
+AI-INV-000b AI Raw Direct Write = 0：AI 不得绕过 HigherAction / ChangeSet——写入唯一工具 execute_higher_actions（一次 Action Pack = ONE ChangeSet）；权限分级 Level 1（明确授权 → Auto Apply → Audit / Undo / ReadBack）/ Level 2（Confirm）/ Level 3（Blocked）。
+AI-INV-000c Goal Truth Roles：GoalTarget = strategic destination；Final Goal = executable tree root；Blueprint = strategy roadmap；GoalTree = time hierarchy execution——四角色独立，GoalTarget 缺失不代表 Final/树为空（current_goal_summary 复合呈现）。
+AI-INV-000d Planning Mission Contract（§19-§21/§31-§33）：ReadyForPlanning → PLANNING MISSION CHECKLIST + PlanningContextSnapshot（每轮自 SQLite 重建，SQLite = Truth）；交付 = verify_planning_mission 确定性验证（缺交付 feedback ≤2 次后 run failed planning_mission_incomplete，禁 generic completed）；有写入必须附 ReadBack 摘要（本次实际创建）；execution_requested=false → execute_higher_actions 拒绝（0 mutation）。
+AI-INV-000e Execution Authorization Fail Closed（DEV-AI-ARCH-001-F1.1）：授权四态 REQUESTED / DECLINED / UNKNOWN / INVALID（结构化 mission understanding 判定，缺字段 = UNKNOWN）；仅 REQUESTED 放行写入与 Mission verify——UNKNOWN/DECLINED/INVALID 一律 0 ChangeSet 0 mutation；续接轮继承原 mission 授权（UNKNOWN 时允许轮首重判）；成功终态 = completed 三处（run.status / workflow.state / last_phase）。
+AI-INV-000f Level 2 = 整个 ChangeSet 确认（DEV-AI-ARCH-001-F1.1 §22-§24）：破坏性操作（bulk_delete_tasks 等）与普通业务动作同 Pack → 整包 permission = max → ONE ChangeSet waiting_approval，确认前所有 ops（含新建）0 mutation，确认后 ONE atomic Apply；禁止两段式 Replacement；外部业务事实只经 record_external_fact（Backend 验证 sid ∈ 本 run opened_sources，provenance 后端写）。
 AI-INV-001 Current User Intent First：只有最后一个用户消息是本轮请求；Context 永远是 system 背景。
 AI-INV-002 LLM 理解与 Domain Execution 分层：模型输出 Typed Intent（SemanticAction/TemporalIntent），绝不输出数据库操作或实体 id。
-AI-INV-003 Direct Write = 0：一切正式写入经 ChangeSet → 用户批准 → Apply；未批准 0 落库。
+AI-INV-003 AI Raw Direct Write = 0：一切正式写入经 ChangeSet 管线（Level 1 明确授权自动生效 + 审计可撤销；Level 2 待确认）；未授权/未批准 0 落库。
 AI-INV-004 Skill 来自 versioned Registry：SKILL.md 编译期嵌入（include_str!），运行时禁止源码扫描。
 AI-INV-005 Skill Contract 可验证：required_capabilities ⊆ Capability Registry；optional_tools ⊆ Tool Registry（SKILL_CONTRACT_STALE 检测）。
 AI-INV-006 Turn Router 保守默认：路由不确定时偏向 HigherRead/SemanticAction，动作请求绝不判成 FastChat。
@@ -104,7 +110,7 @@ AI-INV-011 FastChat 零负担：tools=0、Memory Extract=0、私有 Context=0、
 AI-INV-012 Recurring 语义复用既有系统：不重建重复任务体系；规则语义（estimated_minutes/task_kind/priority）由 materialization 继承。
 AI-INV-013 语义动作成功后总结确定性生成（Compiler 产出），禁止第二次模型调用写总结。
 AI-INV-014 Invalid Semantic JSON 最多 Repair Once；修复仍失败 → 0 落库。
-AI-INV-015 Active Planner 收口：显式取消走本地 Cancel（不调 Provider）；续跑 vs 新意图由 Semantic Router 判定；被接管的旧规划 paused。
+AI-INV-015 Active Workflow Ownership：显式取消走本地 Cancel（不调 Provider）；Active Planning 期间用户答案中的弱 adaptation 关键词不抢占原任务（F2.4 强弱分级）；被接管的旧任务 paused。
 AI-INV-016 Performance Trace 复用 ai_run_events：主/次 Provider 调用分开计数；禁记 API Key / 完整 Prompt / 用户隐私全文。
 
 **回归纪律**：任何修改 `src-tauri/src/ai/**`、AI ChangeSet Compiler、GoalTarget AI truth、Skill Registry、Tool Registry 的提交，必须至少运行并通过：

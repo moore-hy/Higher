@@ -305,6 +305,17 @@ fn runtime_tc004_reasoning_never_emitted() {
 }
 
 // =============== TC005 · Planner JSON 不得作为 delta ===============
+//
+// ARCH-001 §44 冲突测试更新（OLD/NEW/WHY）：
+// - OLD_EXPECTATION：planner 轮模型输出 plan_draft JSON（Dedicated Planner
+//   协议）→ compile → ChangeSet；断言 JSON 不进 delta。
+// - NEW_AUTHORITY（§19/§21）：Dedicated Planner 协议退役，planning mission 由
+//   Global Agent 用 execute_higher_actions 一次 Action Pack 完成；Mission
+//   verify + ReadBack 收口。
+// - WHY_CHANGED：生产链已无 plan_draft JSON 通道（planner.rs 协议保留但
+//   production 不可达）；本测试的原始目的——「结构化轮的机器内容严禁作为
+//   delta 流给用户」——在新链路下由「planning mission 轮始终非流式」继续
+//   保证，fixture 改为 Action Pack 后断言全部保留且语义不变。
 
 fn planner_intel() -> Vec<Completion> {
     vec![text_completion(
@@ -312,41 +323,55 @@ fn planner_intel() -> Vec<Completion> {
     )]
 }
 
-fn plan_draft_json() -> J {
-    json!({
-        "type": "plan_draft",
-        "draft": {
-            "final_goal_adjustment": {
-                "title": "2028考研上岸", "outcome": "成功上岸", "deadline": "2028-12",
-                "deadline_precision": "month", "success_criteria": ["初试过线"]
-            },
-            // DEV-0077.4-A.1 F1：模型输出契约升级（P1-P5）——fixture 同步（断言不变）。
-            "learning_units": [
-                {"ref_key":"mock","name":"全真模拟","parent_ref":""}
+/// ARCH-001 §21：满足 Mission Verify 的最小 Action Pack（LOCAL_DATE=2026-08-24）。
+fn planning_pack_tool_call() -> Completion {
+    let days = ["2026-08-25", "2026-08-26", "2026-08-27"];
+    let day_goals: Vec<J> = days
+        .iter()
+        .map(|d| {
+            json!({
+                "type": "create_goal", "level": "day",
+                "name": format!("{d} 学习日"), "period": d,
+                "parent_level": "month", "parent_title": "2026 年 8 月",
+            })
+        })
+        .collect();
+    let tasks: Vec<J> = days
+        .iter()
+        .map(|d| {
+            json!({
+                "type": "create_task",
+                "title": format!("{d} 数学：摸底自测"),
+                "date": { "kind": "absolute_date", "date": d },
+                "estimated_minutes": 90,
+                "goal_hint": format!("{d} 学习日"),
+            })
+        })
+        .collect();
+    let mut actions: Vec<J> = vec![
+        json!({ "type": "set_final_goal_brief", "title": "2028考研上岸", "outcome": "成功上岸" }),
+        json!({
+            "type": "set_planning_blueprint", "title": "考研全程蓝图",
+            "scenario_type": "postgraduate",
+            "phases": [
+                { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01",
+                  "end_date": "2027-06-30", "objective_md": "基础一轮" }
             ],
-            "blueprint": {
-                "title": "考研全程蓝图", "summary": "三阶段", "scenario_type": "postgraduate",
-                "review_interval_days": 14,
-                "phases": [
-                    { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01",
-                      "end_date": "2027-06-30", "objective_md": "基础一轮", "sort_order": 1 }
-                ],
-                "milestones": [
-                    { "milestone_key": "M1", "title": "基础完成", "start_date": "2027-06",
-                      "end_date": "2027-06", "date_precision": "month", "date_status": "estimated" }
-                ],
-                "future_tasks": [
-                    { "title": "摸底自测", "planned_date": "2026-08-25", "estimated_minutes": 90,
-                      "grounding": {"mode": "learning", "unit_refs": ["mock"]} }
-                ],
-                "assumptions": [], "unresolved": [], "external_facts": [],
-                "source_review": [], "suggested_target_changes": []
-            },
-            "year_goals": [
-                { "name": "基础年", "period": "2026-09-01..2027-08-31", "operation_ref": "Y1" }
+            "milestones": [
+                { "milestone_key": "M1", "title": "基础完成", "start_date": "2027-06-01",
+                  "end_date": "2027-06-30" }
             ]
-        }
-    })
+        }),
+        json!({ "type": "create_goal", "level": "year", "name": "基础年", "period": "2026" }),
+        json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
+                "parent_level": "year", "parent_title": "基础年" }),
+    ];
+    actions.extend(day_goals);
+    actions.extend(tasks);
+    tool_call("execute_higher_actions", json!({
+        "title": "AI 规划 · 2028 考研初始规划",
+        "actions": actions
+    }))
 }
 
 #[test]
@@ -357,26 +382,31 @@ fn runtime_tc005_planner_json_never_streamed_as_delta() {
         let pid = mk_profile(&conn, "R5P");
         (pid, new_conv(&conn, pid))
     };
-    // Proactive（用户未明确要求执行）→ proposal only；planner 轮输出 plan_draft JSON
+    // planning mission 轮：Action Pack（工具调用）→ final 自然语言（§21 新链路）
     let responder = ModelResponder::ScriptedIntel {
         intel: std::sync::Mutex::new(VecDeque::from(planner_intel())),
-        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion(&plan_draft_json().to_string())])),
+        main: std::sync::Mutex::new(VecDeque::from(vec![
+            planning_pack_tool_call(),
+            text_completion("已完成 2028 考研初始规划并写入 Higher。"),
+        ])),
         capture: None,
     };
     let (out, sink) = run_turn_sink(&state, &vault, "r3-tc005", pid, cid, "帮我看看我的学习安排", responder);
     assert_eq!(out.unwrap(), "completed");
-    // 结构化 Planner JSON 严禁逐字出现在任何 delta 通道（§六十八/§二十四）
+    // 结构化/机器内容严禁逐字出现在任何 delta 通道（§六十八/§二十四；
+    // 新链路：Action Pack 参数与机器 JSON 同样不得泄漏）
     for e in sink.of_kind(kind::DELTA) {
         let s = e.to_string();
         assert!(!s.contains("plan_draft"), "Planner JSON 泄漏进 canonical delta：{s}");
         assert!(!s.contains("future_tasks"), "Planner JSON 泄漏进 canonical delta：{s}");
+        assert!(!s.contains("execute_higher_actions"), "工具机密泄漏进 canonical delta：{s}");
     }
     for (_, p) in sink.side_events.lock().unwrap().iter() {
         let s = p.to_string();
         assert!(!s.contains("plan_draft"), "Planner JSON 泄漏进 legacy 事件：{s}");
         assert!(!s.contains("future_tasks"), "Planner JSON 泄漏进 legacy 事件：{s}");
     }
-    // 用户可见的最终文案是自然语言（含 ChangeSet 提示），而非 JSON
+    // 用户可见的最终文案是自然语言（含 ReadBack 提示），而非 JSON
     let msgs = assistant_messages(&state.0.lock().unwrap(), "r3-tc005");
     assert_eq!(msgs.len(), 1);
     assert!(!msgs[0].1.contains("\"type\""), "落库文案不得是原始 JSON：{}", msgs[0].1);
@@ -545,8 +575,10 @@ fn runtime_tc010_memory_blocking_does_not_delay_terminal() {
             .unwrap();
     }
     // intel 通道：goal 分析立即返回；Memory 提取在 gate 取消前永久阻塞
+    //（F1.1 §45：execution_requested 必须显式给出——缺省会触发 structured
+    // repair 的第 2 次 intel 调用，被 gate 阻塞在轮首，terminal 永不到达）
     let intel_q = VecDeque::from(vec![
-        text_completion(r#"{"goal":"考研数学复习","goal_type":"education","planning_required":false,"required_information":[]}"#),
+        text_completion(r#"{"goal":"考研数学复习","goal_type":"education","planning_required":false,"execution_requested":false,"required_information":[]}"#),
         text_completion(r#"{"memories":[{"kind":"explicit","memory_type":"user_fact","category":"学习","key":"备考科目","value":"考研数学二","excerpt":"我最近在准备考研数学二","importance":4,"confidence":"high"}]}"#),
     ]);
     let responder = ModelResponder::ScriptedIntelGate {

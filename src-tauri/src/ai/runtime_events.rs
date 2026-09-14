@@ -305,3 +305,15 @@ impl AiRuntimeEmitter {
 pub fn runtime_trace(node: &str, run_id: &str) {
     eprintln!("[AI-RUNTIME] {node} run_id={run_id} ts={}", now_ms());
 }
+
+/// DEV-AI-CORE-001-F2.4 §十一：ai_run_events 持久化事件的统一封装。
+/// 供 agent/adaptation 等层记录最小诊断 trace（tool_executed /
+/// adaptation_route_decision / adaptation_analyzer_response…）——调用方
+/// 持锁传 conn；失败静默（trace 是增强，不得 fail 主链）。
+pub fn record_run_event(conn: &rusqlite::Connection, run_id: &str, event_type: &str, data_json: &str) {
+    let _ = conn.execute(
+        "INSERT INTO ai_run_events (run_id, event_type, data_json)
+         VALUES (?1, ?2, ?3)",
+        rusqlite::params![run_id, event_type, data_json],
+    );
+}

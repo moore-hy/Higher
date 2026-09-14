@@ -93,7 +93,14 @@ fn goal_json(required: J) -> Completion {
             "goal_type": "education",
             "deadline": "2026-12",
             "priority": "high",
+            // F1.2.1-R1.1 · §8 · CANONICAL FULL SCOPE：用户请求明确「重新生成
+            // 未来14天计划并替换旧任务」→ planning_scope=full（Production
+            // Authority）；planning_required=true 保留作 Legacy mirror。
+            "planning_scope": "full",
             "planning_required": true,
+            // F1.1 §45：mutation fixture 显式 execution_requested=true
+            //（Fail Closed——缺失 = UNKNOWN = 工具拒绝）。
+            "execution_requested": true,
             "confidence": 0.9,
             "required_information": required,
         })
@@ -287,12 +294,20 @@ fn new_plan_draft() -> J {
 }
 
 fn five_questions() -> Vec<J> {
+    // F1.1 修复：元素同时作为 intel required_information 与 request_user_input
+    // questions——必须含 source_kind/description（缺 source_kind 会让 structured
+    // result 解析 Err → intel 静默降级 → 授权未持久（Fail Closed 下 = UNKNOWN）。
     vec![
-        json!({ "key": "daily_time", "question": "每天大约能投入多少时间学习？", "why_needed": "决定强度" }),
-        json!({ "key": "math_material", "question": "数学使用什么教材/课程？", "why_needed": "决定内容" }),
-        json!({ "key": "cs_material", "question": "408 使用什么资料？", "why_needed": "决定内容" }),
-        json!({ "key": "eng_material", "question": "英语有固定教材吗？", "why_needed": "决定内容" }),
-        json!({ "key": "replace_scope", "question": "新计划如何处理现有旧任务？", "why_needed": "决定替换范围" }),
+        json!({ "key": "daily_time", "description": "每日可学时长", "why_needed": "决定强度", "source_kind": "user",
+                "question": "每天大约能投入多少时间学习？" }),
+        json!({ "key": "math_material", "description": "数学教材", "why_needed": "决定内容", "source_kind": "user",
+                "question": "数学使用什么教材/课程？" }),
+        json!({ "key": "cs_material", "description": "408 资料", "why_needed": "决定内容", "source_kind": "user",
+                "question": "408 使用什么资料？" }),
+        json!({ "key": "eng_material", "description": "英语教材", "why_needed": "决定内容", "source_kind": "user",
+                "question": "英语有固定教材吗？" }),
+        json!({ "key": "replace_scope", "description": "替换范围", "why_needed": "决定替换范围", "source_kind": "user",
+                "question": "新计划如何处理现有旧任务？" }),
     ]
 }
 
@@ -310,8 +325,16 @@ fn t2_full_answer_tool() -> Completion {
 }
 
 /// 两 Turn 主链（§九二-§九六）：Turn 1 五问挂起；Turn 2 轮首 Decision 仍未
-/// Ready（原失败场景）→ 模型纯答案提交 → FIX-2 确定性重派发 → plan_draft。
-/// 返回 (state, vault, pid, cid)。
+/// Ready（原失败场景）→ 模型纯答案提交 → PENDING_ANSWERS_RESOLVED 确定性恢复
+/// planning mission（§20）→ Action Pack 交付。
+/// DEV-AI-ARCH-001-F1.1 §22-§24/§43（权威恢复，OLD/NEW/WHY）：
+/// - OLD（ARCH-001 错误 Authority）：Replacement 拆两 pack——Level1 新计划
+///   先 Auto Apply + Level2 删除后确认（半套 replacement，确认前已写入）。
+/// - NEW（F1.1 正确 Authority）：ONE mixed-risk Action Pack（create 新计划 +
+///   bulk_delete 旧任务）→ 整包 permission = max = Level2 → ONE ChangeSet
+///   waiting_approval——确认前 0 business mutation（含新建）；确认后 ONE
+///   atomic Apply。本轮修 implementation（Mixed Pack Compiler），不迁就
+///   错误实现改产品语义。
 fn two_turn_e2e(name: &str, with_memory: bool) -> (DbState, VaultState, i64, i64) {
     let (state, vault) = setup(name);
     let (pid, cid) = {
@@ -319,6 +342,7 @@ fn two_turn_e2e(name: &str, with_memory: bool) -> (DbState, VaultState, i64, i64
         let pid = mk_profile(&conn, "F2E2E");
         mk_final_goal(&conn, pid);
         seed_legacy_tasks(&conn, pid);
+        seed_learning_items(&conn, pid);
         (pid, new_conv(&conn, pid))
     };
 
@@ -348,11 +372,114 @@ fn two_turn_e2e(name: &str, with_memory: bool) -> (DbState, VaultState, i64, i64
     let out2 = run_turn(
         &state, &vault, "f2-t2", pid, cid, T2_MSG,
         intel2,
-        vec![t2_full_answer_tool(), text_completion(&new_plan_draft().to_string())],
+        vec![
+            t2_full_answer_tool(),
+            mixed_replacement_pack(),
+            text_completion("已生成替换方案（新计划 + 删除旧任务整体一份修改集），需要你确认后才会生效。"),
+        ],
     )
     .unwrap();
     assert_eq!(out2, "completed", "E2E T2：同 Turn 自动继续并收口（禁 Turn 3）");
     (state, vault, pid, cid)
+}
+
+/// Learning Items（工具路径 knowledge_hint 匹配目标；§四七 grounding 通道）。
+fn seed_learning_items(conn: &Connection, p: i64) {
+    for name in ["极限", "线性代数", "考研词汇", "数据结构"] {
+        conn.execute(
+            "INSERT INTO learning_items (profile_id, name) VALUES (?1, ?2)",
+            params![p, name],
+        )
+        .unwrap();
+    }
+}
+
+/// ARCH-001 §21 · F1.1 §22-§24：**Mixed Replacement Pack**（ONE ChangeSet，
+/// 整包 Level 2）——新计划（Level 1 creates）+ bulk_delete 旧任务（Level 2）
+/// 同 pack：整包 permission = max(op permissions) = Level2 → waiting_approval，
+/// 确认前所有 ops（含新建）均不 Apply。
+/// F1.2.1-R1.1 · §9-§13 · FULL DELIVERY WINDOW：LOCAL_DATE=2026-08-27 →
+/// 正式未来 14 天 = 2026-08-28..2026-09-10；pack 必须 EXACTLY 14 DISTINCT
+/// Day Goals（全部 study）+ 15 Tasks（原 5 核心 + 10 coverage 补齐其余
+/// Study Day）+ bulk_delete **SAME pack 禁止拆包** → ONE Level2 ChangeSet。
+fn mixed_replacement_pack() -> Completion {
+    let task_specs = [
+        ("高数：极限基础题 15题", "2026-08-28", 90, Some("极限"), "2026-08-28 学习日"),
+        ("英语：考研词汇 List 1-2", "2026-08-28", 60, Some("考研词汇"), "2026-08-28 学习日"),
+        ("线代：行列式计算 10题", "2026-08-29", 75, Some("线性代数"), "2026-08-29 学习日"),
+        ("408：数据结构链表基础", "2026-08-30", 75, Some("数据结构"), "2026-08-30 学习日"),
+        ("周复盘：进度核对", "2026-09-02", 30, None, "2026-09-02 学习日"),
+    ];
+    // §11 · ADD EXACTLY 10 COVERAGE TASKS：补齐其余 10 个 Study Day
+    //（§12 KNOWLEDGE RULE：goal_hint REQUIRED、knowledge_hint OMIT——
+    // Knowledge Optional，只要求 Formal Task→Day grounding）。
+    let coverage_days = [
+        "2026-08-31", "2026-09-01", "2026-09-03", "2026-09-04", "2026-09-05",
+        "2026-09-06", "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10",
+    ];
+    let mut actions: Vec<J> = vec![
+        json!({ "type": "set_final_goal_brief", "outcome": "2026 考研上岸：替换生成未来 14 天执行计划",
+                "success_criteria": ["按新计划完成未来 14 天训练"] }),
+        json!({
+            "type": "set_planning_blueprint", "title": "2026考研 全程复习蓝图", "scenario_type": "postgraduate",
+            "phases": [
+                { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-08-28", "end_date": "2026-12-31", "objective_md": "基础一轮" }
+            ],
+            "milestones": [
+                { "milestone_key": "M1", "title": "基础完成", "phase_key": "P1", "start_date": "2026-12-01", "end_date": "2026-12-31" }
+            ]
+        }),
+        json!({ "type": "create_goal", "level": "year", "name": "2026 备考年", "period": "2026" }),
+        json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
+                "parent_level": "year", "parent_title": "2026 备考年" }),
+        json!({ "type": "create_goal", "level": "month", "name": "2026 年 9 月", "period": "2026-09",
+                "parent_level": "year", "parent_title": "2026 备考年" }),
+    ];
+    // §9 · 14 DISTINCT Day Goals（2026-08-28 .. 2026-09-10，全部 study）
+    for d in [
+        "2026-08-28", "2026-08-29", "2026-08-30", "2026-08-31",
+        "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04",
+        "2026-09-05", "2026-09-06", "2026-09-07", "2026-09-08",
+        "2026-09-09", "2026-09-10",
+    ] {
+        actions.push(json!({
+            "type": "create_goal", "level": "day",
+            "name": format!("{d} 学习日"), "period": d,
+            "day_kind": "study",
+            "parent_level": "month",
+            "parent_title": if d.starts_with("2026-08") { "2026 年 8 月" } else { "2026 年 9 月" },
+        }));
+    }
+    // §10 · 原 5 个核心 Task 原样保留（knowledge_hint / goal_hint 不变）
+    for (t, d, m, hint, goal_hint) in task_specs {
+        let mut a = json!({
+            "type": "create_task", "title": t,
+            "date": { "kind": "absolute_date", "date": d },
+            "estimated_minutes": m,
+            // F1.1 §13：goal_hint 关联同 pack Day Goal（真实 goal_id）
+            "goal_hint": goal_hint,
+        });
+        if let Some(h) = hint {
+            a["knowledge_hint"] = json!(h);
+        }
+        actions.push(a);
+    }
+    // §11 · 10 个 coverage Task（45 分钟，goal_hint 同日 Day Goal，无 knowledge_hint）
+    for d in coverage_days {
+        actions.push(json!({
+            "type": "create_task", "title": format!("计划补全：{d} 基础复习"),
+            "date": { "kind": "absolute_date", "date": d },
+            "estimated_minutes": 45,
+            "goal_hint": format!("{d} 学习日"),
+        }));
+    }
+    // F1.1 §23 / R1.1 §13：删除旧任务与新计划同 pack（Atomic Replacement，
+    // SAME Action Pack 禁止拆包）→ ONE ChangeSet，permission = Level2
+    actions.push(json!({ "type": "bulk_delete_tasks", "filter": { "title_hint": "旧" } }));
+    tool_call("execute_higher_actions", json!({
+        "title": "AI 规划 · 替换未来14天计划（整体待确认）",
+        "actions": actions
+    }))
 }
 
 // ==================== F2-TC001 · Partial Answer ====================
@@ -402,19 +529,17 @@ fn f2_tc001_partial_answer_keeps_waiting() {
 fn f2_tc002_full_answer_auto_continue() {
     let (state, _vault, pid, _cid) = two_turn_e2e("tc002", false);
     let conn = state.0.lock().unwrap();
-    // 不需要 Turn 3：ChangeSet 已生成（replacement → waiting_approval，§九六 B）
-    let (cs_id, status): (i64, String) = conn
+    // F1.1 §21/§28 恢复（ATOMIC-01 语义）：ONE mixed-risk ChangeSet →
+    // Level2 waiting_approval；确认前 0 business mutation（含新计划）。
+    let (cs_n, status): (i64, String) = conn
         .query_row(
-            "SELECT id, status FROM ai_change_sets WHERE profile_id=?1",
+            "SELECT COUNT(*), MAX(status) FROM ai_change_sets WHERE profile_id=?1",
             params![pid],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("TC002：Turn 2 必须交付 Planning ChangeSet");
-    assert_eq!(status, "waiting_approval", "TC002/TC015：Replacement → 现有正式确认语义");
-    let n: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
-        .unwrap();
-    assert_eq!(n, 1, "TC013/TC017：ONE ChangeSet（Repair/Replacement 不另开包）");
+    assert_eq!(cs_n, 1, "TC013/TC017：ONE ChangeSet（Atomic Replacement 不拆分）");
+    assert_eq!(status, "waiting_approval", "TC002/TC015：Replacement → 整体待确认");
     // 确认前 0 mutation（§三七）：旧任务原样、新任务未落库
     let archived: i64 = conn
         .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NOT NULL", params![pid], |r| r.get(0))
@@ -462,8 +587,8 @@ fn f2_tc004_no_generic_fallback() {
     );
     let reply = last_assistant(&conn, cid, pid);
     assert!(
-        reply.contains("替换现有") && reply.contains("需要你确认"),
-        "TC004：交付文案如实（{reply}）"
+        reply.contains("替换") && reply.contains("需要你确认"),
+        "TC004：交付文案如实（F1.1：ONE 混包修改集整体待确认）：{reply}"
     );
 }
 
@@ -479,7 +604,7 @@ fn f2_tc005_memory_non_blocking() {
         )
         .unwrap();
     assert_eq!(mem_n, 3, "TC005：3 条 Memory Proposal 待确认");
-    // 同时 Planning 已交付（解耦证明：未点任何确认）
+    // 同时 Planning 已交付（解耦证明：未点任何确认）——混包 ONE ChangeSet
     let cs: i64 = conn
         .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
         .unwrap();
@@ -502,7 +627,7 @@ fn f2_tc006_ignore_memory_still_plans() {
     let cs: i64 = conn
         .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
         .unwrap();
-    assert_eq!(cs, 1, "TC006：Planning 结果不受 Memory 影响");
+    assert_eq!(cs, 1, "TC006：Planning 结果不受 Memory 影响（ONE mixed CS）");
 }
 
 #[test]
@@ -518,7 +643,7 @@ fn f2_tc007_no_memory_action_still_plans() {
     let cs: i64 = conn
         .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
         .unwrap();
-    assert_eq!(cs, 1, "TC007：Planning 正常完成");
+    assert_eq!(cs, 1, "TC007：Planning 正常完成（ONE mixed ChangeSet）");
 }
 
 // ==================== F2-TC008 · Replacement Window（选择器单元级） ====================
@@ -550,12 +675,14 @@ fn f2_tc008_replacement_window_selector() {
 // ==================== F2-TC009/010/011/012/016 · 确认后 ReadBack ====================
 
 /// 应用两 Turn ChangeSet（§一〇〇：正式 confirmation action ≠ Memory confirm）。
+/// ARCH-001：确认对象 = Level 2 旧任务清理（waiting_approval 行）；Level 1
+/// 新计划已 Auto Apply 无需确认。
 fn applied_e2e(name: &str) -> (DbState, VaultState, i64, i64, i64) {
     let (state, vault, pid, cid) = two_turn_e2e(name, false);
     let cs_id = {
         let conn = state.0.lock().unwrap();
         conn.query_row(
-            "SELECT id FROM ai_change_sets WHERE profile_id=?1",
+            "SELECT id FROM ai_change_sets WHERE profile_id=?1 AND status='waiting_approval'",
             params![pid],
             |r| r.get(0),
         )
@@ -653,15 +780,15 @@ fn f2_tc012_grounding_100_percent() {
 fn f2_tc016_readback() {
     let (state, _vault, pid, _cid, cs) = applied_e2e("tc016");
     let conn = state.0.lock().unwrap();
-    // A：被替换 old future tasks 已按 ops 处理（5 复合 + 1 meta 归档）
+    // A：被替换 old future tasks 已按 ops 处理（引擎 task delete = 硬删；
+    // ARCH-001 工具路径 bulk_delete → ChangeSet delete op → DELETE FROM tasks）
     let replaced: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND archived_at IS NOT NULL AND title LIKE '%旧%'",
-            params![pid],
-            |r| r.get(0),
+            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title LIKE '%旧%'",
+            params![pid], |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(replaced, 6, "TC016：6 条旧未来任务按 ChangeSet 归档");
+    assert_eq!(replaced, 0, "TC016：6 条旧未来任务已按确认的 ChangeSet 删除");
     // B/C/D/E：new tasks 存在 + 日期窗口 + profile + grounding
     let in_window: i64 = conn
         .query_row(
@@ -673,6 +800,55 @@ fn f2_tc016_readback() {
         )
         .unwrap();
     assert_eq!(in_window, 4, "TC016：新任务日期均在窗口内且 grounded");
+    // F1.2.1-R1.1 · §15 · FULL DAY DELIVERY：Full Planning 必须交付完整
+    // 14 DISTINCT Day（2026-08-28 .. 2026-09-10）。
+    let day_count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT period_start)
+         FROM goals
+         WHERE profile_id=?1
+           AND goal_level='day'
+           AND status!='archived'
+           AND period_start BETWEEN
+               '2026-08-28'
+               AND
+               '2026-09-10'",
+        params![pid],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(
+        day_count,
+        14,
+        "TC016：Full Planning 必须交付完整 14 DISTINCT Day"
+    );
+    // F1.2.1-R1.1 · §16 · STUDY DAY COVERAGE：14 个 Study Day 全部必须有
+    // grounded Task（task.goal_id = 当日 Day Goal）。
+    let uncovered: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM goals g
+         WHERE g.profile_id=?1
+           AND g.goal_level='day'
+           AND g.status!='archived'
+           AND g.period_start BETWEEN
+               '2026-08-28'
+               AND
+               '2026-09-10'
+           AND COALESCE(g.day_kind,'study')!='rest'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM tasks t
+               WHERE t.profile_id=?1
+                 AND t.archived_at IS NULL
+                 AND t.planned_date=g.period_start
+                 AND t.goal_id=g.id
+           )",
+        params![pid],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(
+        uncovered,
+        0,
+        "TC016：14 个 Study Day 全部必须有 grounded Task"
+    );
     // 引擎 ReadBack 通道核验
     let written = ChangeSetRepository::new(&conn).list_operations(cs, pid).unwrap();
     let (ok, fail) = app_lib::ai::higher_action::verify_written_ops(&conn, pid, &written);
@@ -685,13 +861,13 @@ fn f2_tc017_idempotency() {
     {
         // 块作用域释放锁 guard（run_turn 内部需再次 lock；std Mutex 同线程重入=死锁）
         let conn = state.0.lock().unwrap();
-        assert_eq!(count(&conn, "ai_change_sets"), 1, "TC017：single effective proposal");
+        assert_eq!(count(&conn, "ai_change_sets"), 1, "TC017：single effective proposal（F1.1：ONE mixed CS）");
     }
     // 「下一步」类消息不得再触发第二套规划（§七一：非特殊字符串修复）
     let out3 = run_turn(
         &state, &vault, "f2-t3", pid, _cid, "下一步",
         vec![text_completion(r#"{"goal":"","goal_type":"other","planning_required":false,"required_information":[]}"#)],
-        vec![text_completion("上一步规划提案仍在审查面板等待确认，确认后即会替换旧任务。")],
+        vec![text_completion("上一步的旧任务清理修改集仍在等待确认，确认后即会完成替换。")],
     );
     assert_eq!(out3.unwrap(), "completed");
     let conn = state.0.lock().unwrap();
@@ -739,7 +915,8 @@ fn f2_tc014_failure_preserves_old_plan() {
         vec![tool_call("request_user_input", json!({ "questions": five_questions() }))],
     )
     .unwrap();
-    // Turn 2：模型两次都输出无 grounding 复合任务（invalid + repair 失败）
+    // Turn 2：模型持续输出旧协议 plan_draft 文本（不交付 Action Pack）
+    // → ARCH-001 §31/§32：Mission verify feedback ×2 后 run failed，0 mutation
     let bad_draft = json!({
         "type": "plan_draft",
         "draft": {
@@ -750,20 +927,18 @@ fn f2_tc014_failure_preserves_old_plan() {
             "assumptions": [], "unresolved": []
         }
     });
-    let bad_repair = json!({
-        "tasks": [
-            {"title":"高数+英语+408 全科综合训练（未修复）","date":"2026-08-28","estimated_minutes":240,
-             "task_kind":"structured","priority":"core"}
-        ],
-        "assumptions": [], "unresolved": []
-    });
     let out2 = run_turn(
         &state, &vault, "t14b", pid, cid, T2_MSG,
-        vec![goal_json(json!([])), text_completion(&bad_repair.to_string())],
-        vec![t2_full_answer_tool(), text_completion(&bad_draft.to_string())],
+        vec![goal_json(json!([]))],
+        vec![
+            t2_full_answer_tool(),
+            text_completion(&bad_draft.to_string()),
+            text_completion(&bad_draft.to_string()),
+            text_completion(&bad_draft.to_string()),
+        ],
     )
     .unwrap();
-    assert_eq!(out2, "completed", "TC014：以失败文案收口");
+    assert_eq!(out2, "failed", "TC014：mission 未交付 → failed（不悬挂）");
     let conn = state.0.lock().unwrap();
     // 旧计划完整保留：0 归档、0 新任务、0 ChangeSet
     let archived: i64 = conn
@@ -773,7 +948,7 @@ fn f2_tc014_failure_preserves_old_plan() {
     assert_eq!(count(&conn, "ai_change_sets"), 0, "TC014：0 replacement mutation");
     let reply = last_assistant(&conn, cid, pid);
     assert!(
-        reply.contains("未通过学习关联校验") && reply.contains("正式数据未变化"),
+        reply.contains("本次规划任务未完成交付") && reply.contains("正式数据未变化"),
         "TC014：失败如实告知（{reply}）"
     );
 }

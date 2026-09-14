@@ -253,30 +253,76 @@ pub fn detect_context_purpose(
 /// - 无 active GoalTarget：返回「正式目标：未设置」，**不自动返回旧 goals.final**（legacy 只能是候选）
 /// DEV-0070 F21-02：pub(crate) 供 agent 轮首 intelligence 分析复用（Higher 当前上下文）。
 pub(crate) fn current_goal_summary(conn: &Connection, profile_id: i64) -> Result<Option<String>, String> {
+    // DEV-AI-ARCH-001 §38 · Composite Goal Summary：同时表达 Strategic
+    // Targets（GoalTarget）/ Final Goal（可执行树根）/ Current Goal Path
+    //（final→year→month 链）/ Active Blueprint title——避免 AI 只看到一层
+    //（此前 GoalTarget=0 时直接返回「正式目标未设置」，掩盖 Final/Blueprint）。
     let targets = crate::repository::goal_target::GoalTargetRepository::new(conn)
         .list_active(profile_id, None, None)
         .unwrap_or_default();
-    if targets.is_empty() {
-        return Ok(Some(
-            "正式目标未设置（GoalTarget=0；历史数据中的旧目标仅为候选，不是当前正式目标）".to_string(),
-        ));
-    }
-    let reach = targets
-        .iter()
-        .find(|t| t.scenario_type == "postgraduate" && t.role == "reach")
-        .or_else(|| targets.iter().find(|t| t.role == "reach"))
-        .or_else(|| targets.first());
-    let safety = targets.iter().find(|t| t.role == "safety");
     let mut parts: Vec<String> = Vec::new();
-    if let Some(r) = reach {
-        parts.push(format!(
-            "{}（正式 GoalTarget{}）",
-            r.title,
-            if r.scenario_type == "postgraduate" { "·REACH 主目标" } else { "" }
-        ));
+    // ① Strategic Targets
+    if targets.is_empty() {
+        parts.push("GoalTarget=0（战略目标未设置；历史旧目标仅为候选）".to_string());
+    } else {
+        let reach = targets
+            .iter()
+            .find(|t| t.scenario_type == "postgraduate" && t.role == "reach")
+            .or_else(|| targets.iter().find(|t| t.role == "reach"))
+            .or_else(|| targets.iter().find(|t| t.role == "primary"))
+            .or_else(|| targets.first());
+        let safety = targets.iter().find(|t| t.role == "safety");
+        if let Some(r) = reach {
+            parts.push(format!(
+                "{}（正式 GoalTarget{}）",
+                r.title,
+                if r.scenario_type == "postgraduate" { "·REACH 主目标" } else { "" }
+            ));
+        }
+        if let Some(s) = safety {
+            parts.push(format!("{}（SAFETY 风险参考）", s.title));
+        }
     }
-    if let Some(s) = safety {
-        parts.push(format!("{}（SAFETY 风险参考）", s.title));
+    // ② Final Goal（可执行目标体系唯一根）
+    let final_goal: Option<String> = conn
+        .query_row(
+            "SELECT name FROM goals WHERE profile_id=?1 AND goal_level='final'",
+            params![profile_id],
+            |r| r.get(0),
+        )
+        .ok();
+    match &final_goal {
+        Some(f) => parts.push(format!("Final（执行树根）：{f}")),
+        None => parts.push("Final（执行树根）：未创建".to_string()),
+    }
+    // ③ Current Goal Path（final→year→month 最新链）
+    let path: Vec<String> = conn
+        .prepare(
+            "SELECT goal_level, name, COALESCE(period,'') FROM goals
+             WHERE profile_id=?1 AND goal_level IN ('year','month')
+             ORDER BY CASE goal_level WHEN 'year' THEN 0 ELSE 1 END, COALESCE(period,'') DESC",
+        )
+        .and_then(|mut st| {
+            st.query_map(params![profile_id], |r| {
+                Ok(format!("{}:{}", r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap_or_default();
+    if !path.is_empty() {
+        parts.push(format!("当前目标路径：{}", path.iter().take(4).cloned().collect::<Vec<_>>().join(" → ")));
+    }
+    // ④ Active Blueprint title（战略路线）
+    let bp: Option<String> = conn
+        .query_row(
+            "SELECT title FROM planning_blueprints WHERE profile_id=?1 AND status='active'",
+            params![profile_id],
+            |r| r.get(0),
+        )
+        .ok();
+    match &bp {
+        Some(b) => parts.push(format!("Active Blueprint：{b}")),
+        None => parts.push("Active Blueprint：未设置".to_string()),
     }
     Ok(Some(parts.join("；")))
 }

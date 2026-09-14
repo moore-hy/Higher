@@ -282,6 +282,8 @@ pub fn apply_proposal(
         "应用 AI 调整建议",
         "AI 复盘调整（DEV-0077 U1 Proposal Apply）",
         &compiled.actions,
+        false,
+        false,
     );
     let status = result
         .json

@@ -126,6 +126,28 @@ pub struct AgentToolCtx<'a> {
     pub evidence_urls: Vec<String>,
     /// 本 run 内模型标记的无法验证/冲突事实点（§16/§30，收口合并 workflow.unresolved）。
     pub unresolved_updates: Vec<String>,
+    // ---- DEV-AI-ARCH-001 §24 · Workflow v2 external facts ----
+    /// 本 run 内经 record_external_fact 登记的外部事实（含 provenance，收口合并
+    /// workflow.external_facts；F1.1 §8：只有 sid 已成功 web_open 才可登记）。
+    pub external_facts_updates: Vec<super::workflow::ExternalFact>,
+    /// F1.1 §7/§10 · web_open = VERIFIED SOURCE（不是业务事实）：本 run 内
+    /// 成功打开的来源（sid→title/url），供 record_external_fact 做 Backend 验证。
+    pub opened_sources: Vec<(String, String, String)>, // (sid, title, url)
+    /// DEV-AI-ARCH-001-F1.1 §2/§4 · Execution Authorization（Fail Closed）：
+    /// 仅 Requested 允许正式 mutation；Declined/Unknown/Invalid 一律 0 mutation。
+    pub execution_authorization: super::workflow::ExecutionAuthorization,
+    /// F1.1 §26 · Initial Planning Preflight：本 run 处于 planning mission 的
+    /// 初始写入（本 Mission 尚无正式 Planning ChangeSet）→ pack 语义校验
+    /// （F1.2 P0-3，在 CS create 之前）不通过直接 invalid_planning_pack。
+    pub is_initial_planning_mission: bool,
+    /// F1.2 · P0-5 · Formal Planning Mission（mission_kind=planning 的写入
+    /// pack）→ Task→Day 强关系（structured planned Task 必须关联 Day Goal；
+    /// Goal Optional 仅适用于 Quick Study / 临时任务）。
+    pub formal_planning_mission: bool,
+    /// F1.2.1 · §12/§14 · CURRENT MISSION owned CS（agent.rs 每次构造 ctx 前
+    /// 经 collect_current_mission_changeset_ids 动态传入）——ONE ChangeSet
+    /// Per Mission guard 的唯一依据（§14.2）。
+    pub mission_changeset_ids: Vec<i64>,
 }
 
 /// Phase A Agent 工具定义：read ∪ planning（含 web，按开关）+ 临时任务写工具。
@@ -234,6 +256,33 @@ pub fn agent_tool_definitions(web_enabled: bool) -> J {
             }
         }
     }));
+    // F1.1 §8 · record_external_fact（Level 0）：外部业务事实登记——
+    // 只能引用本轮已成功 web_open 的 sid；来源 provenance 由系统自动写入。
+    arr.push(json!({
+        "type": "function",
+        "function": {
+            "name": "record_external_fact",
+            "description": "把一条「已从验证来源读到的业务事实」登记为外部事实（写入当前工作流，供后续规划引用并保留来源）。前置条件：该事实来自你本轮 web_open 成功打开的来源（sid）。系统会自动记录来源标题/链接/核验日期/verified 状态——你只需要给出 key（稳定语义键，如 exam_subjects）、value（事实本体，如「数学二、英语二、408」）和 sid。禁止：登记未经 web_open 验证的猜测；禁止自行编造来源 URL（参数中没有 source_url，来源只能由系统绑定）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "稳定语义键（如 exam_subjects / target_exam_date）"
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "事实本体（从已验证来源读到的业务事实）"
+                    },
+                    "sid": {
+                        "type": "string",
+                        "description": "本轮 web_search 返回且已 web_open 成功的来源编号（如 S1）"
+                    }
+                },
+                "required": ["key", "value", "sid"]
+            }
+        }
+    }));
     json!(arr)
 }
 
@@ -287,6 +336,8 @@ pub async fn execute_agent_tool(ctx: &mut AgentToolCtx<'_>, name: &str, args: &J
         "cancel_current_task" => cancel_current_task_tool(ctx, args),
         // Phase F（§16/§30）：研究中无法验证/冲突的事实点标记（Level 0，无 DB 写）
         "record_unresolved" => record_unresolved_tool(ctx, args),
+        // F1.1 §8：外部业务事实登记（Level 0；Backend 验证 sid 已 web_open）
+        "record_external_fact" => record_external_fact_tool(ctx, args),
         read if super::tools::TOOL_ALLOWLIST.contains(&read) => {
             let conn = match ctx.state.0.lock() {
                 Ok(c) => c,
@@ -352,20 +403,22 @@ async fn execute_web_open(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
     if target.is_empty() {
         return json!({ "error": "缺少 sid 或 url 参数" }).to_string();
     }
-    // sid → 本轮搜索已返回来源的 URL（SSRF 校验在 web_open 内部）
-    let url = if let Some(num) = target
+    // sid → 本轮搜索已返回来源的 URL（SSRF 校验在 web_open 内部）。
+    // F1.1 §8：以 sid 打开时**保留原 sid**（record_external_fact 引用的就是
+    // 搜索返回的 sid）；直接 URL 打开才登记新 sid。
+    let (src_title, url, sid_from_search) = if let Some(num) = target
         .strip_prefix('S')
         .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
     {
         match num.parse::<usize>().ok().and_then(|i| ctx.sources.get(i - 1)) {
-            Some(s) => s.url.clone(),
+            Some(s) => (s.title.clone(), s.url.clone(), Some(target.clone())),
             None => {
                 return json!({ "error": format!("来源 {target} 不存在（只能打开本轮搜索返回的来源）") })
                     .to_string()
             }
         }
     } else {
-        target.clone()
+        (target.clone(), target.clone(), None)
     };
     // Phase F §38：测试 fake 优先（确定性；生产 None → 真实 web_open）
     let result = match web_fake_for(ctx.state) {
@@ -377,11 +430,16 @@ async fn execute_web_open(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
             // Phase F §19/§21：web_open 成功 = 正式 Evidence——归一 URL 去重后
             // 进入本 run 证据链（收口写 workflow_json.evidence_sources），
             // 同时登记为来源（sid/ai://source/ai_sources 可追溯 §34）。
+            //
+            // F1.1 §7/§10 权威修正：web_open 只产出 **VERIFIED SOURCE**
+            //（evidence_sources / opened_sources）——不是业务事实；禁止把网页
+            // 前 80 字当成 ExternalFact.value。业务事实只能由模型经
+            // record_external_fact(key,value,sid) 显式登记，Backend 验证 sid。
             let canonical = normalize_url(&url);
             if !ctx.evidence_urls.contains(&canonical) {
                 ctx.evidence_urls.push(canonical);
             }
-            let sid = format!("S{}", ctx.sources.len() + 1);
+            let sid = sid_from_search.unwrap_or_else(|| format!("S{}", ctx.sources.len() + 1));
             let snippet: String = text.chars().take(160).collect();
             ctx.sources.push(AgentSource {
                 title: url.clone(),
@@ -389,6 +447,11 @@ async fn execute_web_open(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
                 snippet: snippet.clone(),
                 published_at: None,
             });
+            // opened_sources 记录「模型可引用的 sid」→ 来源 title/url
+            //（record_external_fact 的 Backend 验证依据；重复打开同 sid 幂等覆盖）
+            let rec = (sid.clone(), src_title.clone(), url.clone());
+            ctx.opened_sources.retain(|(s, _, _)| *s != sid);
+            ctx.opened_sources.push(rec);
             crate::ai::run::emit(
                 ctx.app,
                 "ai://source",
@@ -396,10 +459,68 @@ async fn execute_web_open(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
                 json!({ "sid": sid, "title": url, "url": url, "snippet": snippet, "published_at": null }),
             );
             let cut: String = text.chars().take(TOOL_RESULT_MAX_CHARS).collect();
-            json!({ "url": url, "content": cut }).to_string()
+            json!({
+                "url": url,
+                "content": cut,
+                "note": "已验证来源。要把它登记为外部事实（供规划引用），请调用 record_external_fact(key, value, sid)"
+            })
+            .to_string()
         }
         Err(e) => json!({ "error": e }).to_string(),
     }
+}
+
+/// F1.1 §8 · record_external_fact（Level 0）：把「已验证来源中的业务事实」
+/// 登记为 ExternalFact（收口合并 workflow.external_facts，跨 Turn 持久）。
+/// Backend 必须验证：sid 属于当前 run 且已成功 web_open——模型禁止自行传
+/// source_url 冒充验证来源；provenance（source_title/source_url/checked_at/
+/// verification_status="verified"）全部由 Backend 自动写入。
+fn record_external_fact_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
+    let key = args.get("key").and_then(|k| k.as_str()).unwrap_or("").trim().to_string();
+    let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let sid = args.get("sid").and_then(|s| s.as_str()).unwrap_or("").trim().to_string();
+    if key.is_empty() || value.is_empty() {
+        return json!({
+            "status": "invalid_action",
+            "message": "record_external_fact 需要 key 与 value（非空）",
+            "formal_mutations": 0,
+        })
+        .to_string();
+    }
+    // §12（EXT-02）：sid 必须是本 run 内已成功 web_open 的来源——未打开 → reject。
+    let Some((_, title, url)) = ctx
+        .opened_sources
+        .iter()
+        .find(|(s, _, _)| *s == sid)
+        .cloned()
+    else {
+        return json!({
+            "status": "invalid_sid",
+            "message": format!("sid {sid} 未在本轮成功 web_open——外部事实只能来自已验证来源；请先 web_open 该来源"),
+            "formal_mutations": 0,
+        })
+        .to_string();
+    };
+    let fact = super::workflow::ExternalFact {
+        key,
+        value,
+        source_title: title,
+        source_url: url,
+        checked_at: ctx.env.local_date.clone(),
+        verification_status: "verified".into(),
+    };
+    let (k, v) = (fact.key.clone(), fact.value.clone());
+    // 同 key 后写覆盖（模型纠正事实以最新为准）
+    ctx.external_facts_updates.retain(|f| f.key != k);
+    ctx.external_facts_updates.push(fact);
+    json!({
+        "status": "recorded",
+        "key": k,
+        "value": v,
+        "verification_status": "verified",
+        "note": "外部事实已登记（含来源 provenance）；规划时可引用，禁止编造未验证事实",
+    })
+    .to_string()
 }
 
 /// Phase F §16/§30 · record_unresolved：标记无法验证/冲突事实点（Level 0 无 DB 写，
@@ -437,6 +558,59 @@ fn record_unresolved_tool(ctx: &mut AgentToolCtx<'_>, args: &J) -> String {
 /// （parse → permission → validator → compiler → ONE ChangeSet →
 /// Level 1 自动 Apply / Level 2 confirmation_required / Level 3 拒绝 → read-back verify）。
 fn execute_higher_actions_tool(ctx: &mut AgentToolCtx<'_>, conn: &rusqlite::Connection, args: &J) -> String {
+    // DEV-AI-ARCH-001-F1.1 §2/§4 · Execution Authorization Mutation Gate
+    //（Fail Closed）：仅 REQUESTED 允许正式 mutation。
+    // - DECLINED → execution_not_requested
+    // - UNKNOWN  → execution_authorization_unknown（UNKNOWN 绝不等于授权）
+    // - INVALID  → execution_authorization_invalid
+    // 三者均 0 ChangeSet、0 business mutation。
+    use super::workflow::ExecutionAuthorization as Ea;
+    match ctx.execution_authorization {
+        Ea::Requested => {}
+        Ea::Declined => {
+            return json!({
+                "status": "execution_not_requested",
+                "message": "本次请求用户未明确要求写入 Higher（分析/建议型）。请只提供分析结论，不要调用写工具；如用户随后明确要求执行，再使用 execute_higher_actions。",
+                "formal_mutations": 0,
+            })
+            .to_string();
+        }
+        Ea::Unknown => {
+            return json!({
+                "status": "execution_authorization_unknown",
+                "message": "无法确认用户是否明确要求写入 Higher（execution_requested 未判定）。请先向用户确认是否要真正写入；用户明确要求执行后再调用 execute_higher_actions。",
+                "formal_mutations": 0,
+            })
+            .to_string();
+        }
+        Ea::Invalid => {
+            return json!({
+                "status": "execution_authorization_invalid",
+                "message": "执行授权状态非法（同时声明要求与拒绝执行）。请先向用户澄清本轮意图。",
+                "formal_mutations": 0,
+            })
+            .to_string();
+        }
+    }
+    // F1.1 §27 → F1.2.1 · §14.2 · ONE CHANGESET PER MISSION：
+    // (a) already_in_run = 本 run 已 applied / writes > 0；
+    // (b) mission_already_has_changeset = !ctx.mission_changeset_ids.is_empty()
+    //（current Mission owned CS——agent.rs 动态传入；与 CS status 无关：
+    // waiting / applied / rejected / apply_failed 均算 Mission 已有 CS）。
+    // 任一 → planning_changeset_already_exists（0 mutation）。
+    // F1.2.1 · §14.1：conversation 级 waiting CS guard **已删除**——conversation
+    // history 不得影响 current Mission（旧 Mission 的 waiting CS 由 hard switch
+    // §17.1 reject / 界面确认处理，不再阻塞新 Mission）。
+    let already_in_run = !ctx.applied_changeset_ids.is_empty() || ctx.writes_applied > 0;
+    let mission_already_has_changeset = !ctx.mission_changeset_ids.is_empty();
+    if already_in_run || mission_already_has_changeset {
+        return json!({
+            "status": "planning_changeset_already_exists",
+            "message": "当前 Mission 已经拥有正式 ChangeSet（ONE ChangeSet 原则）：同一 Mission 不允许创建第二张。若用户放弃/拒绝旧修改集并希望重新生成，请先明确开始新的 Mission（cancel_current_task new_task=true）；若修改集待确认，请引导用户在界面确认。",
+            "formal_mutations": 0,
+        })
+        .to_string();
+    }
     let title = args.get("title").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
     if title.is_empty() {
         return json!({ "status": "invalid_pack", "message": "缺少 title 参数" }).to_string();
@@ -445,6 +619,11 @@ fn execute_higher_actions_tool(ctx: &mut AgentToolCtx<'_>, conn: &rusqlite::Conn
         Some(a) => a.clone(),
         None => return json!({ "status": "invalid_pack", "message": "缺少 actions 参数（对象数组）" }).to_string(),
     };
+    // F1.2 · P0-3：Initial Planning 的**语义** Preflight（A-J：DISTINCT DATE
+    // 7~14 详细窗口 / Final / Blueprint / Year / 当前 Month / Task→Day 强关系 /
+    // 重复实体）由 higher_action 管线在编译后、ChangeSetRepository::create
+    // 之前执行（execute_higher_action_pack(initial_planning=true)）——失败 =
+    // invalid_planning_pack，0 CS 0 op 0 mutation（旧 actions 级结构检查退役）。
     let result = super::higher_action::execute_higher_action_pack(
         ctx.app,
         conn,
@@ -456,6 +635,8 @@ fn execute_higher_actions_tool(ctx: &mut AgentToolCtx<'_>, conn: &rusqlite::Conn
         ctx.user_message,
         &title,
         &actions,
+        ctx.is_initial_planning_mission,
+        ctx.formal_planning_mission,
     );
     // Agent 工作流记账：Level 1 已生效 / Level 2 待确认（writes_applied 只计真实生效）
     if let Some(cs) = result.applied_change_set {

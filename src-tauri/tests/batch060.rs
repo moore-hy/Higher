@@ -228,8 +228,16 @@ fn test_t6_no_goaltarget_legacy_not_promoted() {
     let page = PageContext { page_label: "规划".into(), knowledge_path: None, session_title: None, date: None, conversation_id: None };
     let report = build_context(&conn, p, "我的正式目标是什么", &page, "readonly", ContextPurpose::HigherData).unwrap();
     let l1 = &report.layers[0].text;
-    assert!(l1.contains("正式目标未设置"), "无 GoalTarget 必须如实说明：{l1}");
+    // ARCH-001 §37/§38（新权威，OLD/NEW/WHY）：
+    // - OLD：GoalTarget=0 时 L1 只报「正式目标未设置」（Final/树一律不可见）。
+    // - NEW：Goal Truth Roles 复合摘要——GoalTarget=0 如实报「战略目标未设置；
+    //   历史旧目标仅为候选」，同时 Final（执行树根）以正确角色可见；
+    //   legacy goal 仍不得晋升为「当前目标」。
+    // - WHY：§37 GoalTarget=战略目的地 / Final=执行树根 / Blueprint=战略路线 /
+    //   GoalTree=时间层级——四个 Truth 角色独立，GoalTarget 缺失不代表全空。
+    assert!(l1.contains("战略目标未设置"), "无 GoalTarget 必须如实说明：{l1}");
     assert!(!l1.contains("当前目标：考研2027"), "禁止 legacy 晋升为当前目标：{l1}");
+    assert!(l1.contains("考研2027"), "Final（执行树根）以正确角色可见：{l1}");
 
     let out = execute_read_tool(&conn, p, "get_current_goal", &json!({})).unwrap();
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();

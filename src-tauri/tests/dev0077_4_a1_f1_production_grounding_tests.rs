@@ -160,8 +160,25 @@ fn text_completion(body: &str) -> Completion {
     }
 }
 
+/// ARCH-001 §21：Action Pack 工具调用形态（E2E fixture）。
+fn tool_call(name: &str, arguments: J) -> Completion {
+    Completion {
+        content: None,
+        reasoning_content: None,
+        finish_reason: Some("tool_calls".into()),
+        tool_calls: Some(json!([{
+            "id": format!("call_{name}"),
+            "type": "function",
+            "function": { "name": name, "arguments": arguments.to_string() }
+        }])),
+        usage: Usage::default(),
+    }
+}
+
 /// intel 通道：goal 分析（信息齐备 + planning_required → ReadyForPlanning）。
 fn goal_json(required: J) -> Completion {
+    // F1.1 §45：用户明确要求规划写入 = REQUESTED（缺省 None = UNKNOWN =
+    // Fail Closed 拒绝写入/跳过 verify）。
     text_completion(
         &json!({
             "goal": "2026考研上岸（数学+英语+408）",
@@ -171,6 +188,7 @@ fn goal_json(required: J) -> Completion {
             "planning_required": true,
             "confidence": 0.9,
             "required_information": required,
+            "execution_requested": true,
         })
         .to_string(),
     )
@@ -509,36 +527,85 @@ fn a1f1_tc007_no_production_legacy_fallback() {
     );
 }
 
-// ==================== A1F1-TC008 · Production Planner E2E（含 §九四 Case 1） ====================
+// ==================== A1F1-TC008 · Production Planning E2E（含 §九四 Case 1） ====================
+//
+// ARCH-001 §44 冲突测试更新（OLD/NEW/WHY）：
+// - OLD_EXPECTATION：E2E 模型输出 plan_draft JSON（Dedicated Planner 协议）→
+//   compile_production_plan（grounding 强关联 learning_item_id NOT NULL）→
+//   ChangeSet → Apply。
+// - NEW_AUTHORITY（§19/§21）：规划 E2E = Global Agent 一次 Action Pack
+//  （execute_higher_actions）→ ONE ChangeSet → Apply → ReadBack；
+//   mission verify 收口。
+// - WHY_CHANGED：Dedicated Planner 协议生产退役（governance_production_call_graph
+//   已改为反向断言）；工具路径 create_task 为 knowledge_hint/learning 弱关联
+//  （强关联列 FOLLOWUP）。legacy grounding 语义保留由 TC001~TC007 直测覆盖。
 
-/// Scripted model 正确输出：learning_units + 3 atomic learning tasks。
-fn case1_plan_draft() -> J {
-    json!({
-        "type": "plan_draft",
-        "draft": {
-            "learning_units": [
-                {"ref_key":"math","name":"数学","parent_ref":""},
-                {"ref_key":"math.limit","name":"极限","parent_ref":"math"},
-                {"ref_key":"eng","name":"英语","parent_ref":""},
-                {"ref_key":"eng.vocab","name":"考研词汇","parent_ref":"eng"},
-                {"ref_key":"cs408","name":"408","parent_ref":""},
-                {"ref_key":"cs408.ds","name":"数据结构","parent_ref":"cs408"},
-                {"ref_key":"cs408.ds.list","name":"链表","parent_ref":"cs408.ds"}
-            ],
-            "tasks": [
-                {"title":"高数：极限基础训练","date":"2026-08-28","estimated_minutes":90,
-                 "task_kind":"structured","priority":"core",
-                 "grounding":{"mode":"learning","unit_refs":["math.limit"]}},
-                {"title":"英语：考研词汇 List 1-2","date":"2026-08-28","estimated_minutes":60,
-                 "task_kind":"structured","priority":"normal",
-                 "grounding":{"mode":"learning","unit_refs":["eng.vocab"]}},
-                {"title":"408：链表基础","date":"2026-08-29","estimated_minutes":75,
-                 "task_kind":"structured","priority":"normal",
-                 "grounding":{"mode":"learning","unit_refs":["cs408.ds.list"]}}
-            ],
-            "assumptions": [], "unresolved": []
-        }
+/// ARCH-001 §21 → F1.2 §3：满足 Mission Verify + 7~14 DISTINCT DATE 详细窗口
+/// 的 Action Pack（LOCAL_DATE=2026-08-27；窗口 08-28..09-10，跨月需 9 月 Month）。
+fn case1_planning_pack() -> Completion {
+    // F1.2 · P0-2：7~14 distinct dates（旧 3 天 fixture 在新权威下 invalid）
+    let days = [
+        "2026-08-28", "2026-08-29", "2026-08-30", "2026-08-31",
+        "2026-09-01", "2026-09-02", "2026-09-03",
+    ];
+    let day_goals: Vec<J> = days
+        .iter()
+        .map(|d| {
+            json!({
+                "type": "create_goal", "level": "day",
+                "name": format!("{d} 学习日"), "period": d,
+                "parent_level": "month",
+                "parent_title": if d.starts_with("2026-08") { "2026 年 8 月" } else { "2026 年 9 月" },
+            })
+        })
+        .collect();
+    let tasks: Vec<J> = [
+        ("高数：极限基础训练", "2026-08-28", 90),
+        ("英语：考研词汇 List 1-2", "2026-08-28", 60),
+        ("408：链表基础", "2026-08-29", 75),
+        ("高数：导数应用", "2026-08-30", 90),
+        ("英语：长难句精读", "2026-08-31", 60),
+        ("408：栈与队列", "2026-09-01", 75),
+        ("周复盘与错题整理", "2026-09-02", 60),
+        ("高数：积分基础", "2026-09-03", 90),
+    ]
+    .iter()
+    .map(|(t, d, m)| {
+        json!({
+            "type": "create_task", "title": t,
+            "date": { "kind": "absolute_date", "date": d },
+            "estimated_minutes": m,
+            "goal_hint": format!("{d} 学习日"),
+        })
     })
+    .collect();
+    let mut actions: Vec<J> = vec![
+        json!({ "type": "set_final_goal_brief", "title": "2026考研上岸", "outcome": "2026 考研上岸（数学+英语+408）" }),
+        json!({
+            "type": "set_planning_blueprint", "title": "考研全程蓝图",
+            "scenario_type": "postgraduate",
+            "phases": [
+                { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01",
+                  "end_date": "2026-11-30", "objective_md": "基础一轮" }
+            ],
+            "milestones": [
+                { "milestone_key": "M1", "title": "基础完成", "start_date": "2026-11-01",
+                  "end_date": "2026-11-30" }
+            ]
+        }),
+        json!({ "type": "create_goal", "level": "year", "name": "2026 备考年", "period": "2026" }),
+        json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
+                "parent_level": "year", "parent_title": "2026 备考年" }),
+        // 跨月窗口：9 月 Day Goals 的父 Month Goal
+        json!({ "type": "create_goal", "level": "month", "name": "2026 年 9 月", "period": "2026-09",
+                "parent_level": "year", "parent_title": "2026 备考年" }),
+    ];
+    actions.extend(day_goals);
+    actions.extend(tasks);
+    tool_call("execute_higher_actions", json!({
+        "title": "AI 规划 · 2026 考研 14 天计划",
+        "actions": actions
+    }))
 }
 
 #[test]
@@ -551,13 +618,13 @@ fn a1f1_tc008_planner_e2e_grounded_no_direct_executor() {
     let out = run_turn(
         &state, &vault, "f1-tc008", pid, cid, E2E_MSG,
         vec![goal_json(json!([]))],
-        vec![text_completion(&case1_plan_draft().to_string())],
+        vec![case1_planning_pack(), text_completion("已完成 14 天学习计划并写入 Higher。")],
     )
     .unwrap();
     assert_eq!(out, "completed", "TC008: E2E 正常收口");
 
     let conn = state.0.lock().unwrap();
-    // ChangeSet created（ONE）且 Explicit → Level1 已 Apply（§九七/§九八）
+    // ONE ChangeSet（§21）→ Explicit → Level1 已 Apply（§九七/§九八）
     let cs: (i64, String) = conn
         .query_row(
             "SELECT id, status FROM ai_change_sets WHERE profile_id=?1",
@@ -570,7 +637,8 @@ fn a1f1_tc008_planner_e2e_grounded_no_direct_executor() {
         .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
         .unwrap();
     assert_eq!(n_cs, 1, "TC008: ONE ChangeSet");
-    // §九四：所有 Learning Task learning_item_id NOT NULL
+    // §九四（新语义）：3 项学习任务落库（ARCH-001 §21 工具路径弱关联——
+    // learning 强关联随 PlanDraft 协议退役，列 FOLLOWUP；Mission verify 监控）
     let rows: Vec<(String, Option<i64>)> = conn
         .prepare("SELECT title, learning_item_id FROM tasks WHERE profile_id=?1 ORDER BY id")
         .unwrap()
@@ -578,18 +646,7 @@ fn a1f1_tc008_planner_e2e_grounded_no_direct_executor() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(rows.len(), 3, "TC008: 3 atomic tasks");
-    for (title, item) in &rows {
-        let id = item.expect("TC008: 学习任务必须 NOT NULL");
-        let n: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM learning_items WHERE id=?1 AND profile_id=?2",
-                params![id, pid],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(n, 1, "TC008: {title} 的 item 存在且 Profile 正确");
-    }
+    assert_eq!(rows.len(), 8, "TC008: 8 tasks（F1.2 7 天窗口 + 双任务日）");
     // §九十九 ReadBack
     let written = ChangeSetRepository::new(&conn).list_operations(cs.0, pid).unwrap();
     let (ok, fail) = verify_written_ops(&conn, pid, &written);
@@ -597,7 +654,7 @@ fn a1f1_tc008_planner_e2e_grounded_no_direct_executor() {
     // Direct Executor test spy：0 calls（无任何未审计 task create）
     assert_eq!(unaudited_task_creates(&conn, pid), 0, "TC008: direct executor 0 调用痕迹");
     let reply = last_assistant(&conn, cid, pid);
-    assert!(reply.contains("已应用"), "TC008: F1 交付文案（{reply}）");
+    assert!(reply.contains("本次实际创建"), "TC008: §33 ReadBack 交付文案（{reply}）");
 }
 
 // ==================== A1F1-TC009 · execute_action Legacy Still Testable ====================
@@ -724,7 +781,18 @@ fn a1f1_tc012_session_snapshot_immutable() {
     assert_eq!(snap, Some(item_a), "TC012: 历史 Session 快照不变");
 }
 
-// ==================== E2E Case 2 · 第一次复合任务 → Repair → 3 atomic（§九五） ====================
+// ==================== E2E Case 2 · 第一次输出无效 → Mission feedback → Action Pack（§九五） ====================
+//
+// ARCH-001 §44 冲突测试更新（OLD/NEW/WHY）：
+// - OLD_EXPECTATION：模型第一次输出复合任务 plan_draft → grounding Repair
+//   （intel 通道二次调用）→ 修复后 ONE ChangeSet。
+// - NEW_AUTHORITY（§19/§31/§32）：Dedicated Planner Repair 循环退役
+//  （legacy 语义由 TC005 直测保留）；production 的「第一版无效 → 修正」
+//   由 Mission Completeness Gate 承担——第一版（旧协议 JSON 文本，不构成
+//   交付）→ verify fail → Backend feedback → 模型改用 execute_higher_actions
+//   Action Pack → ONE ChangeSet → Apply。
+// - WHY_CHANGED：planning mission 的交付判据从「plan_draft 可编译」改为
+//   「verify_planning_mission 对 SQLite 真实状态的确定性验证」。
 
 #[test]
 fn e2e_case2_grounding_repair_applies_once() {
@@ -733,7 +801,8 @@ fn e2e_case2_grounding_repair_applies_once() {
         let conn = state.0.lock().unwrap();
         seed_e2e(&conn, "F1C2")
     };
-    // 模型第一次：故意输出一条「高数+英语+408」（legacy 形态：无 units 无 grounding）
+    // 模型第一次：旧 Dedicated Planner 协议形态（plan_draft JSON 文本）——
+    // 新生产链中这是普通 FinalAnswer，不构成任何写入（协议已退役）。
     let first = json!({
         "type": "plan_draft",
         "draft": {
@@ -744,39 +813,21 @@ fn e2e_case2_grounding_repair_applies_once() {
             "assumptions": [], "unresolved": []
         }
     });
-    // Repair 响应：拆成 3 atomic（learning_units + 逐条 grounding）
-    let repaired = json!({
-        "learning_units": [
-            {"ref_key":"math","name":"数学","parent_ref":""},
-            {"ref_key":"math.limit","name":"极限","parent_ref":"math"},
-            {"ref_key":"eng","name":"英语","parent_ref":""},
-            {"ref_key":"eng.vocab","name":"考研词汇","parent_ref":"eng"},
-            {"ref_key":"cs408","name":"408","parent_ref":""},
-            {"ref_key":"cs408.ds","name":"数据结构","parent_ref":"cs408"},
-            {"ref_key":"cs408.ds.list","name":"链表","parent_ref":"cs408.ds"}
-        ],
-        "tasks": [
-            {"title":"高数：极限基础训练","date":"2026-08-28","estimated_minutes":90,
-             "grounding":{"mode":"learning","unit_refs":["math.limit"]}},
-            {"title":"英语：考研词汇 List 1-2","date":"2026-08-28","estimated_minutes":60,
-             "grounding":{"mode":"learning","unit_refs":["eng.vocab"]}},
-            {"title":"408：链表基础","date":"2026-08-29","estimated_minutes":75,
-             "grounding":{"mode":"learning","unit_refs":["cs408.ds.list"]}}
-        ],
-        "assumptions": [], "unresolved": []
-    });
-    // 注意：Repair 调用为非工具 chat → ScriptedIntel 路由 intel 队列
-    //（harness 契约：tools=None = intel 通道），故修复响应脚本化在 intel 第二位。
+    // Mission feedback 后模型改走 Action Pack（3 项原子任务，§21 新链路）
     let out = run_turn(
         &state, &vault, "f1-case2", pid, cid, E2E_MSG,
-        vec![goal_json(json!([])), text_completion(&repaired.to_string())],
-        vec![text_completion(&first.to_string())],
+        vec![goal_json(json!([]))],
+        vec![
+            text_completion(&first.to_string()),
+            case1_planning_pack(),
+            text_completion("已完成 14 天学习计划并写入 Higher。"),
+        ],
     )
     .unwrap();
-    assert_eq!(out, "completed", "Case2: Repair 后正常收口");
+    assert_eq!(out, "completed", "Case2: feedback 修正后正常收口");
 
     let conn = state.0.lock().unwrap();
-    // 第一版不能 Apply：库里不存在复合任务
+    // 第一版不能生效：库里不存在复合任务（旧协议文本 0 mutation）
     let mixed: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title LIKE '%复合训练%'",
@@ -784,32 +835,32 @@ fn e2e_case2_grounding_repair_applies_once() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(mixed, 0, "Case2: 第一版（复合任务）未 Apply");
-    // Repair 后：3 atomic tasks 全部 grounded；ONE ChangeSet
+    assert_eq!(mixed, 0, "Case2: 第一版（旧协议文本）未生效");
+    // 修正后：ONE ChangeSet applied；3 项原子任务
     let n_cs: i64 = conn
         .query_row("SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
         .unwrap();
-    assert_eq!(n_cs, 1, "Case2: ONE ChangeSet（Repair 不另开包）");
+    assert_eq!(n_cs, 1, "Case2: ONE ChangeSet（feedback 修正不另开包）");
     let status: String = conn
         .query_row("SELECT status FROM ai_change_sets WHERE profile_id=?1", params![pid], |r| r.get(0))
         .unwrap();
     assert_eq!(status, "applied", "Case2: Explicit → Auto Apply");
-    let ungrounded: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND learning_item_id IS NULL",
-            params![pid],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(ungrounded, 0, "Case2: 3/3 grounded（无 NULL 学习任务）");
     let n_tasks: i64 = conn
         .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1", params![pid], |r| r.get(0))
         .unwrap();
-    assert_eq!(n_tasks, 3, "Case2: 3 atomic tasks");
+    assert_eq!(n_tasks, 8, "Case2: 8 atomic tasks（F1.2 7 天窗口 pack）");
     assert_eq!(unaudited_task_creates(&conn, pid), 0, "Case2: direct executor 0 调用痕迹");
 }
 
-// ==================== E2E Case 3 · 两次都不给 grounding → Run failed（§九六） ====================
+// ==================== E2E Case 3 · 持续不交付 → Run failed 0 mutation（§九六） ====================
+//
+// ARCH-001 §44 冲突测试更新（OLD/NEW/WHY）：
+// - OLD_EXPECTATION：两次 plan_draft 均 ungrounded → compile Err →
+//   「未通过学习关联校验」失败文案。
+// - NEW_AUTHORITY（§31/§32）：交付判据 = verify_planning_mission；持续无写入
+//   → Mission feedback ×2 后 run failed（planning_mission_incomplete），
+//   0 mutation，用户看到缺什么（禁 generic completed）。
+// - WHY_CHANGED：同 Case2——判据从「plan_draft 可编译」改为 SQLite 真实状态。
 
 #[test]
 fn e2e_case3_persistent_ungrounded_zero_mutation() {
@@ -818,7 +869,7 @@ fn e2e_case3_persistent_ungrounded_zero_mutation() {
         let conn = state.0.lock().unwrap();
         seed_e2e(&conn, "F1C3")
     };
-    // 第一次：无 grounding
+    // 模型持续输出旧协议 plan_draft 文本（feedback 后仍不改走工具）→ 0 交付
     let first = json!({
         "type": "plan_draft",
         "draft": {
@@ -829,22 +880,17 @@ fn e2e_case3_persistent_ungrounded_zero_mutation() {
             "assumptions": [], "unresolved": []
         }
     });
-    // Repair 也拒绝补 grounding（原样返回无关联版本）
-    let bad_repair = json!({
-        "tasks": [
-            {"title":"高数+英语+408 复合训练","date":"2026-08-28","estimated_minutes":240,
-             "task_kind":"structured","priority":"core"}
-        ],
-        "assumptions": [], "unresolved": []
-    });
-    // Repair 同样经 intel 通道（tools=None）→ bad_repair 脚本化在 intel 第二位
     let out = run_turn(
         &state, &vault, "f1-case3", pid, cid, E2E_MSG,
-        vec![goal_json(json!([])), text_completion(&bad_repair.to_string())],
-        vec![text_completion(&first.to_string())],
+        vec![goal_json(json!([]))],
+        vec![
+            text_completion(&first.to_string()),
+            text_completion(&first.to_string()),
+            text_completion(&first.to_string()),
+        ],
     )
     .unwrap();
-    assert_eq!(out, "completed", "Case3: 以失败文案收口（run 不悬挂）");
+    assert_eq!(out, "failed", "Case3: mission 未交付 → failed（run 不悬挂）");
 
     let conn = state.0.lock().unwrap();
     // Run failed 的可观察证据：0 Planning business mutation
@@ -853,9 +899,19 @@ fn e2e_case3_persistent_ungrounded_zero_mutation() {
     assert_eq!(count(&conn, "learning_items"), 0, "Case3: LearningItem delta=0");
     let reply = last_assistant(&conn, cid, pid);
     assert!(
-        reply.contains("未通过学习关联校验") && reply.contains("正式数据未变化"),
+        reply.contains("本次规划任务未完成交付") && reply.contains("正式数据未变化"),
         "Case3: 失败如实告知（{reply}）"
     );
+    // §32 durable：run status=failed + err_code planning_mission_incomplete
+    let (status, err): (String, Option<String>) = conn
+        .query_row(
+            "SELECT status, error FROM ai_runs WHERE id='f1-case3'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "failed", "Case3: durable failed");
+    assert_eq!(err.as_deref(), Some("planning_mission_incomplete"), "Case3: err_code");
 }
 
 // ==================== P1-02 行为级 · ActionPlan 直执行链已关闭（§二八/§一一六） ====================
@@ -941,11 +997,54 @@ fn governance_production_call_graph() {
             "Governance: {name} 调用 deprecated compile_to_changeset_ops_grounded"
         );
     }
-    // §九二：所有正式 Planning entry 覆盖 production compiler
-    assert!(agent.contains("compile_production_plan("), "Governance: agent 规划入口");
-    assert!(lib.contains("compile_production_plan("), "Governance: lib 规划入口");
-    assert!(planner.contains("compile_production_plan("), "Governance: Review 复盘路径");
-    assert!(planner.contains("pub fn compile_production_plan("), "Governance: 唯一定义");
+    // ARCH-001 §A2/§19/§44（新权威治理，替代旧 §九二「production 必须
+    // compile_production_plan」断言）：
+    // - OLD_EXPECTATION：agent.rs / lib.rs 的所有正式 Planning entry 必须调用
+    //   compile_production_plan（Dedicated Planner 生产链）。
+    // - NEW_AUTHORITY：Dedicated Planner 生产链退役——agent.rs（production
+    //   Agent 主链）与 lib.rs 生产入口 ai_start_run 区域**零引用**
+    //   compile_production_plan / build_planning_instruction /
+    //   PLAN_DRAFT_INSTRUCTION / PLANNER_TURN_PROTOCOL；planner.rs 保留
+    //   唯一定义（legacy 可测，production 不可达）。
+    // - WHY_CHANGED：Global Agent = 唯一生产入口（§A1），规划由
+    //   execute_higher_actions Action Pack 完成（§21）；run_chat_turn 为
+    //   零调用者死代码（dev0077_3 治理 L866 保证），其体内残留引用不在
+    //   生产链上——lib.rs 采用「ai_start_run 函数区域」扫描而非全文件。
+    for (src, name) in [(&agent, "agent.rs")] {
+        for banned in [
+            "compile_production_plan(",
+            "build_planning_instruction(",
+            "PLAN_DRAFT_INSTRUCTION",
+            "PLANNER_TURN_PROTOCOL",
+        ] {
+            assert!(
+                !src.contains(banned),
+                "Governance: {name}（production Agent 主链）残留 Dedicated Planner 生产链引用 {banned}"
+            );
+        }
+    }
+    {
+        let lib_src = &lib;
+        let start = lib_src.find("async fn ai_start_run").expect("ai_start_run 必须存在");
+        let end = lib_src[start..]
+            .find("\nasync fn ")
+            .map(|i| start + i)
+            .unwrap_or(lib_src.len());
+        let entry = &lib_src[start..end];
+        for banned in [
+            "compile_production_plan(",
+            "build_planning_instruction(",
+            "PLAN_DRAFT_INSTRUCTION",
+            "PLANNER_TURN_PROTOCOL",
+            "run_chat_turn(",
+        ] {
+            assert!(
+                !entry.contains(banned),
+                "Governance: lib.rs 生产入口 ai_start_run 不得引用 {banned}（Global Agent 唯一入口）"
+            );
+        }
+    }
+    assert!(planner.contains("pub fn compile_production_plan("), "Governance: planner.rs legacy 定义保留（production 不可达）");
 
     // P1-03：Session 路由（task_id → start_for_task；无 → start_quick）
     assert!(

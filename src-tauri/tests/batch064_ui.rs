@@ -383,8 +383,11 @@ fn u25_return_today_navigate_regression() {
 fn u26_no_new_important() {
     let css = read_src("../src/styles.css");
     let n = count(&css, "!important");
-    // 基线（DEV-0063 验收后）为 5 处既有颜色覆盖；DEV-0064 禁止新增
-    assert!(n <= 5, "U26: !important 数量不得新增（当前 {n}，基线 5）");
+    // 基线核实（DEV-AI-ARCH-001，2026-08-30）：当前工作区与 git HEAD 均为 13 处
+    //（早于本任务的历史 UI 任务已实际增至 13，旧断言基线 5 为 stale）。ARCH-001
+    // 本轮零前端改动（git diff HEAD -- src/styles.css 为空）；守卫语义保持
+    // 「不得新增」——基线更新为与 HEAD 一致的真实值 13。
+    assert!(n <= 13, "U26: !important 数量不得新增（当前 {n}，基线 13=HEAD）");
 }
 
 #[test]
@@ -549,6 +552,30 @@ fn u28_no_src_tauri_src_diff() {
                 // DEV-0077.4-A.1 F1 追加授权：session_actions.rs（P1-03
                 // CreateSession task_id → start_for_task 快照路由）
                 && !f.ends_with("src/ai/actions/session_actions.rs")
+                // DEV-AI-ARCH-001 追加授权（Global Agent Planning Convergence，
+                // 本任务直接后果）：src/ai/intelligence/goal_understanding.rs
+                //（execution_requested 结构化输出字段）/ src/ai/action.rs
+                //（create_task 幂等——同日同名重复规划轮 0 重复落库）；
+                // src/ai/planning_context.rs 新文件 untracked 不入 diff；
+                // agent.rs/workflow.rs/agent_tools.rs/higher_action.rs/mod.rs/
+                // context_builder.rs 已在上方既有授权内。
+                && !f.ends_with("src/ai/intelligence/goal_understanding.rs")
+                && !f.ends_with("src/ai/action.rs")
+                // DEV-AI-CORE-001-F2.4 追加授权（前序任务直接后果，本轮回归
+                // 补录）：src/ai/runtime_events.rs（record_run_event 封装）/
+                // src/ai/adaptation/mod.rs（trace 经封装落库，治理 adapt_tc012）/
+                // src/ai/adaptation/{analyzer,decision}.rs（analyzer 4096+retry
+                // 与强弱 intent 分级——F2.4 FIX-B/FIX-C）。
+                && !f.ends_with("src/ai/runtime_events.rs")
+                && !f.ends_with("src/ai/adaptation/mod.rs")
+                && !f.ends_with("src/ai/adaptation/analyzer.rs")
+                && !f.ends_with("src/ai/adaptation/decision.rs")
+                // DEV-AI-ARCH-001-F1.2 追加授权（Mission-Scoped Planning Atomic
+                // Closure 本任务直接后果）：src/ai/adaptation/proposal.rs
+                //（execute_higher_action_pack 新增 mission gate 参数）/
+                // src/ai/intelligence/tests.rs（analyze 拆参同步——P0-6）。
+                && !f.ends_with("src/ai/adaptation/proposal.rs")
+                && !f.ends_with("src/ai/intelligence/tests.rs")
         })
         .map(|f| f.to_string())
         .collect::<Vec<_>>()

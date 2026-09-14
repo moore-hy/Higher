@@ -42,7 +42,7 @@ Higher 是一个帮助用户**建立个人学习系统**的本地软件：它记
 - **Goal Optional / Knowledge Optional / AI Optional**——三层均可不用，Quick Study 永远可用
 - **Archive Later**——学习先永久保存，整理稍后决定
 - **User Controlled Knowledge**——知识结构由**用户控制**：允许用户手动创建；允许 AI Assistant 提出知识结构修改方案，经 ChangeSet 展示，**用户批准后正式写入**。禁止 AI 未经批准直接改变正式知识结构。**User Controlled ≠ Manual Only**。
-- **Unified Higher AI**——无用户可见的只读/助手双模式；AI 只读取分析建议；**Direct Write Tools 永远为 0**（一切修改经 propose → ChangeSet → 用户批准）；联网与修改权限独立
+- **Unified Higher AI**——无用户可见的只读/助手双模式；AI 只读取分析建议；**AI Raw Direct Write = 0**（AI 不得绕过 HigherAction / ChangeSet——DEV-AI-ARCH-001 起唯一写入入口 = execute_higher_actions → ChangeSet 管线）；联网与修改权限独立
 - **Evidence Exists ≠ Evidence Trusted**——真实记录也可能异常（如忘记结束学习导致的超长时长）：Higher **不得静默修改**任何真实原始数据；明显异常时长（默认阈值 12h）进入**待确认**；待确认记录默认不进入可信统计、不作为 AI 可靠学习投入证据；用户确认或修正后恢复正常
 - **No Decorative Data**——不打努力分/专注分/效率分；0/0 不显示伪 0%；未评估 ≠ 0 分；证据不足不硬打分
 - **Local First / RAM-light / Disk-rich**——数据本地；尽量轻内存、完整留盘
@@ -90,7 +90,9 @@ PlanningBlueprint = 我准备怎么去（长期规划 Canonical；Phase/Mileston
 Legacy Final Goal / GoalBrief = compatibility / history（仅候选与历史证据，永不覆盖 GoalTarget，永不自动晋升）
 ```
 
-- **AI Direct Write = 0** 不变：GoalTarget/Blueprint 的一切实体化只经 PlanDraft（可含 target_proposal）→ ChangeSet → 用户批准 → Apply；未批准正式数据 0 修改。
+- **AI Raw Direct Write = 0** 不变（DEV-AI-ARCH-001 定义：AI 不得绕过 HigherAction / ChangeSet）：GoalTarget/Final/Blueprint/GoalTree/Tasks 的一切实体化只经 execute_higher_actions（AI 唯一写入工具，一次 Action Pack = ONE ChangeSet）→ 权限分级（Level 1 明确授权 Auto Apply + Audit/Undo/ReadBack；Level 2 Confirm；Level 3 Blocked）→ Apply；未授权/未批准正式数据 0 修改。
+- **写入授权 Fail Closed（DEV-AI-ARCH-001-F1.1）**：execution_requested 由结构化 mission understanding 判定（REQUESTED / DECLINED / UNKNOWN / INVALID 四态）；只有 REQUESTED 放行写入与 Mission verify——UNKNOWN/DECLINED/INVALID 一律 0 ChangeSet 0 mutation，绝不把「未判定」当「已授权」。
+- **Level 2 = 整个 ChangeSet 确认（F1.1 §22-§24）**：bulk_delete_tasks 等破坏性操作与普通业务动作同 Pack 时，整包 permission = max → ONE ChangeSet waiting_approval，**确认前所有 ops（含其中的新建）0 mutation**；用户确认后 ONE atomic Apply。禁止「先建新计划再等确认删除」的两段式。
 - **Context = background，Current User Intent First**：Higher Context（档案/目标/记忆/历史）只是背景事实，不是用户当前指令；只有最后一个用户消息是本轮请求；与背景无关的问题直接回答。
 - PersonalProfile 中的目标描述只能是 source observation（unresolved/goal_observation），不是正式 Goal。
 
@@ -148,13 +150,14 @@ Skill System（versioned SKILL.md 编译期嵌入；运行时 0 源码扫描）
 Runtime Time Truth（今天/星期/时区由 Higher 提供，模型永不自行猜测）
 Minimal Change Scope（操作实体 ⊆ 用户请求范围；禁止自动扩大）
 Knowledge Optional（创建任务不依赖也不自动创建知识）
-Direct Write = 0（一切写经 ChangeSet → 用户批准 → Apply）
+AI Raw Direct Write = 0（DEV-AI-ARCH-001：AI 不得绕过 HigherAction / ChangeSet）
 ```
 
-- **Turn Interpreter（唯一控制入口）**：每轮一次请求同时产出 route 与 typed action（FastChat / HigherRead / Action{SemanticAction} / Planning / PlannerContinuation / Clarification）；控制层（Interpreter / Repair / Selection）温度恒 0（deterministic）；动作不再二次调用模型。
-- **Typed SemanticAction（Contract v2）**：模型输出类型化意图（create_task / create_recurring_task / update_task{target,patch} / set_task_status / update_recurring_task{target,patch,reconcile_future} / bulk_update_tasks + TemporalIntent），**不输出数据库操作**；显式 patch 字段（无 flatten）；ContractFailure（模型输出不可靠）与 NothingToChange（DB 已是要求值）严格分离；Grounding 0 匹配→NotFound、2+→澄清；Domain Compiler 确定性编译 ChangeSet。
+- **Normal AI Main Runtime = Global Agent（DEV-AI-ARCH-001 唯一生产入口）**：ai_start_run → run_agent_turn；**Turn Interpreter = Legacy compatibility**（旧 run_chat_turn 死代码，零调用者）；**Dedicated Planner = Legacy compatibility**（plan_draft JSON 协议生产不可达，planner.rs 保留供 legacy 测试）。
+- **Global Agent Planning（§19-§21 新权威）**：ReadyForPlanning 不切换 Planner——注入 PLANNING MISSION CHECKLIST + PlanningContextSnapshot（只读事实快照，每轮自 SQLite 重建），由 Agent 用 execute_higher_actions 一次 Action Pack 完成规划（长期 Final+GoalTarget+Blueprint+Year；中期当前 Month；短期未来 7~14 天 Day+Tasks）；Mission Completeness Gate（verify_planning_mission）确定性验证交付，缺交付反馈 ≤2 次后 run failed（禁 generic completed）；有写入则附 §33 ReadBack 摘要（本次实际创建，自 Higher 读回验证）。
+- **Typed SemanticAction（Contract v2）**：模型输出类型化意图（create_task / create_recurring_task / update_task{target,patch} / set_task_status / update_recurring_task{target,patch,reconcile_future} / bulk_update_tasks + TemporalIntent），**不输出数据库操作**；显式 patch 字段（无 flatten）；ContractFailure（模型输出不可靠）与 NothingToChange（DB 已是要求值）严格分离（NothingToChange = 幂等跳过，0 重复数据）；Grounding 0 匹配→NotFound、2+→澄清；Domain Compiler 确定性编译 ChangeSet。
 - **Recurring Rule = 既有系统**：AI 语义层复用 recurring_task_rules（v023 起规则携带 estimated_minutes/task_kind/priority，materialization 继承）；初始任务与规则同 ChangeSet（recurring_rule_ref 前向引用）。
-- **Active Planner 收口**：明确取消与「先不规划了…」类退出语走本地 Cancel（不调 Provider）；其余续跑 vs 新意图由 Turn Interpreter 判定，旧规划 paused 而非劫持；「帮我安排明天30分钟数学」类单任务请求是 Action，不是 Planner（仅长期/阶段/多日蓝图进 Planner）。
+- **Active Workflow Ownership**：明确取消与「先不规划了…」类退出语走本地 Cancel（不调 Provider）；Active Planning 期间用户答案里的弱 adaptation 关键词不抢占原任务（F2.4 语义）；「帮我安排明天30分钟数学」类单任务请求是 Action，不是 Planning mission。
 
 ## 10c. AI Grounding（DEV-0060.2 起稳定架构）
 
@@ -175,8 +178,8 @@ LLM 提供 Semantic Reference；Higher 决定 Canonical Entity。
 ```text
 Unified Higher AI
 No user-facing readonly/assistant modes
-Approval First
-Direct Write = 0
+Approval First（Level 1 明确授权 Auto Apply / Level 2 Confirm / Level 3 Blocked）
+AI Raw Direct Write = 0（不得绕过 HigherAction / ChangeSet）
 Conversation History ≠ Control State
 Current User Intent First
 Semantic Contract v2
@@ -192,7 +195,7 @@ Task ≠ StudySession
 - **模型能力不足时必须明确 Limited / Incompatible**，不得静默降级或伪装成功。
 - **Higher 支持 Primary AI + optional Control AI**（动作理解层可独立固定）；切换模型 = 切换 Connection，不篡改其他配置；禁止隐式 Provider fallback。
 - **Conversation Prose ≠ Control State**：等待候选选择等执行中业务状态必须由 Higher 结构化持久化，禁止依赖聊天文字恢复。
-- **Direct Write 永远为 0**（多 Provider 不改变审批边界）。
+- **AI Raw Direct Write 永远为 0**（多 Provider 不改变审批边界：AI 不得绕过 HigherAction / ChangeSet）。
 - 一个 Connection = 一套确定 Provider + Model Config（V1 Adapter：DeepSeek / OpenAI Compatible；OpenAI Compatible 模型名原样发送）。
 
 ## 11. Today 与双树闭环

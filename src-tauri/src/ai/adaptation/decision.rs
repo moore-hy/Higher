@@ -135,6 +135,74 @@ pub struct AdaptationDecision {
     pub summary: String,
 }
 
+/// DEV-AI-CORE-001-F2.4 FIX-B（§六）· Adaptation Intent 强弱分级。
+/// - StrongExplicit：明确的当下祈使（帮我调整/复盘最近/重新评估/并调整…）
+/// - WeakKeyword：仅弱关键词出现（「以后再调整」「之后再复盘」「后面优化」
+///   ——通常只是答案内容的一部分，不是 Adaptation 请求）。
+/// Active workflow 中 WeakKeyword 不得抢占（agent.rs Active Workflow Guard）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdaptationIntentStrength {
+    StrongExplicit,
+    WeakKeyword,
+}
+
+impl AdaptationIntentStrength {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AdaptationIntentStrength::StrongExplicit => "strong_explicit",
+            AdaptationIntentStrength::WeakKeyword => "weak_keyword",
+        }
+    }
+}
+
+/// F2.4 §六：STRONG 判定——显式动作短语（当下祈使 + 复盘/调整宾语）。
+fn is_strong_adaptation_intent(m: &str) -> bool {
+    // 现有 explicit_apply 词组（§二十二 A）全部视为 STRONG
+    let explicit_apply = m.contains("帮我调整") || m.contains("调整一下") || m.contains("调整并")
+        || m.contains("改合理") || m.contains("更新我的计划") || m.contains("写进去")
+        || m.contains("改一下计划") || m.contains("调整计划") || m.contains("调整后续计划")
+        || m.contains("调整规划") || m.contains("计划调") || m.contains("把计划改");
+    // 复盘/回顾/重新评估 + 近期范围/祈使修饰（「复盘一下最近」「复盘最近一周」…）
+    let review_imperative = (m.contains("复盘") || m.contains("回顾") || m.contains("重新评估"))
+        && (m.contains("一下") || m.contains("最近") || m.contains("一周")
+            || m.contains("我的") || m.contains("并调整") || m.contains("根据最近"));
+    // 将来限定弱形（「以后再调整」「之后再复盘」「后面优化」）显式排除出 STRONG
+    let future_deferred = (m.contains("以后再") || m.contains("之后再") || m.contains("后面再")
+        || m.contains("稍后再") || m.contains("以后再优化") || m.contains("后面优化"))
+        && !explicit_apply;
+    (explicit_apply || review_imperative) && !future_deferred
+}
+
+/// F2.4 §五：用户显式中断当前 workflow（最小明确规则）。
+/// 只有「先暂停/停止当前/切换任务/先帮我复盘」级明确 interrupt 才允许
+/// active workflow → adaptation 切换；禁止单个弱关键词抢占。
+pub fn is_explicit_workflow_interrupt(user_message: &str) -> bool {
+    let m = user_message.trim();
+    if m.is_empty() {
+        return false;
+    }
+    [
+        "先暂停", "暂停刚才", "暂停规划", "暂停计划", "暂停当前",
+        "停止当前", "停止规划", "停止刚才", "先不继续", "切换任务",
+        "先帮我复盘", "先复盘",
+    ]
+    .iter()
+    .any(|p| m.contains(p))
+}
+
+/// F2.4 FIX-B：带强度分级的入口路由（detect_adaptation_intent 的分级版）。
+pub fn detect_adaptation_intent_with_strength(
+    user_message: &str,
+) -> Option<(AdaptationEntry, AdaptationIntentStrength)> {
+    let entry = detect_adaptation_intent(user_message)?;
+    let strength = if is_strong_adaptation_intent(user_message.trim()) {
+        AdaptationIntentStrength::StrongExplicit
+    } else {
+        AdaptationIntentStrength::WeakKeyword
+    };
+    Some((entry, strength))
+}
+
 /// §二十四入口路由：判定用户消息是否进入 Adaptation Workflow。
 /// 仅识别「复盘/执行情况」语境与「明确要求调整」意图（路由，非判断）；
 /// 与 detect_write_intent 同族的确定性文本检测，无模型参与。
