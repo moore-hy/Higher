@@ -85,67 +85,6 @@ fn tool_call(name: &str, arguments: serde_json::Value) -> Completion {
     }
 }
 
-/// ARCH-001 §21 → F1.2 §3：满足 Mission Verify + 7~14 DISTINCT DATE 详细窗口
-/// 的 Action Pack（LOCAL_DATE=2026-08-24；窗口 08-25..09-07）。
-fn planning_pack_tool_call() -> Completion {
-    // F1.2 · P0-2：7~14 distinct dates（旧 3 天 fixture 在新权威下 invalid）
-    let days = [
-        "2026-08-25", "2026-08-26", "2026-08-27", "2026-08-28",
-        "2026-08-29", "2026-08-30", "2026-08-31",
-    ];
-    let day_goals: Vec<serde_json::Value> = days
-        .iter()
-        .map(|d| {
-            json!({
-                "type": "create_goal", "level": "day",
-                "name": format!("{d} 学习日"), "period": d,
-                "parent_level": "month", "parent_title": "2026 年 8 月",
-            })
-        })
-        .collect();
-    let tasks: Vec<serde_json::Value> = [
-        ("数学：高等数学基础题 15题", "2026-08-25", 60),
-        ("英语：词汇复习 30min", "2026-08-25", 30),
-        ("数学：线代基础题 10题", "2026-08-26", 60),
-        ("英语：阅读精读 1 篇", "2026-08-27", 45),
-        ("408：数据结构基础", "2026-08-28", 75),
-        ("数学：概率论入门", "2026-08-29", 60),
-        ("周复盘与错题整理", "2026-08-30", 60),
-        ("英语：写作句型积累", "2026-08-31", 45),
-    ]
-    .iter()
-    .map(|(t, d, m)| {
-        json!({
-            "type": "create_task", "title": t,
-            "date": { "kind": "absolute_date", "date": d },
-            "estimated_minutes": m,
-            "goal_hint": format!("{d} 学习日"),
-        })
-    })
-    .collect();
-    let mut actions: Vec<serde_json::Value> = vec![
-        json!({ "type": "set_final_goal_brief", "outcome": "2028 考研上岸：基础-强化-冲刺三阶段", "deadline": "2028" }),
-        json!({
-            "type": "set_planning_blueprint", "title": "2028考研复习蓝图", "scenario_type": "postgraduate",
-            "phases": [
-                { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01", "end_date": "2027-06-30", "objective_md": "过一轮基础" }
-            ],
-            "milestones": [
-                { "milestone_key": "M1", "title": "基础完成", "phase_key": "P1", "start_date": "2027-06-01", "end_date": "2027-06-30" }
-            ]
-        }),
-        json!({ "type": "create_goal", "level": "year", "name": "2026 备考年", "period": "2026" }),
-        json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
-                "parent_level": "year", "parent_title": "2026 备考年" }),
-    ];
-    actions.extend(day_goals);
-    actions.extend(tasks);
-    tool_call("execute_higher_actions", json!({
-        "title": "AI 规划 · 2028 考研初始规划",
-        "actions": actions
-    }))
-}
-
 fn mk_fixture(conn: &Connection, user_message: &str) -> (i64, i64, i64) {
     let profile_id = StudyProfileRepository::new(conn)
         .create("PG73", None, None, None, None, None)
@@ -305,37 +244,65 @@ fn test2_complete_information_auto_plans() {
     );
     assert_eq!(out1.unwrap(), "needs_user_input");
 
-    // 轮2：用户补充完整资料 → gate Complete → ReadyForPlanning → mission 注入
-    //（ARCH-001 §21：main = execute_higher_actions Action Pack → ONE ChangeSet
-    // → Auto Apply → Mission verify + ReadBack；旧 plan_draft JSON 协议退役）
+    // 轮2：用户补充完整资料 → gate Complete → ReadyForPlanning → planner 注入
+    //（main 第一响应 = plan_draft）→ 确定性 compile → ChangeSet
     let supplement = "24岁，本科毕业，计算机专业，每天2小时，英语数学408基础弱";
     let msg2 = ConversationRepository::new(&state.0.lock().unwrap())
         .add_message(conv, profile_id, "user", supplement, None)
         .unwrap();
+    let plan_draft = json!({
+        "type": "plan_draft",
+        "draft": {
+            // DEV-0077.4-A.1 F1：模型输出契约升级（P1-P5）——fixture 同步（断言不变）。
+            "learning_units": [
+                {"ref_key":"math","name":"数学","parent_ref":""},
+                {"ref_key":"eng","name":"英语","parent_ref":""}
+            ],
+            "blueprint": {
+                "title": "2028考研复习蓝图",
+                "summary": "基础-强化-冲刺三阶段",
+                "scenario_type": "postgraduate",
+                "review_interval_days": 14,
+                "phases": [
+                    { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01",
+                      "end_date": "2027-06-30", "objective_md": "过一轮基础", "sort_order": 1 }
+                ],
+                "milestones": [],
+                "future_tasks": [
+                    { "title": "数学：高等数学基础题 15题", "planned_date": "2026-08-25", "estimated_minutes": 60,
+                      "grounding": {"mode": "learning", "unit_refs": ["math"]} },
+                    { "title": "英语：词汇复习 30min", "planned_date": "2026-08-25", "estimated_minutes": 30,
+                      "grounding": {"mode": "learning", "unit_refs": ["eng"]} }
+                ],
+                "assumptions": ["每天可学习2小时"],
+                "unresolved": [],
+                "external_facts": [],
+                "source_review": [],
+                "suggested_target_changes": []
+            }
+        }
+    });
     let (out2, cap2) = run_turn_capture(
         &state, &vault, "g73-t2-r2", profile_id, conv, msg2.id, supplement,
         vec![text_completion(
-            r#"{"goal":"2028考研","goal_type":"education","deadline":"2028","priority":"high","planning_required":true,"execution_requested":true,"confidence":0.95,"required_information":[]}"#,
+            r#"{"goal":"2028考研","goal_type":"education","deadline":"2028","priority":"high","planning_required":true,"confidence":0.95,"required_information":[]}"#,
         )],
-        vec![
-            planning_pack_tool_call(),
-            text_completion("已按你的资料完成 2028 考研初始规划并写入 Higher。"),
-        ],
+        vec![text_completion(&plan_draft.to_string())],
     );
     assert_eq!(out2.unwrap(), "completed", "信息齐备自动规划后正常收口");
 
-    // 决策链验证：ReadyForPlanning 已触发（system 注入 planning mission 指令）
+    // 决策链验证：ReadyForPlanning 已触发（system 注入 Planner 指令）
     {
         let calls = cap2.lock().unwrap();
         let has_planner_instruction = calls
             .iter()
             .flat_map(|c| c.iter())
             .any(|m| m.role == "system" && m.content.contains("进入正式规划"));
-        assert!(has_planner_instruction, "ReadyForPlanning 轮必须注入 planning mission 指令");
+        assert!(has_planner_instruction, "ReadyForPlanning 轮必须注入 Dedicated Planner 指令");
     }
 
     let conn = state.0.lock().unwrap();
-    // ARCH-001 §16：用户明确要求规划（Level 1）→ Auto Apply
+    // ChangeSet 已创建（waiting_approval，批准前 0 落库）
     let cs: (i64, String) = conn
         .query_row(
             "SELECT id, status FROM ai_change_sets WHERE run_id='g73-t2-r2'",
@@ -343,18 +310,20 @@ fn test2_complete_information_auto_plans() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("Test2：必须生成计划 ChangeSet");
-    assert_eq!(cs.1, "applied", "Level1 明确授权 → Auto Apply + ReadBack");
+    assert_eq!(cs.1, "waiting_approval", "提案等待用户审查（批准前 0 落库）");
 
-    // 回复形态（§33 新交付文案）：基于真实读回；停止询问
+    // 回复形态（任务书最终验收）：目标理解 + 下一步 + 提案提示；停止询问
     let reply = last_assistant_text(&conn, conv, profile_id);
-    assert!(reply.contains("2028"), "回复含目标：{reply}");
-    assert!(reply.contains("本次实际创建"), "§33 ReadBack 交付：{reply}");
+    assert!(reply.contains("你的目标理解如下"), "回复形态：{reply}");
+    assert!(reply.contains("2028考研"), "回复含目标：{reply}");
+    assert!(reply.contains("下一步：制定年度/月/日计划"), "回复含下一步：{reply}");
+    assert!(reply.contains("已生成学习计划提案"), "回复含提案提示：{reply}");
     assert!(!reply.contains("还需要你确认"), "信息齐备必须停止询问");
 
-    // workflow：mission 交付完成（F1.1 §31/§35：成功终态 = completed 三处；
-    // §44 恢复严格断言——不得放宽为 ready_for_planning/planning 集合）
+    // workflow：规划提案已交付（ChangeSet 待审）→ run completed；
+    // intel_ready 保持 ready_for_planning 收口（F21-03：信息完整 + 提案待审）
     let (state_str, payload) = read_workflow(&conn, profile_id, conv);
-    assert_eq!(state_str, "completed", "planning mission 成功收口 = completed");
+    assert_eq!(state_str, "ready_for_planning");
     assert!(payload.pending_questions.is_empty(), "停止询问：pending 清空");
 }
 
@@ -387,12 +356,7 @@ fn test3_template_context_enters_decision_context() {
     let (out, cap) = run_turn_capture(
         &state, &vault, "g73-t3-run", profile_id, conv, msg, "帮我规划复习",
         vec![text_completion(r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#)],
-        //（ARCH-001 §21：planning mission 用 Action Pack 交付——旧 handoff_chat
-        // JSON 文本不再被解析，Mission verify 会追加反馈轮）
-        vec![
-            planning_pack_tool_call(),
-            text_completion("已按你的档案完成 2028 考研规划并写入 Higher。"),
-        ],
+        vec![text_completion(r#"{"type":"handoff_chat","message":"已了解你的情况，我们可以开始规划。"}"#)],
     );
     assert_eq!(out.unwrap(), "completed");
 
@@ -450,12 +414,10 @@ fn test4_chitchat_never_enters_planning() {
     assert!(reply.contains("2"), "直接回答：{reply}");
 }
 
-// =============== 单元层补充：mission 澄清分歧兜底 ===============
+// =============== 单元层补充：planner clarification 分歧兜底 ===============
 
-/// gate 判 Complete 但 Agent 仍要澄清 → request_user_input 工具问询
+/// gate 判 Complete 但 Planner 二轮仍要澄清 → 转 Agent 信息收集
 ///（questions 原子替换 + waiting_user），不静默丢问题。
-/// ARCH-001 §44 更新：旧 planner clarification JSON 文本协议退役——
-/// 澄清的合规模型通道 = request_user_input 工具调用（ARCH001-TC06 同语义）。
 #[test]
 fn planner_clarification_divergence_falls_back_to_collecting() {
     let (state, vault) = setup("t5");
@@ -466,10 +428,7 @@ fn planner_clarification_divergence_falls_back_to_collecting() {
     let (out, _cap) = run_turn_capture(
         &state, &vault, "g73-t5-run", profile_id, conv, msg, "帮我规划考研复习",
         vec![text_completion(r#"{"goal":"2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#)],
-        vec![tool_call("request_user_input", json!({
-            "reason": "定校影响整体路线",
-            "questions": [{ "key": "target_school", "question": "你的目标院校是哪所？", "why_needed": "定校" }]
-        }))],
+        vec![text_completion(r#"{"type":"clarification","questions":[{"key":"target_school","question":"你的目标院校是哪所？"}]}"#)],
     );
     assert_eq!(out.unwrap(), "needs_user_input");
     let conn = state.0.lock().unwrap();

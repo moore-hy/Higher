@@ -169,8 +169,6 @@ fn seed_personal_profile(conn: &Connection, pid: i64) {
 }
 
 /// goal 分析 intel JSON（required_information 驱动 gate）。
-/// F1.1 §45：用户请求「生成考研计划」= REQUESTED（缺省 None = UNKNOWN =
-/// Fail Closed 拒绝写入）。
 fn goal_json(required: serde_json::Value) -> Completion {
     text_completion(&json!({
         "goal": "2028考研上岸华中科技大学408",
@@ -180,73 +178,7 @@ fn goal_json(required: serde_json::Value) -> Completion {
         "planning_required": true,
         "confidence": 0.9,
         "required_information": required,
-        "execution_requested": true,
     }).to_string())
-}
-
-/// ARCH-001 §21 → F1.2 §3：满足 Mission Verify + 7~14 DISTINCT DATE 详细窗口
-/// 的 Action Pack（LOCAL_DATE=2026-08-24；窗口 08-25..09-07）。
-fn planning_pack_tool_call() -> Completion {
-    // F1.2 · P0-2：7~14 distinct dates（旧 3 天 fixture 在新权威下 invalid）
-    let days = [
-        "2026-08-25", "2026-08-26", "2026-08-27", "2026-08-28",
-        "2026-08-29", "2026-08-30", "2026-08-31",
-    ];
-    let day_goals: Vec<serde_json::Value> = days
-        .iter()
-        .map(|d| {
-            json!({
-                "type": "create_goal", "level": "day",
-                "name": format!("{d} 学习日"), "period": d,
-                "parent_level": "month", "parent_title": "2026 年 8 月",
-            })
-        })
-        .collect();
-    let tasks: Vec<serde_json::Value> = [
-        ("摸底自测：数学+英语+408 各一套", "2026-08-25", 90),
-        ("高数：函数与极限基础模块", "2026-08-26", 120),
-        ("408：数据结构导学", "2026-08-27", 90),
-        ("英语：阅读基础训练", "2026-08-28", 90),
-        ("高数：微分中值定理", "2026-08-29", 120),
-        ("408：操作系统导学", "2026-08-30", 90),
-        ("周复盘与错题整理", "2026-08-31", 60),
-    ]
-    .iter()
-    .map(|(t, d, m)| {
-        json!({
-            "type": "create_task", "title": t,
-            "date": { "kind": "absolute_date", "date": d },
-            "estimated_minutes": m,
-            "goal_hint": format!("{d} 学习日"),
-        })
-    })
-    .collect();
-    let mut actions: Vec<serde_json::Value> = vec![
-        json!({ "type": "set_final_goal_brief", "title": "2028考研上岸华中科技大学（408统考方向）",
-                "outcome": "成功考取华中科技大学计算机科学与技术学院（408统考）研究生", "deadline": "2028-12",
-                "success_criteria": ["初试总分达到华科计算机复试线", "成功录取/上岸目标院校"] }),
-        json!({
-            "type": "set_planning_blueprint", "title": "2028考研 408 全程复习蓝图",
-            "scenario_type": "postgraduate",
-            "phases": [
-                { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01",
-                  "end_date": "2027-06-30", "objective_md": "数学英语408基础一轮" }
-            ],
-            "milestones": [
-                { "milestone_key": "M1", "title": "基础一轮完成", "phase_key": "P1",
-                  "start_date": "2027-06-01", "end_date": "2027-06-30" }
-            ]
-        }),
-        json!({ "type": "create_goal", "level": "year", "name": "2026-2027：基础与强化年", "period": "2026" }),
-        json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
-                "parent_level": "year", "parent_title": "2026-2027：基础与强化年" }),
-    ];
-    actions.extend(day_goals);
-    actions.extend(tasks);
-    tool_call("execute_higher_actions", json!({
-        "title": "AI 规划 · 2028 考研 408 初始规划",
-        "actions": actions
-    }))
 }
 
 fn pending_count(conn: &Connection, pid: i64, cid: i64) -> usize {
@@ -306,33 +238,75 @@ fn e2e_three_turns() -> (DbState, VaultState, i64, i64, i64) {
     assert_eq!(out1, "needs_user_input", "RW-TC002：NeedUserInput 正常产生");
 
     // ---- Turn 2：side question「每日计划呢」→ 模型纯文本回答（无工具）----
-    //（ARCH-001 §44：side 轮 intel 必须如实仍报 4 项缺失——用户未回答任何一问，
-    // decision=AskUser → 不进 planning mission；旧 required=[] 会误触发
-    // ReadyForPlanning + Mission verify feedback 耗尽脚本）
     let out2 = run_turn(
         &state, &vault, "rw-t2", pid, cid,
         "每日计划呢",
-        vec![goal_json(json!([
-            {"key":"exam_year","description":"考研年份","why_needed":"时间线","source_kind":"user"},
-            {"key":"current_level","description":"基础","why_needed":"起点","source_kind":"user"},
-            {"key":"daily_time","description":"时长","why_needed":"强度","source_kind":"user"},
-            {"key":"target_school","description":"院校","why_needed":"科目","source_kind":"user"}
-        ]))],
+        vec![goal_json(json!([]))], // side 轮 goal 分析不完整无妨（无 required 也不触发 planning）
         vec![text_completion("会生成每日计划。等这几项关键信息确认后，我会直接生成近期任务安排。")],
     )
     .unwrap();
     assert_eq!(out2, "needs_user_input", "RW-TC003：side question 后仍 waiting_user");
 
-    // ---- Turn 3：完整回答 → ReadyForPlanning → Action Pack（§21 新链路）----
-    //（ARCH-001：旧 plan_draft JSON 协议退役；Mission verify + ReadBack 收口）
+    // ---- Turn 3：完整回答 → ReadyForPlanning → plan_draft（完整 Draft）----
+    let plan_draft = json!({
+        "type": "plan_draft",
+        "draft": {
+            "final_goal_adjustment": {
+                "title": "2028考研上岸华中科技大学（408统考方向）",
+                "outcome": "成功考取华中科技大学计算机科学与技术学院（408统考）研究生",
+                "deadline": "2028-12",
+                "deadline_precision": "month",
+                "success_criteria": ["初试总分达到华科计算机复试线", "成功录取/上岸目标院校"]
+            },
+            // DEV-0077.4-A.1 F1：模型输出契约升级（PLAN_DRAFT_INSTRUCTION P1-P5）
+            // ——future_tasks 必须逐条 grounding；fixture 同步（断言不变）。
+            "learning_units": [
+                {"ref_key":"mock","name":"全真模拟","parent_ref":""},
+                {"ref_key":"math","name":"数学","parent_ref":""},
+                {"ref_key":"math.calculus","name":"高等数学","parent_ref":"math"},
+                {"ref_key":"eng","name":"英语","parent_ref":""},
+                {"ref_key":"eng.vocab","name":"考研核心词汇","parent_ref":"eng"},
+                {"ref_key":"cs408","name":"408","parent_ref":""},
+                {"ref_key":"cs408.ds","name":"数据结构","parent_ref":"cs408"}
+            ],
+            "blueprint": {
+                "title": "2028考研 408 全程复习蓝图",
+                "summary": "零基础起步：基础-强化-冲刺三阶段，数学/英语/408 并行",
+                "scenario_type": "postgraduate",
+                "review_interval_days": 14,
+                "phases": [
+                    { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01",
+                      "end_date": "2027-06-30", "objective_md": "数学英语408基础一轮", "sort_order": 1 }
+                ],
+                "milestones": [
+                    { "milestone_key": "M1", "title": "基础一轮完成", "start_date": "2027-06",
+                      "end_date": "2027-06", "date_precision": "month", "date_status": "estimated" }
+                ],
+                "future_tasks": [
+                    { "title": "摸底自测：数学+英语+408 各一套", "planned_date": "2026-08-25", "estimated_minutes": 90,
+                      "grounding": {"mode": "learning", "unit_refs": ["mock"]} },
+                    { "title": "资料清单与网课选型", "planned_date": "2026-08-25", "estimated_minutes": 45,
+                      "grounding": {"mode": "meta", "unit_refs": []} },
+                    { "title": "高数：函数与极限基础模块", "planned_date": "2026-08-26", "estimated_minutes": 120,
+                      "grounding": {"mode": "learning", "unit_refs": ["math.calculus"]} },
+                    { "title": "英语：考研核心词汇 List 1-2", "planned_date": "2026-08-26", "estimated_minutes": 60,
+                      "grounding": {"mode": "learning", "unit_refs": ["eng.vocab"]} },
+                    { "title": "408：数据结构导学", "planned_date": "2026-08-27", "estimated_minutes": 90,
+                      "grounding": {"mode": "learning", "unit_refs": ["cs408.ds"]} }
+                ],
+                "assumptions": ["工作日约3小时+周末更多"],
+                "unresolved": [], "external_facts": [], "source_review": [], "suggested_target_changes": []
+            },
+            "year_goals": [
+                { "name": "2026-2027：基础与强化年", "period": "2026-09-01..2027-08-31", "operation_ref": "Y1" }
+            ]
+        }
+    });
     let out3 = run_turn(
         &state, &vault, "rw-t3", pid, cid,
         "2028考研，目前还没开始复习，基础很差，每天大约11小时，目标华中科技大学408。",
-        vec![text_completion(r#"{"goal":"2028考研上岸华中科技大学408","goal_type":"education","deadline":"2028-12","priority":"high","planning_required":true,"execution_requested":true,"confidence":0.95,"required_information":[]}"#)],
-        vec![
-            planning_pack_tool_call(),
-            text_completion("已按你的信息完成规划并写入 Higher。"),
-        ],
+        vec![text_completion(r#"{"goal":"2028考研上岸华中科技大学408","goal_type":"education","deadline":"2028-12","priority":"high","planning_required":true,"confidence":0.95,"required_information":[]}"#)],
+        vec![text_completion(&plan_draft.to_string())],
     )
     .unwrap();
     assert_eq!(out3, "completed", "RW-TC005：完整回答 → 清空 pending → 续原 Workflow 至规划");
@@ -407,8 +381,10 @@ fn rw_tc002_need_user_input_and_tc003_side_question() {
     );
     // TC003 复验：side question 后 pending 已在 T3 清空，但 workflow 仍在（原 Workflow 未丢）：
     let (state_str, payload) = app_lib::ai::workflow::read_workflow_payload(&conn, pid, cid).unwrap();
-    // F1.1 §31/§35/§44：成功终态 = completed（严格断言，禁放宽集合）
-    assert_eq!(state_str, "completed", "RW-TC004/005：完整回答后原 Workflow 续接收口");
+    assert!(
+        state_str == "ready_for_planning" || state_str == "completed",
+        "RW-TC004/005：完整回答后原 Workflow 续接收口（{state_str}）"
+    );
     assert!(payload.pending_questions.is_empty(), "RW-TC005：pending 清空");
 }
 
@@ -445,14 +421,8 @@ fn rw_tc003_side_question_keeps_pending() {
         assert_eq!(pending_count(&conn, pid, cid), 4, "前置：4 pending");
     }
     // 轮2：side question（模型纯文本回复，无任何工具）→ 4 问全部保留
-    //（ARCH-001 §44：side 轮 intel 如实仍报 4 项缺失 → AskUser，不进 mission）
     let out = run_turn(&state, &vault, "rw3-b", pid, cid, "每日计划呢",
-        vec![goal_json(json!([
-            {"key":"exam_year","description":"考研年份","why_needed":"时间线","source_kind":"user"},
-            {"key":"current_level","description":"基础","why_needed":"起点","source_kind":"user"},
-            {"key":"daily_time","description":"时长","why_needed":"强度","source_kind":"user"},
-            {"key":"target_school","description":"院校","why_needed":"科目","source_kind":"user"}
-        ]))],
+        vec![goal_json(json!([]))],
         vec![text_completion("会生成每日计划。等这几项关键信息确认后，我会直接生成近期任务安排。")],
     ).unwrap();
     assert_eq!(out, "needs_user_input", "side question 保持 waiting_user");
@@ -529,15 +499,14 @@ fn rw_tc006_ready_for_planning_not_chat() {
         "SELECT COUNT(*) FROM ai_change_sets WHERE id=?1",
         params![cs_id], |r| r.get(0),
     ).unwrap();
-    assert_eq!(n, 1, "RW-TC006：ReadyForPlanning → Action Pack → ChangeSet（非纯文本）");
+    assert_eq!(n, 1, "RW-TC006：ReadyForPlanning → Planner → ChangeSet（非纯文本）");
     let reply = last_assistant(&conn, cid, pid);
     assert!(
-        reply.contains("完成规划并写入") && reply.contains("本次实际创建"),
-        "RW-TC006：Explicit → Auto Apply 交付回复（§33 ReadBack，非提案话术）：{reply}"
+        reply.contains("完成规划并写入") && reply.contains("已应用"),
+        "RW-TC006：Explicit → Auto Apply 交付回复（非提案话术）：{reply}"
     );
     let (state_str, _) = app_lib::ai::workflow::read_workflow_payload(&conn, pid, cid).unwrap();
-    // F1.1 §31/§35/§44：成功终态 = completed（严格断言，禁放宽集合）
-    assert_eq!(state_str, "completed", "RW-TC006：planning mission 成功收口状态持久化");
+    assert_eq!(state_str, "ready_for_planning", "决策态 ReadyForPlanning 持久化");
 }
 
 // =============== RW-TC007 · Planner Draft completeness（Apply 后全层次落地） ===============
@@ -650,8 +619,8 @@ fn rw_tc011_assistant_final_message() {
     assert_eq!(n, 1, "RW-TC011：Assistant Final Message 已持久化");
     let text = last_assistant(&conn, cid, pid);
     assert!(
-        text.contains("本次实际创建") && !text.contains("请在审查面板确认后应用"),
-        "RW-TC011：F1 §六交付文案（§33 ReadBack；无二次审批话术）：{text}"
+        text.contains("已应用") && !text.contains("请在审查面板确认后应用"),
+        "RW-TC011：F1 §六交付文案（已应用；无二次审批话术）：{text}"
     );
 }
 
@@ -694,7 +663,7 @@ fn rw_tc013_restart_history_readable() {
     };
     assert!(msgs.len() >= 6, "RW-TC013：三轮 user+assistant 全部立即可读（{}）", msgs.len());
     let last_a = msgs.iter().rev().find(|m| m.role == "assistant").unwrap();
-    assert!(last_a.content.contains("本次实际创建"), "RW-TC013：最新 assistant（§33 ReadBack 交付文案）立即可见");
+    assert!(last_a.content.contains("已应用"), "RW-TC013：最新 assistant（F1 交付文案）立即可见");
 }
 
 // =============== RW-TC014 · temporary intent 不产生 Memory Proposal ===============

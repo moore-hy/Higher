@@ -82,42 +82,31 @@ pub fn decide_result(missing: &[MissingInformation]) -> DecisionResult {
 /// goal_understanding → missing_information → information_gate → decision
 /// ```
 ///
-/// F1.2.1-R1 · §8 · Production 调用 `evaluate_with_scope`：
-/// - Complete + **Full** → AiDecision::ReadyForPlanning；
-/// - Complete + Amend / None → Execute（信息齐备即执行/回答，不进 Full
-///   Planning 链——Amendment 与普通 Action 的交付由 HigherAction→ChangeSet→
-///   Apply→ReadBack 完成）；
-/// - Incomplete → 保持 source_kind 渠道决策（AskUser/Research/Execute）。
+/// 规则：
+/// - InformationStatus::Complete 且 planning_required=true
+///   → **自动 AiDecision::ReadyForPlanning**（信息齐备即进规划，禁止继续追问）；
+/// - Complete 且 planning_required=false（模型明确无需正式规划）
+///   → Execute（直接执行/回答，不进规划链）；
+/// - Incomplete → 按 source_kind 渠道决策（同 decide 规则）。
 ///
-/// 本 `evaluate`（非 Production 兼容版）：effective_planning_scope() 为 None
-/// 时按 `PlanningScope::None` 处理——**禁止 None→ReadyForPlanning**（删除旧
-/// `planning_required.unwrap_or(true)` 默认 Full 行为；Production analyze 已
-/// 保证 goal 非空 scope known，见 goal_understanding §7 Fail Closed）。
+/// 兼容：planning_required=None（旧数据/未判断）按 true 处理——与 v2.2 行为
+///（missing 空 → ReadyForPlanning）完全一致；confidence=None 按 1.0。
 pub fn evaluate(goal: &GoalUnderstanding, missing: &[MissingInformation]) -> DecisionResult {
-    let scope = goal.effective_planning_scope().unwrap_or(super::goal_understanding::PlanningScope::None);
-    evaluate_with_scope(goal, missing, scope)
-}
-
-/// F1.2.1-R1 · §8 · Production 决策入口（scope 显式传入）。
-pub fn evaluate_with_scope(
-    goal: &GoalUnderstanding,
-    missing: &[MissingInformation],
-    scope: super::goal_understanding::PlanningScope,
-) -> DecisionResult {
     use super::missing_information::{goal_information_status, InformationStatus};
     let status = goal_information_status(goal);
+    let planning_required = goal.planning_required.unwrap_or(true);
     let confidence = goal.confidence.unwrap_or(1.0);
     let missing_fields = missing.iter().map(|m| m.field.clone()).collect::<Vec<_>>();
     match status {
-        InformationStatus::Complete if scope == super::goal_understanding::PlanningScope::Full => DecisionResult {
+        InformationStatus::Complete if planning_required => DecisionResult {
             decision: AiDecision::ReadyForPlanning,
-            reason: "必要信息已齐备且为 Full Planning，自动进入规划".to_string(),
+            reason: "必要信息已齐备且目标需要规划，自动进入规划".to_string(),
             confidence,
             missing_fields,
         },
         InformationStatus::Complete => DecisionResult {
             decision: AiDecision::Execute,
-            reason: "必要信息已齐备（amend/none 不进 Full Planning），直接执行/回答".to_string(),
+            reason: "必要信息已齐备，目标无需正式规划，直接执行/回答".to_string(),
             confidence,
             missing_fields,
         },

@@ -66,7 +66,7 @@ fn envelope(p: i64, c: i64) -> AiRuntimeEnvelope {
 
 fn run_pack(conn: &Connection, vault: &VaultState, p: i64, c: i64, title: &str, actions: &[J]) -> J {
     execute_higher_action_pack(
-        None, conn, vault, p, c, RUN_ID, &envelope(p, c), "测试指令", title, actions, false, false,
+        None, conn, vault, p, c, RUN_ID, &envelope(p, c), "测试指令", title, actions,
     )
     .json
 }

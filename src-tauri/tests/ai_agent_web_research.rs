@@ -665,34 +665,6 @@ fn f13_ef_continuation_researches_original_task() {
     };
     // 用户回答时间 → 信息齐 → 学校信息属 external fact → researching
     // DEV-0077.2 §十八：完整回答 = 结构化提交（不挂起）→ 继续研究原任务
-    //（ARCH-001 §19/§31 新权威：续接恢复 planning mission 后，收口前需
-    // execute_higher_actions 完成正式交付——Mission verify + ReadBack，
-    // 否则 verify feedback 会追加模型轮（旧 Scripted 序列耗尽））
-    let mut pack_actions: Vec<serde_json::Value> = vec![
-        serde_json::json!({ "type": "set_final_goal_brief", "outcome": "2028 考研上岸：按官方招生信息完成备考" }),
-        serde_json::json!({
-            "type": "set_planning_blueprint", "title": "2028 考研总体路线", "scenario_type": "postgraduate",
-            "phases": [
-                { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-08-22", "end_date": "2026-12-31", "objective_md": "基础" }
-            ],
-            "milestones": [
-                { "milestone_key": "M1", "title": "基础完成", "phase_key": "P1", "start_date": "2026-12-01", "end_date": "2026-12-31" }
-            ]
-        }),
-        serde_json::json!({ "type": "create_goal", "level": "year", "name": "2026 备考年", "period": "2026" }),
-        serde_json::json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
-                "parent_level": "year", "parent_title": "2026 备考年" }),
-    ];
-    for d in ["2026-08-22", "2026-08-23"] {
-        pack_actions.push(serde_json::json!({
-            "type": "create_goal", "level": "day", "name": format!("{d} 学习日"), "period": d,
-            "parent_level": "month", "parent_title": "2026 年 8 月",
-        }));
-        pack_actions.push(serde_json::json!({
-            "type": "create_task", "title": format!("{d} 数学：基础训练"),
-            "date": { "kind": "absolute_date", "date": d }, "estimated_minutes": 90,
-        }));
-    }
     let out = run_turn(&state, &vault, p, c, m, "工作日 6 小时。", "f13-run", true, vec![
         tool_call("request_user_input", json!({
             "collected": { "weekday_study_hours": "工作日 6 小时" },
@@ -700,11 +672,7 @@ fn f13_ef_continuation_researches_original_task() {
         })),
         tool_call("web_search", json!({ "query": "华中科技大学 2028 招生" })),
         tool_call("web_open", json!({ "sid": "S1" })),
-        tool_call("execute_higher_actions", json!({
-            "title": "AI 规划 · 2028 考研初始规划",
-            "actions": pack_actions
-        })),
-        final_answer("已记录你的可用时间；学校官方信息已查证，考研规划已写入 Higher。"),
+        final_answer("已记录你的可用时间；学校官方信息已查证，继续你的考研规划。"),
     ]);
     assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();

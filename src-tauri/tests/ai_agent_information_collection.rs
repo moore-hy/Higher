@@ -144,50 +144,6 @@ fn run_turn(
     tauri::async_runtime::block_on(agent_turn_core(None, state, vault, responder, &args))
 }
 
-/// F1.1.1 §五：new_task 场景的 fresh Mission 授权来自「新 Mission 本身的
-/// 本轮 intelligence 结果」——intel 通道必须真实脚本化（Scripted 单队列对
-/// intel 一律 Err → current-turn 判定缺失 → fresh 授权 UNKNOWN）。
-#[allow(clippy::too_many_arguments)]
-fn run_turn_intel(
-    state: &DbState,
-    vault: &VaultState,
-    profile_id: i64,
-    conversation_id: i64,
-    current_message_id: i64,
-    user_message: &str,
-    intel: Vec<Completion>,
-    scripted: Vec<Completion>,
-) -> Result<&'static str, String> {
-    let token = tokio_util::sync::CancellationToken::new();
-    let cfg = runtime_cfg(profile_id);
-    let args = AgentTurnArgs {
-        profile_id,
-        conversation_id,
-        run_id: RUN_ID,
-        token: &token,
-        current_message_id,
-        user_message,
-        primary: &cfg,
-        page_label: "Today",
-        knowledge_path: None,
-        session_title: None,
-        date: None,
-        web_enabled: false,
-        brave_key: "",
-        local_date: LOCAL_DATE.into(),
-        local_datetime: format!("{LOCAL_DATE} 10:30"),
-        timezone_offset_minutes: 480,
-        client_turn_id: "",
-        event_sink: None,
-    };
-    let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(intel)),
-        main: std::sync::Mutex::new(VecDeque::from(scripted)),
-        capture: None,
-    };
-    tauri::async_runtime::block_on(agent_turn_core(None, state, vault, responder, &args))
-}
-
 fn count(conn: &Connection, table: &str) -> i64 {
     conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap()
 }
@@ -229,19 +185,7 @@ fn seed_waiting(
     )
     .unwrap();
     let mut payload = AgentWorkflowPayload::default();
-    // F1.2.1-R1.1 · §3/§4 · FIX A · DURABLE MISSION TRUTH：该 helper 模拟的是
-    // 已进入 waiting_user 的 **Full Planning Mission**——真实 Production 在
-    // Full Planning → waiting_user 时 mission_epoch / mission_kind /
-    // planning_intent_summary 已是 durable workflow truth，fixture 必须真实
-    // 反映该状态（否则 §13 REMOVE BLIND WAITING→PLANNING 语义下 deterministic
-    // resume 无法识别 Full Planning Mission）。
-    payload.mission_epoch = 1;
-    payload.mission_kind = "planning".to_string();
-    payload.planning_intent_summary = original.to_string();
     payload.original_request = original.to_string();
-    // F1.1 §5/§45：挂起前用户已明确要求规划（原 mission 授权 = REQUESTED）——
-    // 续接轮继承（Fail Closed 下缺失 = UNKNOWN = 拒绝写入/跳过 verify）。
-    payload.execution_requested = true;
     for (key, question) in questions {
         payload.pending_questions.push(AgentQuestion {
             key: key.to_string(),
@@ -364,20 +308,16 @@ fn e03_continuation_restores_workflow() {
     };
     // 模型判定回答完毕、信息足够 → 结构化提交（DEV-0077.2 §十八：
     // request_user_input(collected, questions=[]) = Answer 提交，不挂起）
-    // + 总结文本 → ARCH-001 新权威（§19/§32）：信息齐备进入 planning
-    // mission 后只总结不写库 = 未交付 → verify feedback ×2 后 run failed
-    //（planning_mission_incomplete；替代旧 completed/ready_for_planning）。
+    // + 总结文本 → 直接继续原任务收尾（§15 自动继续）
     let scripted = vec![
         tool_call("request_user_input", json!({
             "collected": { "daily_hours": "工作日 6 小时，周末 10 小时" },
             "questions": []
         })),
         final_answer("已记录你的可用时间，我继续做考研规划。"),
-        final_answer(""),
-        final_answer(""),
     ];
     let out = run_turn(&state, &vault, p, c, m, "工作日 6 小时，周末 10 小时。", scripted);
-    assert_eq!(out, Ok("failed"), "ARCH-001：mission 未交付（0 写入只总结）→ failed：{out:?}");
+    assert_eq!(out, Ok("completed"), "{out:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     assert_eq!(payload.original_request, "我要准备 2028 考研规划", "恢复原 workflow（非独立聊天）");
@@ -387,8 +327,9 @@ fn e03_continuation_restores_workflow() {
         payload.collected_user_information
     );
     assert!(payload.pending_questions.is_empty(), "pending 解决");
-    // ARCH-001 §32：failed 收口 durable（workflow 携 original_request 可恢复）
-    assert_eq!(run_row(&conn).0.as_str(), "failed", "durable 状态");
+    // DEV-0077.4-A.1 F2 §四：pending 全 resolved + Decision Ready → workflow
+    // 收口 ready_for_planning（信息齐备待进 Planning），不能 completed。
+    assert_eq!(run_row(&conn).1.as_deref(), Some("ready_for_planning"), "离开 waiting_user");
     assert_zero_mutation(&conn);
 }
 
@@ -451,23 +392,20 @@ fn e05_complete_answer_auto_continues() {
         f
     };
     // DEV-0077.2 §十八：完整回答 = 结构化提交（collected + questions=[]）+ 总结
-    //（ARCH-001 新权威：信息齐备 → planning mission；只总结不写库 → verify
-    // feedback ×2 后仍缺交付 → failed planning_mission_incomplete）
     let scripted = vec![
         tool_call("request_user_input", json!({
             "collected": { "weekend_study_hours": "周末10小时" },
             "questions": []
         })),
         final_answer("信息齐全了，我现在开始制定考研规划方案。"),
-        final_answer(""),
-        final_answer(""),
     ];
     let out = run_turn(&state, &vault, p, c, m, "周末10小时。", scripted);
-    assert_eq!(out, Ok("failed"), "ARCH-001 §32：未交付即收尾 → failed：{out:?}");
+    assert_eq!(out, Ok("completed"), "信息足够 → 自动继续（不挂起不追问）：{out:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     assert!(payload.pending_questions.is_empty(), "pending_questions = []");
-    assert_eq!(run_row(&conn).0.as_str(), "failed", "durable 状态（可恢复续跑）");
+    // DEV-0077.4-A.1 F2 §四：信息齐备 → ready_for_planning（非 completed）
+    assert_eq!(run_row(&conn).1.as_deref(), Some("ready_for_planning"), "workflow 离开 waiting_user");
     // 两个信息都在 collected
     assert_eq!(payload.collected_user_information.get("weekday_study_hours").map(String::as_str), Some("6"));
     assert!(payload.collected_user_information.get("weekend_study_hours").is_some_and(|v| v.contains("10")));
@@ -863,25 +801,7 @@ fn er103_new_task_waiting_continues_with_new_context() {
             ]
         })),
     ];
-    // F1.1.1 §五：新英语任务自身的 intelligence 真实输出 execution_requested=true
-    //（fresh Mission 授权重建依据——通过原因是 NEW MISSION 自身重新判定为
-    // REQUESTED，绝非旧考研 Mission 的授权继承）
-    let intel1 = vec![final_answer(&json!({
-        "goal": "英语学习规划",
-        "goal_type": "education",
-        "deadline": null,
-        "priority": "normal",
-        "planning_required": true,
-        "execution_requested": true,
-        "confidence": 0.9,
-        "required_information": [
-            { "key": "english_level", "description": "英语水平", "why_needed": "决定起点", "source_kind": "user" }
-        ]
-    }).to_string())];
-    let out1 = run_turn_intel(
-        &state, &vault, p, c, m1, "先不考研了，帮我规划英语学习。",
-        intel1, scripted,
-    );
+    let out1 = run_turn(&state, &vault, p, c, m1, "先不考研了，帮我规划英语学习。", scripted);
     assert_eq!(out1, Ok("needs_user_input"), "新任务挂起：{out1:?}");
     {
         let conn = state.0.lock().unwrap();
@@ -907,17 +827,13 @@ fn er103_new_task_waiting_continues_with_new_context() {
     };
     let out2 = run_turn(&state, &vault, p, c, m2, "六级 480 分，主要想提升考研英语到 75+。", vec![
         // DEV-0077.2 §十八：完整回答 = 结构化提交（不挂起，自动继续英语任务）
-        //（ARCH-001 新权威：信息齐备 → planning mission；只总结不写库 →
-        // verify feedback ×2 后 failed planning_mission_incomplete）
         tool_call("request_user_input", json!({
             "collected": { "english_level": "六级 480 分", "english_goal": "考研英语 75+" },
             "questions": []
         })),
         final_answer("已记录你的英语基础与目标，我继续制定英语学习规划。"),
-        final_answer(""),
-        final_answer(""),
     ]);
-    assert_eq!(out2, Ok("failed"), "ARCH-001 §32：{out2:?}");
+    assert_eq!(out2, Ok("completed"), "{out2:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();
     assert_eq!(
@@ -925,7 +841,7 @@ fn er103_new_task_waiting_continues_with_new_context() {
         "先不考研了，帮我规划英语学习。",
         "续接恢复的必须是英语任务，绝不能恢复考研上下文"
     );
-    assert!(payload.pending_questions.is_empty(), "failed 收口 pending 保持已消解状态");
+    assert!(payload.pending_questions.is_empty(), "completed 清空 pending");
     // 多 pending 时后端不猜归属（E-R1-01 设计）：精确拆分属模型职责，
     // 后端硬保证是「用户原始回复不丢失」
     assert!(
@@ -1022,10 +938,6 @@ fn er201_new_task_prompt_isolation_captured() {
         let mut payload = app_lib::ai::workflow::AgentWorkflowPayload::default();
         payload.original_request = "2028考研规划".into();
         payload.current_goal = "考上研究生".into();
-        // 旧考研 Mission 自身授权 = REQUESTED（挂起前用户已要求规划）。
-        // F1.1.1：该授权属于旧 Mission——cancel(new_task=true) 后**被废弃**，
-        // 英语 fresh Mission 的授权由其自身本轮 intelligence 重建（intel1）。
-        payload.execution_requested = true;
         payload.pending_questions.push(app_lib::ai::workflow::AgentQuestion {
             key: "weekday_study_hours".into(),
             question: "工作日每天能学多久？".into(),
@@ -1074,35 +986,17 @@ fn er201_new_task_prompt_isolation_captured() {
             client_turn_id: "",
             event_sink: None,
         };
-        // F1.1.1 §五：intel 通道脚本化——新英语任务自身的 intelligence 真实输出
-        // execution_requested=true（fresh Mission 授权重建依据，非旧考研继承）
-        let intel1 = vec![final_answer(&json!({
-            "goal": "三个月英语学习规划",
-            "goal_type": "education",
-            "deadline": null,
-            "priority": "normal",
-            "planning_required": true,
-            "execution_requested": true,
-            "confidence": 0.9,
-            "required_information": [
-                { "key": "english_level", "description": "英语水平", "why_needed": "决定起点", "source_kind": "user" }
-            ]
-        }).to_string())];
-        let responder = ModelResponder::ScriptedIntel {
-            intel: std::sync::Mutex::new(VecDeque::from(intel1)),
-            main: std::sync::Mutex::new(VecDeque::from(scripted)),
-            capture: Some(capture.clone()),
-        };
+        let responder = ModelResponder::ScriptedCapture(
+            std::sync::Mutex::new(VecDeque::from(scripted)),
+            capture.clone(),
+        );
         tauri::async_runtime::block_on(agent_turn_core(None, &state, &vault, responder, &args))
     };
     assert_eq!(out, Ok("needs_user_input"), "{out:?}");
 
     // ---- Prompt Isolation 断言（真实 Provider 输入） ----
-    // ScriptedIntel 的 capture 记录全部调用：calls[0]=intel 轮首分析（旧任务
-    // 上下文）、calls[1]=cancel 决策（切换前最后一次完整上下文）、
-    // calls[2]=cancel 之后的重建调用（fresh 隔离）。
     let calls = capture.lock().unwrap();
-    assert!(calls.len() >= 3, "至少三次 Provider 调用：{}", calls.len());
+    assert!(calls.len() >= 2, "至少两次 Provider 调用：{}", calls.len());
     let ctx_of = |i: usize| -> String {
         calls[i]
             .iter()
@@ -1110,13 +1004,13 @@ fn er201_new_task_prompt_isolation_captured() {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    // 切换前（cancel 决策轮）：旧上下文完整在场（证明 fixture 与恢复链路生效）
-    let ctx0 = ctx_of(1);
+    // 切换前（第 1 次调用）：旧上下文完整在场（证明 fixture 与恢复链路生效）
+    let ctx0 = ctx_of(0);
     for must in ["2028考研规划", "工作日每天能学多久", "清华大学", "任务续接"] {
         assert!(ctx0.contains(must), "切换前 Provider 上下文应含「{must}」（fixture 生效）");
     }
-    // 切换后（cancel 之后的下一次 Provider 调用）：完全隔离
-    let ctx1 = ctx_of(2);
+    // 切换后（第 2 次调用 = cancel 之后的下一次 Provider 调用）：完全隔离
+    let ctx1 = ctx_of(1);
     assert!(ctx1.contains("帮我规划三个月英语学习"), "新任务消息必须在场：\n{ctx1}");
     for banned in ["2028考研规划", "工作日每天能学多久", "清华大学", "任务续接", "考上研究生"] {
         assert!(
@@ -1168,18 +1062,14 @@ fn er201_new_task_prompt_isolation_captured() {
         &state, &vault, p, c, m2, "六级 480 分，目标提升到 75+。",
         vec![
             // DEV-0077.2 §十八：完整回答 = 结构化提交（不挂起，自动继续英语任务）
-            //（ARCH-001 新权威：信息齐备 → planning mission；只总结不写库 →
-            // verify feedback ×2 后 failed planning_mission_incomplete）
             tool_call("request_user_input", json!({
                 "collected": { "english_level": "六级 480 分", "english_goal": "考研英语 75+" },
                 "questions": []
             })),
             final_answer("已记录你的英语基础，我继续制定三个月英语学习计划。"),
-            final_answer(""),
-            final_answer(""),
         ],
     );
-    assert_eq!(out2, Ok("failed"), "ARCH-001 §32：{out2:?}");
+    assert_eq!(out2, Ok("completed"), "{out2:?}");
     let conn = state.0.lock().unwrap();
     let (_, payload2) = read_workflow_payload(&conn, p, c).unwrap();
     assert_eq!(
@@ -1188,7 +1078,8 @@ fn er201_new_task_prompt_isolation_captured() {
         "续接的必须是英语 workflow，绝不能恢复考研上下文"
     );
     assert!(payload2.pending_questions.is_empty());
-    assert_eq!(run_row(&conn).0.as_str(), "failed", "durable（可恢复续跑英语任务）");
+    // DEV-0077.4-A.1 F2 §四：信息齐备 → ready_for_planning（非 completed）
+    assert_eq!(run_row(&conn).1.as_deref(), Some("ready_for_planning"));
     assert_zero_mutation(&conn);
 }
 

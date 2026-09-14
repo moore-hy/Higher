@@ -73,66 +73,6 @@ fn text_completion(body: &str) -> Completion {
     }
 }
 
-/// ARCH-001 §21 → F1.2 §3：满足 Mission Verify + 7~14 DISTINCT DATE 详细窗口
-/// 的 Action Pack（LOCAL_DATE=2026-08-25；窗口 08-26..09-08）。
-///（GOAL_JSON planning_required=true + required=[] → planning mission；
-///  只输出文字会被 Mission verify 反馈追加轮，故需真实交付）
-fn planning_pack_tool_call() -> Completion {
-    // F1.2 · P0-2/P0-5：7~14 distinct dates + Task→Day 强关联（旧 2 天 fixture
-    // 在新权威下 invalid）
-    let mut actions: Vec<serde_json::Value> = vec![
-        serde_json::json!({ "type": "set_final_goal_brief", "outcome": "2028 考研上岸：完成初始规划" }),
-        serde_json::json!({ "type": "set_planning_blueprint", "title": "2028考研复习蓝图", "scenario_type": "postgraduate",
-          "phases": [ { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01", "end_date": "2026-12-31", "objective_md": "基础一轮" } ],
-          "milestones": [ { "milestone_key": "M1", "title": "基础完成", "phase_key": "P1", "start_date": "2026-12-01", "end_date": "2026-12-31" } ] }),
-        serde_json::json!({ "type": "create_goal", "level": "year", "name": "2026 备考年", "period": "2026" }),
-        serde_json::json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
-          "parent_level": "year", "parent_title": "2026 备考年" }),
-        serde_json::json!({ "type": "create_goal", "level": "month", "name": "2026 年 9 月", "period": "2026-09",
-          "parent_level": "year", "parent_title": "2026 备考年" }),
-    ];
-    let days = [
-        ("2026-08-26", "数学：基础训练", 60),
-        ("2026-08-27", "英语：词汇复习", 45),
-        ("2026-08-28", "数学：强化训练", 60),
-        ("2026-08-29", "英语：阅读精读", 45),
-        ("2026-08-30", "408：数据结构", 75),
-        ("2026-08-31", "周复盘整理", 60),
-        ("2026-09-01", "数学：真题入门", 90),
-    ];
-    for (d, t, m) in days {
-        let gname = format!("{d} 学习日");
-        actions.push(serde_json::json!({
-            "type": "create_goal", "level": "day", "name": gname, "period": d,
-            "parent_level": "month",
-            "parent_title": if d.starts_with("2026-08") { "2026 年 8 月" } else { "2026 年 9 月" },
-        }));
-        actions.push(serde_json::json!({
-            "type": "create_task", "title": format!("{d} {t}"),
-            "date": { "kind": "absolute_date", "date": d }, "estimated_minutes": m,
-            "goal_hint": gname,
-        }));
-    }
-    let tool_calls = serde_json::json!([{
-        "id": "call_execute_higher_actions",
-        "type": "function",
-        "function": {
-            "name": "execute_higher_actions",
-            "arguments": serde_json::json!({
-                "title": "AI 规划 · 2028 考研初始规划",
-                "actions": actions
-            }).to_string()
-        }
-    }]);
-    Completion {
-        content: None,
-        reasoning_content: None,
-        finish_reason: Some("tool_calls".into()),
-        tool_calls: Some(tool_calls),
-        usage: Usage::default(),
-    }
-}
-
 fn new_message(conn: &Connection, profile_id: i64, conversation_id: i64, text: &str) -> i64 {
     ConversationRepository::new(conn)
         .add_message(conversation_id, profile_id, "user", text, None)
@@ -198,10 +138,8 @@ fn captured_system(cap: &std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>
         .join("\n---\n")
 }
 
-// F1.1 §45：用户明确要求规划 = REQUESTED。缺省会触发 structured repair
-//（额外消耗 intel 队列一条，吃掉收口 memory 提取脚本）——必须显式给出。
 const GOAL_JSON: &str =
-    r#"{"goal":"准备2028考研","goal_type":"education","planning_required":true,"execution_requested":true,"required_information":[]}"#;
+    r#"{"goal":"准备2028考研","goal_type":"education","planning_required":true,"required_information":[]}"#;
 
 /// TC001 场景：用户「我要准备2028考研」→ 收口提取产出一条 explicit 目标记忆。
 fn exam_extraction() -> serde_json::Value {
@@ -235,8 +173,7 @@ fn tc001_ai_generates_pending_memory_proposal() {
             text_completion(GOAL_JSON),
             text_completion(&exam_extraction().to_string()),
         ],
-        //（ARCH-001 §21：planning mission 需 Action Pack 交付；memory 提取照常）
-        vec![planning_pack_tool_call(), text_completion("好的，已记录你的考研目标并写入初始规划。")],
+        vec![text_completion("好的，已记录你的考研目标。")],
     );
     assert_eq!(out.unwrap(), "completed");
 
@@ -427,8 +364,7 @@ fn tc005_next_turn_ai_reads_confirmed_memory() {
             text_completion(GOAL_JSON),
             text_completion(&exam_extraction().to_string()),
         ],
-        //（ARCH-001 §21：planning mission 需 Action Pack 交付）
-        vec![planning_pack_tool_call(), text_completion("已记录。")],
+        vec![text_completion("已记录。")],
     );
     assert_eq!(out1.unwrap(), "completed");
 

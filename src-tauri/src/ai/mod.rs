@@ -63,9 +63,6 @@ pub mod learning_load;
 // DEV-0077.4-A.1：Learning Grounding & Task Atomicity（Draft 单元解析/复用/校验；
 // 零写库——写入只能经 planner 编译的 ProposedOp → ONE ChangeSet）
 pub mod learning_grounding;
-// DEV-AI-ARCH-001 §5：PlanningContextSnapshot（Planning Mission 只读事实快照，
-// 每轮自 SQLite 重建；含 §7 goal_observations 与 §31 verify_planning_mission）
-pub mod planning_context;
 
 use serde::{Deserialize, Serialize};
 

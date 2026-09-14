@@ -115,52 +115,6 @@ fn intel(body: &str) -> Completion {
     text_completion(body)
 }
 
-/// ARCH-001 §21：满足 Mission Verify 的最小 Action Pack（LOCAL_DATE=2026-08-21）。
-fn planning_pack_tool_call() -> Completion {
-    let days = ["2026-08-22", "2026-08-23", "2026-08-24"];
-    let day_goals: Vec<serde_json::Value> = days
-        .iter()
-        .map(|d| {
-            json!({
-                "type": "create_goal", "level": "day",
-                "name": format!("{d} 学习日"), "period": d,
-                "parent_level": "month", "parent_title": "2026 年 8 月",
-            })
-        })
-        .collect();
-    let tasks: Vec<serde_json::Value> = days
-        .iter()
-        .map(|d| {
-            json!({
-                "type": "create_task", "title": format!("{d} 数学：基础训练"),
-                "date": { "kind": "absolute_date", "date": d },
-                "estimated_minutes": 60,
-            })
-        })
-        .collect();
-    let mut actions: Vec<serde_json::Value> = vec![
-        json!({ "type": "set_final_goal_brief", "outcome": "2028 考研上岸：完成初始规划" }),
-        json!({
-            "type": "set_planning_blueprint", "title": "2028考研复习蓝图", "scenario_type": "postgraduate",
-            "phases": [
-                { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01", "end_date": "2026-12-31", "objective_md": "基础一轮" }
-            ],
-            "milestones": [
-                { "milestone_key": "M1", "title": "基础完成", "phase_key": "P1", "start_date": "2026-12-01", "end_date": "2026-12-31" }
-            ]
-        }),
-        json!({ "type": "create_goal", "level": "year", "name": "2026 备考年", "period": "2026" }),
-        json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
-                "parent_level": "year", "parent_title": "2026 备考年" }),
-    ];
-    actions.extend(day_goals);
-    actions.extend(tasks);
-    tool_call("execute_higher_actions", json!({
-        "title": "AI 规划 · 2028 考研初始规划",
-        "actions": actions
-    }))
-}
-
 fn mk_fixture(conn: &Connection, user_message: &str) -> (i64, i64, i64) {
     let profile_id = StudyProfileRepository::new(conn)
         .create("PF21", None, None, None, None, None)
@@ -388,7 +342,7 @@ fn f21_t03_saas_goal_dynamic_required_information() {
         capture: None,
     };
     let g = tauri::async_runtime::block_on(goal_understanding::analyze(
-        &responder, &uc, "我想三年内做一个自己的 SaaS", None, "", &Default::default(), "",
+        &responder, &uc, "我想三年内做一个自己的 SaaS", &Default::default(), "",
     ))
     .unwrap();
     // 动态推理结果原样通过（代码无考研/education 专用规则可依赖）
@@ -526,7 +480,6 @@ fn f21_t06_final_answer_then_persistent_ready_for_planning() {
         .unwrap();
     let ready_json = r#"{"goal":"2028考研","goal_type":"education","required_information":[]}"#;
     // DEV-0077.2 §十八：完整回答 = 结构化提交（collected + questions=[]，不挂起）
-    //（ARCH-001 §21：mission 用 Action Pack 交付——Mission verify + ReadBack 收口）
     let (out2, _cap) = run_turn_capture(
         &state, &vault, "f21t06-run2", profile_id, conv, msg2.id, "华中科技大学",
         vec![intel(ready_json)],
@@ -535,21 +488,19 @@ fn f21_t06_final_answer_then_persistent_ready_for_planning() {
                 "collected": { "target_school": "华中科技大学" },
                 "questions": []
             })),
-            planning_pack_tool_call(),
-            text_completion("目标院校已记录：华中科技大学。初始规划已写入 Higher。"),
+            text_completion("好的，目标院校已记录：华中科技大学。信息已完整，可以进入规划。"),
         ],
     );
     assert_eq!(out2.unwrap(), "completed");
     let conn = state.0.lock().unwrap();
-    // F21-03 三重断言（ARCH-001 §20：mission 轮 workflow.state=planning）
+    // F21-03 三重断言
     let status: String = conn
         .query_row("SELECT status FROM ai_runs WHERE id=?1", params!["f21t06-run2"], |r| r.get(0))
         .unwrap();
     assert_eq!(status, "completed");
     let (wf_state, payload) = read_workflow(&conn, profile_id, conv);
-    // F1.1 §31/§35/§44：成功终态 = completed 三处（严格断言，禁放宽集合）
-    assert_eq!(wf_state, "completed", "workflow_state 成功终态 = completed");
-    assert_eq!(payload.last_phase, "completed", "last_phase 成功终态 = completed");
+    assert_eq!(wf_state, "ready_for_planning", "workflow_state 必须持久为 ready_for_planning");
+    assert_eq!(payload.last_phase, "ready_for_planning");
     assert!(payload.pending_questions.is_empty(), "pending 必须清空");
 }
 

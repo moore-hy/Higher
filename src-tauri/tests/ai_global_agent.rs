@@ -141,50 +141,6 @@ fn run_turn(
     tauri::async_runtime::block_on(agent_turn_core(None, state, vault, responder, &args))
 }
 
-/// F1.1 §42/§45：mutation / verify 场景的 intel 通道必须真实脚本化
-///（Scripted 单队列对 intel 一律 Err → 静默降级 → 授权 UNKNOWN → Fail Closed
-/// 拒绝写入/跳过 verify）。本 helper 提供 intel/main 双队列。
-#[allow(clippy::too_many_arguments)]
-fn run_turn_intel(
-    state: &DbState,
-    vault: &VaultState,
-    profile_id: i64,
-    conversation_id: i64,
-    current_message_id: i64,
-    user_message: &str,
-    intel: Vec<Completion>,
-    scripted: Vec<Completion>,
-) -> Result<&'static str, String> {
-    let token = tokio_util::sync::CancellationToken::new();
-    let cfg = runtime_cfg(profile_id, Some(true));
-    let args = AgentTurnArgs {
-        profile_id,
-        conversation_id,
-        run_id: RUN_ID,
-        token: &token,
-        current_message_id,
-        user_message,
-        primary: &cfg,
-        page_label: "Today",
-        knowledge_path: None,
-        session_title: None,
-        date: None,
-        web_enabled: false,
-        brave_key: "",
-        local_date: LOCAL_DATE.into(),
-        local_datetime: format!("{LOCAL_DATE} 10:30"),
-        timezone_offset_minutes: 480,
-        client_turn_id: "",
-        event_sink: None,
-    };
-    let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(intel)),
-        main: std::sync::Mutex::new(VecDeque::from(scripted)),
-        capture: None,
-    };
-    tauri::async_runtime::block_on(agent_turn_core(None, state, vault, responder, &args))
-}
-
 fn assistant_messages(conn: &Connection, conversation_id: i64, profile_id: i64) -> Vec<String> {
     ConversationRepository::new(conn)
         .list_messages(conversation_id, profile_id, 20, 0)
@@ -308,20 +264,8 @@ fn t03_task_write_creates_changeset_applies_and_verifies() {
         ),
         final_answer("已为你创建明天的数学任务（60 分钟）。"),
     ];
-    // F1.1 §45：用户明确要求安排（「给我安排」= execution_requested）——
-    // intel 结构化输出授权；一次性任务安排非正式规划（planning_required=false）。
-    let intel = vec![final_answer(&json!({
-        "goal": "明天安排 60 分钟数学学习",
-        "goal_type": "education",
-        "deadline": null,
-        "priority": "normal",
-        "planning_required": false,
-        "execution_requested": true,
-        "confidence": 0.9,
-        "required_information": []
-    }).to_string())];
 
-    let out = run_turn_intel(&state, &vault, p, c, m, "明天给我安排 60 分钟数学。", intel, scripted);
+    let out = run_turn(&state, &vault, p, c, m, "明天给我安排 60 分钟数学。", scripted);
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
@@ -517,10 +461,6 @@ fn t07_waiting_user_reply_recorded_into_collected_information() {
         .unwrap();
         let mut payload = AgentWorkflowPayload::default();
         payload.original_request = "帮我做考研规划".into();
-        // F1.1 §5/§45：挂起前用户已明确要求规划（原 mission = planning +
-        // REQUESTED）——续接轮继承授权与 mission_kind，verify 才有依据。
-        payload.execution_requested = true;
-        payload.mission_kind = "planning".into();
         payload.pending_questions.push(AgentQuestion {
             key: "daily_hours".into(),
             question: "你每天能学几小时？".into(),
@@ -529,19 +469,15 @@ fn t07_waiting_user_reply_recorded_into_collected_information() {
         set_workflow_payload(&conn, "prev-run", p, c, STATE_WAITING_USER, &payload);
     }
     // 本轮用户回复（DEV-0077.2 §十八：完整回答 = 结构化提交，不挂起自动续）
-    //（ARCH-001 新权威 §19/§32：信息齐备 → planning mission；只总结不写库 →
-    // verify feedback ×2 后 failed planning_mission_incomplete——替代旧 completed）
     let scripted = vec![
         tool_call("request_user_input", json!({
             "collected": { "daily_hours": "工作日 6 小时，周末 10 小时" },
             "questions": []
         })),
         final_answer("好的，我已记录你的可用时间。"),
-        final_answer(""),
-        final_answer(""),
     ];
     let out = run_turn(&state, &vault, p, c, m, "工作日 6 小时，周末 10 小时。", scripted);
-    assert_eq!(out, Ok("failed"), "ARCH-001 §32：{out:?}");
+    assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
     let (_, payload) = read_workflow_payload(&conn, p, c).unwrap();

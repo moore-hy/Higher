@@ -119,47 +119,6 @@ fn is_temporary_operation_intent(item: &ExtractedMemory) -> bool {
     PATTERNS.iter().any(|p| lower.contains(p))
 }
 
-/// DEV-AI-CORE-001-F2 §十：memory_candidate_semantic_gate——最小语义完整性 Gate。
-/// 禁止自动建议长期保存孤立片段（Live 提取「2028」「11小时」「大三」类）：
-/// - 纯数字（含小数，如年份/数量）→ 拒；
-/// - 数字+单位（11小时 / 3小时 / 408分…）→ 拒；
-/// - ≤4 字且不含任何谓语/关系词的超短片段（大三/二战/408…）→ 拒。
-/// 完整语义陈述（含主语/关系/谓语，如「用户每天可用于学习约 11 小时」）允许。
-/// 只做最小 Gate，不重构 Memory 架构。
-pub fn memory_candidate_semantic_gate(item: &ExtractedMemory) -> bool {
-    let value = item.value.trim();
-    if value.is_empty() {
-        return false;
-    }
-    // 纯数字（含小数点）
-    if value.chars().all(|c| c.is_ascii_digit() || c == '.') {
-        return false;
-    }
-    // 数字+单位（数值前缀 + 恰好一个计量单位，无其它语义成分）
-    const UNITS: [&str; 20] = [
-        "小时", "分钟", "分", "天", "日", "岁", "年", "次", "个", "人", "门", "科", "遍", "轮",
-        "块", "元", "公斤", "公里", "kg", "km",
-    ];
-    let num_len = value
-        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .unwrap_or(value.len());
-    if num_len > 0 {
-        let rest = value[num_len..].trim();
-        if UNITS.contains(&rest) {
-            return false;
-        }
-    }
-    // 超短无谓语片段（≤4 字且不含谓语/关系词）
-    const PREDICATES: [&str; 18] = [
-        "是", "为", "在", "有", "能", "可以", "需要", "必须", "计划", "参加", "准备", "学习",
-        "工作", "读", "每", "约", "当前", "目前",
-    ];
-    if value.chars().count() <= 4 && !PREDICATES.iter().any(|p| value.contains(p)) {
-        return false;
-    }
-    true
-}
-
 /// §五.2：候选 → **pending_confirmation** 落库（DEV-0076 §七确认闭环：
 /// AI 不得自动提升 confirmed；explicit 原话与 derived 推断同样走确认门）。
 /// 返回新记忆 id 列表（供 Chat 认知卡片）。
@@ -170,10 +129,6 @@ pub fn apply_memories(conn: &Connection, profile_id: i64, items: &[ExtractedMemo
     for it in items {
         // DEV-0077.2 §四十二：temporary operation intent 不落库（0 proposal）
         if is_temporary_operation_intent(it) {
-            continue;
-        }
-        // F2 §十：语义完整性 Gate——孤立片段不弹长期记忆卡
-        if !memory_candidate_semantic_gate(it) {
             continue;
         }
         if let Ok(id) = super::memory_confirmation::create_memory_proposal(conn, profile_id, it) {

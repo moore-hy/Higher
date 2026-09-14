@@ -318,24 +318,6 @@ pub fn planning_continuation_decision(user_message: &str, workflow_state: Option
     PlanningContinuation::Continue // 其余视为对 pending questions 的回答（§10.1 禁止劫持的例外=真回答）
 }
 
-/// DEV-AI-CORE-001-F2 §九：显式恢复意图（确定性，无 LLM）。
-/// 用户明确要求继续此前的规划任务（「继续刚才的规划任务 / 继续原任务 /
-/// 根据刚才信息继续 / 信息已经补全，请继续规划…」）→ 必须优先恢复
-/// original_request，不得当作普通聊天。命中即要求调用方桥接
-/// workflow.original_request 进本轮 Context（agent.rs intel_request）。
-pub fn is_explicit_planning_resume(text: &str) -> bool {
-    let t: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    if t.is_empty() {
-        return false;
-    }
-    [
-        "继续刚才", "继续原任务", "继续之前的", "继续上次", "继续规划",
-        "继续之前", "根据刚才", "信息已经补全", "信息已补全", "补全后继续",
-    ]
-    .iter()
-    .any(|p| t.contains(p))
-}
-
 // =============== Goal State（PART 5/7） ===============
 
 #[derive(Debug, serde::Serialize)]

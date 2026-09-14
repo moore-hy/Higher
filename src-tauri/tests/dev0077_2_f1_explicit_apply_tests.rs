@@ -74,84 +74,6 @@ fn run_turn(
     user_message: &str,
     intel_required: serde_json::Value,
 ) -> Result<&'static str, String> {
-    // F1.1 §45：用户明确要求「规划并写入」= REQUESTED（Fail Closed 下缺省
-    // None = UNKNOWN = 拒绝写入）。显式 DECLINED 反例（tc006）用 run_turn_ext。
-    run_turn_ext(state, vault, run_id, profile_id, conversation_id, user_message, intel_required, Some(true))
-}
-
-/// ARCH-001 §11：execution_requested 可注入（Proactive 反例 = Some(false)）。
-fn run_turn_ext(
-    state: &DbState,
-    vault: &VaultState,
-    run_id: &str,
-    profile_id: i64,
-    conversation_id: i64,
-    user_message: &str,
-    intel_required: serde_json::Value,
-    execution_requested: Option<bool>,
-) -> Result<&'static str, String> {
-    let goal_json = {
-        let mut g = json!({
-            "goal": "2028考研上岸华中科技大学408",
-            "goal_type": "education",
-            "deadline": "2028-12",
-            "priority": "high",
-            "planning_required": true,
-            "confidence": 0.95,
-            "required_information": intel_required,
-        });
-        if let Some(e) = execution_requested {
-            g["execution_requested"] = json!(e);
-        }
-        g
-    };
-    // ARCH-001 §21（新权威）：planning mission = execute_higher_actions 一次
-    // Action Pack → ONE ChangeSet → Auto Apply → ReadBack；旧 plan_draft JSON
-    // 文本协议已退役（dev0077_4 TC008/case2 同步更新）。
-    let main = vec![
-        planning_pack_tool_call(),
-        text_completion("已按你的档案完成 2028 考研计划并写入 Higher。"),
-    ];
-    run_turn_impl(state, vault, run_id, profile_id, conversation_id, user_message, goal_json, main)
-}
-
-/// ARCH-001 §44：自定义 main 序列（apply 失败 / feedback 重放等场景）。
-#[allow(clippy::too_many_arguments)]
-fn run_turn_pack(
-    state: &DbState,
-    vault: &VaultState,
-    run_id: &str,
-    profile_id: i64,
-    conversation_id: i64,
-    user_message: &str,
-    intel_required: serde_json::Value,
-    main: Vec<Completion>,
-) -> Result<&'static str, String> {
-    let goal_json = json!({
-        "goal": "2028考研上岸华中科技大学408",
-        "goal_type": "education",
-        "deadline": "2028-12",
-        "priority": "high",
-        "planning_required": true,
-        "confidence": 0.95,
-        "required_information": intel_required,
-        // F1.1 §45：自定义 main 序列场景（apply 失败等）同为用户明确要求执行。
-        "execution_requested": true,
-    });
-    run_turn_impl(state, vault, run_id, profile_id, conversation_id, user_message, goal_json, main)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_turn_impl(
-    state: &DbState,
-    vault: &VaultState,
-    run_id: &str,
-    profile_id: i64,
-    conversation_id: i64,
-    user_message: &str,
-    goal_json: serde_json::Value,
-    main: Vec<Completion>,
-) -> Result<&'static str, String> {
     let token = tokio_util::sync::CancellationToken::new();
     let cfg = runtime_cfg(profile_id);
     let args = AgentTurnArgs {
@@ -176,8 +98,18 @@ fn run_turn_impl(
         event_sink: None,
     };
     let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(vec![text_completion(&goal_json.to_string())])),
-        main: std::sync::Mutex::new(VecDeque::from(main)),
+        intel: std::sync::Mutex::new(VecDeque::from(vec![text_completion(&json!({
+            "goal": "2028考研上岸华中科技大学408",
+            "goal_type": "education",
+            "deadline": "2028-12",
+            "priority": "high",
+            "planning_required": true,
+            "confidence": 0.95,
+            "required_information": intel_required,
+        }).to_string())])),
+        main: std::sync::Mutex::new(VecDeque::from(vec![text_completion(
+            &plan_draft_json().to_string(),
+        )])),
         capture: None,
     };
     // 模拟 lib.rs send 层：user 消息先落库
@@ -188,84 +120,6 @@ fn run_turn_impl(
             .unwrap();
     }
     tauri::async_runtime::block_on(agent_turn_core(None, state, vault, responder, &args))
-}
-
-/// ARCH-001 §21 → F1.2 §3：满足 Mission Verify + 7~14 DISTINCT DATE 详细窗口
-/// 的 Action Pack（LOCAL_DATE=2026-08-24；窗口 08-25..09-07）。
-fn planning_pack_tool_call() -> Completion {
-    // F1.2 · P0-2：7~14 distinct dates（旧 3 天 fixture 在新权威下 invalid）
-    let days = [
-        "2026-08-25", "2026-08-26", "2026-08-27", "2026-08-28",
-        "2026-08-29", "2026-08-30", "2026-08-31",
-    ];
-    let day_goals: Vec<serde_json::Value> = days
-        .iter()
-        .map(|d| {
-            json!({
-                "type": "create_goal", "level": "day",
-                "name": format!("{d} 学习日"), "period": d,
-                "parent_level": "month", "parent_title": "2026 年 8 月",
-            })
-        })
-        .collect();
-    let tasks: Vec<serde_json::Value> = [
-        ("摸底自测：数学+英语+408 各一套", "2026-08-25", 90),
-        ("高数：函数与极限基础模块", "2026-08-26", 120),
-        ("408：数据结构导学", "2026-08-27", 90),
-        ("英语：阅读基础训练", "2026-08-28", 90),
-        ("高数：微分中值定理", "2026-08-29", 120),
-        ("408：操作系统导学", "2026-08-30", 90),
-        ("周复盘与错题整理", "2026-08-31", 60),
-    ]
-    .iter()
-    .map(|(t, d, m)| {
-        json!({
-            "type": "create_task", "title": t,
-            "date": { "kind": "absolute_date", "date": d },
-            "estimated_minutes": m,
-            "goal_hint": format!("{d} 学习日"),
-        })
-    })
-    .collect();
-    let mut actions: Vec<serde_json::Value> = vec![
-        json!({ "type": "set_final_goal_brief", "title": "2028考研上岸华中科技大学（408统考方向）",
-                "outcome": "成功考取华中科技大学计算机科学与技术学院（408统考）研究生", "deadline": "2028-12" }),
-        json!({
-            "type": "set_planning_blueprint", "title": "2028考研 408 全程复习蓝图",
-            "scenario_type": "postgraduate",
-            "phases": [
-                { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01",
-                  "end_date": "2027-06-30", "objective_md": "数学英语408基础一轮" }
-            ],
-            "milestones": [
-                { "milestone_key": "M1", "title": "基础一轮完成", "phase_key": "P1",
-                  "start_date": "2027-06-01", "end_date": "2027-06-30" }
-            ]
-        }),
-        json!({ "type": "create_goal", "level": "year", "name": "2026-2027：基础与强化年", "period": "2026" }),
-        json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
-                "parent_level": "year", "parent_title": "2026-2027：基础与强化年" }),
-    ];
-    actions.extend(day_goals);
-    actions.extend(tasks);
-    tool_call("execute_higher_actions", json!({
-        "title": "AI 规划 · 2028 考研 408 初始规划",
-        "actions": actions
-    }))
-}
-
-fn tool_call(name: &str, arguments: serde_json::Value) -> Completion {
-    Completion {
-        content: None,
-        reasoning_content: None,
-        finish_reason: Some("tool_calls".into()),
-        tool_calls: Some(json!([{
-            "id": format!("call_{name}"),
-            "type": "function",
-            "function": { "name": name, "arguments": arguments.to_string() }
-        }])),
-        usage: Usage::default(),
-    }
 }
 
 fn mk_profile(conn: &Connection, tag: &str) -> i64 {
@@ -504,8 +358,7 @@ fn f1_tc005_final_text() {
         !reply.contains("请在审查面板确认后应用"),
         "F1-TC005：禁用二次审批话术：{reply}"
     );
-    // ARCH-001 §33：ReadBack 交付文案前缀更新（OLD「已应用」→ NEW「本次实际创建」）
-    assert!(reply.contains("本次实际创建"), "F1-TC005：必须含 ReadBack 交付（§33）：{reply}");
+    assert!(reply.contains("已应用"), "F1-TC005：必须含「已应用」：{reply}");
     assert!(reply.contains("已创建") || reply.contains("实际创建"), "F1-TC005：必须含实际创建清单：{reply}");
     // §六模板要素：Final Goal / REACH / SAFETY / 未来7天任务（ReadBack 清单行）
     for must in ["Final Goal：", "REACH：", "SAFETY：", "未来7天任务："] {
@@ -513,16 +366,7 @@ fn f1_tc005_final_text() {
     }
 }
 
-// =============== F1-TC006 · Proactive → 0 mutation（§五新权威） ===============
-//
-// ARCH-001 §44 冲突测试更新（OLD/NEW/WHY）：
-// - OLD：Proactive（用户未要求执行）→ PlanDraft 编译为 pending ChangeSet
-//   （waiting_approval）+「审查面板」提案话术。
-// - NEW（§11/§34）：mission understanding 判定 execution_requested=false →
-//   Backend 防线拒绝 execute_higher_actions（execution_not_requested），
-//   0 mutation；分析型交付正常收口。
-// - WHY：Dedicated Planner「模型自愿提案」通道退役；Proactive 保护迁移为
-//   execution_requested 结构化判定（ARCH001-TC15 同语义）。
+// =============== F1-TC006 · Proactive → proposal only ===============
 
 #[test]
 fn f1_tc006_proactive_proposal_only() {
@@ -533,21 +377,18 @@ fn f1_tc006_proactive_proposal_only() {
         seed_personal_profile(&conn, pid);
         (pid, new_conv(&conn, pid))
     };
-    // 用户只要求看档案（未要求执行规划）→ execution_requested=false → 防线 0 mutation
-    let out = run_turn_ext(&state, &vault, "f1-pro", pid, cid, PROACTIVE_MSG, json!([]), Some(false))
-        .unwrap();
+    // 用户只要求看档案（未要求执行规划）；模型/AI 侧自行产出 plan_draft → §五 proposal only
+    let out = run_turn(&state, &vault, "f1-pro", pid, cid, PROACTIVE_MSG, json!([])).unwrap();
     assert_eq!(out, "completed");
     let conn = state.0.lock().unwrap();
-    // 0 mutation：正式数据零变化（无 ChangeSet、无 Goal/Task/Blueprint）
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM ai_change_sets WHERE profile_id=?1", pid), 0, "ChangeSet 0");
+    let (_id, status) = cs_row(&conn, pid);
+    assert_eq!(status, "waiting_approval", "F1-TC006：Proactive 保持提案（不自动 Apply）");
+    // 0 mutation：正式数据零变化
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM goals WHERE profile_id=?1", pid), 0, "goals 0");
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM tasks WHERE profile_id=?1", pid), 0, "tasks 0");
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM planning_blueprints WHERE profile_id=?1", pid), 0, "blueprints 0");
     let reply = last_assistant(&conn, cid, pid);
-    assert!(
-        !reply.contains("本次实际创建") && !reply.contains("已写入"),
-        "F1-TC006：未授权执行不得声称写入：{reply}"
-    );
+    assert!(reply.contains("审查面板"), "F1-TC006：提案话术交用户决定：{reply}");
 }
 
 // =============== F1-TC007 · Apply failure → 不得 success ===============
@@ -577,16 +418,8 @@ fn f1_tc007_apply_failure_not_success() {
         .unwrap();
         (pid, new_conv(&conn, pid))
     };
-    let out = run_turn_pack(&state, &vault, "f1-fail", pid, cid, EXPLICIT_MSG, json!([]), vec![
-        planning_pack_tool_call(),
-        text_completion("写入失败，我再检查一下。"),
-        text_completion("仍然失败。"),
-        text_completion("无法完成写入。"),
-    ]);
-    // ARCH-001 §44 更新：pack Apply 失败 = 工具级 apply_failed（0 mutation 整包
-    // 回滚），run 由 Mission verify 收口 failed（旧链 plan_draft compile Err 上抛
-    // 的等价可观察终态：非 completed + error 记录 + 0 mutation）。
-    assert_eq!(out, Ok("failed"), "F1-TC007：写入失败必须 run failed：{out:?}");
+    let out = run_turn(&state, &vault, "f1-fail", pid, cid, EXPLICIT_MSG, json!([]));
+    assert!(out.is_err(), "F1-TC007：Apply 失败必须上抛（run failed）：{out:?}");
     let conn = state.0.lock().unwrap();
     let run_err: String = conn
         .query_row(
@@ -596,12 +429,13 @@ fn f1_tc007_apply_failure_not_success() {
         )
         .unwrap();
     assert!(!run_err.is_empty(), "F1-TC007：run error 记录失败原因");
+    assert!(run_err.contains("失败") || run_err.contains("未通过"), "F1-TC007：error 文案如实：{run_err}");
     let reply = last_assistant(&conn, cid, pid);
     assert!(
         !reply.contains("已应用") && !reply.contains("完成规划并写入"),
         "F1-TC007：失败时不得声称完成：{reply}"
     );
-    assert!(reply.contains("未完成交付") || reply.contains("失败") || reply.contains("未通过"), "F1-TC007：失败可见：{reply}");
+    assert!(reply.contains("失败") || reply.contains("未通过"), "F1-TC007：失败可见：{reply}");
     // business mutation 原子性：draft 全部 ops 回滚（0 新任务；既有 year 仍 1）
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM tasks WHERE profile_id=?1", pid), 0, "0 mutation");
     assert_eq!(

@@ -629,42 +629,18 @@ pub fn plan_action(
             date,
             time_of_day,
             estimated_minutes,
-            goal_hint,
+            goal_hint: _,
             knowledge_hint,
             task_kind,
             priority,
         } => {
             let planned_date = date.0.resolve(env)?;
-            // DEV-AI-ARCH-001-F1.1 §13：goal_hint 不再丢弃——作为内部字段
-            // 透传给 pack 编译层（同 pack Day Goal / 已有 Day Goal 关联依据；
-            // 落库前由 pack 层消费并移除，避免脏字段入库）。
-            let goal_hint_clean = goal_hint.as_deref().map(str::trim).filter(|s| !s.is_empty());
-            // DEV-AI-ARCH-001 §21 · create_task 幂等（对齐 create_goal D09）：
-            // 同 profile + 同 planned_date + 同 title 的有效任务已存在 → no-op。
-            // 防线场景：用户「再检查一遍计划 / 继续」时模型重放同一 Action Pack
-            // → 不得重复落库（§31 verify 的同日同名 dup 检查配套）。
-            let dup: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM tasks
-                     WHERE profile_id=?1 AND planned_date=?2 AND title=?3 AND archived_at IS NULL",
-                    params![profile_id, planned_date, title],
-                    |r| r.get(0),
-                )
-                .unwrap_or(0);
-            if dup > 0 {
-                return Ok(ActionOutcome::NothingToChange(format!(
-                    "任务「{title}」（{planned_date}）已存在，保持不变（幂等）"
-                )));
-            }
             let mut after = json!({
                 "title": title,
                 "planned_date": planned_date,
                 "task_kind": task_kind.clone().unwrap_or_else(|| "structured".into()),
                 "priority": priority.clone().unwrap_or_else(|| "normal".into()),
             });
-            if let Some(gh) = goal_hint_clean {
-                after["_goal_hint"] = json!(gh);
-            }
             if let Some(t) = time_of_day {
                 after["planned_time"] = json!(t);
             }
@@ -705,11 +681,7 @@ pub fn plan_action(
             end_date,
             time_of_day,
             estimated_minutes,
-            // F1.2 · §8 · Recurring Task Goal Link：goal_hint 不再静默丢弃——
-            // 首日实例 task op 携带 _goal_hint，走与普通 Task 一致的 Goal
-            // grounding Authority（Formal Planning Mission 强关联；普通独立
-            // recurring task 保持 Goal Optional）。
-            goal_hint,
+            goal_hint: _,
             knowledge_hint,
             task_kind,
             priority,
@@ -788,9 +760,6 @@ pub fn plan_action(
                 }
                 if let Some(m) = estimated_minutes {
                     task_after["estimated_minutes"] = json!(m);
-                }
-                if let Some(gh) = goal_hint.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                    task_after["_goal_hint"] = json!(gh);
                 }
                 ops.push(ProposedOp {
                     entity_type: "task".into(),

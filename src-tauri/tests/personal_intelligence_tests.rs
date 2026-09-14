@@ -87,58 +87,6 @@ fn text_completion(body: &str) -> Completion {
     }
 }
 
-/// ARCH-001 §21 → F1.2 §3：满足 Mission Verify + 7~14 DISTINCT DATE 详细窗口
-/// 的 Action Pack（LOCAL_DATE=2026-08-24；窗口 08-25..09-07）。
-///（goal planning_required=true + required=[] → planning mission 需真实交付）
-fn planning_pack_tool_call() -> Completion {
-    // F1.2 · P0-2/P0-5：7~14 distinct dates + Task→Day 强关联
-    let mut actions: Vec<serde_json::Value> = vec![
-        json!({ "type": "set_final_goal_brief", "outcome": "考研数学二上岸：完成初始规划" }),
-        json!({ "type": "set_planning_blueprint", "title": "考研数学复习蓝图", "scenario_type": "postgraduate",
-          "phases": [ { "phase_key": "P1", "title": "基础阶段", "start_date": "2026-09-01", "end_date": "2026-12-31", "objective_md": "基础一轮" } ],
-          "milestones": [ { "milestone_key": "M1", "title": "基础完成", "phase_key": "P1", "start_date": "2026-12-01", "end_date": "2026-12-31" } ] }),
-        json!({ "type": "create_goal", "level": "year", "name": "2026 备考年", "period": "2026" }),
-        json!({ "type": "create_goal", "level": "month", "name": "2026 年 8 月", "period": "2026-08",
-          "parent_level": "year", "parent_title": "2026 备考年" }),
-    ];
-    let days = [
-        ("2026-08-25", "高数基础", 60),
-        ("2026-08-26", "线代基础", 60),
-        ("2026-08-27", "概率基础", 60),
-        ("2026-08-28", "高数强化", 75),
-        ("2026-08-29", "线代强化", 60),
-        ("2026-08-30", "真题训练", 90),
-        ("2026-08-31", "周复盘整理", 60),
-    ];
-    for (d, t, m) in days {
-        let gname = format!("{d} 学习日");
-        actions.push(json!({
-            "type": "create_goal", "level": "day", "name": gname, "period": d,
-            "parent_level": "month", "parent_title": "2026 年 8 月",
-        }));
-        actions.push(json!({
-            "type": "create_task", "title": format!("{d} 数学：{t}"),
-            "date": { "kind": "absolute_date", "date": d }, "estimated_minutes": m,
-            "goal_hint": gname,
-        }));
-    }
-    let args = json!({
-        "title": "AI 规划 · 考研数学二初始规划",
-        "actions": actions
-    });
-    Completion {
-        content: None,
-        reasoning_content: None,
-        finish_reason: Some("tool_calls".into()),
-        tool_calls: Some(json!([{
-            "id": "call_execute_higher_actions",
-            "type": "function",
-            "function": { "name": "execute_higher_actions", "arguments": args.to_string() }
-        }])),
-        usage: Usage::default(),
-    }
-}
-
 fn mk_fixture(conn: &Connection, user_message: &str) -> (i64, i64, i64) {
     let profile_id = mk_profile(conn);
     let conv = ConversationRepository::new(conn)
@@ -252,11 +200,10 @@ fn pi_at002_memory_extraction_persists() {
         &state, &vault, "pi-at002-run", profile_id, conv, msg,
         "我最近准备考研数学二，我长期关注AI创业",
         vec![
-            text_completion(r#"{"goal":"考研数学二复习","goal_type":"education","planning_required":true,"execution_requested":true,"required_information":[]}"#),
+            text_completion(r#"{"goal":"考研数学二复习","goal_type":"education","planning_required":true,"required_information":[]}"#),
             text_completion(&extraction.to_string()),
         ],
-        //（ARCH-001 §21：planning mission 需 Action Pack 交付）
-        vec![planning_pack_tool_call(), text_completion("已记录你的备考方向并写入初始规划。")],
+        vec![text_completion("已记录你的备考方向。")],
     );
     assert_eq!(out.unwrap(), "completed");
 

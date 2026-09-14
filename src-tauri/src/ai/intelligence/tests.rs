@@ -90,7 +90,7 @@ fn goal_dynamic_inference_maps_required_information() {
       ]}"#;
     let uc = UserContext::default();
     let g = tauri::async_runtime::block_on(goal_understanding::analyze(
-        &scripted(json), &uc, "我想三年内做一个自己的 SaaS", None, "", &Default::default(), "",
+        &scripted(json), &uc, "我想三年内做一个自己的 SaaS", &Default::default(), "",
     ))
     .unwrap();
     assert_eq!(g.goal_type, "career");
@@ -112,13 +112,13 @@ fn goal_analysis_rejects_invalid_source_kind_and_empty_goal_items() {
     let bad = r#"{"goal":"x","goal_type":"other","required_information":[{"key":"k","source_kind":"web"}]}"#;
     let uc = UserContext::default();
     let r = tauri::async_runtime::block_on(goal_understanding::analyze(
-        &scripted(bad), &uc, "x", None, "", &Default::default(), "",
+        &scripted(bad), &uc, "x", &Default::default(), "",
     ));
     assert!(r.is_err(), "非法 source_kind 必须整体失败");
 
     let casual = r#"{"goal":"","goal_type":"other","required_information":[{"key":"k","source_kind":"user"}]}"#;
     let g = tauri::async_runtime::block_on(goal_understanding::analyze(
-        &scripted(casual), &uc, "1+1是多少", None, "", &Default::default(), "",
+        &scripted(casual), &uc, "1+1是多少", &Default::default(), "",
     ))
     .unwrap();
     assert!(g.goal.is_empty());
@@ -341,8 +341,6 @@ fn goal_understanding_phase3_fields_backward_compatible() {
         &scripted(raw),
         &super::UserContext::default(),
         "我要准备2028考研",
-        None,
-        "",
         &Default::default(),
         "",
     ))
@@ -369,8 +367,6 @@ fn goal_understanding_phase3_chitchat_clears_extended_fields() {
         &scripted(&raw.to_string()),
         &super::UserContext::default(),
         "1+1等于多少",
-        None,
-        "",
         &Default::default(),
         "",
     ))

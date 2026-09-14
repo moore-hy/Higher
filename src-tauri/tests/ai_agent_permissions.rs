@@ -144,63 +144,6 @@ fn run_turn(
     tauri::async_runtime::block_on(agent_turn_core(None, state, vault, responder, &args))
 }
 
-/// F1.1 §42/§45：mutation 场景 intel 通道必须真实脚本化（Scripted 单队列对
-/// intel 一律 Err → 静默降级 → 授权 UNKNOWN → Fail Closed 拒绝写入）。
-#[allow(clippy::too_many_arguments)]
-fn run_turn_intel(
-    state: &DbState,
-    vault: &VaultState,
-    profile_id: i64,
-    conversation_id: i64,
-    current_message_id: i64,
-    user_message: &str,
-    intel: Vec<Completion>,
-    scripted: Vec<Completion>,
-) -> Result<&'static str, String> {
-    let token = tokio_util::sync::CancellationToken::new();
-    let cfg = runtime_cfg(profile_id);
-    let args = AgentTurnArgs {
-        profile_id,
-        conversation_id,
-        run_id: RUN_ID,
-        token: &token,
-        current_message_id,
-        user_message,
-        primary: &cfg,
-        page_label: "Today",
-        knowledge_path: None,
-        session_title: None,
-        date: None,
-        web_enabled: false,
-        brave_key: "",
-        local_date: LOCAL_DATE.into(),
-        local_datetime: format!("{LOCAL_DATE} 10:30"),
-        timezone_offset_minutes: 480,
-        client_turn_id: "",
-        event_sink: None,
-    };
-    let responder = ModelResponder::ScriptedIntel {
-        intel: std::sync::Mutex::new(VecDeque::from(intel)),
-        main: std::sync::Mutex::new(VecDeque::from(scripted)),
-        capture: None,
-    };
-    tauri::async_runtime::block_on(agent_turn_core(None, state, vault, responder, &args))
-}
-
-/// F1.1 §45：用户明确要求安排/删除（执行写入）的 intel 结构化输出。
-fn goal_exec_json(goal: &str) -> Completion {
-    final_answer(&json!({
-        "goal": goal,
-        "goal_type": "education",
-        "deadline": null,
-        "priority": "normal",
-        "planning_required": false,
-        "execution_requested": true,
-        "confidence": 0.9,
-        "required_information": []
-    }).to_string())
-}
-
 fn envelope(p: i64, c: i64) -> AiRuntimeEnvelope {
     AiRuntimeEnvelope::validated(
         LOCAL_DATE,
@@ -230,7 +173,7 @@ fn run_pack(
     actions: &[J],
 ) -> J {
     execute_higher_action_pack(
-        None, conn, vault, p, c, RUN_ID, &envelope(p, c), "测试指令", title, actions, false, false,
+        None, conn, vault, p, c, RUN_ID, &envelope(p, c), "测试指令", title, actions,
     )
     .json
 }
@@ -266,11 +209,7 @@ fn p01_level1_pack_auto_applies_one_changeset_and_verifies() {
         final_answer("已创建明天的数学（60 分钟）和英语（30 分钟）任务。"),
     ];
 
-    let out = run_turn_intel(
-        &state, &vault, p, c, m, "明天安排 60 分钟数学和 30 分钟英语",
-        vec![goal_exec_json("安排明天 60 分钟数学 + 30 分钟英语学习")],
-        scripted,
-    );
+    let out = run_turn(&state, &vault, p, c, m, "明天安排 60 分钟数学和 30 分钟英语", scripted);
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
@@ -330,11 +269,7 @@ fn p02_level2_bulk_delete_requires_confirmation_zero_mutation() {
         final_answer("这是破坏性操作，我已生成待确认的删除清单（3 个任务），请你在确认界面决定是否执行。"),
     ];
 
-    let out = run_turn_intel(
-        &state, &vault, p, c, m, "把我今天所有的任务全部删掉",
-        vec![goal_exec_json("删除今天全部任务")],
-        scripted,
-    );
+    let out = run_turn(&state, &vault, p, c, m, "把我今天所有的任务全部删掉", scripted);
     assert_eq!(out, Ok("completed"));
 
     let conn = state.0.lock().unwrap();
@@ -575,11 +510,9 @@ fn p08_undo_rolls_back_level1_apply() {
     assert_eq!(status, "undone");
 }
 
-// =============== P09 · 混包 = 整包 Level2 确认（F1.1 §22-§24 新权威） ===============
+// =============== P09 · 混包拒绝 ===============
 
-/// bulk_delete_tasks（Level 2）与普通业务动作同 Pack → 整包 permission=max：
-/// ONE ChangeSet waiting_approval，确认前**所有 ops**（含新建）0 mutation；
-/// 确认后 ONE atomic Apply（旧删新建成）。替代旧「混包拒绝 invalid_pack」。
+/// bulk_delete_tasks（Level 2）不得与普通业务动作混在同一 Pack。
 #[test]
 fn p09_level2_cannot_mix_with_normal_actions() {
     let (state, vault) = setup("p09");
@@ -597,28 +530,12 @@ fn p09_level2_cannot_mix_with_normal_actions() {
             json!({ "type": "create_task", "title": "新任务", "date": { "kind": "tomorrow" } }),
         ],
     );
-    assert_eq!(out["status"], "confirmation_required", "混包 = 整包 Level2 确认（F1.1 §22）：{out}");
-    assert_eq!(count(&conn, "ai_change_sets"), 1, "ONE ChangeSet");
+    assert_eq!(out["status"], "invalid_pack", "混包必须拒绝：{out}");
+    assert_eq!(count(&conn, "ai_change_sets"), 0, "0 ChangeSet");
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM tasks WHERE profile_id=?1", params![p], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 1, "确认前旧任务原样、新任务未建（0 mutation）");
-    // 确认（用户 UI Apply）→ ONE atomic Apply：旧删 + 新建
-    let cs_id = out["change_set_id"].as_i64().unwrap();
-    app_lib::ai::commands::apply_change_set_with_side_effects(
-        None, &conn, &vault, p, cs_id, false, "user",
-    )
-    .unwrap();
-    let (old_n, new_n): (i64, i64) = conn
-        .query_row(
-            "SELECT
-                (SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='旧任务'),
-                (SELECT COUNT(*) FROM tasks WHERE profile_id=?1 AND title='新任务')",
-            params![p],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!((old_n, new_n), (0, 1), "确认后原子生效：旧删除 + 新建落地");
+    assert_eq!(n, 1, "旧任务原样、新任务未建（0 mutation）");
 }
 
 // =============== P10 · permission 定级单元 ===============

@@ -256,5 +256,5 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 29, "幂等：不重复应用（v029 全链）");
+    assert_eq!(n, 27, "幂等：不重复应用");
 }

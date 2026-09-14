@@ -130,12 +130,6 @@ impl From<String> for PackAbort {
 }
 
 /// §11 Action Pack 执行入口（一次工具调用 = 一个 Pack = 至多一个 ChangeSet）。
-/// F1.2 新增 Mission Gate 参数：
-/// - `initial_planning`：本 pack 是 Initial Planning Mission 的首次正式写入
-///   → 语义 Preflight（A-J，§P0-3）在 ChangeSetRepository::create **之前**
-///   确定性验证（失败 = invalid_planning_pack，0 CS 0 op 0 mutation）；
-/// - `formal_planning`：本 pack 属 Formal Planning Mission → Task→Day 强关系
-///   （§P0-5：每个 structured planned Task 必须关联 Day Goal）。
 #[allow(clippy::too_many_arguments)]
 pub fn execute_higher_action_pack(
     app: Option<&tauri::AppHandle>,
@@ -148,8 +142,6 @@ pub fn execute_higher_action_pack(
     user_message: &str,
     pack_title: &str,
     actions: &[J],
-    initial_planning: bool,
-    formal_planning: bool,
 ) -> HigherActionResult {
     if actions.is_empty() {
         return HigherActionResult {
@@ -212,10 +204,25 @@ pub fn execute_higher_action_pack(
             HigherAction::PhaseD { type_name, .. } => phase_d_actions.push((type_name, v.clone())),
         }
     }
+    // 混包检查（解析完成后统一做——顺序无关）：Level 2 必须独立提交
+    if bulk_delete.is_some() && (!semantic_actions.is_empty() || !phase_d_actions.is_empty()) {
+        return HigherActionResult {
+            json: json!({
+                "status": "invalid_pack",
+                "message": "bulk_delete_tasks（需人工确认）必须独立提交，不得与其他动作混包",
+                "formal_mutations": 0,
+            }),
+            applied_change_set: None,
+            pending_change_set: None,
+        };
+    }
 
-    // ---- ② Phase D 域先编译（F1.1 §15 编译顺序：Goal create 必须在引用它的
-    // Task 之前——禁止 Forward Ref；CompileCtx.created_goals 供 Task 域
-    // goal_hint 解析为同 pack goal_ref）----
+    // ---- ② Level 2 分支：bulk_delete_tasks → pending ChangeSet（绝不自动执行）----
+    if let Some(bd) = bulk_delete {
+        return compile_bulk_delete(conn, profile_id, conversation_id, run_id, env, pack_title, bd);
+    }
+
+    // ---- ③ Level 1 编译：Task 域（Resolver/Grounding）+ Phase D 域（Compiler）----
     let input = super::action::PlanInput {
         user_message,
         conversation_id,
@@ -224,36 +231,7 @@ pub fn execute_higher_action_pack(
     let mut all_ops: Vec<ProposedOp> = Vec::new();
     let mut pack_summary = String::new();
     let mut skipped: Vec<J> = Vec::new();
-    // Phase D 域先编译（GoalTarget / Final Goal / Goal Tree / Planning）——
-    // F1.1 §15：Goal create 必须先于引用它的 Task（禁 Forward Ref）。
-    let mut cctx = CompileCtx::default();
-    for (type_name, v) in &phase_d_actions {
-        let compiled = match compile_phase_d(conn, profile_id, &mut cctx, type_name, v) {
-            Ok(x) => x,
-            Err(abort) => {
-                // 关键 action 编译失败 → 整包 0 mutation（§5/D08）
-                return HigherActionResult {
-                    json: abort.into_json(),
-                    applied_change_set: None,
-                    pending_change_set: None,
-                };
-            }
-        };
-        match compiled {
-            CompiledPhaseD { ops, note } => {
-                if ops.is_empty() {
-                    skipped.push(json!({ "type": type_name, "note": note }));
-                } else {
-                    if !pack_summary.is_empty() {
-                        pack_summary.push('；');
-                    }
-                    pack_summary.push_str(&note);
-                    all_ops.extend(ops);
-                }
-            }
-        }
-    }
-    // Task 域后编译（Resolver/Grounding）
+    // Task 域
     for a in &semantic_actions {
         let outcome = match super::action::plan_action(conn, profile_id, env, &input, a) {
             Ok(o) => o,
@@ -294,13 +272,8 @@ pub fn execute_higher_action_pack(
                     pending_change_set: None,
                 };
             }
-            // DEV-AI-ARCH-001 §21 · Task 域幂等 no-op（create_task 同日同名已存在）
-            // → 温和跳过（进 skipped，不建重复数据），其余 action 继续编译；
-            // NotFound/Unsupported/ContractFailure 仍为整包 0 mutation 拒绝。
-            super::action::ActionOutcome::NothingToChange(m) => {
-                skipped.push(json!({ "type": a.type_name(), "note": m }));
-            }
             super::action::ActionOutcome::NotFound(m)
+            | super::action::ActionOutcome::NothingToChange(m)
             | super::action::ActionOutcome::Unsupported(m)
             | super::action::ActionOutcome::ContractFailure(m) => {
                 return HigherActionResult {
@@ -311,67 +284,32 @@ pub fn execute_higher_action_pack(
             }
         }
     }
-    // ---- F1.1 §13/§14 · Same-Pack Goal Grounding：task create ops 的
-    // _goal_hint → 真实 goal 关联（goal_ref / goal_id）----
-    // A. 同 pack 更早 create 的 Day Goal（created_goals ref → goal_ref，
-    //    Apply 走既有 resolve_refs → real goal_id）；
-    // B. 已有 Day Goal（DB 唯一命中 → after.goal_id 直连）。
-    // 多命中（§16 Ambiguous）或日期不一致（§17 Date Contract）→ invalid_pack
-    // 0 ChangeSet；hint 0 命中（明确要求关联却无目标）→ invalid_pack；
-    // 无 hint：Goal Optional 保留 goal_id=NULL（Quick Study / 临时任务）。
-    if let Err(abort) = resolve_task_goal_hints(conn, profile_id, &cctx, &mut all_ops, formal_planning) {
-        return HigherActionResult {
-            json: abort.into_json(),
-            applied_change_set: None,
-            pending_change_set: None,
+    // Phase D 域（GoalTarget / Final Goal / Goal Tree / Planning）
+    let mut cctx = CompileCtx::default();
+    for (type_name, v) in &phase_d_actions {
+        let compiled = match compile_phase_d(conn, profile_id, &mut cctx, type_name, v) {
+            Ok(x) => x,
+            Err(abort) => {
+                // 关键 action 编译失败 → 整包 0 mutation（§5/D08）
+                return HigherActionResult {
+                    json: abort.into_json(),
+                    applied_change_set: None,
+                    pending_change_set: None,
+                };
+            }
         };
-    }
-    // ---- F1.2 · P0-3 · Initial Planning Semantic Preflight（A-J）----
-    // 编译产物（ProposedOps，全部确定性字段）在 ChangeSetRepository::create
-    // **之前**确定性验证：Final/Blueprint/Year/当前 Month（pack set 或 DB
-    // reused）/ Day 详细窗口（DISTINCT DATE 7~14 且 ∈ [local+1, local+14]）/
-    // Task 窗口内 + 每个 study Day 有执行内容（rest Day 用 day_kind=rest 显式
-    // 表达）/ Task→Day ground（G，formal 强关系）/ 重复实体（J）。
-    // 失败 = invalid_planning_pack（0 CS、0 ai_change_operations、0 mutation），
-    // Agent 可根据 feedback 重新提交修正后的完整 Action Pack（§5：Invalid
-    // Pack #1/#2 → 0 CS；Valid Pack #3 → ONE ChangeSet）。
-    if initial_planning {
-        if let Err(msg) = preflight_initial_planning_semantics(conn, profile_id, env, &all_ops) {
-            return HigherActionResult {
-                json: json!({
-                    "status": "invalid_planning_pack",
-                    "message": msg,
-                    "formal_mutations": 0,
-                }),
-                applied_change_set: None,
-                pending_change_set: None,
-            };
-        }
-    }
-    // ---- F1.1 §22-§25 · Mixed Pack：bulk_delete_tasks 可与 Level1 create/update
-    // 同 pack（整包 permission = max(op permissions)）→ ONE ChangeSet →
-    // Level2 → waiting_approval（确认前所有 ops 均 0 mutation，原子 Apply）。
-    let mut pending_delete_count: usize = 0;
-    if let Some(bd) = bulk_delete {
-        match compile_bulk_delete_ops(conn, profile_id, env, bd) {
-            Ok(Some(ops)) => {
-                pending_delete_count = ops.len();
-                if !pack_summary.is_empty() {
-                    pack_summary.push('；');
+        match compiled {
+            CompiledPhaseD { ops, note } => {
+                if ops.is_empty() {
+                    skipped.push(json!({ "type": type_name, "note": note }));
+                } else {
+                    if !pack_summary.is_empty() {
+                        pack_summary.push('；');
+                    }
+                    pack_summary.push_str(&note);
+                    all_ops.extend(ops);
                 }
-                pack_summary.push_str(&format!(
-                    "批量删除 {} 个任务（Level 2，整体待确认）",
-                    pending_delete_count
-                ));
-                all_ops.extend(ops);
             }
-            Ok(None) => {
-                skipped.push(json!({
-                    "type": "bulk_delete_tasks",
-                    "note": "没有匹配到可删除的任务（0 删除 ops）"
-                }));
-            }
-            Err(res) => return res,
         }
     }
     // 全部 no-op（幂等重放）→ 不建空 ChangeSet
@@ -411,28 +349,6 @@ pub fn execute_higher_action_pack(
             }
         }
     };
-
-    // ---- ⑤ F1.1 §22-§24 · Mixed Pack Risk Escalation：整包 permission =
-    // max(op permissions)——含 Level2 destructive（bulk_delete）→ ONE ChangeSet
-    // 保持 waiting_approval，确认前**所有 ops**（含 Level1 create）均不 Apply
-    //（禁止两段式：先创建新计划再等确认删除）。确认后 ONE atomic Apply。
-    if pending_delete_count > 0 {
-        return HigherActionResult {
-            json: json!({
-                "status": "confirmation_required",
-                "permission": PermissionLevel::Level2ConfirmRequired.as_str(),
-                "change_set_id": cs_id,
-                "title": pack_title,
-                "summary": pack_summary,
-                "pending_deletes": pending_delete_count,
-                "ops": all_ops.len(),
-                "message": "本修改集包含破坏性操作（批量删除），已整体生成待确认修改集；确认前不会写入任何变更（包括其中的新建部分）。请向用户说明范围并等待用户在界面上确认",
-                "formal_mutations": 0,
-            }),
-            applied_change_set: None,
-            pending_change_set: Some(cs_id),
-        };
-    }
 
     // ---- ⑤ Level 1 自动 Apply（§13 共享实现：事务 + grounding + 审计 + 快照 + 广播）----
     if let Err(e) = super::commands::apply_change_set_with_side_effects(
@@ -1311,21 +1227,6 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
     if let Some(d) = v.get("review_interval_days").and_then(|x| x.as_i64()) {
         bp_after["review_interval_days"] = json!(d);
     }
-    // DEV-AI-ARCH-001 §30 · Blueprint provenance 最小补齐：action 可选携带
-    // source_snapshot / provenance（object）→ 编译写入 source_snapshot_json /
-    // provenance_json 列（记录 PersonalProfile version / 目标观察来源 / 外部
-    // 网页来源 / 当前 Higher facts）。引擎侧已有缺省 "{}"（changeset.rs apply）。
-    // 禁止保存 API Key / 完整 reasoning / 敏感原始 prompt（治理）。
-    if let Some(ss) = v.get("source_snapshot").filter(|x| !x.is_null()) {
-        if let Ok(s) = serde_json::to_string(ss) {
-            bp_after["source_snapshot_json"] = json!(s);
-        }
-    }
-    if let Some(pv) = v.get("provenance").filter(|x| !x.is_null()) {
-        if let Ok(s) = serde_json::to_string(pv) {
-            bp_after["provenance_json"] = json!(s);
-        }
-    }
     ops.push(ProposedOp {
         entity_type: "planning_blueprint".into(),
         entity_id: None,
@@ -1423,403 +1324,64 @@ fn compile_planning_blueprint(conn: &Connection, profile_id: i64, v: &J) -> Resu
 }
 
 // =====================================================================
-// F1.2 · P0-3 · Initial Planning Semantic Preflight（A-J，ops 级）
+// Level 2 · bulk_delete_tasks 编译（Phase C）
 // =====================================================================
 
-/// 详细窗口边界日期：local_date 偏移 n 天（简单日历算术，YYYY-MM-DD）。
-fn date_offset_ymd(base: &str, days: i64) -> Option<String> {
-    let p: Vec<i64> = base.split('-').filter_map(|x| x.parse().ok()).collect();
-    if p.len() != 3 {
-        return None;
-    }
-    // days_from_civil 等价（proleptic Gregorian）
-    let (y, m, d) = (p[0], p[1], p[2]);
-    let y2 = if m <= 2 { y - 1 } else { y };
-    let era = if y2 >= 0 { y2 } else { y2 - 399 } / 400;
-    let yoe = y2 - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468 + days;
-    let civil = |z: i64| -> (i64, i64, i64) {
-        let z = z + 719468;
-        let era = if z >= 0 { z } else { z - 146096 } / 146097;
-        let doe = z - era * 146097;
-        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-        let y = yoe + era * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = doy - (153 * mp + 2) / 5 + 1;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 };
-        (if m <= 2 { y + 1 } else { y }, m, d)
-    };
-    let (ry, rm, rd) = civil(days);
-    Some(format!("{ry:04}-{rm:02}-{rd:02}"))
-}
-
-/// A-J 语义检查（编译后 ProposedOps，全部确定性字段；在 CS create 之前）。
-/// Err(message) = invalid_planning_pack（0 CS 0 op 0 mutation）。
-fn preflight_initial_planning_semantics(
+fn compile_bulk_delete(
     conn: &Connection,
     profile_id: i64,
+    conversation_id: i64,
+    run_id: &str,
     env: &super::runtime::AiRuntimeEnvelope,
-    ops: &[ProposedOp],
-) -> Result<(), String> {
-    let local = env.local_date.as_str();
-    let win_lo = date_offset_ymd(local, 1).unwrap_or_else(|| local.to_string());
-    let win_hi = date_offset_ymd(local, 14).unwrap_or_else(|| local.to_string());
-
-    // ---- pack ops 交付意图提取 ----
-    let has_final_brief = ops.iter().any(|op| op.entity_type == "goal"
-        && (op.action == "create"
-            && op.after.get("goal_level").and_then(|l| l.as_str()) == Some("final")
-            || op.after.get("goal_brief").is_some()));
-    let has_blueprint = ops.iter().any(|op| op.entity_type == "planning_blueprint");
-    let year_dates: Vec<&str> = ops
-        .iter()
-        .filter(|op| op.entity_type == "goal" && op.action == "create"
-            && op.after.get("goal_level").and_then(|l| l.as_str()) == Some("year"))
-        .filter_map(|op| op.after.get("period").and_then(|p| p.as_str()))
-        .collect();
-    let month_periods: Vec<&str> = ops
-        .iter()
-        .filter(|op| op.entity_type == "goal" && op.action == "create"
-            && op.after.get("goal_level").and_then(|l| l.as_str()) == Some("month"))
-        .filter_map(|op| op.after.get("period").and_then(|p| p.as_str()))
-        .collect();
-    // E · Day Goals：DISTINCT DATE（P0-2：7 个 create_goal 同一天 ≠ 7 天）
-    let mut day_dates: Vec<(String, String)> = Vec::new(); // (date, day_kind)
-    for op in ops.iter().filter(|op| op.entity_type == "goal" && op.action == "create") {
-        if op.after.get("goal_level").and_then(|l| l.as_str()) == Some("day") {
-            let d = op.after.get("period").and_then(|p| p.as_str()).unwrap_or("").to_string();
-            let dk = op
-                .after
-                .get("day_kind")
-                .and_then(|k| k.as_str())
-                .unwrap_or("study")
-                .to_string();
-            day_dates.push((d, dk));
-        }
-    }
-    // F · Tasks（编译后 planned_date 为绝对日期）
-    let mut task_dates: Vec<String> = Vec::new();
-    for op in ops.iter().filter(|op| op.entity_type == "task" && op.action == "create") {
-        if let Some(d) = op.after.get("planned_date").and_then(|p| p.as_str()) {
-            task_dates.push(d.to_string());
-        }
-    }
-    // G · Task→Day ground：goal_ref / goal_id 至少其一（formal planning 由
-    // resolve_task_goal_hints 强制；此处对 initial 再确定性复核）
-    let ungrounded: Vec<&str> = ops
-        .iter()
-        .filter(|op| op.entity_type == "task" && op.action == "create")
-        .filter(|op| {
-            op.after.get("goal_ref").is_none() && op.after.get("goal_id").is_none()
-        })
-        .filter_map(|op| op.after.get("title").and_then(|t| t.as_str()))
-        .collect();
-
-    let mut missing: Vec<String> = Vec::new();
-    // A · Final Goal（pack set 或 DB 存在 reused）
-    if !has_final_brief && q_exists(conn, "SELECT EXISTS(SELECT 1 FROM goals WHERE profile_id=?1 AND goal_level='final' AND status!='archived')", profile_id) == 0 {
-        missing.push("Final Goal（set_final_goal_brief 或已有最终目标根）".into());
-    }
-    // B · Active Blueprint（pack set 或 DB 存在）
-    if !has_blueprint
-        && q_exists(conn, "SELECT EXISTS(SELECT 1 FROM planning_blueprints WHERE profile_id=?1 AND status='active')", profile_id) == 0
-    {
-        missing.push("Active PlanningBlueprint（set_planning_blueprint 或已有长期蓝图）".into());
-    }
-    // C · Year Goal（pack create 或 DB 存在；period 合法性已由 compile 校验）
-    if year_dates.is_empty()
-        && q_exists(conn, "SELECT EXISTS(SELECT 1 FROM goals WHERE profile_id=?1 AND goal_level='year' AND status!='archived')", profile_id) == 0
-    {
-        missing.push("Year Goal（create_goal level=year）".into());
-    }
-    // D · 当前 Month Goal（pack period == local_date 当前月，或 DB 已有）
-    let cur_month = local.get(..7).unwrap_or("").to_string();
-    let db_cur_month: i64 = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM goals WHERE profile_id=?1 AND goal_level='month' AND substr(period_start,1,7)=?2 AND status!='archived')",
-            params![profile_id, cur_month],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    let cur_month_ok = month_periods.iter().any(|p| p.starts_with(cur_month.as_str())) || db_cur_month == 1;
-    if !cur_month_ok {
-        missing.push(format!("当前月 Goal（{cur_month} Month Goal，create_goal level=month period={cur_month}）"));
-    }
-    // E · Day 详细窗口：DISTINCT DATE ∈ [local+1, local+14]，7 ≤ n ≤ 14
-    let distinct_days: std::collections::BTreeSet<&str> =
-        day_dates.iter().map(|(d, _)| d.as_str()).collect();
-    let out_of_window: Vec<&str> = distinct_days
-        .iter()
-        .filter(|d| **d < win_lo.as_str() || **d > win_hi.as_str())
-        .copied()
-        .collect();
-    if !out_of_window.is_empty() {
-        missing.push(format!(
-            "Day Goal 日期越界（{}）：详细窗口必须位于 {win_lo} ~ {win_hi}（local_date+1 ~ +14）",
-            out_of_window.join("、")
-        ));
-    }
-    if distinct_days.len() < 7 {
-        missing.push(format!(
-            "Day Goal 仅覆盖 {} 个不同日期（要求 7~14 个 DISTINCT DATE——Day 是近期执行层，不得只建一两天）",
-            distinct_days.len()
-        ));
-    }
-    if distinct_days.len() > 14 {
-        missing.push(format!(
-            "Day Goal 覆盖 {} 个不同日期（上限 14）——禁止全年日任务爆量，更远日期待临近时扩展",
-            distinct_days.len()
-        ));
-    }
-    // F · Task 窗口 + 每个 study Day 有执行内容（rest Day 必须显式 day_kind=rest）
-    let out_tasks: Vec<&str> = task_dates
-        .iter()
-        .map(String::as_str)
-        .filter(|d| *d < win_lo.as_str() || *d > win_hi.as_str())
-        .collect();
-    if !out_tasks.is_empty() {
-        missing.push(format!(
-            "正式规划任务日期越界（{}）：必须位于详细窗口 {win_lo} ~ {win_hi}",
-            out_tasks.join("、")
-        ));
-    }
-    let task_set: std::collections::BTreeSet<&str> = task_dates.iter().map(String::as_str).collect();
-    let empty_days: Vec<&str> = distinct_days
-        .iter()
-        .filter(|d| {
-            let dk = day_dates
-                .iter()
-                .find(|(dd, _)| dd.as_str() == **d)
-                .map(|(_, k)| k.as_str())
-                .unwrap_or("study");
-            dk != "rest" && !task_set.contains(**d)
-        })
-        .copied()
-        .collect();
-    if !empty_days.is_empty() {
-        missing.push(format!(
-            "学习日 {} 无任何执行任务——正式规划每个 study Day 必须有对应 Task；若为休息日必须显式 day_kind=rest（不得用「没有 Task」偷偷代表休息）",
-            empty_days.join("、")
-        ));
-    }
-    // F1.2.1 · §19 · REST DAY CONTRACT：本处**不再**要求 task_set.len() >= 7
-    //（与 rest Day 允许 0 Task 矛盾——已删除该 hard requirement）。正式
-    // Authority：DISTINCT Day Goals 7~14；每个 day_kind=study → >=1 Task；
-    // day_kind=rest → 允许 0 Task（上方 empty_days 检查已覆盖 study 覆盖率）。
-    // 禁止要求 Task planned_date distinct >= 7。
-    // G · Task→Day ground（formal 强关系复核）
-    if !ungrounded.is_empty() {
-        missing.push(format!(
-            "任务 {} 未关联 Day Goal——正式规划任务必须带 goal_hint 关联对应 Day Goal",
-            ungrounded.join("、")
-        ));
-    }
-    // J · 重复实体（同层同周期 Goal / 同日同名 Task）
-    let mut goal_keys = std::collections::BTreeSet::new();
-    for op in ops.iter().filter(|op| op.entity_type == "goal" && op.action == "create") {
-        if let Some(level) = op.after.get("goal_level").and_then(|l| l.as_str()) {
-            if level != "final" {
-                let period = op.after.get("period").and_then(|p| p.as_str()).unwrap_or("");
-                if !period.is_empty() && !goal_keys.insert(format!("{level}|{period}")) {
-                    missing.push(format!("{level} Goal 周期 {period} 在 pack 内重复"));
-                }
-            }
-        }
-    }
-    let mut task_keys = std::collections::BTreeSet::new();
-    for op in ops.iter().filter(|op| op.entity_type == "task" && op.action == "create") {
-        let title = op.after.get("title").and_then(|t| t.as_str()).unwrap_or("");
-        let date = op.after.get("planned_date").and_then(|d| d.as_str()).unwrap_or("");
-        if !title.is_empty() && !task_keys.insert(format!("{date}|{title}")) {
-            missing.push(format!("任务「{title}」（{date}）在 pack 内重复"));
-        }
-    }
-    if !missing.is_empty() {
-        return Err(format!(
-            "初始规划 Action Pack 语义校验未通过：{}。一次初始规划需覆盖长期（Final+Blueprint+Year）、当前月、以及未来 7~14 天（DISTINCT DATE）的 Day Goals + 关联 Tasks；请提交修正后的完整 Action Pack。",
-            missing.join("；")
-        ));
-    }
-    Ok(())
-}
-
-fn q_exists(conn: &Connection, sql: &str, profile_id: i64) -> i64 {
-    conn.query_row(sql, params![profile_id], |r| r.get(0)).unwrap_or(0)
-}
-
-
-/// F1.1 §13-§17：task create ops 的 `_goal_hint` 解析为真实 goal 关联：
-/// - A：同 pack 更早 create 的 Day Goal（Goal create 先编译，§15）→ `goal_ref`
-///   （Apply 走既有 resolve_refs → real goal_id，禁止新建另一套 ref 机制）；
-/// - B：已有 Day Goal（DB 唯一命中）→ `after.goal_id` 直连 real id。
-/// - §16 Ambiguous（多命中）→ invalid_pack；hint 0 命中 → invalid_pack；
-/// - §17 Date Contract：planned_date == DayGoal.period（pack）/ period_start
-///   （DB，且 start==end），不一致 → invalid_pack；
-/// - §18 Goal Optional：无 hint 的 create_task 保留 goal_id=NULL（Quick Study 等）。
-fn resolve_task_goal_hints(
-    conn: &Connection,
-    profile_id: i64,
-    _cctx: &CompileCtx,
-    all_ops: &mut [ProposedOp],
-    formal_planning: bool,
-) -> Result<(), PackAbort> {
-    // pack 内 day goal creates（Goal 域先编译 → 已在 ops 前段）：
-    // (name, period, operation_ref)
-    let pack_day_goals: Vec<(String, String, String)> = all_ops
-        .iter()
-        .filter(|op| op.entity_type == "goal" && op.action == "create")
-        .filter_map(|op| {
-            let a = &op.after;
-            if a.get("goal_level").and_then(|l| l.as_str()) == Some("day") {
-                Some((
-                    a.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
-                    a.get("period").and_then(|p| p.as_str()).unwrap_or("").to_string(),
-                    op.operation_ref.clone().unwrap_or_default(),
-                ))
-            } else {
-                None
-            }
-        })
-        .collect();
-    for op in all_ops.iter_mut() {
-        if op.entity_type != "task" || op.action != "create" {
-            continue;
-        }
-        let Some(hint) = op
-            .after
-            .get("_goal_hint")
-            .and_then(|h| h.as_str())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-        else {
-            // F1.2 · P0-5 · Formal Planning Task→Day 强关系：Formal Planning
-            // Mission 生成的 structured planned Task 必须关联其 Day Goal
-            //（same-pack goal_ref / existing goal_id 二选一）——无关联 =
-            // invalid_pack 0 ChangeSet。Goal Optional 仅适用于 Quick Study /
-            // 临时任务（非 planning mission）。
-            if formal_planning {
-                let title = op.after.get("title").and_then(|t| t.as_str()).unwrap_or("");
-                let planned = op.after.get("planned_date").and_then(|d| d.as_str()).unwrap_or("");
-                return Err(PackAbort::Invalid {
-                    message: format!(
-                        "正式规划任务「{title}」（{planned}）缺少 goal_hint——Formal Planning 的每个任务必须关联对应 Day Goal（create_task 带 goal_hint=<当日 Day Goal 名称>，且该 Day Goal 在本 pack 创建或已存在）"
-                    ),
-                });
-            }
-            continue; // §18 Goal Optional：无 hint → goal_id=NULL 合法
-        };
-        let planned = op
-            .after
-            .get("planned_date")
-            .and_then(|d| d.as_str())
-            .unwrap_or("")
-            .to_string();
-        let pack_hits: Vec<&(String, String, String)> =
-            pack_day_goals.iter().filter(|(n, _, _)| *n == hint).collect();
-        // B：已有 Day Goal（level=day + name 精确 + 有效）
-        let db_rows: Vec<(i64, String)> = {
-            let mut stmt = match conn.prepare(
-                "SELECT id, period_start FROM goals
-                 WHERE profile_id=?1 AND goal_level='day' AND name=?2 AND status!='archived'",
-            ) {
-                Ok(s) => s,
-                Err(e) => return Err(PackAbort::Invalid { message: e.to_string() }),
-            };
-            match stmt
-                .query_map(params![profile_id, hint], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })
-                .map(|rows| rows.filter_map(|x| x.ok()).collect::<Vec<_>>())
-            {
-                Ok(v) => v,
-                Err(e) => return Err(PackAbort::Invalid { message: e.to_string() }),
-            }
-        };
-        let total = pack_hits.len() + db_rows.len();
-        if total == 0 {
-            return Err(PackAbort::Invalid {
-                message: format!(
-                    "create_task 的 goal_hint「{hint}」未匹配到任何 Day Goal（同 pack create_goal 或已有目标）——正式规划任务必须关联对应 Day Goal；请先在 pack 中创建该 Day Goal 或修正 hint"
-                ),
-            });
-        }
-        if total > 1 {
-            return Err(PackAbort::Invalid {
-                message: format!(
-                    "create_task 的 goal_hint「{hint}」匹配到 {total} 个 Day Goal（歧义）——禁止随机选择；请使用唯一的 Day Goal 名称"
-                ),
-            });
-        }
-        if let Some((_, period, gref)) = pack_hits.first() {
-            // §17 Date Contract（pack 内 Day Goal：period 即当日 YYYY-MM-DD）
-            if *period != planned {
-                return Err(PackAbort::Invalid {
-                    message: format!(
-                        "任务日期 {planned} 与 Day Goal「{hint}」的 period {period} 不一致（必须相同）"
-                    ),
-                });
-            }
-            let obj = op.after.as_object_mut().unwrap();
-            obj.remove("_goal_hint");
-            obj.insert("goal_ref".into(), json!(gref));
-        } else {
-            let (gid, period_start) = &db_rows[0];
-            if *period_start != planned {
-                return Err(PackAbort::Invalid {
-                    message: format!(
-                        "任务日期 {planned} 与已有 Day Goal「{hint}」的日期 {period_start} 不一致（必须相同）"
-                    ),
-                });
-            }
-            let obj = op.after.as_object_mut().unwrap();
-            obj.remove("_goal_hint");
-            obj.insert("goal_id".into(), json!(gid));
-        }
-    }
-    Ok(())
-}
-
-// =====================================================================
-// F1.1 §22-§25 · bulk_delete_tasks 编译（Mixed Pack：只产 ops，CS 由主流程统一建）
-// =====================================================================
-
-/// 编译 bulk_delete_tasks 为 delete ProposedOps（不建 ChangeSet——混包主流程
-/// 统一 ONE ChangeSet + permission=max）。Ok(None) = 0 匹配（无删除 ops，
-/// 其余 create 照常）；Err = invalid_action / 超上限（整包 0 mutation）。
-fn compile_bulk_delete_ops(
-    conn: &Connection,
-    profile_id: i64,
-    env: &super::runtime::AiRuntimeEnvelope,
+    pack_title: &str,
     bd: &J,
-) -> Result<Option<Vec<ProposedOp>>, HigherActionResult> {
-    let invalid = |msg: String| HigherActionResult {
-        json: json!({ "status": "invalid_action", "message": msg, "formal_mutations": 0 }),
-        applied_change_set: None,
-        pending_change_set: None,
-    };
+) -> HigherActionResult {
     let filter: super::grounding::BulkFilter = match bd.get("filter") {
         Some(f) => match serde_json::from_value(f.clone()) {
             Ok(f) => f,
-            Err(e) => return Err(invalid(format!("filter 不合法：{e}"))),
+            Err(e) => {
+                return HigherActionResult {
+                    json: json!({ "status": "invalid_action", "message": format!("filter 不合法：{e}"), "formal_mutations": 0 }),
+                    applied_change_set: None,
+                    pending_change_set: None,
+                }
+            }
         },
-        None => return Err(invalid("bulk_delete_tasks 缺少 filter".into())),
+        None => {
+            return HigherActionResult {
+                json: json!({ "status": "invalid_action", "message": "bulk_delete_tasks 缺少 filter", "formal_mutations": 0 }),
+                applied_change_set: None,
+                pending_change_set: None,
+            }
+        }
     };
     let (tasks, total) = match super::grounding::retrieve_bulk_tasks(conn, profile_id, &filter, env) {
         Ok(x) => x,
-        Err(e) => return Err(invalid(e)),
+        Err(e) => {
+            return HigherActionResult {
+                json: json!({ "status": "invalid_action", "message": e, "formal_mutations": 0 }),
+                applied_change_set: None,
+                pending_change_set: None,
+            }
+        }
     };
     if total == 0 || tasks.is_empty() {
-        return Ok(None);
+        return HigherActionResult {
+            json: json!({ "status": "not_executed", "message": "没有匹配到可删除的任务", "formal_mutations": 0 }),
+            applied_change_set: None,
+            pending_change_set: None,
+        };
     }
     if total > super::grounding::MAX_BULK {
-        return Err(invalid(format!(
-            "匹配 {total} 条超过单次批量上限 {}，请缩小范围",
-            super::grounding::MAX_BULK
-        )));
+        return HigherActionResult {
+            json: json!({
+                "status": "invalid_action",
+                "message": format!("匹配 {total} 条超过单次批量上限 {}，请缩小范围", super::grounding::MAX_BULK),
+                "formal_mutations": 0,
+            }),
+            applied_change_set: None,
+            pending_change_set: None,
+        };
     }
     let ops: Vec<ProposedOp> = tasks
         .iter()
@@ -1828,11 +1390,43 @@ fn compile_bulk_delete_ops(
             entity_id: Some(*id),
             action: "delete".into(),
             after: json!({ "id": id, "title": title, "planned_date": date }),
-            reason: "bulk_delete_tasks（Level 2，整体待确认）".into(),
+            reason: "bulk_delete_tasks（Level 2，需人工确认）".into(),
             operation_ref: None,
         })
         .collect();
-    Ok(Some(ops))
+    let summary = format!("批量删除 {} 个任务（破坏性操作，等待用户确认）", ops.len());
+    let cs_id = match crate::repository::changeset::ChangeSetRepository::new(conn).create(
+        profile_id,
+        Some(conversation_id),
+        Some(run_id),
+        pack_title,
+        &summary,
+        &ops,
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            return HigherActionResult {
+                json: json!({ "status": "error", "message": format!("创建修改集失败：{e}"), "formal_mutations": 0 }),
+                applied_change_set: None,
+                pending_change_set: None,
+            }
+        }
+    };
+    let sample: Vec<&str> = tasks.iter().map(|(_, t, ..)| t.as_str()).take(5).collect();
+    HigherActionResult {
+        json: json!({
+            "status": "confirmation_required",
+            "permission": PermissionLevel::Level2ConfirmRequired.as_str(),
+            "change_set_id": cs_id,
+            "title": pack_title,
+            "pending_deletes": ops.len(),
+            "sample_titles": sample,
+            "message": "这是破坏性操作，已生成待确认的修改集，未执行任何删除；请向用户说明范围并等待用户在界面上确认",
+            "formal_mutations": 0,
+        }),
+        applied_change_set: None,
+        pending_change_set: Some(cs_id),
+    }
 }
 
 // =====================================================================
@@ -1852,11 +1446,8 @@ pub fn is_explicit_planning_request(text: &str) -> bool {
         return false;
     }
     // ① 动词 … 宾语（间隔 ≤ 24 字节 ≈ 8 汉字）
-    // F2.2（Live 样本适配）：真实首轮原文「真正建立 Higher 中的最终目标、
-    // 年目标…任务，并通过正式变更流程写入」不含「制定…规划」对——用户
-    // 明确授权 Level 1 写入的意图由「建立…目标」承载，补入最小词组。
-    for v in ["生成", "制定", "做", "设计", "安排", "整理", "规划", "建立"] {
-        for n in ["计划", "规划", "方案", "日程", "目标"] {
+    for v in ["生成", "制定", "做", "设计", "安排", "整理", "规划"] {
+        for n in ["计划", "规划", "方案", "日程"] {
             if let Some(vi) = t.find(v) {
                 let rest = &t[vi + v.len()..];
                 if let Some(off) = rest.find(n) {

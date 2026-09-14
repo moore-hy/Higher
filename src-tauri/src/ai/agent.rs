@@ -442,49 +442,29 @@ async fn agent_turn_inner(
         return Ok("completed");
     }
 
-    // ④ Workflow（§14/§16）→ F1.2.1 · §7 · 正式 Cross-Turn Mission Lifecycle：
-    //    上一 workflow 状态是否**拥有**下一条用户消息（waiting_user /
-    //    waiting_approval = SAME MISSION；completed/cancelled/failed/其它 =
-    //    NEW MISSION，必须 fresh payload——旧 Mission 的授权 / mission_kind /
-    //    planning_intent / mission_changeset_ids / collected / external facts /
-    //    unresolved 等 mission-private state 绝不进入新请求）。
-    //    run status=failed 但 workflow_state=waiting_user 仍按 workflow_state
-    //    判断（SAME MISSION）；Mission identity 由 lifecycle 决定，禁关键词。
-    let (mut workflow, continuation_block, mut prev_waiting, mut had_original_before_turn, previous_waiting_approval) = {
+    // ④ Workflow（§14/§16）：恢复/初始化 global_agent 工作进度；
+    //    Phase E §9/§10：仅当最近 workflow 处于 waiting_user 时视为「续接模式」——
+    //    用户本轮消息默认是 pending questions 的回答/原任务延续（同 Profile 同会话，
+    //    跨 Profile/会话绝不串线 §17），并注入续接上下文块供模型判定
+    //    answer_pending / replace_answer / new_task / cancel_task（§18，无关键词路由）。
+    //    waiting_user 中的用户回复 → 记录为已收集信息（不得当成独立聊天），本轮直接可用。
+    let (mut workflow, continuation_block, prev_waiting) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let (prev_state, mut payload) =
             super::workflow::read_workflow_payload(&conn, *profile_id, *conversation_id).unwrap_or_default();
-        if super::workflow::workflow_owns_next_user_turn(&prev_state) {
-            // ---- SAME MISSION continuation ----
-            super::workflow::ensure_mission_epoch(&mut payload);
-            let waiting = prev_state == super::workflow::STATE_WAITING_USER;
-            let continuation = if waiting {
-                // 续接块在 record_user_answers 改写 payload 之前、按恢复态构建
-                //（保留原 pending/collected 供模型对照用户最新回答）
-                let block = build_continuation_block(&payload);
-                super::workflow::record_user_answers(&mut payload, user_message);
-                block
-            } else {
-                // §7/§8 waiting_approval：用户消息不是 pending question 的回答
-                //——**不得** record_user_answers；注入 Backend 固定
-                // waiting_approval continuation block（模型无需猜状态）。
-                build_waiting_approval_block(&payload)
-            };
-            // resume 判定依据取「回填前是否已存在 original_request」
-            let had_original = !payload.original_request.trim().is_empty();
-            (
-                payload,
-                continuation,
-                waiting,
-                had_original,
-                prev_state == super::workflow::STATE_WAITING_APPROVAL,
-            )
+        // 续接块必须在 record_user_answers 改写 payload 之前、按恢复态构建
+        //（保留原 pending/collected 供模型对照用户最新回答）
+        let waiting = prev_state == super::workflow::STATE_WAITING_USER;
+        let continuation = if waiting {
+            build_continuation_block(&payload)
         } else {
-            // ---- NEW MISSION：fresh payload（epoch 递增；全部 Mission
-            // private state 清空；授权 UNKNOWN 直到本轮 intelligence 判定）----
-            let fresh = super::workflow::fresh_mission_payload(&payload, user_message);
-            (fresh, String::new(), false, false, false)
+            String::new()
+        };
+        if payload.original_request.is_empty() {
+            payload.original_request = user_message.to_string();
         }
+        super::workflow::record_user_answers(&mut payload, user_message);
+        (payload, continuation, waiting)
     };
     workflow.last_phase = super::workflow::STATE_UNDERSTANDING.to_string();
     {
@@ -501,36 +481,8 @@ async fn agent_turn_inner(
     // §二十二权限执行）；分支内部自行持久化与收口，直接返回 run 终态。
     // §十四续接：waiting_user 的 adaptation 问询回答（任意自然语言，无关键词）→
     // 恢复原 entry 权限级别，继续同一 Adaptation Workflow（不要求重新发起）。
-    //
-    // DEV-AI-CORE-001-F2.4 FIX-A/FIX-B（§二/§三/§四/§五/§六）· Active Workflow
-    // Ownership Guard：同一时刻存在 active/waiting workflow 时，用户下一条消息
-    // 默认属于**当前 workflow**，其它功能不得仅凭弱关键词抢占——
-    // - prev_waiting 且当前是 Planning（无 _adaptation_context）：Adaptation
-    //   检测默认失效（用户答案里的「再调整/以后再复盘/后面优化」只是答案内容），
-    //   消息继续进入原 Planning（record answer → rebuild → intel → AskUser/
-    //   ReadyForPlanning）；
-    // - 当前是 Adaptation workflow（有 _adaptation_context）：Adaptation owns
-    //   next answer，续接不受影响（§四）；
-    // - 显式 interrupt（「先暂停刚才的规划…」§五）+ adaptation intent → 允许切换；
-    // - 无 active workflow：保持既有识别能力（§六）。
-    let has_adaptation_ctx = workflow.collected_user_information.contains_key("_adaptation_context");
-    // F1.2.1-R1 · §25 · ACTIVE OWNER = waiting_user OR waiting_approval：
-    // 两种挂起态都**拥有**下一条用户消息——弱 Adaptation intent 一律不得抢占
-    //（此前仅 prev_waiting 判定，waiting_approval 的 Planning Mission 会被
-    // 弱关键词劫持进 Adaptation，Cross-Runtime Ownership 泄漏）。
-    let previous_workflow_owned = prev_waiting || previous_waiting_approval;
-    let detected_with_strength =
-        super::adaptation::decision::detect_adaptation_intent_with_strength(user_message);
-    let explicit_interrupt = detected_with_strength.is_some()
-        && super::adaptation::decision::is_explicit_workflow_interrupt(user_message);
-    let blocked_by_active_owner = previous_workflow_owned && !has_adaptation_ctx && !explicit_interrupt;
-    let adaptation_entry = if blocked_by_active_owner {
-        None
-    } else {
-        detected_with_strength.map(|(entry, _)| entry)
-    }
-    .or_else(|| {
-        if previous_workflow_owned && has_adaptation_ctx {
+    let adaptation_entry = super::adaptation::detect_adaptation_intent(user_message).or_else(|| {
+        if prev_waiting && workflow.collected_user_information.contains_key("_adaptation_context") {
             Some(
                 if workflow
                     .collected_user_information
@@ -547,52 +499,7 @@ async fn agent_turn_inner(
             None
         }
     });
-    // F2.4 §十一 · 最小 trace：adaptation_route_decision（无用户敏感全文）
-    {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let _ = conn.execute(
-            "INSERT INTO ai_run_events (run_id, event_type, data_json)
-             VALUES (?1, 'adaptation_route_decision', ?2)",
-            rusqlite::params![run_id, format!(
-                "{{\"prev_waiting\":{prev_waiting},\"current_workflow_type\":\"{}\",\
-                 \"has_adaptation_context\":{has_adaptation_ctx},\"intent_strength\":\"{}\",\
-                 \"route_taken\":\"{}\"}}",
-                if has_adaptation_ctx { "adaptation" } else { "planning" },
-                detected_with_strength
-                    .as_ref()
-                    .map(|(_, s)| s.as_str())
-                    .unwrap_or("none"),
-                if adaptation_entry.is_some() { "adaptation" } else if blocked_by_active_owner { "active_workflow_owned" } else { "planning" },
-            )],
-        );
-    }
     if let Some(entry) = adaptation_entry {
-        // F1.2.1-R1 · §26 · EXPLICIT ADAPTATION INTERRUPT：当前 active owner
-        // 是 Planning/Action Mission 且（显式打断 + Adaptation intent）→
-        // ① close_current_mission_for_cancel(...)?——ONE transaction 原子
-        //    reject 旧 Mission waiting CS + cancel 旧 workflow（失败 ? 上抛：
-        //    禁止半取消、禁止 Adaptation 直接覆盖旧 Mission）；
-        // ② fresh_mission_payload（epoch+1）+ mission_kind="adaptation" 持久化；
-        // ③ 再进入 adaptation_turn（§23/§24 从真实 payload 继承 Mission 上下文）。
-        if previous_workflow_owned && !has_adaptation_ctx {
-            let old_mission_cs_ids = workflow.mission_changeset_ids.clone();
-            {
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                super::workflow::close_current_mission_for_cancel(
-                    &conn, *profile_id, *conversation_id, &old_mission_cs_ids,
-                )?;
-            }
-            let mut fresh = super::workflow::fresh_mission_payload(&workflow, user_message);
-            fresh.mission_kind = "adaptation".into();
-            workflow = fresh;
-            {
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                super::workflow::set_workflow_payload(
-                    &conn, run_id, *profile_id, *conversation_id,
-                    super::workflow::STATE_UNDERSTANDING, &workflow,
-                );
-            }
-        }
         // §五十一：Adaptation 分支共用同一 Emitter（seq 连续、协议一致）
         return super::adaptation::adaptation_turn(app, state, vault, &responder, args, emitter, entry).await;
     }
@@ -615,57 +522,17 @@ async fn agent_turn_inner(
     // 分析失败 → 仅注入既有理解摘要（可能为空），不推断缺失、不推进状态。
     // intel_decision 供 F21-03 closure 使用。
     let mut intel_decision: Option<super::intelligence::decision::AiDecision> = None;
-    // F1.1.1 · C · CURRENT-TURN RE-EVALUATION：本轮 goal_understanding 对
-    //「当前用户消息」的结构化 execution_requested 判定（含 analyze 内部
-    // structured repair 的结果；分析失败 = None）。cancel_current_task
-    // (new_task=true) 发生在 Tool Loop 内，此时本轮 intelligence 已经分析
-    // 过当前消息——fresh（新 Mission）payload 的授权据此重建，**绝不读旧
-    // workflow 授权**（NEW MISSION AUTHORIZATION ISOLATION）。
-    let mut current_turn_exec_request: Option<bool> = None;
-    // F1.2.1-R1 · §10 · CURRENT-MESSAGE PLANNING METADATA（run-local，仅供
-    // 同 run 内 explicit new_task hard switch 重建 fresh Mission；不写入数据
-    // 库作 Truth）：current_message_scope / current_message_decision 只表示
-    // **当前用户消息本身**——正常 SAME MISSION 运行的 effective Mission
-    // scope 来自 workflow.mission_kind（§9：禁止用用户回答重新覆盖）。
-    // 示例：Planning waiting_user 用户回答「每天3小时」（scope=None），
-    // 当前 Mission 仍是 Full Planning；但若模型随后
-    // cancel_current_task(new_task=true)，fresh Mission 用
-    // current_message_scope=None——绝不把旧 Full scope 带进新 Mission。
-    let mut current_message_scope: Option<
-        super::intelligence::goal_understanding::PlanningScope,
-    > = None;
-    let mut current_message_decision: Option<super::intelligence::decision::AiDecision> = None;
-    let mut current_turn_goal_summary: String = String::new();
-    // F2.2 FIX-A：Intel AskUser 阶段的 missing 清单（收口确定性兜底数据源）
-    let mut intel_askuser_missing: Vec<super::intelligence::missing_information::MissingInformation> =
-        Vec::new();
-    // DEV-0073 Phase 5 → DEV-AI-ARCH-001 §20（新 Authority）：
-    // ReadyForPlanning 不再切换 Dedicated Planner——
-    // workflow.state=planning，Global Agent 继续正常 Tool Loop
-    //（注入 PLANNING MISSION CHECKLIST，由 Agent 使用 Higher
-    // Tools 完成规划，§19/§21；Dedicated Planner 生产链已退役）。
+    // DEV-0073 Phase 5：Decision → Planner 自动连接。
+    // 轮首 gate Complete + planning_required → AiDecision::ReadyForPlanning 时，
+    // 本轮主 Tool Loop 注入 Dedicated Planner 指令（PLAN_DRAFT_INSTRUCTION +
+    // PLANNER_TURN_PROTOCOL + Planning Truth），FinalAnswer 按 Planner Response
+    // Protocol 确定性处理（plan_draft → validate → compile → ChangeSet）。
+    // 解析失败/普通文本 → 保持既有行为零变化（兼容层）。
     let mut planner_ready = false;
     let mut planner_goal_summary = String::new();
     // DEV-0077.3 §十（Stage 由代码确定）：进入 goal_understanding::analyze
     // 之前 → understanding_goal（任何长 await 前先发 Stage，§二）。
     emitter.emit_stage(super::runtime_events::stage::UNDERSTANDING_GOAL);
-    // DEV-AI-ARCH-001 §13 · Mission Understanding 输入升级：PlanningContextSnapshot
-    //（Confirmed PersonalProfile + goal_observations + GoalTarget/Final/Blueprint/
-    // GoalTree/Tasks/Trusted Evidence + workflow collected）——模型在生成
-    // missing 前已看到完整 PlanningContext（§14）。
-    let snapshot_block = {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        super::planning_context::build_planning_context_snapshot(
-            &conn,
-            *profile_id,
-            &local_date,
-            user_message,
-            &workflow.collected_user_information,
-            &workflow.external_facts,
-            &workflow.unresolved,
-        )
-        .snapshot_instruction_block()
-    };
     let user_context_block = {
         let (uc, higher_ctx) = {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -680,41 +547,20 @@ async fn agent_turn_inner(
         // 纯编号回答本身无目标语义（Turn 2「1.每天11小时…」），必须与
         // original_request 一起呈现，goal_understanding 才能恢复原任务的目标
         // 与真实 remaining 缺口；非续接轮保持既有行为零变化（只传本轮消息）。
-        // DEV-AI-CORE-001-F2 FIX-3（§九）→ F2.2 FIX-C 修正：显式 resume
-        //（「继续刚才的规划任务」…）桥接 original_request。判定依据改为
-        // had_original_before_turn（回填前已存在旧任务请求）——首轮新建的
-        // original_request≡本轮消息不得自我识别为 resume（§七/§八）。
-        let explicit_resume = had_original_before_turn
-            && super::planner::is_explicit_planning_resume(user_message);
-        let original_mission: String = if (prev_waiting || explicit_resume)
-            && !workflow.original_request.trim().is_empty()
-        {
-            if prev_waiting {
-                super::planner::log_continuation_event("WAITING_WORKFLOW_RESUMED");
-            } else {
-                super::planner::log_continuation_event("EXPLICIT_RESUME_DETECTED");
-            }
-            workflow.original_request.chars().take(2000).collect::<String>()
+        let intel_request: String = if prev_waiting && !workflow.original_request.trim().is_empty() {
+            super::planner::log_continuation_event("WAITING_WORKFLOW_RESUMED");
+            format!(
+                "（用户正在回答一个进行中工作流的待确认问题）\n原始请求：{}\n用户本轮回答：{}",
+                workflow.original_request.chars().take(2000).collect::<String>(),
+                user_message
+            )
         } else {
-            String::new()
-        };
-        // F1.1 §40 → F1.2 · P0-6 · Mission Context 真正分层：不再拼接混合
-        // user_request 传给 goal_understanding::analyze——三区块作为独立
-        // 参数（current_user_request / original_mission / planning_context），
-        // 各自独立预算（§10：4000 / 2000 / 6000），prompt 分区由 analyze 构建。
-        let current_request_bounded: String =
-            user_message.chars().take(4000).collect::<String>();
-        let original_mission_opt: Option<String> = if original_mission.is_empty() {
-            None
-        } else {
-            Some(original_mission)
+            user_message.to_string()
         };
         match super::intelligence::goal_understanding::analyze(
             &responder,
             &uc,
-            &current_request_bounded,
-            original_mission_opt.as_deref(),
-            &snapshot_block,
+            &intel_request,
             &workflow.collected_user_information,
             &higher_ctx,
         )
@@ -722,97 +568,21 @@ async fn agent_turn_inner(
         {
             Ok(goal) => {
                 let missing = super::intelligence::missing_information::from_goal(&goal);
-                // F1.1.1 · C：保存本轮（当前用户消息）的授权判定，供 Tool Loop
-                // 内 cancel_current_task(new_task=true) 重建 fresh Mission 授权。
-                current_turn_exec_request = goal.execution_requested;
-                // DEV-0073 Phase 4 → F1.2.1-R1 §2/§8：goal_understanding →
-                // missing_information → information_gate → decision。
-                // Canonical Authority = planning_scope（planning_required 仅
-                // Legacy Compatibility）：Complete + Full → ReadyForPlanning；
-                // Complete + Amend/None → Execute；Incomplete 保持渠道决策。
-                let effective_scope = goal.effective_planning_scope();
-                let result = super::intelligence::decision::evaluate_with_scope(
-                    &goal,
-                    &missing,
-                    effective_scope.unwrap_or(
-                        super::intelligence::goal_understanding::PlanningScope::None,
-                    ),
-                );
+                // DEV-0073 Phase 4：goal_understanding → missing_information
+                // → information_gate → decision（Complete + planning_required
+                // → 自动 ReadyForPlanning；planning_required 缺省 true 保持
+                // v2.2 行为，渠道规则同 decide）
+                let result = super::intelligence::decision::evaluate(&goal, &missing);
                 let decision = result.decision;
-                // F1.2.1-R1 · §10：goal 非空且分析成功时保存 current-message
-                // planning metadata（run-local，仅供 hard switch 重建 fresh）。
-                current_message_scope = effective_scope;
-                current_message_decision = Some(decision.clone());
-                current_turn_goal_summary = goal.goal.clone();
                 let block = super::intelligence::build_prompt_block(&uc, &goal, &missing);
                 // F21-T07/F22-T02：goal 为空（闲聊/无目标）不产生决策、不推进状态
                 if !goal.goal.trim().is_empty() {
                     intel_decision = Some(decision);
-                    // DEV-AI-ARCH-001 §11/§12 → F1.1 §5 · Execution Authorization：
-                    // 首轮由 mission understanding 结构化输出（禁止关键词表，
-                    // Backend 只做 Validator）；续接轮**继承** original mission
-                    //（用户回答缺失信息不得重新判断成新任务）——例外：授权仍为
-                    // UNKNOWN（未判定，如 new_task 重置后）时允许轮首判定
-                    //（明确新 Mission 的重新判断通道，Fail Closed 不锁死）。
-                    if !had_original_before_turn
-                        || workflow.execution_authorization()
-                            == super::workflow::ExecutionAuthorization::Unknown
-                    {
-                        if let Some(want_exec) = goal.execution_requested {
-                            workflow.execution_requested = want_exec;
-                            workflow.execution_declined = !want_exec;
-                        }
-                    }
-                    // F1.2.1-R1 · §9 · PlanningScope → mission_kind 三态映射：
-                    //   Full  → "planning"
-                    //   Amend → "planning_amendment"
-                    //   None  → "action"
-                    // 同 Mission continuation（mission_kind 已确立）：
-                    // **禁止用用户回答重新覆盖 mission_kind**——Mission 性质在
-                    // Mission 建立时判定一次（§10：Planning waiting_user 用户
-                    // 回答 scope=None，当前 Mission 仍是 Full Planning）。
-                    if workflow.mission_kind.is_empty() {
-                        match effective_scope {
-                            Some(super::intelligence::goal_understanding::PlanningScope::Full) => {
-                                workflow.mission_kind = "planning".into();
-                                if workflow.planning_intent_summary.is_empty() {
-                                    workflow.planning_intent_summary = goal.goal.clone();
-                                }
-                            }
-                            Some(super::intelligence::goal_understanding::PlanningScope::Amend) => {
-                                workflow.mission_kind = "planning_amendment".into();
-                                if workflow.planning_intent_summary.is_empty() {
-                                    workflow.planning_intent_summary = goal.goal.clone();
-                                }
-                            }
-                            Some(super::intelligence::goal_understanding::PlanningScope::None) => {
-                                workflow.mission_kind = "action".into();
-                            }
-                            None => {}
-                        }
-                    }
-                    // DEV-AI-CORE-001-F2.2 FIX-A（§三）：保存 Intel AskUser 阶段的
-                    // missing 清单供本轮收口确定性兜底——Provider 即使全程不调
-                    // request_user_input / 返回空文本，Backend 也必须让用户真正
-                    // 看到问题并进入 waiting_user（不得 generic 假装 completed）。
-                    if decision == super::intelligence::decision::AiDecision::AskUser {
-                        intel_askuser_missing = missing.clone();
-                    }
-                    // DEV-0073 Phase 5 → DEV-AI-ARCH-001 §20（新 Authority）：
-                    // ReadyForPlanning 不再切换 Dedicated Planner——
-                    // workflow.state=planning，Global Agent 继续正常 Tool Loop
-                    //（注入 PLANNING MISSION CHECKLIST，由 Agent 使用 Higher
-                    // Tools 完成规划，§19/§21）。
+                    // DEV-0073 Phase 5：ReadyForPlanning（gate Complete + 规划需求）
+                    // → 本轮自动进入 Dedicated Planner（Decision → Planner →
+                    // Plan Draft → ChangeSet），不再依赖关键词路由。
                     if decision == super::intelligence::decision::AiDecision::ReadyForPlanning {
                         planner_ready = true;
-                        // DEV-AI-CORE-001-F2 FIX-1（§八状态机）：gate Complete 语义
-                        // = 信息已齐、禁止继续追问 → Backend 确定性消解 pending
-                        //（此前 pending 清空完全依赖模型自愿调
-                        // request_user_input(questions=[])；模型失联时 pending 残留
-                        // → 收口被误判 side_question → generic 文案 + 死锁
-                        // waiting_user）。模型若真缺信息，会在 Tool Loop 中
-                        // request_user_input 原子替换重新挂起，不受影响。
-                        workflow.pending_questions.clear();
                         let mut s = format!("{}（类型 {}", goal.goal, goal.goal_type);
                         if let Some(d) = goal.deadline.as_deref() {
                             s.push_str(&format!("，期限 {d}"));
@@ -891,30 +661,22 @@ async fn agent_turn_inner(
     messages.push(ChatMessage::system(agent_prompt::agent_system_prompt(
         &envelope, page_label, &collected_info, &user_context_block, *web_enabled, &continuation_block,
     )));
-    // DEV-AI-ARCH-001 §19/§20 · ReadyForPlanning 新行为：不切换 Dedicated
-    // Planner。workflow.state=planning，Global Agent 继续正常 Tool Loop；
-    // 注入短 PLANNING MISSION CHECKLIST（§20）+ PlanningContextSnapshot——
-    // 由 Agent 使用 Higher Tools（execute_higher_actions）完成规划（§21），
-    // 不要求输出 PlanDraft JSON。
+    // DEV-0073 Phase 5：ReadyForPlanning → 注入 Dedicated Planner 指令
+    //（PLAN_DRAFT_INSTRUCTION + PLANNER_TURN_PROTOCOL + Planning Truth 五区块；
+    // collected_user_information 桥接为 PlanningWorkflowPayload.answered，
+    // 与既有 answer/pending「禁止重复询问」语义一致）。
     if planner_ready {
-        {
+        let instruction = {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            workflow.last_phase = super::workflow::STATE_PLANNING.to_string();
-            super::workflow::set_workflow_payload(
-                &conn, run_id, *profile_id, *conversation_id,
-                super::workflow::STATE_PLANNING, &workflow,
-            );
-        }
+            let truth = super::planner::build_planning_truth_context(&conn, *profile_id);
+            let mut p = super::planner::PlanningWorkflowPayload::default();
+            p.original_request = workflow.original_request.clone();
+            p.answered = workflow.collected_user_information.clone();
+            p.updated_by_user_turn = user_message.to_string();
+            super::planner::build_planning_instruction(&truth.instruction, &p)
+        };
         messages.push(ChatMessage::system(format!(
-            "【DEV-AI-ARCH-001 · 信息已齐备，进入正式规划任务】\n目标理解：{planner_goal_summary}\n\n{snapshot_block}\n\nPLANNING MISSION CHECKLIST（当前用户希望建立正式规划，你必须）：\n1. 使用上方 PlanningContext 中已有事实（含档案目标观察；只有语义上确实是第一/第二目标院校时才建立 REACH/SAFETY）。\n2. Higher 已知信息不要问用户。\n3. External 缺失使用 web_search / web_open 自行研究（打开后用 record_external_fact(key,value,sid) 登记业务事实，禁止编造来源）。\n4. User-only 缺失用 request_user_input 提问（只问真正影响规划的 1~3 项）。\n5. 信息足够后使用 execute_higher_actions 写入（包含 set_goal_target / set_final_goal_brief / set_planning_blueprint / create_goal YEAR/MONTH/DAY / create_task，create_task 用 goal_hint 关联同 pack 的 Day Goal）。\n6. 一次初始规划形成一个 Action Pack（ONE ChangeSet：长期 Final+GoalTarget+Blueprint+Year；中期当前 Month；短期未来 7~14 天 Day+Tasks；禁止全年日任务爆量；替换/删除旧计划与新建同 pack 整体待确认）。\n7. 执行后用 get_higher_overview 重新读取 Higher 验证。\n8. 不得只输出一篇文字计划；最终回复必须基于真实读回的数据。{}",
-            // F1.1 §2 Fail Closed：非 REQUESTED（DECLINED/UNKNOWN/INVALID）
-            // 一律禁止写入提示（Mutation Gate 在工具层同样拒绝）。
-            match workflow.execution_authorization() {
-                super::workflow::ExecutionAuthorization::Requested => "",
-                super::workflow::ExecutionAuthorization::Declined => "\n\n注意：本次请求用户未明确要求写入（分析型请求）——只做分析/建议，禁止调用 execute_higher_actions。",
-                super::workflow::ExecutionAuthorization::Unknown => "\n\n注意：尚未确认用户是否明确要求写入——请先向用户确认是否要真正写入；确认前禁止调用 execute_higher_actions。",
-                super::workflow::ExecutionAuthorization::Invalid => "\n\n注意：执行授权状态非法——请先向用户澄清本轮意图；澄清前禁止调用 execute_higher_actions。",
-            }
+            "【DEV-0073 · 信息已齐备，本轮进入正式规划】\n目标理解：{planner_goal_summary}\n以下按 Planner Response Protocol 输出（只输出一个 JSON 对象）：\n\n{instruction}"
         )));
     }
     for (_, role, content) in super::runtime::bound_history(&recent, *current_message_id, 8, 14_000) {
@@ -950,30 +712,16 @@ async fn agent_turn_inner(
     let mut hangup_reason: Option<String> = None;
     let mut task_cancelled = false;
     let mut task_cancel_new_task = false;
-    // E-R3-02 → F1.2.1-R1 §16/§19：cancel 的 durable close（ONE transaction）
-    // 只执行一次（cancel 工具成功后立即；plain/hard switch 共用同一原子路径，
-    // silent cancel 已退役）。
+    // E-R2-01：new_task 上下文切换只执行一次；切换前的 applied cs 属旧 workflow
+    let mut new_task_context_switched = false;
+    let mut applied_before_context_switch: Vec<i64> = Vec::new();
+    // E-R3-02：cancel 的 durable 取消只执行一次（工具成功后立即；closure 兜底幂等）
     let mut cancel_durable_done = false;
     // Phase F §28：researching 状态只在首次 web 调用前持久化一次
     let mut research_state_persisted = false;
     // Phase F §19：本 run web_open 证据 / §30 unresolved 标记
     let mut evidence_urls: Vec<String> = Vec::new();
     let mut unresolved_updates: Vec<String> = Vec::new();
-    // DEV-AI-ARCH-001 §24：本 run web_open 验证的外部事实（收口合并 workflow）
-    let mut external_facts_updates: Vec<super::workflow::ExternalFact> = Vec::new();
-    // F1.1 §7/§10：本 run 已成功 web_open 的来源（sid→title/url），跨轮保留
-    //（record_external_fact 的 Backend 验证依据）。
-    let mut opened_sources: Vec<(String, String, String)> = Vec::new();
-    // F1.1 §22/§27：本 run 已产出 Level2 待确认提案（confirmation_required）
-    // → Mission verify 跳过（交付=提案就绪）；收口进正式 Approval State。
-    let mut has_pending_proposal = false;
-    // F1.1 §27 精化：本 run 发生过 pack Apply 失败（apply_failed，CS 以
-    // waiting_approval 残留供人工处置）≠「待确认提案」——Mission verify
-    // 不得被 has_waiting_cs 豁免（失败残留必须走缺交付反馈/failed 收口）。
-    let mut has_apply_failure = false;
-    // F1.2 · P0-1/P0-4：本 run 产生/残留的 CS（waiting 提案 + apply_failed
-    // 残留）——收口并入 workflow.mission_changeset_ids（mission 记账）。
-    let mut mission_pending_changeset_ids: Vec<i64> = Vec::new();
     // DEV-0077.3 §二十七：最后一轮 FinalAnswer 是否已真流式 emit 给用户
     //（决定收口处是否还需 legacy 全文补发；planner/挂起轮恒 false）。
     let mut round_streamed = false;
@@ -981,21 +729,6 @@ async fn agent_turn_inner(
     // pending 是否为空（纯答案提交重派发的 ① 前提）+ Planner 二次 dispatch 只做一次。
     let initial_pending_empty = workflow.pending_questions.is_empty();
     let mut planner_dispatched_none = true;
-    // DEV-AI-ARCH-001 §31/§32 · Mission Completeness Gate 状态：
-    // - mission_feedback_rounds：Backend verify 缺交付时给 Agent 的反馈次数
-    //   （上限 2，防止无限 feedback 循环；之后 run 失败并明确缺什么）。
-    // - mission_incomplete_flag：verify 最终未通过 → 收口 failed（禁止 generic
-    //   completed）。Dedicated Planner 协议 re-dispatch（F2 FIX-2）随 §19 退役。
-    let mut mission_feedback_rounds: u32 = 0;
-    let mut mission_incomplete_flag = false;
-    // F1.2.1 · §11 · REMOVE STATIC PLANNING GATE FLAGS：formal_planning_mission
-    // / is_initial_planning_mission 不再在 Tool Loop 前静态计算（hard switch
-    // 可能在 Tool Loop 内改变 Mission）——改为**每次构造 AgentToolCtx 之前**
-    // 按 collect_current_mission_changeset_ids 动态重算（见 Tool Loop 内）。
-    // 固定算法：
-    //   current_mission_cs_ids = collect_current_mission_changeset_ids(...)
-    //   formal_planning_mission = planner_ready && workflow.mission_kind=="planning"
-    //   is_initial_planning_mission = formal_planning_mission && cs_ids.is_empty()
 
     'outer: for round in 0..agent_tools::MAX_AGENT_ROUNDS {
         if token.is_cancelled() {
@@ -1013,14 +746,12 @@ async fn agent_turn_inner(
         //   chunk 即时 emit_delta（TTFT）；tool_calls 由 client 层聚合。
         // §二十六：流式路径不产生 reasoning_content（client 不解析）。
         let mut streamed_this_round = false;
-        // ARCH-001 §21：planning mission 轮始终携带全量工具（Tool Loop 语义）。
-        let round_tools: Option<serde_json::Value> = Some(tools.clone());
         let comp = if planner_ready {
-            responder.chat(messages.clone(), round_tools.clone(), Some(4096)).await?
+            responder.chat(messages.clone(), Some(tools.clone()), Some(4096)).await?
         } else {
             let em = &*emitter;
             let c = responder
-                .chat_streaming(messages.clone(), round_tools.clone(), Some(4096), token, |chunk| {
+                .chat_streaming(messages.clone(), Some(tools.clone()), Some(4096), token, |chunk| {
                     em.emit_delta(chunk);
                 })
                 .await?;
@@ -1040,27 +771,29 @@ async fn agent_turn_inner(
         match super::planner::classify_tool_round(comp.tool_calls.as_ref(), comp.content.as_deref()) {
             super::planner::ToolRoundOutcome::FinalAnswer(text) => {
                 final_text = text;
-                // DEV-AI-ARCH-001 §19：Dedicated Planner 协议（plan_draft /
-                // clarification / handoff_chat JSON 与 compile_production_plan
-                // 编译链）整体退出 production——Global Agent 用 Higher Tools
-                //（execute_higher_actions）完成规划（§21），FinalAnswer 就是
-                // 正常用户可见文本。保留：ActionPlan 直执行禁用（legacy 治理）。
+                // DEV-0073 Phase 5：ReadyForPlanning 轮的 FinalAnswer 按
+                // Planner Response Protocol 确定性处理（clarification /
+                // plan_draft / handoff_chat）；非 JSON/解析失败 → final_text
+                // 原样（既有行为零变化）。
                 //
                 // DEV-0077.4-A.1 F1 §二七-§二九（P1-02 收口）：planner_ready
-                // 轮不再执行 Business Actions——ActionPlan 直执行链
-                //（DEV-0074 execute_action → Repository direct write，绕过
-                // ChangeSet/Audit/Undo/ReadBack）在 Production 关闭。
+                // **不再执行 Business Actions**——ActionPlan 直执行链
+                // （DEV-0074 execute_action → Repository direct write，绕过
+                // ChangeSet/Audit/Undo/ReadBack）已在 Production 关闭。
+                // 生产架构：Planner 只允许进入 PlanDraft Planning Flow 或返回
+                // 用户可见文本（§二九）。模型若仍输出 ActionPlan 形态 → 不解析
+                // 执行，按「未通过规划协议」处理（§一一六 记录可达性错误标记）。
                 if planner_ready && !cancelled {
                     if super::planner::ActionPlan::parse(&final_text).is_ok() {
                         // §一一六：Debug 环境明确记录（返回 Err 而不是继续执行）
                         println!(
                             "[AI-PLANNING] LEGACY_EXECUTOR_PRODUCTION_REACHABILITY_ERROR \
-                             run_id={run_id}（ActionPlan 直执行链已关闭；请使用 \
-                             execute_higher_actions 工具完成写入）"
+                             run_id={run_id}（ActionPlan 直执行链已关闭；请按 Planner \
+                             Response Protocol 输出 plan_draft JSON）"
                         );
                         let msg = format!(
                             "本次规划输出使用了已停用的直执行格式（ActionPlan），\
-                             正式数据未变化。请重新发起规划，我会通过正式变更流程生成可审查计划。"
+                             正式数据未变化。请重新发起规划，我会按标准格式生成可审查计划。"
                         );
                         {
                             let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -1085,127 +818,532 @@ async fn agent_turn_inner(
                         emitter.compat_delta(&final_text);
                         break 'outer;
                     }
-                    // ===== DEV-AI-ARCH-001 §31/§32 · Mission Completeness Gate =====
-                    // Backend deterministic verifier（verify_planning_mission，
-                    // 不依赖 LLM 自称「完成了」）。planning mission 想收尾时：
-                    // - 缺交付且 Tool Loop 还有轮次 → 把缺失 deliverables 作为
-                    //   Backend feedback 回给 Global Agent 继续（不要求 PlanDraft）；
-                    // - 轮次耗尽 / feedback 上限 → run 失败并明确缺什么（§32
-                    //   禁止 generic completed）。
-                    // F1.1 §2/§27：仅在授权 REQUESTED 且无待确认提案时验证——
-                    // DECLINED/UNKNOWN/INVALID 0 mutation 是权限语义（非交付缺失）；
-                    // 已产出 waiting_approval 提案（Level2）= 交付已就绪等用户确认。
-                    // F1.2.1 · §15：has_waiting_cs 只检查 **current Mission 记账**
-                    // 中的 CS（collect_current_mission_changeset_ids）——删除
-                    // conversation 级 SQL（conversation history 不得影响
-                    // current Mission）。
-                    let current_mission_cs_ids = collect_current_mission_changeset_ids(
-                        &workflow,
-                        &applied_changeset_ids,
-                        &mission_pending_changeset_ids,
-                    );
-                    let has_waiting_cs: bool = {
-                        if current_mission_cs_ids.is_empty() {
-                            false
-                        } else {
-                            let conn2 = state.0.lock().map_err(|e| e.to_string())?;
-                            let placeholders = current_mission_cs_ids
-                                .iter()
-                                .map(|i| i.to_string())
-                                .collect::<Vec<_>>()
-                                .join(",");
-                            let sql = format!(
-                                "SELECT EXISTS(SELECT 1 FROM ai_change_sets WHERE profile_id={} AND status='waiting_approval' AND id IN ({}))",
-                                *profile_id, placeholders
-                            );
-                            conn2
-                                .query_row(&sql, [], |r| r.get::<_, i64>(0))
-                                .map(|v| v == 1)
-                                .unwrap_or(false)
-                        }
-                    };
-                    // F1.2.1-R1 · §12 · FULL PLANNING ONLY VERIFY：
-                    // verify_planning_mission 只允许 mission_kind=="planning"
-                    // 调用——planning_amendment 不跑 Full Planning Mission
-                    // Verify（其结果由 HigherAction Validator / Compiler /
-                    // ChangeSet / Apply / ReadBack 完成）；action 无正式规划
-                    // 交付语义。
-                    if workflow.mission_kind == "planning"
-                        && workflow.execution_authorization()
-                            == super::workflow::ExecutionAuthorization::Requested
-                        && !has_pending_proposal
-                        && (!has_waiting_cs || has_apply_failure)
-                    {
-                        // F1.2 · P0-4 → F1.2.1 · §16 · Mission-scoped verify：
-                        // 正式输入 = current Mission owned CS only
-                        //（workflow.mission_changeset_ids + 本 run applied +
-                        // 本 run pending）；**删除 legacy fallback**
-                        // workflow.applied_changeset_ids。
-                        let verify = {
-                            let conn = state.0.lock().map_err(|e| e.to_string())?;
-                            super::planning_context::verify_planning_mission(
-                                &conn, *profile_id, &local_date, &current_mission_cs_ids,
-                            )
-                        };
-                        if !verify.ok {
-                            if round + 1 < agent_tools::MAX_AGENT_ROUNDS
-                                && mission_feedback_rounds < 2
-                                && !task_cancelled
-                            {
-                                mission_feedback_rounds += 1;
-                                let fb = verify.missing.join("；");
-                                messages.push(ChatMessage {
-                                    role: "assistant".into(),
-                                    content: final_text.clone(),
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                    name: None,
-                                });
-                                messages.push(ChatMessage::system(format!(
-                                    "【MISSION VERIFY · 正式规划还缺少交付】{fb}。\n请继续使用 Higher Tools 补齐（execute_higher_actions 一个 Action Pack / request_user_input），完成后重新验证；不要只输出文字计划。"
-                                )));
-                                final_text = String::new();
-                                round_streamed = false;
-                                continue 'outer;
+                    let trimmed = final_text
+                        .trim()
+                        .trim_start_matches("```json")
+                        .trim_start_matches("```")
+                        .trim_end_matches("```")
+                        .trim()
+                        .to_string();
+                    let turn: Option<(String, serde_json::Value)> =
+                        serde_json::from_str::<serde_json::Value>(&trimmed).ok().and_then(|v| {
+                            let t = v.get("type").and_then(|t| t.as_str()).map(String::from);
+                            t.map(|t| (t, v))
+                        });
+                    if let Some((t, v)) = turn {
+                        match t.as_str() {
+                            "clarification" => {
+                                // Planner 仍缺信息（与轮首 gate 分歧）→ 转 Agent
+                                // 信息收集语义：questions 原子替换 + waiting_user 收口
+                                let qs: Vec<super::workflow::AgentQuestion> = v
+                                    .get("questions")
+                                    .and_then(|q| q.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .take(super::planner::MAX_BLOCKING_QUESTIONS)
+                                            .filter_map(|q| {
+                                                let key = q.get("key").and_then(|x| x.as_str())?.to_string();
+                                                let question = q.get("question").and_then(|x| x.as_str())?.to_string();
+                                                Some(super::workflow::AgentQuestion {
+                                                    key,
+                                                    question,
+                                                    why_needed: String::new(),
+                                                })
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                if !qs.is_empty() {
+                                    pending_questions_override = Some(qs);
+                                    hangup_reason = Some("生成正式计划前".to_string());
+                                    final_text = String::new();
+                                }
                             }
-                            let fb = verify.missing.join("；");
-                            // F1.2 · §11 · User-facing Truth：mutation 状态来自
-                            // durable 真实状态——仅当本 run 确无任何生效/残留
-                            // 写入时才声明「正式数据未变化」，禁止编造。
-                            let mutation_note = if applied_changeset_ids.is_empty()
-                                && mission_pending_changeset_ids.is_empty()
-                            {
-                                "正式数据未变化，请重新发起规划。"
-                            } else {
-                                "已生效/待确认部分可通过审查面板查看或撤销；请继续或重新发起规划。"
-                            };
-                            final_text = format!(
-                                "本次规划任务未完成交付（缺少：{fb}）。{mutation_note}"
-                            );
-                            mission_incomplete_flag = true;
-                        } else if !applied_changeset_ids.is_empty() {
-                            // §33：只要发生正式写入，最终用户回复必须依据
-                            // SQLite ReadBack 生成——附加 Backend 确定性读回摘要
-                            //（不因 LLM 自称「已经创建」就当成功）。
-                            let rb = {
-                                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                super::planner::planning_apply_readback_summary(
-                                    &conn, *profile_id, &local_date,
-                                )
-                            };
-                            if !final_text.contains("本次实际创建") {
-                                final_text = format!(
-                                    "{final_text}\n\n本次实际创建（自 Higher 读回验证）：\n{rb}"
-                                );
+                            "handoff_chat" => {
+                                let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                                if !msg.is_empty() {
+                                    final_text = msg;
+                                }
                             }
+                            "plan_draft" => {
+                                let draft_val = v.get("draft").cloned().unwrap_or_else(|| v.clone());
+                                if let Ok(mut draft) =
+                                    serde_json::from_value::<super::planner::PlanDraft>(draft_val)
+                                {
+                                    let validation = {
+                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                        if let Some(bp) = draft.blueprint.as_mut() {
+                                            bp.scenario_type = super::planner::resolve_blueprint_scenario(
+                                                &conn, *profile_id, bp, false,
+                                            );
+                                        }
+                                        super::planner::validate_plan_draft(&conn, *profile_id, &draft)
+                                    };
+                                    if validation.errors.is_empty() {
+                                        let (fid, has_gt) = {
+                                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                            let fid: Option<i64> = conn
+                                                .query_row(
+                                                    "SELECT id FROM goals WHERE profile_id=?1 AND goal_level='final'",
+                                                    rusqlite::params![profile_id],
+                                                    |r| r.get(0),
+                                                )
+                                                .ok();
+                                            let has_gt = !crate::repository::goal_target::GoalTargetRepository::new(&conn)
+                                                .list_active(*profile_id, None, None)
+                                                .unwrap_or_default()
+                                                .is_empty();
+                                            (fid, has_gt)
+                                        };
+                                        let mut draft = draft;
+                                        // DEV-0077.4-A.1：Grounding 编译错误（ambiguity 等）
+                                        // 捕获后走 Repair（F1 §十九-§二四，≤1 次）或失败文案（0 mutation）。
+                                        let mut grounding_err: Option<String> = None;
+                                        let mut grounding_report: Option<super::planner::GroundedCompileReport> = None;
+                                        // DEV-0077.2 §三十五/§三十六：Planning Completeness
+                                        // 校验 + 一次 Repair Pass（只补缺失，禁止重做整个计划）。
+                                        // 阻断级 = 近期任务为 0（execution planning 缺口）；
+                                        // repair 后仍缺 → partial_failure 文案（§四十一），
+                                        // 不得以「完整计划」名义交付。
+                                        let mut completeness = {
+                                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                            // F1 §九一：Production 源码零 legacy 编译调用——
+                                            // Completeness 试编译同样走 compile_production_plan
+                                            //（ungrounded 首稿在此即 Err → 进入 Grounding Repair）
+                                            match super::planner::compile_production_plan(
+                                                &conn, *profile_id, fid, has_gt, &draft,
+                                            ) {
+                                                Ok((ops0, rep0)) => {
+                                                    grounding_report = rep0;
+                                                    super::planner::validate_planning_completeness(&conn, *profile_id, &ops0)
+                                                }
+                                                Err(e) => {
+                                                    grounding_err = Some(e);
+                                                    super::planner::PlanningCompleteness { missing_tasks: false, notes: vec![] }
+                                                }
+                                            }
+                                        };
+                                        if completeness.missing_tasks && draft.blueprint.is_some() {
+                                            // §三十六：一次 Repair Pass——只要求补 near_term_tasks
+                                            let bp_summary = draft.blueprint.as_ref()
+                                                .map(|b| b.summary.clone())
+                                                .unwrap_or_default();
+                                            let repair_prompt = format!(
+                                                "你刚为用户生成了学习规划蓝图（摘要：{bp_summary}），\
+但缺少近期可执行任务。请只补充 future_tasks（未来 7 天、4~14 项真实可执行任务，\
+基于真实基础与可执行性安排，不要求机械填满每天），不要改动蓝图其他内容。\
+严格返回 JSON：{{\"future_tasks\":[{{\"title\":\"...\",\"planned_date\":\"YYYY-MM-DD\",\"estimated_minutes\":60}}]}}"
+                                            );
+                                            let repair_msgs = vec![crate::ai::client::ChatMessage {
+                                                role: "user".into(),
+                                                content: repair_prompt,
+                                                tool_calls: None,
+                                                tool_call_id: None,
+                                                name: None,
+                                            }];
+                                            if let Ok(rc) = responder
+                                                .chat(repair_msgs, None, Some(2000))
+                                                .await
+                                            {
+                                                let raw = rc.content.unwrap_or_default();
+                                                let t = raw
+                                                    .trim()
+                                                    .trim_start_matches("```json")
+                                                    .trim_start_matches("```")
+                                                    .trim_end_matches("```")
+                                                    .trim();
+                                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+                                                    if let Some(arr) = v.get("future_tasks").and_then(|x| x.as_array()).cloned() {
+                                                        if let Ok(tasks) = serde_json::from_value::<Vec<super::planner::BlueprintTaskDraft>>(serde_json::Value::Array(arr)) {
+                                                            if let Some(bp) = draft.blueprint.as_mut() {
+                                                                bp.future_tasks = tasks;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // 重新校验（repair 后 ops 已含任务）
+                                            completeness = {
+                                                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                match super::planner::compile_production_plan(
+                                                    &conn, *profile_id, fid, has_gt, &draft,
+                                                ) {
+                                                    Ok((ops1, rep1)) => {
+                                                        grounding_report = rep1;
+                                                        super::planner::validate_planning_completeness(&conn, *profile_id, &ops1)
+                                                    }
+                                                    Err(e) => {
+                                                        grounding_err = Some(e);
+                                                        super::planner::PlanningCompleteness { missing_tasks: false, notes: vec![] }
+                                                    }
+                                                }
+                                            };
+                                        }
+                                        // ===== DEV-0077.4-A.1 F1 §十九-§二四：Grounding
+                                        // Repair Pass（严格 ≤1 次；正常 Grounded 路径 0 额外
+                                        // Provider call，§一〇三/§一一四）。只修 grounding
+                                        // （拆任务/补 grounding/补 units/meta 分类），禁止
+                                        // 重写战略（§二十/§二十一）。ChangeSet 尚未 Apply →
+                                        // 修复失败也是 0 business mutation（§二三）。=====
+                                        if let Some(ge) = grounding_err.clone() {
+                                            super::planner::log_grounding_event("GROUNDING_REPAIR_START");
+                                            let repair_prompt = super::planner::grounding_repair_prompt(
+                                                &draft,
+                                                &[ge],
+                                            );
+                                            let repair_msgs = vec![crate::ai::client::ChatMessage {
+                                                role: "user".into(),
+                                                content: repair_prompt,
+                                                tool_calls: None,
+                                                tool_call_id: None,
+                                                name: None,
+                                            }];
+                                            if let Ok(rc) = responder
+                                                .chat(repair_msgs, None, Some(4096))
+                                                .await
+                                            {
+                                                let raw = rc.content.unwrap_or_default();
+                                                usage_total.prompt_tokens += rc.usage.prompt_tokens;
+                                                usage_total.completion_tokens += rc.usage.completion_tokens;
+                                                usage_total.total_tokens += rc.usage.total_tokens;
+                                                let t = raw
+                                                    .trim()
+                                                    .trim_start_matches("```json")
+                                                    .trim_start_matches("```")
+                                                    .trim_end_matches("```")
+                                                    .trim()
+                                                    .to_string();
+                                                let repaired: Option<super::planner::PlanDraft> =
+                                                    serde_json::from_str(&t).ok();
+                                                if let Some(mut rd) = repaired {
+                                                    // 场景继承与原 validate 保持同口径
+                                                    {
+                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                        if let Some(bp) = rd.blueprint.as_mut() {
+                                                            bp.scenario_type = super::planner::resolve_blueprint_scenario(
+                                                                &conn, *profile_id, bp, false,
+                                                            );
+                                                        }
+                                                    }
+                                                    // §六六：Repair 后重新完整校验（非仅 grounding）
+                                                    let revalidate = {
+                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                        super::planner::validate_plan_draft(&conn, *profile_id, &rd)
+                                                    };
+                                                    if revalidate.errors.is_empty() {
+                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                        match super::planner::compile_production_plan(
+                                                            &conn, *profile_id, fid, has_gt, &rd,
+                                                        ) {
+                                                            Ok(_) => {
+                                                                super::planner::log_grounding_event("GROUNDING_REPAIR_SUCCESS");
+                                                                grounding_err = None;
+                                                                draft = rd;
+                                                            }
+                                                            Err(_) => {
+                                                                super::planner::log_grounding_event("GROUNDING_REPAIR_FAILED");
+                                                                // 修复无效：保持原错误（run failed 路径）
+                                                            }
+                                                        }
+                                                    } else {
+                                                        super::planner::log_grounding_event("GROUNDING_REPAIR_FAILED");
+                                                    }
+                                                } else {
+                                                    super::planner::log_grounding_event("GROUNDING_REPAIR_FAILED");
+                                                }
+                                            } else {
+                                                super::planner::log_grounding_event("GROUNDING_REPAIR_FAILED");
+                                            }
+                                        }
+                                        // ===== F1 §六八/§六九：Production 唯一编译入口；
+                                        // 任何 Err 只能进入失败收口（上层禁 fallback）=====
+                                        let ops = {
+                                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                            match super::planner::compile_production_plan(
+                                                &conn, *profile_id, fid, has_gt, &draft,
+                                            ) {
+                                                Ok((o, rep)) => {
+                                                    grounding_report = rep;
+                                                    o
+                                                }
+                                                Err(e) => {
+                                                    grounding_err.get_or_insert(e);
+                                                    Vec::new()
+                                                }
+                                            }
+                                        };
+                                        if let Some(ge) = &grounding_err {
+                                            // DEV-0077.4-A.1：Grounding/Atomicity 校验失败 →
+                                            // 0 mutation，如实告知（不进入 Apply）。
+                                            final_text = format!(
+                                                "计划草稿未通过学习关联校验（正式数据未变化）：{ge}\n\n请回复「重新生成」，我会修正任务关联后重新提交。"
+                                            );
+                                        } else if completeness.missing_tasks && draft.blueprint.is_some() {
+                                            // §四十一 Partial Planning Failure：repair 后近期任务
+                                            // 仍为 0 → 不得以「完整计划」名义交付 ChangeSet。
+                                            final_text = format!(
+                                                "战略规划草稿已生成，但近期执行任务生成失败（未来 7 天为 0 项），\
+本次规划尚未完整完成（正式数据未变化）。\n\n缺失：{}\n\n请回复「重新生成」，我会补全近期任务后再提交。",
+                                                completeness.notes.join("；")
+                                            );
+                                        } else if !super::planner::ops_within_limit(&ops) {
+                                            final_text = "生成的计划规模过大（超过单次修改上限 120 项）。长期计划会随着学习进度变化，建议按月或 14 天滚动生成。".to_string();
+                                        } else {
+                                            // ===== DEV-0077.4-A.1 F2 §二九-§五二：
+                                            // Future Task Replacement 编译（FIX-4）。
+                                            // 顺序（§四八）：PlanDraft → Grounding
+                                            // Validation/Repair（上方已完成）→
+                                            // Production Plan Valid → 计算
+                                            // Replacement Ops → ONE ChangeSet。 =====
+                                            let intent_source = if workflow.original_request.trim().is_empty() {
+                                                user_message.to_string()
+                                            } else {
+                                                workflow.original_request.clone()
+                                            };
+                                            let answer_blob = format!("{intent_source}\n{user_message}");
+                                            let wants_replace =
+                                                super::planner::is_replacement_intent(&answer_blob);
+                                            let mut final_ops = ops;
+                                            let mut replacement_selected: usize = 0;
+                                            if wants_replace {
+                                                let (ws, we) = super::planner::replacement_window(&local_date);
+                                                let selected = {
+                                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                    super::planner::select_replaceable_future_tasks(
+                                                        &conn, *profile_id, &ws, &we,
+                                                    )
+                                                };
+                                                replacement_selected = selected.len();
+                                                if replacement_selected > 0 {
+                                                    super::planner::log_continuation_event(&format!(
+                                                        "REPLACEMENT_INTENT_DETECTED candidates={replacement_selected}"
+                                                    ));
+                                                    final_ops = super::planner::compile_future_task_replacement(
+                                                        &selected,
+                                                        final_ops,
+                                                        "用户要求用新计划替换旧未来任务",
+                                                    );
+                                                } else {
+                                                    super::planner::log_continuation_event(
+                                                        "REPLACEMENT_INTENT_DETECTED candidates=0（窗口内无可替换任务）",
+                                                    );
+                                                }
+                                            }
+                                            // 超限 → 不创建 ChangeSet（0 mutation），走既有失败文案分支
+                                            let oversized_after_replacement =
+                                                !super::planner::ops_within_limit(&final_ops);
+                                            let title = format!("AI 规划 · {}", draft
+                                                .blueprint.as_ref().map(|b| b.title.clone())
+                                                .filter(|t| !t.trim().is_empty())
+                                                .unwrap_or_else(|| "学习计划".to_string()));
+                                            let summary = draft
+                                                .blueprint.as_ref().map(|b| b.summary.clone())
+                                                .filter(|s| !s.trim().is_empty())
+                                                .unwrap_or_else(|| planner_goal_summary.clone());
+                                            let created = {
+                                                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                if oversized_after_replacement {
+                                                    Err("计划加替换操作总规模超过单次修改上限 120 项；请缩短规划范围（如 7 天）后重试".to_string())
+                                                } else {
+                                                    crate::repository::changeset::ChangeSetRepository::new(&conn)
+                                                        .create(
+                                                            *profile_id,
+                                                            Some(*conversation_id),
+                                                            Some(run_id),
+                                                            &title,
+                                                            &summary,
+                                                            &final_ops,
+                                                        )
+                                                }
+                                            };
+                                            match created {
+                                                Ok(cs_id) => {
+                                                    vault.record_ai("changeset_proposed", run_id, &title);
+                                                    emitter.emit_side_effect(
+                                                        "ai://changeset",
+                                                        json!({ "change_set_id": cs_id, "title": title, "count": final_ops.len() }),
+                                                    );
+                                                    // DEV-0077.2 F1 §四：Explicit Planning Intent →
+                                                    // ONE ChangeSet → Level1 Permission → Auto Apply →
+                                                    // ReadBack → §六 Final Response（无需用户二次审批；
+                                                    // ChangeSet/Audit/Undo/ReadBack 全保留）。
+                                                    // Proactive（AI 主动建议、用户未要求执行）→
+                                                    // §五 proposal only（保持 waiting_approval 文案）。
+                                                    // DEV-0077.4-A.1 F2 §三六-§三八：Replacement（含
+                                                    // 多任务移除）按现有批量修改/Level2 confirmation 语义
+                                                    // 整体等待确认——ONE pending ChangeSet，确认前
+                                                    // 0 business mutation；禁止「先建新再等移除旧」。
+                                                    let explicit =
+                                                        super::higher_action::is_explicit_planning_request(&intent_source)
+                                                        && !(wants_replace && replacement_selected > 0);
+                                                    let mut auto_applied = false;
+                                                    if explicit {
+                                                        // §二十八：进入写库 Apply → executing
+                                                        emitter.emit_stage(super::runtime_events::stage::EXECUTING);
+                                                        let apply_result = {
+                                                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                            super::commands::apply_change_set_with_side_effects(
+                                                                app, &conn, vault, *profile_id, cs_id, false, "agent",
+                                                            )
+                                                        };
+                                                        match apply_result {
+                                                            Ok(()) => {
+                                                                // §二十八：ReadBack 校验 → verifying
+                                                                emitter.emit_stage(super::runtime_events::stage::VERIFYING);
+                                                                let (verified, verification) = {
+                                                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                                    let written = crate::repository::changeset::ChangeSetRepository::new(&conn)
+                                                                        .list_operations(cs_id, *profile_id)
+                                                                        .unwrap_or_default();
+                                                                    super::higher_action::verify_written_ops(&conn, *profile_id, &written)
+                                                                };
+                                                                if verified {
+                                                                    auto_applied = true;
+                                                                    applied_changeset_ids.push(cs_id);
+                                                                    // §六 Assistant Final Response（实际创建清单自 DB ReadBack 生成）
+                                                                    let summary = {
+                                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                                        super::planner::planning_apply_readback_summary(
+                                                                            &conn, *profile_id, &local_date,
+                                                                        )
+                                                                    };
+                                                                    final_text = format!(
+                                                                        "已经根据你的个人档案完成规划并写入 Higher。\n\n本次实际创建：\n{summary}\n\nChangeSet #{cs_id} 已应用，可撤销。"
+                                                                    );
+                                                                    // DEV-0077.4-A.1 §九七：学习关联 ReadBack 汇总
+                                                                    //（不展示数据库 id / 内部 ref_key）
+                                                                    if let Some(rep) = &grounding_report {
+                                                                        final_text.push_str(&format!(
+                                                                            "\n\n学习关联：\n{}",
+                                                                            rep.summary_line
+                                                                        ));
+                                                                    }
+                                                                    if !completeness.notes.is_empty() {
+                                                                        final_text.push_str(&format!(
+                                                                            "\n\n尚待完善：{}",
+                                                                            completeness.notes.join("；")
+                                                                        ));
+                                                                    }
+                                                                    // F2 §四九说明：要求替换但窗口无候选（全被保护）
+                                                                    if wants_replace && replacement_selected == 0 {
+                                                                        final_text.push_str(
+                                                                            "\n\n（说明：当前14天窗口内没有可安全替换的旧未来任务——已完成或有学习记录/手工修改的任务会被保留，本次仅创建新任务。）",
+                                                                        );
+                                                                    }
+                                                                } else {
+                                                                    // §七 ReadBack 失败：写入已生效但验证未过——
+                                                                    // 不得声称完成；run failed；用户可 Undo。
+                                                                    let fail_desc = match (
+                                                                        verification.get("entity").and_then(|x| x.as_str()),
+                                                                        verification.get("action").and_then(|x| x.as_str()),
+                                                                    ) {
+                                                                        (Some(en), Some(ac)) => format!("{ac} {en}"),
+                                                                        _ => "内容级核对未通过".to_string(),
+                                                                    };
+                                                                    let failed_msg = format!(
+                                                                        "规划已写入，但回读验证未通过（{fail_desc}），我无法确认全部内容正确落库。请不要以此为准；可在审查面板撤销 ChangeSet #{cs_id}。"
+                                                                    );
+                                                                    {
+                                                                        let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                                        let _ = crate::repository::conversation::ConversationRepository::new(&conn)
+                                                                            .add_message(*conversation_id, *profile_id, "assistant", &failed_msg, Some(run_id));
+                                                                        let _ = conn.execute(
+                                                                            "UPDATE ai_runs SET error=?2, updated_at=datetime('now') WHERE id=?1",
+                                                                            rusqlite::params![run_id, failed_msg],
+                                                                        );
+                                                                    }
+                                                                    return Err(failed_msg);
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                // §七 Apply 失败：apply 单事务全包 rollback
+                                                                //（正式数据 0 变化）；run failed。
+                                                                let failed_msg = format!(
+                                                                    "规划应用失败（正式数据未变化，已整体回滚）：{e}\n\n请回复「重新生成」，或到审查面板查看提案后手动应用。"
+                                                                );
+                                                                {
+                                                                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                                                                    let _ = crate::repository::conversation::ConversationRepository::new(&conn)
+                                                                        .add_message(*conversation_id, *profile_id, "assistant", &failed_msg, Some(run_id));
+                                                                    let _ = conn.execute(
+                                                                        "UPDATE ai_runs SET error=?2, updated_at=datetime('now') WHERE id=?1",
+                                                                        rusqlite::params![run_id, failed_msg],
+                                                                    );
+                                                                }
+                                                                return Err(failed_msg);
+                                                            }
+                                                        }
+                                                    }
+                                                    if !auto_applied {
+                                                        // Proactive（§五）或 explicit 失败兜底：proposal only
+                                                        // —— 保持 waiting_approval，由用户在审查面板决定。
+                                                        // F2 §三六/§五一 B：Replacement 等待的是现有正式
+                                                        // confirmation action（≠「请告诉我下一步」）。
+                                                        let mut reply = if wants_replace && replacement_selected > 0 {
+                                                            let new_task_n = final_ops
+                                                                .iter()
+                                                                .filter(|o| o.entity_type == "task" && o.action == "create")
+                                                                .count();
+                                                            let new_item_n = final_ops
+                                                                .iter()
+                                                                .filter(|o| o.entity_type == "knowledge")
+                                                                .count();
+                                                            format!(
+                                                                "新的14天计划已经生成完成（新学习任务 {} 项、知识节点 {} 个）。\n\
+                                                                 替换现有 {} 项旧未来任务需要你确认；确认前我还没有修改原任务。\n\
+                                                                 请到审查面板确认 ChangeSet #{cs_id}（同一份变更整体生效/撤销）。",
+                                                                new_task_n, new_item_n, replacement_selected,
+                                                            )
+                                                        } else {
+                                                            String::from("你的目标理解如下：\n")
+                                                        };
+                                                        if !(wants_replace && replacement_selected > 0) {
+                                                            reply.push_str(&format!(
+                                                                "目标：{planner_goal_summary}\n\n下一步：制定年度/月/日计划。\n\n已生成学习计划提案（共 {} 项），请在审查面板确认后应用。",
+                                                                final_ops.len()
+                                                            ));
+                                                            let task_n = final_ops.iter().filter(|o| o.entity_type == "task").count();
+                                                            let phase_n = final_ops.iter().filter(|o| o.entity_type == "planning_phase").count();
+                                                            let ms_n = final_ops.iter().filter(|o| o.entity_type == "planning_milestone").count();
+                                                            let year_n = final_ops.iter().filter(|o| o.entity_type == "goal" && o.after.get("goal_level").and_then(|x| x.as_str()) == Some("year")).count();
+                                                            reply.push_str(&format!(
+                                                                "\n\n本次包含：蓝图 1 份、阶段 {phase_n}、里程碑 {ms_n}、年度目标 {year_n}、近期任务 {task_n} 项。"
+                                                            ));
+                                                        }
+                                                        if !completeness.notes.is_empty() {
+                                                            reply.push_str(&format!(
+                                                                "\n\n尚待完善：{}",
+                                                                completeness.notes.join("；")
+                                                            ));
+                                                        }
+                                                        if !validation.overloaded_days.is_empty() {
+                                                            reply.push_str(&format!(
+                                                                "\n\n（部分日期计划量超出可用时间：{}。可在审查中取消超载任务。）",
+                                                                validation.overloaded_days.join("；")
+                                                            ));
+                                                        }
+                                                        final_text = reply;
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    final_text = format!(
+                                                        "计划提案生成失败（正式数据未变化）：{e}"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        final_text = format!(
+                                            "计划草稿未通过校验，暂未生成可应用方案：{}\n\n请回复「重新生成」，我会修正后重新提交。",
+                                            validation.errors.join("；")
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
-                // ===== DEV-AI-ARCH-001 孤儿块清除锚 B2 =====
-                // ===== 锚 B3 =====
-                // ===== 锚 B4 =====
-                // ===== 锚 B5 =====
-                // ===== 锚 B6（孤儿块清除完成） =====
                 // §二十七：真流式轮已逐 chunk emit → 不再全文重发；
                 // 非流式轮（planner / 挂起 / tool-call 后收口）→ legacy 补发。
                 if !round_streamed {
@@ -1261,33 +1399,7 @@ async fn agent_turn_inner(
                     }
                     // 工具执行：ctx 持 state（DB 工具内部短锁；web 不碰 DB）——
                     // 本处不持任何 MutexGuard 跨 await，保证 future Send。
-                    let tool_name_for_trace = fname.clone();
                     let out = {
-                        // F1.2.1 · §11/§12 · 动态 Mission Gate 重算（每次构造
-                        // ctx 之前——hard switch 后旧 Mission gate 绝不泄漏）：
-                        // collector 唯一来源 = workflow.mission_changeset_ids +
-                        // 本 run applied + 本 run pending（严禁 legacy
-                        // applied_changeset_ids / conversation 历史 SQL）。
-                        let current_mission_cs_ids = collect_current_mission_changeset_ids(
-                            &workflow,
-                            &applied_changeset_ids,
-                            &mission_pending_changeset_ids,
-                        );
-                        // F1.2.1-R1 · §11 · TOOL GATES（每次构造 ctx 前动态重算）：
-                        //   full_planning_now = planner_ready && mission_kind=="planning"
-                        //   formal_plan_mutation_now = mission_kind ∈ {planning,
-                        //     planning_amendment}（**不依赖 planner_ready**——
-                        //     Amend mission decision=Execute 仍须 Task→Day 强关系）
-                        //   initial_full_planning_now = full_planning_now && cs_ids 空
-                        // 结果：Full → Task→Day 强关系 + 7~14 Preflight；
-                        // Amend → Task→Day 强关系 + NO 7~14 Full Preflight；
-                        // None（action）→ Goal Optional + NO Full Preflight。
-                        let full_planning_now =
-                            planner_ready && workflow.mission_kind == "planning";
-                        let formal_plan_mutation_now = workflow.mission_kind == "planning"
-                            || workflow.mission_kind == "planning_amendment";
-                        let initial_now =
-                            full_planning_now && current_mission_cs_ids.is_empty();
                         let mut ctx = AgentToolCtx {
                             state,
                             vault,
@@ -1310,12 +1422,6 @@ async fn agent_turn_inner(
                             research_started: research_state_persisted,
                             evidence_urls: std::mem::take(&mut evidence_urls),
                             unresolved_updates: std::mem::take(&mut unresolved_updates),
-                            external_facts_updates: std::mem::take(&mut external_facts_updates),
-                            opened_sources: std::mem::take(&mut opened_sources),
-                            execution_authorization: workflow.execution_authorization(),
-                            is_initial_planning_mission: initial_now,
-                            formal_planning_mission: formal_plan_mutation_now,
-                            mission_changeset_ids: current_mission_cs_ids,
                         };
                         let r = agent_tools::execute_agent_tool(&mut ctx, &fname, &args).await;
                         sources = std::mem::take(&mut ctx.sources);
@@ -1333,164 +1439,51 @@ async fn agent_turn_inner(
                         research_state_persisted = research_state_persisted || ctx.research_started;
                         evidence_urls = std::mem::take(&mut ctx.evidence_urls);
                         unresolved_updates = std::mem::take(&mut ctx.unresolved_updates);
-                        external_facts_updates = std::mem::take(&mut ctx.external_facts_updates);
-                        opened_sources = std::mem::take(&mut ctx.opened_sources);
-                        // F1.1 §22：Level2 混包 → confirmation_required（ONE
-                        // ChangeSet waiting_approval）= 提案已就绪，等用户确认。
-                        // F1.1 §27：apply_failed = Apply 失败残留（非提案）。
-                        // F1.2 · P0-1/P0-4：pending CS 记入 mission_changeset_ids
-                        //（Initial 判定与 verify baseline 的 mission 记账）。
-                        if let Ok(v) = serde_json::from_str::<J>(&r) {
-                            match v.get("status").and_then(|s| s.as_str()) {
-                                Some("confirmation_required") => {
-                                    has_pending_proposal = true;
-                                    if let Some(cs) = v.get("change_set_id").and_then(|x| x.as_i64()) {
-                                        mission_pending_changeset_ids.push(cs);
-                                    }
-                                }
-                                Some("apply_failed") => {
-                                    has_apply_failure = true;
-                                    if let Some(cs) = v.get("change_set_id").and_then(|x| x.as_i64()) {
-                                        mission_pending_changeset_ids.push(cs);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
                         r
                     };
-                    // DEV-AI-CORE-001-F2.2 §十二 · 最小 Runtime Trace：工具执行后
-                    // 记录 tool_executed（此前 F2.1 Live 诊断只能推断模型调过什么）。
-                    {
-                        let conn = state.0.lock().map_err(|e| e.to_string())?;
-                        let _ = conn.execute(
-                            "INSERT INTO ai_run_events (run_id, event_type, data_json)
-                             VALUES (?1, 'tool_executed', ?2)",
-                            rusqlite::params![run_id, format!("{{\"name\":\"{tool_name_for_trace}\"}}")],
-                        );
-                    }
-                    // ---- F1.2.1-R1 · §16/§19 · CANCEL DURABILITY ----
-                    // 任何 cancel_current_task 成功（new_task=true/false）：
-                    // ① collect 当前 Mission CS → close_current_mission_for_cancel
-                    //    (...)?——ONE SQLite transaction 原子完成「reject 旧
-                    //    Mission waiting CS + cancel active workflow」；§16
-                    //    RETIRE SILENT CANCEL：失败 ? 上抛（当前 run failed），
-                    //    禁止吞错、禁止建立 fresh Mission、禁止下一次 Provider、
-                    //    禁止新 mutation；
-                    // ② §19 TOOL BATCH BOUNDARY：当前 batch 后续尚未执行的
-                    //    tool calls 全部丢弃——new_task=false 直接结束 Agent
-                    //    Tool Loop（run 收口 cancelled）；new_task=true 走
-                    //    §18 hard switch 后进入下一 round 新 Mission。
-                    // 幂等：cancel_durable_done 只执行一次（删除原 generic
-                    // cancel + hard switch 内二次 cancel 的重复路径）。
+                    // ---- E-R3-02（P0）：cancel 工具被 Backend 接受 → 在下一次
+                    // Provider 调用之前 durable 取消旧 waiting run（即使下一次
+                    // Provider 立刻失败，也绝不出现 old=waiting_user + current=failed）。
+                    // 幂等：只执行一次；closure 中保留兜底调用。
                     if task_cancelled && !cancelled && !cancel_durable_done {
                         cancel_durable_done = true;
-                        let old_mission_cs_ids = collect_current_mission_changeset_ids(
-                            &workflow,
-                            &applied_changeset_ids,
-                            &mission_pending_changeset_ids,
-                        );
                         {
                             let conn = state.0.lock().map_err(|e| e.to_string())?;
-                            super::workflow::close_current_mission_for_cancel(
-                                &conn,
-                                *profile_id,
-                                *conversation_id,
-                                &old_mission_cs_ids,
-                            )?;
+                            let _ = super::workflow::cancel_waiting_workflow(
+                                &conn, *profile_id, *conversation_id,
+                            );
                         }
-                        if !task_cancel_new_task {
-                            // ---- §17 · PLAIN CANCEL ----
-                            // close 事务已 durable：waiting CS=rejected +
-                            // workflow=cancelled。立即终止旧 Mission Tool
-                            // Batch（禁止执行同 batch cancel 后面的任何
-                            // Tool）；禁止再调用 Provider 执行旧 Mission；
-                            // run 由收口块落 cancelled（task_cancelled 且
-                            // !new_task 分支）。
-                            if final_text.trim().is_empty() {
-                                final_text = "已按你的要求停止当前任务；未生效的待确认修改已一并取消。".to_string();
-                            }
-                            break 'outer;
-                        }
-                        // ---- §18 · HARD SWITCH（cancel_current_task(new_task=true)）----
-                        // 顺序固定（任务书 §18）：close ↑ 已完成 →
-                        // fresh_mission_payload ↓ fresh authorization ↓
-                        // fresh scope（Full→planning / Amend→planning_amendment /
-                        // None→action）↓ planner_ready（仅 scope==Full AND
-                        // decision==ReadyForPlanning）↓ reset run-local state ↓
-                        // set_workflow_payload_checked ↓ 重建 Provider messages ↓
-                        // 下一 round。禁止两次 cancel。
-                        // ---- §17.2 · CREATE FRESH MISSION ----
-                        // fresh_mission_payload：epoch 递增 + 全部 Mission private
-                        // state 清空（禁止直接 Default——会丢 epoch）。
-                        let mut fresh = super::workflow::fresh_mission_payload(&workflow, user_message);
-                        // ---- §17.3 · AUTHORIZATION ----
-                        // F1.1.1 · B · NEW MISSION AUTHORIZATION ISOLATION：基于
-                        // 新 Mission 本身的本轮 intelligence 结果重建：
-                        //   Some(true)→REQUESTED / Some(false)→DECLINED /
-                        //   None→UNKNOWN（Fail Closed）——绝不读旧 Mission 授权。
-                        fresh.execution_requested = current_turn_exec_request == Some(true);
-                        fresh.execution_declined = current_turn_exec_request == Some(false);
-                        // ---- §17.4 · FRESH SCOPE（§9 三态映射）----
-                        // current_message_scope 只表示当前用户消息本身（§10）；
-                        // Option::None（本轮分析失败）Fail Closed → action。
-                        match current_message_scope {
-                            Some(super::intelligence::goal_understanding::PlanningScope::Full) => {
-                                fresh.mission_kind = "planning".into();
-                                fresh.planning_intent_summary = current_turn_goal_summary.clone();
-                            }
-                            Some(super::intelligence::goal_understanding::PlanningScope::Amend) => {
-                                fresh.mission_kind = "planning_amendment".into();
-                                fresh.planning_intent_summary = current_turn_goal_summary.clone();
-                            }
-                            Some(super::intelligence::goal_understanding::PlanningScope::None)
-                            | None => {
-                                fresh.mission_kind = "action".into();
-                            }
-                        }
+                    }
+                    // ---- E-R3-01（P0）：new_task 硬边界。cancel_current_task
+                    // (new_task=true) 一旦成功执行：
+                    // ① 立即终止当前 tool-call batch（cancel 之后尚未执行的
+                    //    tool calls 直接丢弃，不再执行）
+                    // ② 丢弃 switch 之前的全部 Provider messages（bound_history /
+                    //    旧轮 tool 交换 / 本轮 cancel 前的 tool calls+results /
+                    //    cancel 自身的 tool exchange——Backend 已知取消成功，
+                    //    模型无需经旧 Tool Message 得知状态）
+                    // ③ 清空旧 workflow 临时 collected/pending + fresh payload
+                    // ④ 下一次 Provider messages 严格重建为
+                    //    [fresh system prompt] + [current user message]
+                    if task_cancelled && task_cancel_new_task && !new_task_context_switched && !cancelled {
+                        new_task_context_switched = true;
+                        applied_before_context_switch = applied_changeset_ids.clone();
+                        let mut fresh = super::workflow::AgentWorkflowPayload::default();
+                        fresh.original_request = user_message.to_string();
+                        fresh.last_phase = super::workflow::STATE_UNDERSTANDING.to_string();
                         workflow = fresh;
-                        // ---- §17.5 · PLANNER STATE ----
-                        // §18：仅 current_message_scope==Full AND
-                        // current_message_decision==ReadyForPlanning 才保持
-                        // planner_ready；否则显式 false（禁止无条件继承）。
-                        if current_message_scope
-                            == Some(super::intelligence::goal_understanding::PlanningScope::Full)
-                            && current_message_decision
-                                == Some(super::intelligence::decision::AiDecision::ReadyForPlanning)
-                        {
-                            planner_ready = true;
-                            planner_goal_summary = current_turn_goal_summary.clone();
-                        } else {
-                            planner_ready = false;
-                            planner_goal_summary.clear();
-                        }
-                        // ---- §17.6 · RESET ALL OLD MISSION RUN-LOCAL STATE ----
-                        applied_changeset_ids.clear();
-                        writes_applied = 0;
-                        mission_pending_changeset_ids.clear();
-                        has_pending_proposal = false;
-                        has_apply_failure = false;
                         collected_updates.clear();
                         pending_questions_override = None;
                         hangup_reason = None;
-                        sources.clear();
+                        // F14：Task B 不继承 Task A 的 evidence / unresolved 标记
                         evidence_urls.clear();
                         unresolved_updates.clear();
-                        external_facts_updates.clear();
-                        opened_sources.clear();
-                        research_state_persisted = false;
-                        mission_feedback_rounds = 0;
-                        mission_incomplete_flag = false;
-                        round_streamed = false;
-                        prev_waiting = false;
-                        had_original_before_turn = false;
-                        task_cancelled = false;
-                        task_cancel_new_task = false;
-                        // cancel_durable_done 保持 true（§16 幂等；usage_total
-                        // 是 run-level telemetry，不清零）。
+                        // F21-03：切换前轮首分析的 decision 属旧任务上下文，
+                        // 不得作用于新任务的收口（新任务回到通用 completed 语义）
                         intel_decision = None;
-                        intel_askuser_missing.clear();
-                        planner_dispatched_none = true;
+                        // DEV-0073 Phase 5：新任务不继承旧任务的 planner 触发
+                        planner_ready = false;
+                        planner_goal_summary.clear();
                         // E-R4-01 → E-R4.1：fresh payload 必须在下一次 Provider 调用之前
                         // durable 持久化到当前 run（understanding + 新任务 payload），
                         // 不得只存在内存。使用 checked 版本——真实 SQL 成功/失败上抛：
@@ -1520,13 +1513,7 @@ async fn agent_turn_inner(
                     //  ③ 轮首 planner_ready 尚未注入（避免重复注入）；
                     //  ④ 未取消。Replacement intent（§二九）自 collected/原始请求
                     //  确定性检测并进入 Planner Truth（§六三）。
-                    // F1.2.1-R1 · §13 · REMOVE BLIND WAITING→PLANNING：
-                    // deterministic Planner resume 只允许原 Mission 本身是
-                    // Full Planning（mission_kind=="planning"）——
-                    // planning_amendment / action / adaptation 的 waiting_user
-                    // 补齐信息后**不得**被强制转 Full Planning。
                     if prev_waiting
-                        && workflow.mission_kind == "planning"
                         && !initial_pending_empty
                         && pending_questions_override.as_ref().is_some_and(|q| q.is_empty())
                         && !collected_updates.is_empty()
@@ -1546,17 +1533,10 @@ async fn agent_turn_inner(
                         } else {
                             workflow.current_goal.clone()
                         };
-                        // §13：mission_kind=="planning" ⇒ Full Planning Mission
-                        //（映射在 Mission 建立时完成），此处 scope=Full 与
-                        // Mission Truth 一致；legacy bool 仅 compatibility。
-                        goal2.planning_scope = Some(
-                            super::intelligence::goal_understanding::PlanningScope::Full,
-                        );
                         goal2.planning_required = Some(true);
-                        let decision2 = super::intelligence::decision::evaluate_with_scope(
+                        let decision2 = super::intelligence::decision::evaluate(
                             &goal2,
                             &super::intelligence::missing_information::from_goal(&goal2),
-                            super::intelligence::goal_understanding::PlanningScope::Full,
                         );
                         if decision2.decision
                             == super::intelligence::decision::AiDecision::ReadyForPlanning
@@ -1567,24 +1547,24 @@ async fn agent_turn_inner(
                                 "{}（类型 planning；由待确认问题回答恢复）",
                                 goal2.goal
                             );
-                            // DEV-AI-ARCH-001 §19/§20：续接 dispatch 同样不进
-                            // Dedicated Planner——注入 Mission Checklist +
-                            // PlanningContextSnapshot（含替换窗口近期任务），
-                            // Global Agent 用 Higher Tools 完成规划。
-                            let resume_snapshot = {
+                            // §六二/§六三：Planner Context = 原始请求 + collected +
+                            // Planning Truth（含替换窗口旧任务区块）
+                            let instruction = {
                                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                                let mut s = super::planning_context::build_planning_context_snapshot(
-                                    &conn, *profile_id, &local_date, &workflow.original_request,
-                                    &merged, &workflow.external_facts, &workflow.unresolved,
-                                )
-                                .snapshot_instruction_block();
-                                s.push_str(&super::planner::future_tasks_truth_block(
+                                let truth = super::planner::build_planning_truth_context(&conn, *profile_id);
+                                let mut p = super::planner::PlanningWorkflowPayload::default();
+                                p.original_request = workflow.original_request.clone();
+                                p.answered = merged.clone();
+                                p.updated_by_user_turn = user_message.to_string();
+                                let mut ins =
+                                    super::planner::build_planning_instruction(&truth.instruction, &p);
+                                ins.push_str(&super::planner::future_tasks_truth_block(
                                     &conn, *profile_id, &local_date,
                                 ));
-                                s
+                                ins
                             };
                             messages.push(ChatMessage::system(format!(
-                                "【DEV-AI-ARCH-001 · 信息已齐备，进入正式规划任务（续接恢复）】\n目标理解：{planner_goal_summary}\n\n{resume_snapshot}\n\nPLANNING MISSION CHECKLIST：使用已有事实；已知信息不问用户；External 用 Web 自查；User-only 缺失 request_user_input；信息足够后 execute_higher_actions 一次 Action Pack（ONE ChangeSet）；执行后 get_higher_overview 验证；不得只输出文字计划。"
+                                "【DEV-0073 · 信息已齐备，本轮进入正式规划】\n目标理解：{planner_goal_summary}\n以下按 Planner Response Protocol 输出（只输出一个 JSON 对象）：\n\n{instruction}"
                             )));
                             emitter.emit_stage(super::runtime_events::stage::PLANNING);
                             super::planner::log_continuation_event("PLANNING_RESUME_DISPATCH");
@@ -1617,10 +1597,8 @@ async fn agent_turn_inner(
     // active planning continuation（续接轮 + original_request 存在 + pending
     // 已清空 + 无任何 planning 交付 + 未失败/取消）禁止 generic fallback
     // 假装完成；改为 planning_continuation_incomplete → run failed 如实收口。
-    // F1.2.1-R1 · §17：plain cancel（break 'outer 终止 Tool Loop）不进本
-    // guard——run 由收口块落 cancelled，不得被误判 failed。
     let mut continuation_incomplete_flag = false;
-    if final_text.is_empty() && !cancelled && !task_cancelled && hangup_reason.is_none() {
+    if final_text.is_empty() && !cancelled && hangup_reason.is_none() {
         let has_run_changeset_pre: bool = {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
             conn.query_row(
@@ -1631,44 +1609,6 @@ async fn agent_turn_inner(
             .map(|v| v == 1)
             .unwrap_or(false)
         };
-        // ===== DEV-AI-CORE-001-F2.2 FIX-A（§二/§三/§五/§九）· AskUser Backend
-        // Deterministic Guard =====
-        // Intel 已确定 decision=AskUser（「这一轮必须向用户询问信息」），但
-        // Provider 全程未调 request_user_input、无 waiting_user、无 ChangeSet、
-        // 无写入、无取消、最终空输出（F2.1 真实 Live 失败形态）→ Backend
-        // 直接从 Intel missing 构造用户可见问题并挂起 waiting_user；禁止
-        // generic 假装 completed。不依赖 Provider，不二次调 LLM（§四）。
-        let askuser_guard = intel_decision
-            == Some(super::intelligence::decision::AiDecision::AskUser)
-            && !intel_askuser_missing.is_empty()
-            && pending_questions_override.is_none()
-            && !task_cancelled
-            && writes_applied == 0
-            && !has_run_changeset_pre;
-        if askuser_guard {
-            let questions = backend_questions_from_missing(&intel_askuser_missing);
-            let n = questions.len();
-            super::planner::log_continuation_event(&format!(
-                "ASKUSER_BACKEND_GUARD_QUESTIONS n={n} fields={}",
-                questions.iter().map(|q| q.key.as_str()).collect::<Vec<_>>().join(",")
-            ));
-            {
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                let _ = conn.execute(
-                    "INSERT INTO ai_run_events (run_id, event_type, data_json)
-                     VALUES (?1, 'askuser_backend_questions', ?2)",
-                    rusqlite::params![
-                        run_id,
-                        format!("{{\"count\":{n},\"fallback_reason\":\"provider_no_request_user_input_empty_final\"}}")
-                    ],
-                );
-            }
-            workflow.pending_questions = questions.clone();
-            pending_questions_override = Some(questions);
-            hangup_reason = Some("生成正式规划前，还需要你确认关键信息".to_string());
-            // final_text 保持空 → 下方 hangup 文案块渲染问题清单（复用正式
-            // request_user_input 的用户可见协议）。
-        } else {
         // effective pending（收口将落库的口径）：override 存在时以 override 为准
         let effective_pending_now: Vec<super::workflow::AgentQuestion> = pending_questions_override
             .clone()
@@ -1680,19 +1620,7 @@ async fn agent_turn_inner(
             && writes_applied == 0
             && !has_run_changeset_pre
             && !workflow.pending_questions.is_empty();
-        // ===== DEV-AI-CORE-001-F2.2 FIX-B（§六）· Guard 去首轮盲区 =====
-        // planning_workflow_expected：明确 Planning Workflow 的轮次（不限于
-        // waiting_user 续接轮）尚未交付结果时，禁止 generic 假装 completed。
-        // F1.2.1-R1 · §14 · REMOVE KEYWORD PLANNING FALLBACK：
-        // is_explicit_planning_request（中文关键词表）从 Production 路径
-        // 删除——Planning Workflow 是否 expected 只能来自结构化 Mission
-        // Truth：workflow.mission_kind=="planning" 或 planner_ready
-        //（intel AskUser 为 FIX-A 已拦截后的防御性兜底）。
-        let planning_workflow_expected = prev_waiting
-            || planner_ready
-            || intel_decision == Some(super::intelligence::decision::AiDecision::AskUser)
-            || workflow.mission_kind == "planning";
-        let planning_continuation_incomplete = planning_workflow_expected
+        let planning_continuation_incomplete = prev_waiting
             && !workflow.original_request.trim().is_empty()
             && !side_question_now
             && effective_pending_now.is_empty()
@@ -1712,45 +1640,9 @@ async fn agent_turn_inner(
             // §二七：用户可见文案 + run failed（含 durable 错误码；不假装 completed）
             final_text = "规划继续执行时出现问题，本次没有修改现有计划。请重新发送你的规划请求，我会从头处理。".to_string();
             continuation_incomplete_flag = true;
-        } else if workflow.mission_kind == "planning"
-            && planner_ready
-            && workflow.execution_authorization()
-                == super::workflow::ExecutionAuthorization::Requested
-            && !has_pending_proposal
-            && !side_question_now
-            && !cancelled
-        {
-            // DEV-AI-ARCH-001 §31/§32 · 轮耗尽路径的 Mission Verify：
-            // 模型用满轮次未给出 FinalAnswer（已发生写入但可能缺交付）→
-            // Backend verify；缺交付 → mission_incomplete（failed，明确缺什么，
-            // 禁止 generic completed）。F1.1 §2：仅 REQUESTED 验证；
-            // §27 已产出待确认提案 = 交付就绪。F1.2 · P0-4 → F1.2.1 · §16：
-            // mission-scoped，正式输入 = current Mission owned CS only
-            //（**删除 legacy fallback** workflow.applied_changeset_ids）。
-            let mission_cs_ids = collect_current_mission_changeset_ids(
-                &workflow,
-                &applied_changeset_ids,
-                &mission_pending_changeset_ids,
-            );
-            let verify = {
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                super::planning_context::verify_planning_mission(
-                    &conn, *profile_id, &local_date, &mission_cs_ids,
-                )
-            };
-            if !verify.ok {
-                final_text = format!(
-                    "本次规划任务未完成交付（缺少：{}）。已写入部分可通过审查面板查看/撤销；请继续或重新发起规划。",
-                    verify.missing.join("；")
-                );
-                mission_incomplete_flag = true;
-            } else {
-                final_text = "我已按现有信息处理到这里。如需继续，请告诉我下一步。".to_string();
-            }
         } else {
             final_text = "我已按现有信息处理到这里。如需继续，请告诉我下一步。".to_string();
         }
-        } // F2.2 FIX-A else 结束（AskUser 拦截轮不走 generic/failed 文案）
     }
     if cancelled {
         final_text = format!("（已停止。已生成内容：{}）", final_text);
@@ -1842,41 +1734,13 @@ async fn agent_turn_inner(
                 workflow.unresolved.push(u.clone());
             }
         }
-        // DEV-AI-ARCH-001-F1.1 §9 · External Fact Durable Truth：record_external_fact
-        // 登记的外部事实（含 Backend 写入的 provenance）收口合并进
-        // workflow.external_facts（按 key 去重、后写覆盖=模型纠正）——跨 Turn
-        // 持久，新 Turn 由 PlanningContextSnapshot 重新读到（不依赖聊天历史）。
-        for f in external_facts_updates.drain(..) {
-            if let Some(cur) = workflow
-                .external_facts
-                .iter_mut()
-                .find(|x| x.key == f.key)
-            {
-                *cur = f;
-            } else {
-                workflow.external_facts.push(f);
-            }
-        }
-        // F1.2 · P0-1/P0-4 → F1.2.1 · §13 · Mission CS 记账正式定义：
-        // CURRENT MISSION 创建的**全部** ChangeSet（Level1 applied / Level2
-        // waiting_approval / apply_failed residual）去重并入
-        // workflow.mission_changeset_ids——**不区分 mission 类型**（planning /
-        // 普通 action / adaptation）：Mission ownership 与 Mission 类型无关。
-        // NEW MISSION（fresh payload）→ []；Mission 边界由 lifecycle 状态机
-        //（§7）与 hard switch（§17）保证，不再需要 mission_kind 条件。
-        for id in applied_changeset_ids
-            .iter()
-            .chain(mission_pending_changeset_ids.iter())
-        {
-            if !workflow.mission_changeset_ids.contains(id) {
-                workflow.mission_changeset_ids.push(*id);
-            }
-        }
         let err_flag = if writes_applied > 0 { "agent_executed" } else { "" };
-        // F1.2.1-R1 · §16 · RETIRE SILENT CANCEL：原「closure 兜底
-        // cancel_active_workflow」删除——cancel durability 已在 Tool Loop 内
-        // close_current_mission_for_cancel(...)? 原子完成（失败即 ? 上抛，
-        // 不会走到本收口）；此处不再吞错兜底。
+        // E-R2-02 → E-R3-02：durable 取消已在 cancel 工具成功后、下一次 Provider
+        // 调用之前正式执行（见 Tool Loop 内切换点）；此处为幂等兜底（查无 waiting
+        // 行即 no-op），覆盖模型未走 cancel 工具等边缘收口。
+        if task_cancelled && !cancelled && !cancel_durable_done {
+            let _ = super::workflow::cancel_waiting_workflow(&conn, *profile_id, *conversation_id);
+        }
         // DEV-0077.2 §十六-§十九（问题 B 根因修复）：waiting_user 语义化续接——
         // 续接轮模型若既未调用 request_user_input（无 pending_questions_override，
         // 即未提交任何结构化答案/追问）、未取消原任务、也未产生任何写入或
@@ -1903,23 +1767,13 @@ async fn agent_turn_inner(
         // DEV-0077.4-A.1 F2 §二六/§二七：continuation 不完整 → run failed
         //（durable 错误码；workflow 保持 waiting_user 携 original_request，
         // 用户重试时 FIX-1 桥接仍可恢复原任务，不假装 completed）
-        //
-        // DEV-AI-ARCH-001 §32：Mission Completeness Gate 最终未通过
-        //（mission_incomplete_flag，FinalAnswer 阶段 verify 缺交付且
-        // 轮次/feedback 耗尽）→ run failed + durable 错误码
-        // planning_mission_incomplete（明确缺什么在 final_text；禁止 generic
-        // completed，不伪造结果）。
-        if (continuation_incomplete_flag || mission_incomplete_flag) && !cancelled {
-            let err_code = if mission_incomplete_flag {
-                "planning_mission_incomplete"
-            } else {
-                "planning_continuation_incomplete"
-            };
-            finish_run(&conn, run_id, *profile_id, *conversation_id, "failed", err_code, &usage_total);
+        if continuation_incomplete_flag && !cancelled {
+            finish_run(&conn, run_id, *profile_id, *conversation_id, "failed", "planning_continuation_incomplete", &usage_total);
             let _ = conn.execute(
                 "INSERT INTO ai_run_events (run_id, event_type, data_json)
-                 VALUES (?1, ?2, '{\"guard\":\"generic_fallback_blocked\"}')",
-                rusqlite::params![run_id, err_code],
+                 VALUES (?1, 'planning_continuation_incomplete',
+                         '{\"guard\":\"generic_fallback_blocked\"}')",
+                rusqlite::params![run_id],
             );
             workflow.last_phase = super::workflow::STATE_COLLECTING_INFORMATION.to_string();
             super::workflow::set_workflow_payload(
@@ -1937,17 +1791,6 @@ async fn agent_turn_inner(
                 super::workflow::STATE_WAITING_USER, &workflow,
             );
             trace.run_finished(&conn, "waiting_user");
-        } else if has_pending_proposal && !cancelled {
-            // F1.1 §22/§35（STATE-03）：本 run 产出 Level2 待确认提案 →
-            // 正式 Approval State（绝非 completed——确认前 0 business mutation；
-            // 确认动作走既有 ChangeSet apply 通道，不经 agent run）。
-            finish_run(&conn, run_id, *profile_id, *conversation_id, "completed", "awaiting_approval", &usage_total);
-            workflow.last_phase = super::workflow::STATE_WAITING_APPROVAL.to_string();
-            super::workflow::set_workflow_payload(
-                &conn, run_id, *profile_id, *conversation_id,
-                super::workflow::STATE_WAITING_APPROVAL, &workflow,
-            );
-            trace.run_finished(&conn, "completed");
         } else if cancelled || (task_cancelled && !task_cancel_new_task) {
             // 用户点停 或 §19 纯放弃原任务：workflow 结束 cancelled、pending 清空
             finish_run(&conn, run_id, *profile_id, *conversation_id, "cancelled", err_flag, &usage_total);
@@ -1961,20 +1804,38 @@ async fn agent_turn_inner(
         } else {
             // 正常完成（含 E-R2-01 新任务完成）：completed；E-R1-01——信息已足够
             // 才正常继续，completed 时清空 pending。
-            // F1.2.1 · §18：hard switch 已 clear applied_changeset_ids（§17.6）
-            // → 正常 completed 收口直接整表快照（legacy/run summary 字段；
-            // Mission Verify 不再读取它——§16）。
+            // E-R2-01：切换前已 applied 的 ChangeSet 属旧 workflow，不计入新任务。
             finish_run(&conn, run_id, *profile_id, *conversation_id, "completed", err_flag, &usage_total);
             workflow.pending_questions.clear();
-            workflow.applied_changeset_ids = applied_changeset_ids.clone();
-            // F1.1 §9/§31/§32（STATE-01）：成功终态一律 = completed（三处一致：
-            // run.status / workflow.state / last_phase）。ReadyForPlanning /
-            // Planning 仅允许作为执行中的中间态——旧 F21-03「ready_for_planning
-            // 收口」语义随 Planning mission 直接执行而退役（P0-5 权威修正）。
-            workflow.last_phase = super::workflow::STATE_COMPLETED.to_string();
+            workflow.applied_changeset_ids = applied_changeset_ids
+                .iter()
+                .filter(|id| !applied_before_context_switch.contains(id))
+                .cloned()
+                .collect();
+            // F21-03：intelligence decision = ReadyForPlanning 且无挂起确认时，
+            // workflow 持久收口为 ready_for_planning（信息完整、等待进入 Planning），
+            // 通用 completed closure 不得覆盖回 completed；普通聊天/普通任务
+            // 完成仍维持 completed（严格区分，F21-T07）。
+            let pending_confirmation: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ai_change_sets WHERE run_id=?1 AND status='pending')",
+                    rusqlite::params![run_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|v| v == 1)
+                .unwrap_or(false);
+            let intel_ready = intel_decision
+                == Some(super::intelligence::decision::AiDecision::ReadyForPlanning)
+                && !pending_confirmation;
+            let final_state = if intel_ready {
+                super::workflow::STATE_READY_FOR_PLANNING
+            } else {
+                super::workflow::STATE_COMPLETED
+            };
+            workflow.last_phase = final_state.to_string();
             super::workflow::set_workflow_payload(
                 &conn, run_id, *profile_id, *conversation_id,
-                super::workflow::STATE_COMPLETED, &workflow,
+                final_state, &workflow,
             );
             trace.run_finished(&conn, "completed");
         }
@@ -1985,7 +1846,7 @@ async fn agent_turn_inner(
     // 等词，事件层统一 needs_user_input 语义，§三十四）。
     let outcome: &'static str = if cancelled {
         "cancelled"
-    } else if continuation_incomplete_flag || mission_incomplete_flag {
+    } else if continuation_incomplete_flag {
         // DEV-0077.4-A.1 F2 §二六：planning continuation 不完整 → failed
         "failed"
     } else if hangup_reason.is_some() || side_question_hangup {
@@ -2043,98 +1904,6 @@ async fn agent_turn_inner(
     Ok(outcome)
 }
 
-/// DEV-AI-CORE-001-F2.2 FIX-A（§三/§四）· Intel MissingInformation → 用户可见
-/// 问题（最小确定性 formatter，零额外 LLM）。只问 source_kind=user 的缺失
-///（external 走 research、higher 由 Agent 自取，不打扰用户）；最多 3 个
-///（§四：优先 1~3，超出按序截取最重要的 3 个）。
-fn backend_questions_from_missing(
-    missing: &[super::intelligence::missing_information::MissingInformation],
-) -> Vec<super::workflow::AgentQuestion> {
-    use super::intelligence::missing_information::SOURCE_USER;
-    missing
-        .iter()
-        .filter(|m| m.source_kind == SOURCE_USER)
-        .take(3)
-        .map(|m| super::workflow::AgentQuestion {
-            key: m.field.clone(),
-            question: backend_question_text(&m.field),
-            why_needed: m.reason.clone(),
-        })
-        .collect()
-}
-
-/// §四：字段 → 问题文本的最小 deterministic 映射（常见规划字段直译；
-/// 未知字段兜底为**自然语言**通用问句——禁止为改写调用第二个 LLM）。
-///
-/// DEV-AI-ARCH-001 §16（ARCH001-TC26）：用户问题**禁止暴露内部 key**
-///（Live 曾出现「[target_university]」——旧兜底 `请补充「{field}」` 直接
-/// 展示 snake_case 字段名即泄漏源）。兜底绝不使用 field 原文；优先使用
-/// RequiredInformation 语义（reason=why_needed 由调用方传入 why_needed 字段）。
-fn backend_question_text(field: &str) -> String {
-    let f = field.to_lowercase();
-    const KNOWN: &[(&str, &str)] = &[
-        ("university", "你的目标院校是什么？"),
-        ("institution", "你的目标院校是什么？"),
-        ("college", "你的目标院校是什么？"),
-        ("identity", "你当前的学历/身份状态是什么？"),
-        ("candidate", "你当前的学历/身份状态是什么？"),
-        ("身份", "你当前的学历/身份状态是什么？"),
-        ("school", "你的目标院校/学校是什么？"),
-        ("院校", "你的目标院校/学校是什么？"),
-        ("major", "你的目标专业是什么？"),
-        ("program", "你的目标专业是什么？"),
-        ("degree", "你计划报考学硕还是专硕？"),
-        ("学硕", "你计划报考学硕还是专硕？"),
-        ("专业", "你的目标专业是什么？"),
-        ("hour", "你平均每天实际可以投入多少时间学习？"),
-        ("time", "你平均每天实际可以投入多少时间学习？"),
-        ("时间", "你平均每天实际可以投入多少时间学习？"),
-        ("subject", "需要备考哪些科目？"),
-        ("科目", "需要备考哪些科目？"),
-        ("base", "你当前相关科目的基础水平如何？"),
-        ("baseline", "你当前相关科目的基础水平如何？"),
-        ("基础", "你当前相关科目的基础水平如何？"),
-        ("deadline", "目标完成/考试的时间是什么时候？"),
-        ("期限", "目标完成/考试的时间是什么时候？"),
-        ("fulltime", "你计划脱产备考还是在职备考？"),
-        ("脱产", "你计划脱产备考还是在职备考？"),
-        ("work", "你目前是否在职？工作强度如何？"),
-        ("在职", "你目前是否在职？工作强度如何？"),
-        ("location", "你常驻的城市/地区是哪里？"),
-        ("城市", "你常驻的城市/地区是哪里？"),
-    ];
-    for (k, q) in KNOWN {
-        if f.contains(k) {
-            return (*q).to_string();
-        }
-    }
-    // §16 兜底：绝不展示内部 key——自然语言通用句（语义细节由 why_needed 补足）
-    "请补充一项只有你本人能确认、且会直接影响规划的个人情况。".to_string()
-}
-
-/// F1.2.1 · §12 · CURRENT MISSION CHANGESET COLLECTOR：唯一来源 =
-/// workflow.mission_changeset_ids + 本 run applied_changeset_ids +
-/// 本 run mission_pending_changeset_ids（去重）。严禁加入
-/// workflow.applied_changeset_ids（legacy）；严禁 conversation 历史 SQL。
-fn collect_current_mission_changeset_ids(
-    workflow: &super::workflow::AgentWorkflowPayload,
-    run_applied: &[i64],
-    run_pending: &[i64],
-) -> Vec<i64> {
-    let mut ids: Vec<i64> = Vec::new();
-    for id in workflow
-        .mission_changeset_ids
-        .iter()
-        .chain(run_applied.iter())
-        .chain(run_pending.iter())
-    {
-        if !ids.contains(id) {
-            ids.push(*id);
-        }
-    }
-    ids
-}
-
 /// Phase E §10 · 续接上下文块：恢复 waiting_user workflow 时注入 Primary AI——
 /// Original Request / Current Goal / 已收集信息 / 此前待答问题 + 用户最新回答判定指引
 ///（§18 四态判定交给模型，禁止关键词 if/else 路由）。
@@ -2164,31 +1933,6 @@ fn build_continuation_block(payload: &super::workflow::AgentWorkflowPayload) -> 
          2) 纠正之前的回答 → 以最新表述为准（collected 后写覆盖）。\n\
          3) 明确开始新任务 → 先调用 cancel_current_task 取消原任务，再正常处理新任务。\n\
          4) 明确放弃原任务 → 调用 cancel_current_task。\n",
-    );
-    s
-}
-
-/// F1.2.1 · §8 · WAITING APPROVAL continuation block（Backend 固定，模型无需
-/// 猜状态）：当前 Mission 已生成待确认 ChangeSet，用户最新消息默认仍属于
-/// 当前 Mission；禁止创建第二张 ChangeSet；用户明确开始其它任务时必须先
-/// cancel_current_task(new_task=true) 再处理新任务。
-fn build_waiting_approval_block(payload: &super::workflow::AgentWorkflowPayload) -> String {
-    let mut s = String::from("\n【待确认修改集续接】当前 Mission 已生成待确认 ChangeSet（waiting_approval），等待用户在界面上确认：\n");
-    if !payload.original_request.is_empty() {
-        s.push_str(&format!("- 原始请求：{}\n", payload.original_request));
-    }
-    if !payload.mission_changeset_ids.is_empty() {
-        s.push_str(&format!(
-            "- 本 Mission 修改集（ChangeSet #{}）：确认前正式数据零变化\n",
-            payload.mission_changeset_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" / #")
-        ));
-    }
-    s.push_str(
-        "用户最新消息在对话末尾，默认仍属于当前 Mission。\n\
-         规则：\n\
-         1) 禁止创建第二张 ChangeSet（一个 Mission 至多一张正式修改集）。\n\
-         2) 用户在询问/讨论确认内容 → 只解释，不写入。\n\
-         3) 用户明确开始其它任务 → 先调用 cancel_current_task(new_task=true) 取消原任务（系统会自动拒绝未确认的旧修改集），再正常处理新任务。\n",
     );
     s
 }

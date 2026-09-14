@@ -55,13 +55,6 @@ fn question_text(reason: &str, questions: &[String]) -> String {
 
 /// §十四：NeedUserInput → 复用 waiting_user 挂起（同一 Adaptation Workflow 续接）。
 /// payload 记录 `_adaptation_entry`：用户回答轮由 agent.rs 路由回本 Workflow 并恢复权限级别。
-/// F1.2.1-R1 · §23 · ADAPTATION MISSION IDENTITY：禁止
-/// AgentWorkflowPayload::default()（会丢 mission_epoch/identity）——接收
-/// 当前 Mission payload 并 clone 保留 mission_epoch / mission identity /
-/// original_request / authorization / mission_changeset_ids；设置
-/// mission_kind="adaptation"；只替换 adaptation 自己：pending questions /
-/// adaptation context / entry / last_phase（NeedUserInput 挂起 → 下一轮
-/// 用户回答 = SAME MISSION，epoch 不变，§27）。
 fn hangup_waiting_user(
     conn: &rusqlite::Connection,
     run_id: &str,
@@ -69,10 +62,9 @@ fn hangup_waiting_user(
     conversation_id: i64,
     dec: &AdaptationDecision,
     entry: AdaptationEntry,
-    mission: &crate::ai::workflow::AgentWorkflowPayload,
 ) {
-    let mut payload = mission.clone();
-    payload.mission_kind = "adaptation".into();
+    let mut payload = crate::ai::workflow::AgentWorkflowPayload::default();
+    payload.original_request = format!("DEV-0077 adaptation：{}", dec.summary);
     payload.collected_user_information.insert(
         "_adaptation_context".to_string(),
         dec.summary.clone(),
@@ -94,7 +86,6 @@ fn hangup_waiting_user(
         })
         .collect();
     payload.pending_questions = qs;
-    payload.last_phase = crate::ai::workflow::STATE_COLLECTING_INFORMATION.to_string();
     crate::ai::workflow::set_workflow_payload(
         conn,
         run_id,
@@ -142,58 +133,25 @@ pub async fn adaptation_turn(
     };
     let _ = &envelope;
 
-    // ---- ① 锁内：evidence + 当前 Mission payload + PI 摘要 ----
-    // F1.2.1-R1 · §24 · ADAPTATION PI CONTEXT：build_injection 传当前真实
-    // Mission payload（禁止 default() 绕开 Mission Context）；collected /
-    // hangup（§23）同源读取——Adaptation 与 Planning 共享同一 Mission
-    // identity 链（epoch/authorization/mission_changeset_ids）。
-    let (evidence, collected, mission_payload, pi_summary) = {
+    // ---- ① 锁内：evidence + workflow collected + PI 摘要 ----
+    let (evidence, collected, pi_summary) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let ev = evidence::build_adaptation_evidence(&conn, profile_id, &today);
-        let mission_payload = crate::ai::workflow::read_workflow_payload(&conn, profile_id, conversation_id)
-            .map(|(_, p)| p)
-            .unwrap_or_default();
         let collected: Vec<(String, String)> =
-            mission_payload.collected_user_information.clone().into_iter().collect();
+            crate::ai::workflow::read_workflow_payload(&conn, profile_id, conversation_id)
+                .map(|(_, p)| p.collected_user_information.into_iter().collect())
+                .unwrap_or_default();
         let pi = crate::ai::intelligence::intelligence_builder::build_injection(
             &conn,
             profile_id,
-            &mission_payload,
+            &crate::ai::workflow::AgentWorkflowPayload::default(),
             user_message,
         );
-        (ev, collected, mission_payload, pi)
+        (ev, collected, pi)
     };
 
-    // ---- ② 锁外：模型结构化分析（F2.4：带 trace 收集的韧性调用；
-    // analyzer 层不落库——治理契约 adapt_tc012；trace 由本层持锁写）----
-    let mut analyzer_trace: Vec<String> = Vec::new();
-    let dec = match analyzer::analyze_adaptation(
-        responder, &evidence, user_message, &collected, &pi_summary,
-        Some(&mut analyzer_trace),
-    ).await {
-        Ok(d) => d,
-        Err(e) => {
-            // §十：真 Adaptation 请求 retry 后仍失败 → durable 错误（含诊断 trace；
-            // 落库走 runtime_events 封装——治理契约 adapt_tc012：本目录无直写调用）
-            if let Ok(conn) = state.0.lock() {
-                for line in &analyzer_trace {
-                    crate::ai::runtime_events::record_run_event(
-                        &conn, run_id, "adaptation_analyzer_response", line,
-                    );
-                }
-            }
-            return Err(e);
-        }
-    };
-    // F2.4 §十一 trace：adaptation_analyzer_response（成功路径同样落库）
-    {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        for line in &analyzer_trace {
-            crate::ai::runtime_events::record_run_event(
-                &conn, run_id, "adaptation_analyzer_response", line,
-            );
-        }
-    }
+    // ---- ② 锁外：模型结构化分析 ----
+    let dec = analyzer::analyze_adaptation(responder, &evidence, user_message, &collected, &pi_summary).await?;
 
     // ---- ③ 决策分支（锁内短临界区） ----
     let mut usage = Usage::default();
@@ -219,7 +177,7 @@ pub async fn adaptation_turn(
             let q_text = question_text(&dec.reason, &questions);
             {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
-                hangup_waiting_user(&conn, run_id, profile_id, conversation_id, &dec, entry, &mission_payload);
+                hangup_waiting_user(&conn, run_id, profile_id, conversation_id, &dec, entry);
                 let m = crate::repository::conversation::ConversationRepository::new(&conn)
                     .add_message(conversation_id, profile_id, "assistant", &q_text, Some(run_id))?;
                 finish_adaptation_run(&conn, run_id, profile_id, conversation_id, "waiting_user", "");
@@ -323,8 +281,6 @@ fn apply_explicit_adjustment(
         args.user_message,
         "AI 复盘调整（DEV-0077）",
         &compiled.actions,
-        false,
-        false,
     );
     let status = result
         .json
