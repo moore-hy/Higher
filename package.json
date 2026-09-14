@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "generate:types": "cd src-tauri && cargo test -j 1 ipc::dto",
+    "check:types": "npm run generate:types && git diff --exit-code src/generated",
     "tauri": "tauri",
     "test:ai-runtime": "tsc -p tsconfig.ai-runtime-test.json && node --test .ai-runtime-test-build/tests/ai-runtime/runtimeState.test.js",
     "test:mobile": "tsc -p tsconfig.mobile-test.json && node --test .mobile-test-build/tests/mobile/*.test.js",
@@ -16,6 +18,7 @@
   },
   "dependencies": {
     "@radix-ui/themes": "^3.3.0",
+    "@tanstack/react-query": "^5.102.8",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-barcode-scanner": "^2.4.5",
     "@tauri-apps/plugin-dialog": "^2.7.2",
@@ -32,7 +35,8 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.2",
     "recharts": "^3.10.1",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "temporal-polyfill": "^1.0.5"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

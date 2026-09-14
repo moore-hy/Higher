@@ -70,7 +70,7 @@ fn unix_now_secs() -> String {
         .unwrap_or_default()
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 pub struct PeerStatus {
     pub peer_device_id: String,
     pub peer_name: Option<String>,
@@ -79,7 +79,7 @@ pub struct PeerStatus {
     pub last_sync_at: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 pub struct ServerStatus {
     pub running: bool,
     /// 本机真实局域网 IPv4（如 192.168.x.x）；无法确定时为 None（不返回 127.0.0.1 假地址）。
@@ -626,7 +626,7 @@ fn load_peer_rows(conn: &Connection) -> Vec<PeerRow> {
 }
 
 /// DEV-SYNC-002 §十：同步工作台单卡（/sync 页两端共用）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 pub struct PeerCard {
     pub peer_device_id: String,
     pub peer_name: Option<String>,
@@ -637,7 +637,7 @@ pub struct PeerCard {
     pub pending_send: i64,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 pub struct WorkspaceStatus {
     /// 本机 listener 是否运行（可被对端主动连接）。
     pub listening: bool,

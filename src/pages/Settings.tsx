@@ -120,7 +120,7 @@ import {
  * 权限说明固定展示：AI 只在主动使用时运行；建议不会自动写入知识库。
  */
 type SettingsTab =
-  | "profile" | "appearance" | "ai" | "notify" | "data" | "personal" | "websearch" | "vault" | "aimemory";
+  | "profile" | "appearance" | "ai" | "notify" | "data" | "devicesync" | "personal" | "websearch" | "vault" | "aimemory";
 
 /**
  * DEV-MOBILE-001 F1 §十七：可选 initialTab——Android「我的」列表点入对应 section。

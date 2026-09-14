@@ -43,7 +43,7 @@ pub const RUNTIME_EVENT: &str = "ai://runtime";
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// §七：统一事件 payload。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 pub struct RuntimeEvent {
     pub version: u32,
     pub client_turn_id: String,

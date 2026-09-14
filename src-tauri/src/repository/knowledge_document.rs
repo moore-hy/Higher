@@ -6,7 +6,7 @@
 
 use rusqlite::{params, Connection};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct KnowledgeDocument {
     pub id: i64,
     pub profile_id: i64,

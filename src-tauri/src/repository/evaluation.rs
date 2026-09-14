@@ -32,7 +32,7 @@ pub fn is_valid_evaluation_type(raw: &str) -> bool {
 ///
 /// evaluation_type 枚举：practice / test / recall / application / other
 /// outcome 枚举：unrated / passed / partial / failed
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct Evaluation {
     pub id: i64,
     /// v013 起 Profile 直挂

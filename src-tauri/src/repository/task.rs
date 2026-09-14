@@ -10,7 +10,7 @@ use rusqlite::{params, Connection};
 /// - archived_at：归档时间（NULL=活跃）；归档后不出现在 Today/Calendar，
 ///   但 Session/Planning 历史仍完整可见
 /// - 删除语义：无 Session 历史可物理删除；有历史 → 归档
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct Task {
     pub id: i64,
     pub profile_id: i64,

@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 /// - Session 结束 = 永久学习历史（先保存后归档；关闭归档层不丢记录）
 /// - 历史可重开编辑（title/note/媒体/关联）；可手动修正时间（重算 duration）；
 ///   可删除（连同仅属于该 Session 的附件；不动 Knowledge 正文）
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct StudySession {
     pub id: i64,
     pub profile_id: i64,
