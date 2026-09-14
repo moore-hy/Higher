@@ -1036,3 +1036,194 @@ pub fn get_requirement_template() -> Result<String, String> {
     Ok(repository::personalization::REQUIREMENT_TEMPLATE_MD.to_string())
 }
 
+
+// =============== AI 分析（DEV-0019/0020/0021/0022 统一入口；Section 6 increment 17） ===============
+// =============== AI 分析（DEV-0019/0020/0021/0022 统一入口） ===============
+
+/// 上下文摘要标签（Panel 显示"已提供上下文"；与 Tool Trace 明确区分，不伪装成工具）。
+pub fn context_labels(act: ai::AiAction) -> Vec<String> {
+    // DEV-0046：daily_review 只注入 profile + 当日数据（不注入全库摘要）
+    if matches!(act, ai::AiAction::DailyReview) {
+        return vec![
+            "学习档案".to_string(),
+            "当日任务".to_string(),
+            "当日学习记录（含笔记摘要）".to_string(),
+            "当日验证".to_string(),
+            "当日知识关联".to_string(),
+        ];
+    }
+    let mut v = vec![
+        "学习档案".to_string(),
+        "学习目标".to_string(),
+        "当前阶段".to_string(),
+        "知识结构".to_string(),
+        "最近学习摘要".to_string(),
+    ];
+    match act {
+        ai::AiAction::SessionAnalysis => {
+            v.push("本次学习笔记".to_string());
+            v.push("附件元数据".to_string());
+        }
+        ai::AiAction::KnowledgeAnalysis | ai::AiAction::KnowledgeOrganize => {
+            v.push("当前知识正文".to_string());
+            v.push("子节点内容".to_string());
+            v.push("最近学习笔记".to_string());
+        }
+        ai::AiAction::PlanningAnalysis | ai::AiAction::TodaySuggestion => {
+            v.push("学习计划".to_string());
+            v.push("今日任务".to_string());
+            v.push("最近验证".to_string());
+        }
+        ai::AiAction::ProfileAnalysis => {
+            v.push("学习计划".to_string());
+            v.push("最近验证".to_string());
+            v.push("问题与调整记录".to_string());
+            v.push("最近 14 天进展".to_string());
+        }
+        ai::AiAction::AssistantChat => {
+            // 按页面附带的默认理解对象（若有）；档案级数据仍全部提供
+            v.push("学习计划".to_string());
+            v.push("最近验证".to_string());
+            v.push("问题与调整记录".to_string());
+            v.push("最近 14 天进展".to_string());
+        }
+        ai::AiAction::DailyReview => {
+            // 已在函数开头提前返回（只注入当日数据）
+        }
+        ai::AiAction::MasteryAssessment => {
+            // assess_mastery 专用（不经 ai_analyze 入口；此分支不可达，防御完备）
+            v.push("目标树".to_string());
+            v.push("周期任务".to_string());
+            v.push("周期学习记录".to_string());
+            v.push("周期验证".to_string());
+            v.push("关联知识正文".to_string());
+        }
+    }
+    v
+}
+
+/// 运行 AI 分析：前端只传 ID，后端构建 Context（Profile Scope）并调用 DeepSeek。
+/// 返回 content + usage + 真实 tool_trace + context 标签 + 耗时/轮数；AI 不写库。
+/// history：Panel 多轮对话最近消息（由前端按预算截断后传入；业务上下文仍由后端重建）。
+#[tauri::command]
+pub async fn ai_analyze(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    action: String,
+    session_id: Option<i64>,
+    learning_item_id: Option<i64>,
+    user_instruction: Option<String>,
+    history: Option<Vec<(String, String)>>,
+    date: Option<String>,
+) -> Result<ai::AiResult, String> {
+    let started = std::time::Instant::now();
+    let act = ai::AiAction::from_str(&action)
+        .ok_or_else(|| format!("未知的 AI 功能：{}", action))?;
+
+    let (context, page_labels, primary_cfg) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let cfg = ai::provider::resolve_active_ai_profiles(&conn)?.primary;
+        let ctx = ai::context::build_context(
+            &conn,
+            &ai::context::ContextInput {
+                profile_id,
+                action: act,
+                session_id,
+                learning_item_id,
+                user_instruction: user_instruction.clone(),
+                date,
+            },
+        )?;
+        // assistant_chat：页面附带的默认对象追加为标签（区分"页面提供"与"档案提供"）
+        let mut extra: Vec<String> = Vec::new();
+        if act == ai::AiAction::AssistantChat {
+            if session_id.is_some() {
+                extra.push("当前会话（本次学习）".to_string());
+            }
+            if learning_item_id.is_some() {
+                extra.push("当前知识节点".to_string());
+            }
+        }
+        (ctx, extra, cfg)
+    };
+
+    let client = ai::client::AiClient::new(primary_cfg);
+    let mut messages = vec![
+        ai::client::ChatMessage::system(ai::prompts::SYSTEM_PROMPT),
+    ];
+    // Panel 对话历史（role, content；仅 user/assistant；后端不信任其他 role）
+    if let Some(hist) = &history {
+        for (role, content) in hist.iter() {
+            if (role == "user" || role == "assistant") && !content.trim().is_empty() {
+                messages.push(ai::client::ChatMessage {
+                    role: role.clone(),
+                    content: content.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                });
+            }
+        }
+    }
+    messages.push(ai::client::ChatMessage::user(format!(
+        "{}\n\n{}",
+        context,
+        ai::prompts::user_instruction(act)
+    )));
+
+    let mut labels = context_labels(act);
+    let mut page_idx = labels.len();
+    for e in page_labels {
+        labels.insert(page_idx, e);
+        page_idx += 1;
+    }
+
+    // 所有 action 均要求 JSON；一次结构修复重试（最多一次；禁止无限重试）
+    for attempt in 0..2 {
+        let (content, usage, trace, rounds) = if act.allow_tools() {
+            ai::tools::run_with_tools(&state, &client, profile_id, messages.clone(), act.require_json())
+                .await?
+        } else {
+            let c = client
+                .chat(messages.clone(), act.require_json(), None, Some(4096))
+                .await?;
+            let content = c.content.ok_or_else(|| "模型没有返回内容".to_string())?;
+            (content, c.usage, Vec::new(), 0)
+        };
+
+        // JSON 校验（assistant_chat 额外校验协议类型）
+        let trimmed = content.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+        let ok = serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+            && (act != ai::AiAction::AssistantChat
+                || ai::AssistantChatResponse::parse(trimmed).is_ok());
+        if ok || attempt == 1 {
+            return Ok(ai::AiResult {
+                action: act.as_str().to_string(),
+                content: trimmed.to_string(),
+                prompt_tokens: nonzero(usage.prompt_tokens),
+                completion_tokens: nonzero(usage.completion_tokens),
+                total_tokens: nonzero(usage.total_tokens),
+                tool_trace: trace,
+                context_provided: labels,
+                duration_ms: Some(started.elapsed().as_millis() as i64),
+                tool_rounds: Some(rounds),
+                // §31 Provider Provenance：本次调用真实 snapshot
+                provider_profile_name: Some(client.config().display_name.clone()),
+                adapter_kind: Some(client.config().adapter_kind.as_str().to_string()),
+                provider_model: Some(client.config().model.clone()),
+            });
+        }
+
+        // 结构修复重试（仅一次）
+        messages.push(ai::client::ChatMessage::assistant(content));
+        messages.push(ai::client::ChatMessage::user(
+            "上面的输出不是合法 JSON。请严格只输出一个合法 JSON 对象（不要 markdown 代码块、不要解释文字）。",
+        ));
+    }
+    unreachable!()
+}
+
+pub fn nonzero(v: i64) -> Option<i64> {
+    if v > 0 { Some(v) } else { None }
+}
+
