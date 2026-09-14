@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 /// - final：每 Profile 唯一（partial unique index），parent NULL，不可删除
 /// - year/month/day：严格逐级 parent（final→year→month→day），period 由层级推导
 /// - Goal 树只负责组织方向，不是学习权限门（§21）
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct Goal {
     pub id: i64,
     pub name: String,

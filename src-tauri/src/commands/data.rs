@@ -3110,7 +3110,7 @@ pub fn rebuild_search_index(
 pub fn list_learning_items_light(
     state: tauri::State<'_, db::DbState>,
     profile_id: i64,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<crate::ipc::dto::LearningItemLight>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
@@ -3120,16 +3120,16 @@ pub fn list_learning_items_light(
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(rusqlite::params![profile_id], |r| {
-            Ok(serde_json::json!({
-                "id": r.get::<_, i64>(0)?,
-                "goal_id": r.get::<_, Option<i64>>(1)?,
-                "parent_id": r.get::<_, Option<i64>>(2)?,
-                "name": r.get::<_, String>(3)?,
-                "mastery_status": r.get::<_, String>(4)?,
-                "sort_order": r.get::<_, i64>(5)?,
-                "created_at": r.get::<_, String>(6)?,
-                "updated_at": r.get::<_, String>(7)?,
-            }))
+            Ok(crate::ipc::dto::LearningItemLight {
+                id: r.get::<_, i64>(0)?,
+                goal_id: r.get::<_, Option<i64>>(1)?,
+                parent_id: r.get::<_, Option<i64>>(2)?,
+                name: r.get::<_, String>(3)?,
+                mastery_status: r.get::<_, String>(4)?,
+                sort_order: r.get::<_, i64>(5)?,
+                created_at: r.get::<_, String>(6)?,
+                updated_at: r.get::<_, String>(7)?,
+            })
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())

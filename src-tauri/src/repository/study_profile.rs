@@ -7,7 +7,7 @@ use rusqlite::{params, Connection};
 /// 全部通过 Goal.profile_id 链式归属到某个档案。
 ///
 /// 本地 Profile，不是云账号系统。数量 V1 不做人为限制。
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct StudyProfile {
     pub id: i64,
     pub name: String,

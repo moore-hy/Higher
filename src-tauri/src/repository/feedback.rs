@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 /// - Evaluation 是证据，Feedback 是被确认的问题，二者不混淆
 /// - 归属链：Feedback → Goal → Profile（Profile Scope）
 /// - status: open(需要处理) / resolved(已解决) / dismissed(已忽略)；不物理删除
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct Feedback {
     pub id: i64,
     pub goal_id: i64,

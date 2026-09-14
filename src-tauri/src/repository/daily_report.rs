@@ -7,7 +7,7 @@
 
 use rusqlite::{params, Connection};
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct DailyActivityRow {
     pub id: i64,
     pub title: String,
@@ -26,7 +26,7 @@ fn default_review_state() -> String {
     "normal".into()
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct DailyTaskRow {
     pub id: i64,
     pub title: String,
@@ -41,7 +41,7 @@ pub struct DailyTaskRow {
     pub deep_link: String,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct DailyReport {
     pub date: String,
     /// §65：Σ estimated_minutes（只统计有值任务）

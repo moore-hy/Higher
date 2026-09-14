@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "generate:types": "cd src-tauri && cargo test -j 1 ipc::dto",
+    "check:types": "npm run generate:types && git diff --exit-code src/generated",
     "tauri": "tauri",
     "test:ai-runtime": "tsc -p tsconfig.ai-runtime-test.json && node --test .ai-runtime-test-build/tests/ai-runtime/runtimeState.test.js",
     "test:mobile": "tsc -p tsconfig.mobile-test.json && node --test .mobile-test-build/tests/mobile/*.test.js",

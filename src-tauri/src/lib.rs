@@ -7,10 +7,15 @@ pub mod repository;
 pub mod sandbox;
 pub mod sync;
 pub mod commands;
+pub mod ipc;
 pub mod app;
 
 /// 附件根目录（app data / attachments；Dev 与 Prod 均使用系统 app data 路径）。
 pub struct AttachmentDir(pub std::path::PathBuf);
+
+// §6 moved these helpers to commands/data.rs; re-exported at crate root so the
+// legacy integration tests keep addressing them at their original stable paths.
+pub use commands::data::{fmt_md, normalize_memory_key};
 
 /// Repository 错误 → 人话（不暴露 FOREIGN KEY constraint failed 等技术词）。
 pub fn humanize_repo_err(e: rusqlite::Error) -> String {

@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 /// - **profile_id NOT NULL 直挂**；goal_id / learning_item_id 均可空（"每天背单词"无需 Goal）
 /// - time_of_day：Higher 内的任务出现时间（通知由 DEV-0042 插件处理）
 /// - 修改规则只影响未来 materialization，不重写历史 Task
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct RecurringRule {
     pub id: i64,
     pub profile_id: i64,

@@ -76,7 +76,7 @@ pub struct SyncSummary {
     pub pending_after: i64,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 pub struct ClientStatus {
     pub paired: bool,
     /// DEV-SYNC-003 §九：已配对 peer 的 device_id（解除配对入口需要）。
