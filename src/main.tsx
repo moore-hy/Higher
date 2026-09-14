@@ -6,6 +6,9 @@ import "./styles.css";
 import "./mobile/mobile.css";
 import { startupMark, startupMarkInteractive } from "./startupTrace";
 import { applyPlatformRootClass, PLATFORM } from "./platform/runtimePlatform";
+// Foundation 2.0 §7.2：TanStack Query 接管 Tauri IPC server-state
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "./query/client";
 
 // DEV-MOBILE-001 §108：平台 root class（platform-android / platform-desktop），
 // 先于首帧渲染挂载，Android 专属 CSS 以 .platform-android 作用域。
@@ -21,7 +24,9 @@ startupMark("t3_webview_render_start");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
   </React.StrictMode>
 );
 
