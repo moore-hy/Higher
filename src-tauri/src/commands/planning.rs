@@ -1595,3 +1595,67 @@ pub fn delete_evaluation(state: tauri::State<'_, db::DbState>, id: i64) -> Resul
     Ok(())
 }
 
+
+// =============== Goal Tree（DEV-0050 / PHASE B §16-32） ===============
+// Section 6 increment 9: moved verbatim from lib.rs.
+// =============== Goal Tree（DEV-0050 / PHASE B §16-32） ===============
+
+/// 读取目标树（final→year→month→day；legacy 单列不混入）。
+#[tauri::command]
+pub fn get_goal_tree(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<repository::goal::GoalTree, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    GoalRepository::new(&conn).tree(profile_id)
+}
+
+/// 创建目标树节点（Repository 层强校验层级/周期/唯一性/跨档案）。
+#[tauri::command]
+pub fn create_goal_node(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    goal_level: String, // final | year | month | day
+    parent_goal_id: Option<i64>,
+    name: String,
+    description: Option<String>,
+    // period 格式：year="2026" / month="2026-08" / day="2026-08-16"；final 忽略
+    period: Option<String>,
+) -> Result<repository::goal::Goal, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let g = GoalRepository::new(&conn).create_tree_node(
+        profile_id,
+        &goal_level,
+        parent_goal_id,
+        &name,
+        description.as_deref(),
+        period.as_deref(),
+    )?;
+    repository::search::sync_goal(&conn, profile_id, g.id); // DEV-0057 §66
+    Ok(g)
+}
+
+/// 删除目标节点（final 禁删；有子禁删；Task 保留 goal_id 置 NULL）。
+#[tauri::command]
+pub fn delete_goal_node(
+    state: tauri::State<'_, db::DbState>,
+    id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    GoalRepository::new(&conn).delete_tree_node(id)?;
+    repository::search::remove_goal(&conn, id); // DEV-0057 §66
+    Ok(())
+}
+
+/// legacy Stage/Plan 计数（§29：>0 时 Planning 底部轻提示）。
+#[tauri::command]
+pub fn get_legacy_planning_counts(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<(i64, i64), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    GoalRepository::new(&conn)
+        .legacy_planning_counts(profile_id)
+        .map_err(|e| e.to_string())
+}
+
