@@ -1,6 +1,7 @@
 // Foundation 2.0 §6: planning-domain commands (Goal / LearningItem and related).
 // More planning entities (Task / StudySession / Plan / Feedback / ...) are appended
 // in later increments of the same module.
+use crate::ai;
 use crate::db;
 use crate::humanize_repo_err;
 use crate::notifications;
@@ -1657,5 +1658,30 @@ pub fn get_legacy_planning_counts(
     GoalRepository::new(&conn)
         .legacy_planning_counts(profile_id)
         .map_err(|e| e.to_string())
+}
+
+
+// =============== Final Goal Brief（DEV-0055；Section 6 increment 14） ===============
+// =============== DEV-0055 · Final Goal Brief（PART 5-6） ===============
+
+/// §18 Final Goal Card：读 Brief + 冲突 + Readiness。
+#[tauri::command]
+pub fn get_final_goal_state(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<ai::planner::GoalState, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(ai::planner::read_goal_state(&conn, profile_id))
+}
+
+/// §198：用户确认后保存 Brief（Manual 表单路径；经用户点击 = 人工确认，允许直写）。
+#[tauri::command]
+pub fn save_final_goal_brief(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    brief: repository::goal::GoalBrief,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::goal::GoalRepository::new(&conn).set_final_brief(profile_id, &brief)
 }
 

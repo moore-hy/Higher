@@ -14,6 +14,7 @@ use tauri::Manager;
 use crate::repository::ai_pending_action::AiPendingActionRepository;
 use crate::repository::changeset::ChangeSetRepository;
 use crate::repository::conversation::ConversationRepository;
+use crate::repository::goal::GoalRepository;
 use crate::repository::goal_target::GoalTargetRepository;
 use crate::repository::memory::MemoryRepository;
 use crate::repository::personalization::PersonalizationRepository;
@@ -2855,5 +2856,354 @@ pub fn ai_get_run_snapshot(
         },
     )
     .map_err(|e| format!("run_not_found: {e}"))
+}
+
+
+// =============== /data 聚合 + Reliability（DEV-0055/0057；Section 6 increment 14） ===============
+// =============== DEV-0055 · /data 聚合（PART 26-33，Backend aggregate §163） ===============
+
+#[derive(Debug, serde::Serialize)]
+pub struct LearningTotals {
+    /// §105 有 ended Session 的学习日 distinct 数
+    learning_days: i64,
+    /// §106 累计秒
+    total_seconds: i64,
+    /// §107 日均分钟（累计/学习天数）
+    daily_avg_minutes: i64,
+    /// 今天学习秒（含进行中 elapsed？§74 已结束统计 → 只算 ended）
+    today_seconds: i64,
+    today_tasks_total: i64,
+    today_tasks_completed: i64,
+    /// DEV-0057 §102：待确认时长条数（默认统计排除 needs_review；UI 提示"有 N 条待确认"）
+    needs_review_count: i64,
+}
+
+/// §104-109：累计三数 + 今日两数（单条聚合 SQL；RAM-light）。
+/// DEV-0057 §101：可信统计排除 needs_review（confirmed/corrected 计入）。
+#[tauri::command]
+pub fn get_learning_totals(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<LearningTotals, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let (days, total): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT date(started_at,'+8 hours')), COALESCE(SUM(duration_seconds),0)
+             FROM study_sessions
+             WHERE profile_id=?1 AND ended_at IS NOT NULL AND duration_seconds > 0
+               AND duration_review_state != 'needs_review'",
+            rusqlite::params![profile_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let today = chrono_today();
+    let today_secs: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(duration_seconds),0) FROM study_sessions
+             WHERE profile_id=?1 AND date(started_at,'+8 hours')=?2 AND ended_at IS NOT NULL
+               AND duration_review_state != 'needs_review'",
+            rusqlite::params![profile_id, today],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let (tt, tc): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0)
+             FROM tasks WHERE profile_id=?1 AND planned_date=?2 AND archived_at IS NULL",
+            rusqlite::params![profile_id, today],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    let nrc: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM study_sessions
+             WHERE profile_id=?1 AND ended_at IS NOT NULL AND duration_review_state='needs_review'",
+            rusqlite::params![profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(LearningTotals {
+        learning_days: days,
+        total_seconds: total,
+        daily_avg_minutes: if days > 0 { total / days / 60 } else { 0 },
+        today_seconds: today_secs,
+        today_tasks_total: tt,
+        today_tasks_completed: tc,
+        needs_review_count: nrc,
+    })
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct KnowledgeTimeSlice {
+    name: String,
+    seconds: i64,
+    item_id: i64,
+    child_count: i64,
+}
+
+/// §112-117：Knowledge 时间分布（Backend 递归归并到指定层；默认 root children；
+/// parent_item_id=Some → 该节点的 children 分布）。未归单独"未归类学习"。
+/// DEV-0057 §160：N+1 消除——child×(递归CTE+COUNT) 改为**一条**递归 CTE grouped 归并 +
+/// 一条 children COUNT grouped；排除 needs_review（§101）。
+#[tauri::command]
+pub fn get_knowledge_time_distribution(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    parent_item_id: Option<i64>,
+) -> Result<(Vec<KnowledgeTimeSlice>, i64), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // 目标层 children（parent=None → root children）
+    let children: Vec<(i64, String)> = {
+        let sql = match parent_item_id {
+            None => "SELECT id, name FROM learning_items WHERE profile_id=?1 AND parent_id IS NULL ORDER BY sort_order, id",
+            Some(_) => "SELECT id, name FROM learning_items WHERE profile_id=?1 AND parent_id=?2 ORDER BY sort_order, id",
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, String)> { Ok((r.get(0)?, r.get(1)?)) };
+        let rows = if let Some(p) = parent_item_id {
+            stmt.query_map(rusqlite::params![profile_id, p], map).map_err(|e| e.to_string())?
+        } else {
+            stmt.query_map(rusqlite::params![profile_id], map).map_err(|e| e.to_string())?
+        };
+        rows.filter_map(|x| x.ok()).collect()
+    };
+    let want_parent: Option<i64> = parent_item_id;
+    // 一条递归 CTE：每个 item 的 (id, 顶层祖先 in 目标层, 直接父) → 按目标层 children 分组 SUM
+    let secs_map: std::collections::HashMap<i64, i64> = {
+        let sql = "
+            WITH RECURSIVE tree(id, root) AS (
+                SELECT id, id FROM learning_items
+                 WHERE profile_id=?1 AND parent_id IS ?2
+                UNION ALL
+                SELECT li.id, tree.root FROM learning_items li JOIN tree ON li.parent_id = tree.id
+            )
+            SELECT tree.root, COALESCE(SUM(ss.duration_seconds),0)
+            FROM tree
+            JOIN study_sessions ss ON ss.learning_item_id = tree.id
+              AND ss.profile_id=?1 AND ss.ended_at IS NOT NULL
+              AND ss.duration_review_state != 'needs_review'
+            GROUP BY tree.root";
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![profile_id, want_parent], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|v| v.ok()).collect()
+    };
+    let cc_map: std::collections::HashMap<i64, i64> = {
+        let mut stmt = conn
+            .prepare("SELECT parent_id, COUNT(*) FROM learning_items WHERE profile_id=?1 AND parent_id IS NOT NULL GROUP BY parent_id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![profile_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|v| v.ok()).collect()
+    };
+    let mut out = Vec::new();
+    for (id, name) in children {
+        let secs = secs_map.get(&id).copied().unwrap_or(0);
+        let cc = cc_map.get(&id).copied().unwrap_or(0);
+        out.push(KnowledgeTimeSlice { name, seconds: secs, item_id: id, child_count: cc });
+    }
+    // 未归类（同样排除 needs_review）
+    let unassigned: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(duration_seconds),0) FROM study_sessions
+             WHERE profile_id=?1 AND learning_item_id IS NULL AND ended_at IS NOT NULL
+               AND duration_review_state != 'needs_review'",
+            rusqlite::params![profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok((out, unassigned))
+}
+
+/// §118-119：Time-of-Day 分布（核心逻辑在 ai::planner，测试复用）。
+#[tauri::command]
+pub fn get_time_of_day_distribution(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<(String, i64)>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(ai::planner::time_of_day_distribution(&conn, profile_id))
+}
+
+/// §121：计划 vs 实际汇总（range 内每天 planned/actual/completed；不含综合效率 §122）。
+#[tauri::command]
+pub fn get_plan_vs_actual(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    start: String,
+    end: String,
+) -> Result<Vec<(String, i64, i64, i64, i64)>, String> {
+    // DEV-0057 §160-161：N+1 消除——day×query 改两条 grouped SQL + 内存合并；
+    // 同时排除 needs_review（§101 可信统计排除待确认时长）。
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut planned_map: std::collections::HashMap<String, (i64, i64, i64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT planned_date,
+                        COALESCE(SUM(estimated_minutes),0),
+                        COUNT(*),
+                        COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0)
+                 FROM tasks
+                 WHERE profile_id=?1 AND planned_date BETWEEN ?2 AND ?3 AND archived_at IS NULL
+                 GROUP BY planned_date",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![profile_id, start, end], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|v| v.ok())
+            .map(|(d, p, t, c)| (d, (p, t, c)))
+            .collect()
+    };
+    let mut actual_map: std::collections::HashMap<String, i64> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT date(started_at,'+8 hours'), COALESCE(SUM(duration_seconds),0)/60
+                 FROM study_sessions
+                 WHERE profile_id=?1 AND date(started_at,'+8 hours') BETWEEN ?2 AND ?3
+                   AND ended_at IS NOT NULL AND duration_review_state != 'needs_review'
+                 GROUP BY date(started_at,'+8 hours')",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![profile_id, start, end], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|v| v.ok()).collect()
+    };
+    let mut out = Vec::new();
+    let mut d = start.clone();
+    while d <= end {
+        let (planned, tt, tc) = planned_map.remove(&d).unwrap_or((0, 0, 0));
+        let actual = actual_map.remove(&d).unwrap_or(0);
+        out.push((d.clone(), planned, actual, tt, tc));
+        d = next_date(&d);
+    }
+    Ok(out)
+}
+
+pub fn next_date(d: &str) -> String {
+    let p: Vec<i64> = d.split('-').filter_map(|x| x.parse().ok()).collect();
+    if p.len() != 3 {
+        return d.to_string();
+    }
+    let epoch = ai::planner::sqlite_dt_to_epoch(&format!("{:04}-{:02}-{:02} 00:00:00", p[0], p[1], p[2]))
+        .unwrap_or(0);
+    days_to_iso(epoch / 86400 + 1)
+}
+
+// =============== DEV-0057 · Reliability / Data Trust / Performance ===============
+
+/// §68 手动重建搜索索引（从 Canonical tables 完整重建当前 profile）。
+#[tauri::command]
+pub fn rebuild_search_index(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<usize, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::search::rebuild_profile(&mut conn, profile_id)
+}
+
+/// §153-155 Knowledge 轻量列表（树/导航用；不含 content 正文——正文按需加载）。
+#[tauri::command]
+pub fn list_learning_items_light(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, goal_id, parent_id, name, mastery_status, sort_order, created_at, updated_at
+             FROM learning_items WHERE profile_id = ?1 ORDER BY sort_order, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![profile_id], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "goal_id": r.get::<_, Option<i64>>(1)?,
+                "parent_id": r.get::<_, Option<i64>>(2)?,
+                "name": r.get::<_, String>(3)?,
+                "mastery_status": r.get::<_, String>(4)?,
+                "sort_order": r.get::<_, i64>(5)?,
+                "created_at": r.get::<_, String>(6)?,
+                "updated_at": r.get::<_, String>(7)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+/// §133-136 媒体安全 URL：返回沙箱内附件的绝对路径（前端 convertFileSrc → 按需加载，
+/// 主路径不再整文件 base64）。Backend 仍验证附件归属当前 App Attachment Sandbox。
+#[tauri::command]
+pub fn get_attachment_asset_path(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+    attachment_id: i64,
+) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let rel: String = conn
+        .query_row(
+            "SELECT relative_path FROM learning_attachments WHERE id=?1 AND profile_id=?2",
+            rusqlite::params![attachment_id, profile_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "附件不存在或不属于当前档案".to_string())?;
+    let full = sandbox::resolve_in_sandbox(&adir.0, &rel)?;
+    full.to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "附件路径非法".to_string())
+}
+
+
+#[tauri::command]
+pub fn ai_active_run_count(runs: tauri::State<'_, ai::run::RunManager>) -> Result<usize, String> {
+    Ok(runs.active_count())
+}
+
+/// §112：来源 URL 用系统浏览器打开（只 http/https；SSRF 校验 + Source Registry 解析）。
+#[tauri::command]
+pub async fn open_external_url(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    run_id: Option<String>,
+    sid_or_url: String,
+) -> Result<(), String> {
+    // 优先从 Source Registry 按 sid 解析（§109：不信模型自写 URL；用户点击的来自真实列表）
+    let url = if sid_or_url.starts_with("S") && !sid_or_url.contains('/') {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let u: Option<String> = conn
+            .query_row(
+                "SELECT url FROM ai_sources WHERE profile_id=?1 AND run_id=?2 AND url != '' ORDER BY id DESC LIMIT 1",
+                rusqlite::params![profile_id, run_id.clone().unwrap_or_default()],
+                |r| r.get(0),
+            )
+            .ok();
+        u.ok_or("来源不存在")?
+    } else {
+        sid_or_url
+    };
+    ai::web::ssrf_check(&url)?;
+    use tauri_plugin_opener::OpenerExt as _;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("打开网页失败：{e}"))
 }
 
