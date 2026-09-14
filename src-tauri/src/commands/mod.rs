@@ -9,6 +9,7 @@ pub mod data;
 pub mod knowledge;
 pub mod planning;
 pub mod profile;
+pub mod recurrence;
 pub mod settings;
 pub mod sync;
 pub mod system;
