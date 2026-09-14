@@ -4,8 +4,6 @@ use crate::sandbox;
 use crate::AttachmentDir;
 use crate::repository;
 use crate::repository::attachment::AttachmentRepository;
-use crate::repository::knowledge_document::KnowledgeDocumentRepository;
-use crate::repository::knowledge_workspace::KnowledgeWorkspaceRepository;
 use crate::repository::learning_item::LearningItemRepository;
 use crate::repository::study_session::StudySessionRepository;
 use rusqlite::Connection;

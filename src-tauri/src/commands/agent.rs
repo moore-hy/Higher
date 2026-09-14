@@ -3,13 +3,6 @@
 use crate::ai;
 use crate::db;
 use crate::repository;
-use crate::repository::ai_provider_profile::AiProviderProfileRepository;
-use crate::repository::changeset::ChangeSetRepository;
-use crate::repository::conversation::ConversationRepository;
-use crate::repository::memory::MemoryRepository;
-use crate::repository::personalization::PersonalizationRepository;
-use crate::repository::planning_review::PlanningReviewRepository;
-use crate::repository::search::SearchRepository;
 use crate::repository::setting::SettingRepository;
 use crate::sandbox;
 use crate::AttachmentDir;

@@ -3,24 +3,11 @@ use crate::ai;
 use crate::db;
 use crate::platform;
 use crate::repository;
-use crate::repository::cleanup::CleanupRepository;
-use crate::repository::learning_data::LearningDataRepository;
-use crate::repository::mastery::MasteryRepository;
 use crate::commands::agent::chrono_now;
 use crate::commands::agent::primary_client;
 use crate::sandbox;
 use crate::AttachmentDir;
 use tauri::Manager;
-use crate::repository::ai_pending_action::AiPendingActionRepository;
-use crate::repository::changeset::ChangeSetRepository;
-use crate::repository::conversation::ConversationRepository;
-use crate::repository::goal::GoalRepository;
-use crate::repository::goal_target::GoalTargetRepository;
-use crate::repository::memory::MemoryRepository;
-use crate::repository::personalization::PersonalizationRepository;
-use crate::repository::planning::PlanningRepository;
-use crate::repository::planning_review::PlanningReviewRepository;
-use crate::repository::planning_source::PlanningSourceRepository;
 use crate::repository::setting::SettingRepository;
 
 // =============== Profile Data Cleanup（DEV-0030） ===============
@@ -902,7 +889,7 @@ pub async fn run_planning_review_ai(
     profile_id: i64,
     review_id: i64,
 ) -> Result<String, String> {
-    use ai::client::{AiClient, ChatMessage};
+    use ai::client::ChatMessage;
     // 1) 读 review + snapshot（必须 running）
     let snapshot_json = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;

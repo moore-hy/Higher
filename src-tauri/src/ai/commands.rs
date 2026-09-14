@@ -79,7 +79,7 @@ pub fn apply_change_set_with_side_effects(
         if only_selected { "selected" } else { "all" },
     );
     if let Some(a) = app {
-        let db_path = crate::runtime_db_path(a);
+        let db_path = crate::commands::data::runtime_db_path(a);
         if db_path.exists() {
             let _ = vault.snapshot("changeset", Some(db_path.as_path()));
         }
