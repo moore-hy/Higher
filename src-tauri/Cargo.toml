@@ -6,7 +6,7 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.88.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -20,6 +20,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # 仅声明不改变 Windows 默认构建行为。
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+semantic-search = ["dep:usearch"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
@@ -58,6 +59,20 @@ miniz_oxide = { version = "0.8", default-features = false, features = ["std", "w
 tauri-plugin-opener = "2"
 # DEV-0059 §31.3：导出文件 base64 编码传输（已在依赖树中，显式声明以便直接引用）
 base64 = "0.22"
+
+# --- Foundation 2.0：用成熟组件替换自研基础设施 ---
+# 精确钉版本（与 HIGHER_FOUNDATION_2_MASTER_TASK.md 一致，禁止自行升版）。
+rig = "=0.41.0"            # Agent 运行时（替代自研 ai/ 调度）
+rmcp = "=3.3.0"           # 外部 MCP 官方 Rust SDK（替代自研 MCP 桥）
+rrule = "=0.14.0"         # RFC 5545 递归规则（替代自研 Recurrence）
+ts-rs = "=12.0.1"         # Rust→TS DTO 单一真相源（替代手维护 d.ts）
+jieba-rs = "0.10"         # 中文分词（FTS5 中文全文检索）
+keyring = "=4.2.0"        # OS 原生 SecretStore（Windows 凭据管理器 / Android Keystore）
+usearch = { version = "=2.26.1", optional = true }  # 可选语义索引（behind semantic-search feature）
+chrono = "0.4"
+chrono-tz = "0.10"
+schemars = "0.8"
+thiserror = "1"
 
 [target.'cfg(windows)'.dependencies]
 # DEV-SYNC-003 §五：枚举本机 IPv4 候选（QR candidate_ips；仅 Windows 侧需要）
