@@ -9,7 +9,11 @@
  *   逐步补齐真实断言；缺功能时允许临时红（§A3），不得用 skip / 空 assert 造假。
  *
  * 本文件覆盖已落地的「用户面」步骤：
- *   Today（1-15）· Planning/Intake（16-19）· Knowledge Canvas（34-38）。
+ *   Today（1-15）· Planning/Intake（16-19）· Planning→ONE ChangeSet→Today（20, 28-32）
+ *   · Knowledge Canvas（34-38）。
+ * 其余步骤（21-27 Agent Context provenance / Web Research sources、33 Calendar、39-43
+ * Learning Engine / Review）由后端 Rust 测试（ai_agent_*.rs / product2_changeset_idem.rs
+ * / profile_system.rs / ai_agent_web_research.rs）覆盖，后续 Phase 逐步补齐前端断言。
  */
 
 import { render, screen, waitFor, within, act, fireEvent } from "@testing-library/react";
@@ -239,6 +243,7 @@ import * as api from "../../src/api";
 import Today from "../../src/pages/Today";
 import PlanningIntake from "../../src/components/PlanningIntake";
 import KnowledgeCanvas from "../../src/features/knowledge/canvas/KnowledgeCanvas";
+import ChangeSetReview from "../../src/components/ChangeSetReview";
 import { AUTOSAVE_DEBOUNCE_MS } from "../../src/features/knowledge/canvas/canvasSerialization";
 
 // ============================================================
@@ -547,6 +552,163 @@ describe("MORNING_READY · Knowledge Canvas（步骤 34-38）", () => {
 // ============================================================
 // Final Gate（步骤 44）：汇总标记
 // ============================================================
+describe("MORNING_READY · Planning → ONE ChangeSet → Today（步骤 20, 28-33）", () => {
+  // 步骤 28：一个 Proposal 最终形成一个 ONE ChangeSet（多 operation 聚合，而非一天/一个 Task 一个 ChangeSet）。
+  const CS = {
+    id: 555,
+    profile_id: 1,
+    conversation_id: 9,
+    run_id: "r1",
+    title: "9月学习计划",
+    summary: "根据目标安排的 14 天计划",
+    status: "waiting_approval",
+    created_at: "2026-09-15 10:00:00",
+    applied_at: null,
+    rejected_at: null,
+  };
+  const CS_OPS = [
+    {
+      id: 1,
+      change_set_id: 555,
+      operation_order: 1,
+      entity_type: "task",
+      entity_id: null,
+      action: "create",
+      before_json: null,
+      after_json: { title: "极限定义练习", planned_date: "2026-09-15", estimated_minutes: 25 },
+      reason: "覆盖今日核心知识点",
+      deep_link: "higher://task/0",
+      selected: true,
+      created_at: "2026-09-15 10:00:01",
+    },
+    {
+      id: 2,
+      change_set_id: 555,
+      operation_order: 2,
+      entity_type: "goal",
+      entity_id: null,
+      action: "create",
+      before_json: null,
+      after_json: { name: "数学基础", period: "2026-09" },
+      reason: "支撑阶段目标",
+      deep_link: "higher://goal/0",
+      selected: true,
+      created_at: "2026-09-15 10:00:02",
+    },
+  ];
+  const PLANNED_TASK = {
+    id: 99,
+    title: "极限定义练习",
+    status: "planned",
+    planned_time: "09:00",
+    estimated_minutes: 25,
+    task_kind: "structured",
+    priority: "core",
+    goal_id: null,
+    learning_item_id: null,
+    knowledge_name: null,
+    deep_link: "",
+  };
+
+  let csStatus: string;
+  beforeEach(() => {
+    csStatus = "waiting_approval";
+    vi.mocked(api.getAiChangeSet).mockImplementation(async () => ({ ...CS, status: csStatus }) as never);
+    vi.mocked(api.listAiChangeSetOperations).mockResolvedValue(CS_OPS as never);
+    vi.mocked(api.getChangeSetApplySummary).mockResolvedValue([
+      "✓ 已创建任务「极限定义练习」",
+      "✓ 已创建目标「数学基础」",
+    ] as never);
+    vi.mocked(api.applyAiChangeSet).mockImplementation(async () => {
+      csStatus = "applied";
+      return undefined as never;
+    });
+    // 正式任务读路径（步骤 29 / 32）：初始不含计划 Task，apply 后由后端写入。
+    vi.mocked(api.listAllTasksByProfile).mockResolvedValue([] as never);
+    mockReport({ tasks: [TASK] });
+  });
+
+  function renderChangeSet() {
+    return render(
+      <MemoryRouter>
+        <ChangeSetReview profileId={1} changeSetId={555} onClose={() => {}} />
+      </MemoryRouter>
+    );
+  }
+
+  function renderTodayPg() {
+    return render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Today />} />
+          <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+  async function waitLoadedPg() {
+    await waitFor(() => expect(screen.queryByText("加载中…")).not.toBeInTheDocument());
+  }
+
+  it("20：ChangeSet 审阅按 active profile 隔离读取（profileId 透传）", async () => {
+    renderChangeSet();
+    await waitFor(() => expect(api.getAiChangeSet).toHaveBeenCalledWith(1, 555));
+    expect(api.listAiChangeSetOperations).toHaveBeenCalledWith(1, 555);
+  });
+
+  it("28：Proposal 形成 ONE ChangeSet（多个 operation 聚合预览）", async () => {
+    renderChangeSet();
+    // 等待操作加载完成。
+    await waitFor(() => expect(screen.getByText("极限定义练习")).toBeInTheDocument());
+    // 任务 + 目标 两个 operation 同属一个 ChangeSet（不是一天/一个 Task 一个）。
+    expect(screen.getByText("数学基础")).toBeInTheDocument();
+    // 审阅面板标题为「AI 修改提案」（真实组件文案）。
+    expect(screen.getByText("🧩 AI 修改提案")).toBeInTheDocument();
+    // 待审阅状态：允许审查交互。
+    expect(screen.getByRole("button", { name: "应用计划" })).toBeInTheDocument();
+  });
+
+  it("29：Confirm 前正式数据不变（apply 未触发，Today 不出现计划 Task）", async () => {
+    renderChangeSet();
+    await waitFor(() => expect(screen.getByText("极限定义练习")).toBeInTheDocument());
+    // 尚未点击应用：apply 不得被调用。
+    expect(api.applyAiChangeSet).not.toHaveBeenCalled();
+    // 正式任务读路径尚未包含计划 Task。
+    expect(vi.mocked(api.listAllTasksByProfile)).not.toHaveReturnedWith(
+      expect.arrayContaining([expect.objectContaining({ title: "极限定义练习" })])
+    );
+  });
+
+  it("30-32：Confirm 后 ChangeSet apply → 真实结果行 → Today 自动出现对应 Task", async () => {
+    const user = userEvent.setup();
+    const csView = renderChangeSet();
+    await waitFor(() => expect(screen.getByRole("button", { name: "应用计划" })).toBeInTheDocument());
+
+    // 点击「应用计划」→ 真正调用 apply（ONE ChangeSet 路径）。
+    await user.click(screen.getByRole("button", { name: "应用计划" }));
+    await waitFor(() => expect(api.applyAiChangeSet).toHaveBeenCalledTimes(1));
+    expect(api.applyAiChangeSet).toHaveBeenCalledWith(1, 555, false);
+
+    // 应用摘要为后端真实结果行（非模型编造）。
+    await waitFor(() => expect(screen.getByText("✓ 已创建任务「极限定义练习」")).toBeInTheDocument());
+    expect(screen.getByText("✓ 已创建目标「数学基础」")).toBeInTheDocument();
+
+    // 31：幂等——applied 后审查按钮变为「撤销」，不会重复 apply。
+    await waitFor(() => expect(screen.getByRole("button", { name: "撤销本次修改" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "应用计划" })).toBeNull();
+    expect(api.applyAiChangeSet).toHaveBeenCalledTimes(1);
+
+    // 32：后端写入后，Today（同一正式读路径）自动出现该计划 Task。
+    // 先卸载 ChangeSet 审阅视图，避免与 Today 同屏出现重复文本节点。
+    csView.unmount();
+    vi.mocked(api.listAllTasksByProfile).mockResolvedValue([PLANNED_TASK] as never);
+    mockReport({ tasks: [TASK, PLANNED_TASK] });
+    renderTodayPg();
+    await waitLoadedPg();
+    expect(screen.getByText("极限定义练习")).toBeInTheDocument();
+  });
+});
+
 describe("MORNING_READY · Final Gate（步骤 44）", () => {
   it("已贯通步骤均为真实断言（无 skip / 无空 assert / 无 .only）", () => {
     // 仅作契约性声明：本文件所有 it 均为真实断言。

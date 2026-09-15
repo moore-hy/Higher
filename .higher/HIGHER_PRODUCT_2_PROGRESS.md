@@ -227,20 +227,37 @@ XYFlow 知识图继续保留，图双击进入 Canvas 行为不变，Canvas revi
   Active Study Bar / Continue / End 落真实结束时间 / ReadBack duration / 二次 End 幂等 /
   note 失败不丢 duration。
 - Planning / Intake（16-19）：三入口存在 / Direct Goal 存 Draft（只写 draft）/ Draft 不污染正式表。
+- Planning → ONE ChangeSet → Today（20, 28-32）：ChangeSet 按 active profile 隔离读取（20）；
+  Proposal 形成 ONE ChangeSet（任务+目标多 operation 聚合预览，28）；Confirm 前 apply 未触发、
+  正式 Task 读路径不含计划 Task（29）；点击「应用计划」→ 真正调用 `applyAiChangeSet(profileId,id,false)`、
+  应用摘要为后端真实结果行（30）；applied 后审查按钮变「撤销」、不重复 apply（幂等，31）；
+  后端写入后 Today 同一正式读路径自动出现该计划 Task（32）。
 - Knowledge Canvas（34-38）：默认进 Canvas / 可编辑文字·shape·drawing + debounce 落库 /
   autosave 后 reload 内容仍在 / 持久化读路径按 profileId+learningItemId 隔离。
 
+> 步骤 21-27（Agent Context provenance / Confirmed Memory 边界 / Web Research sources）、
+> 33（Planning Calendar 同批 Task）、39-43（Due Review / I-Have-X-Minutes / Recovery /
+> 14-Day Review / AI Tutor）由后端 Rust 测试覆盖（见 §7.6），后续 Phase 逐步补齐前端 e2e 断言。
+
 ### 7.4 A3 验证
-`npx tsc --noEmit` ✓（0 error）· `npm run build`（进行中）·
+`npx tsc --noEmit` ✓（0 error）· `npm run build` ✓（`dist/` 产物完整，vite+rolldown）·
 `test:product-ui` **39/39** ✓ · `test:interaction-contract` **7/7** ✓ ·
-`test:product-e2e` **15/15** ✓（morningReady）。
+`test:product-e2e` **19/19** ✓（morningReady：Today 7 + Planning/Intake 3 + ChangeSet 5 + Knowledge 4）。
 
-> Agent / Review / Learning（步骤 20-33、39-43）按各 Phase 进度逐步补齐真实断言；
-> 缺功能时允许临时红（§A3），不得造假。
+### 7.6 后端既有覆盖（PHASE B/D/E 核心，Rust 测试，无需重复实现）
+- Agent 安全 / Profile 隔离：`src-tauri/tests/ai_agent_*.rs`、`profile_system.rs`、`ai_global_agent.rs`
+  （对应 AGENT-TC001..008 行为：跨 Profile 不串数据 / 未确认 Memory 不进 confirmed / Draft 不写正式表 /
+  外部 fact 需 research / Web source 不凭空生成 / proposal 前正式数据不变 / 无 direct mutation / ONE ChangeSet）。
+- Web Research + source metadata：`src-tauri/tests/ai_agent_web_research.rs`（`WebSource` 含
+  title/url/snippet/retrieved_at/source_type）。
+- ONE ChangeSet 幂等：`src-tauri/tests/product2_changeset_idem.rs`、`dev0077_u1_proposal_tests.rs`。
+- 14-Day Review 证据 / 调整：`src-tauri/tests/adjustment_system.rs`（REVIEW-TC001..007 行为）。
 
-### 7.5 下一步
-PHASE B（Higher 专属 Agent 核心：Higher Context Builder / Web Research + sources /
-propose_* mutation boundary / PlanningProposalV2 → ONE ChangeSet / AGENT-TC001..008）。
+### 7.7 下一步
+PHASE B 余下前端断言（步骤 21-27 Agent Context provenance / Web Research 来源展示 / 33 Calendar）
+与 PHASE D/E 前端断言（39-43 Learning Engine / Review），逐步补入 `morningReady.test.tsx`；
+同时推进 Foundation 2.0（F1 TanStack Query 收口 / F2 FullCalendar / F3 RFC5545 / F4 SecretStore 等，
+后端多已就绪，按任务书 §F 逐页迁移 + 测试，不暴力删除 refreshKey）。
 
 
 ---
