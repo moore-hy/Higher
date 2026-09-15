@@ -60,6 +60,8 @@ export default function DailyTasksSection({
   emptyNote,
   onEmptyCreate,
   onEmptyQuickStart,
+  quickAdd,
+  activeSession,
 }: {
   profileId: number;
   tasks: DailyTaskRow[];
@@ -77,6 +79,10 @@ export default function DailyTasksSection({
   /** 空态按钮（§109：仅 Today 传；Calendar 日报内不显示快捷入口） */
   onEmptyCreate?: () => void;
   onEmptyQuickStart?: () => void;
+  /** PRODUCT-2.0 §22.3：Today 显示 inline 快速添加（Enter 即建 title + today）。 */
+  quickAdd?: boolean;
+  /** PRODUCT-2.0 §22.4：进行中 Session → 其关联任务 Play 显示「继续」（一击回到学习中）。 */
+  activeSession?: { id: number; task_id: number | null } | null;
 }) {
   const navigate = useNavigate();
   const [editing, setEditing] = useState<DailyTaskRow | null>(null);
@@ -84,6 +90,9 @@ export default function DailyTasksSection({
   const [error, setError] = useState("");
   /** ⋯ 菜单（§36-37） */
   const [menuFor, setMenuFor] = useState<number | null>(null);
+  /** §22.3 inline 快速添加输入值 + 提交态 */
+  const [quickTitle, setQuickTitle] = useState("");
+  const [quickBusy, setQuickBusy] = useState(false);
   const { conflict, guard, close } = useActiveSessionConflict();
 
   const groups = useMemo(() => {
@@ -146,9 +155,60 @@ export default function DailyTasksSection({
   // 父级受控 createOpen：直接受控渲染新建 Modal
   const showCreate = createOpen === true;
 
+  /**
+   * §22.3 Quick Add：Enter 立即创建「title + 今天」。
+   * 不强制 Goal / Knowledge / priority / estimated_minutes；
+   * 高级设置创建后通过 ⋯ → 编辑补全。
+   */
+  async function submitQuickAdd() {
+    const name = quickTitle.trim();
+    if (!name || quickBusy) return;
+    setQuickBusy(true);
+    setError("");
+    try {
+      await createTaskV2({
+        profileId,
+        title: name,
+        plannedDate: defaultDate ?? todayDate(),
+      });
+      setQuickTitle("");
+      await onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setQuickBusy(false);
+    }
+  }
+
   return (
     <div className="today__tasks">
       {error && <div className="alert alert--error">{error}</div>}
+
+      {quickAdd && (
+        <div className="quickadd">
+          <input
+            className="quickadd__input"
+            value={quickTitle}
+            onChange={(e) => setQuickTitle(e.target.value)}
+            placeholder="今天要做什么？"
+            aria-label="快速添加任务"
+            disabled={quickBusy}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void submitQuickAdd();
+              }
+            }}
+          />
+          <button
+            className="btn btn--small btn--primary"
+            onClick={() => void submitQuickAdd()}
+            disabled={quickBusy || quickTitle.trim() === ""}
+          >
+            {quickBusy ? "添加中…" : "添加"}
+          </button>
+        </div>
+      )}
 
       {tasks.length === 0 ? (
         <div className="today__empty">
@@ -200,6 +260,14 @@ export default function DailyTasksSection({
                         {done ? (
                           <button className="btn btn--small" onClick={() => setEditing(t)}>
                             查看
+                          </button>
+                        ) : activeSession && activeSession.task_id === t.id ? (
+                          /* §22.4：同一任务正在学习 → 一击回到该 Session */
+                          <button
+                            className="btn btn--small btn--primary"
+                            onClick={() => navigate(`/learn/${activeSession.id}`)}
+                          >
+                            继续
                           </button>
                         ) : (
                           <button

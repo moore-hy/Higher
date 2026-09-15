@@ -11180,3 +11180,128 @@ html.higher-qr-scanning body .qr-scan-frame,
   gap: var(--h-space-2);
   flex-wrap: wrap;
 }
+
+/* ============ PRODUCT-2.0 §22/§30B Today 单一学习引导面 ============
+   约束（§4 视觉 LOCKED）：不设 background-image，沿用 --h-* 表面变量，
+   让全局壁纸继续透出；不新增一级模块样式。 */
+
+/* ---- §30B Start Here 主建议卡（同一时刻最多一个） ---- */
+.starthere {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-3);
+  padding: var(--h-space-4) var(--h-space-5);
+}
+
+.starthere__head {
+  display: flex;
+  align-items: center;
+  gap: var(--h-space-2);
+}
+
+.starthere__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--h-accent);
+}
+
+.starthere__badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--h-text-secondary);
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  padding: 1px 8px;
+}
+
+.starthere__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-1);
+  min-width: 0;
+}
+
+.starthere__name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--h-text);
+  word-break: break-word;
+}
+
+.starthere__meta {
+  font-size: 13px;
+  color: var(--h-text-secondary);
+}
+
+.starthere__reasons {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-1);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--h-text-secondary);
+}
+
+.starthere__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--h-space-2);
+}
+
+/* ---- §22.3 Quick Add（inline，Enter 即建） ---- */
+.quickadd {
+  display: flex;
+  align-items: center;
+  gap: var(--h-space-2);
+  margin: var(--h-space-2) 0 var(--h-space-1);
+}
+
+.quickadd__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--h-text);
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+}
+
+.quickadd__input::placeholder {
+  color: var(--h-text-muted);
+}
+
+.quickadd__input:focus {
+  outline: none;
+  border-color: var(--h-accent-border);
+}
+
+/* ---- §22.5 Active Study Bar 正在学习指示点 ---- */
+.lw-bar__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--h-success);
+  vertical-align: middle;
+}
+
+/* ---- §23.5 结束后非阻塞「已保存」条（无 Modal backdrop） ---- */
+.today-saved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h-space-3);
+  flex-wrap: wrap;
+  padding: 8px 16px;
+}
+
+.today-saved__text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--h-success);
+}

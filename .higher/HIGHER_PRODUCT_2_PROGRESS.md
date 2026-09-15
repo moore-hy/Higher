@@ -62,13 +62,55 @@ v037+ 顺延，实际新增前必须回写本 Ledger
 | 0.1 main / HEAD / worktree precheck | **DONE** |
 | §0.3 `.workbuddy` gitignore + `git rm --cached` | **DONE** |
 | 0C.3 Migration Ledger | **DONE**（见 §0） |
-| 0.4 AppErrorBoundary | see below |
-| 0.5 Route fallback | see below |
-| 0.6 product UI test harness | see below |
-| 0.8 package scripts | see below |
+| 0.4 AppErrorBoundary（§8C.1，含 secret 打码 + 复制错误信息） | **DONE** |
+| 0.5 Route fallback（§8C.2 NotFound） | **DONE** |
+| 0.6 product UI test harness（vitest + jsdom + mockIPC） | **DONE** |
+| 0.8 package scripts（test:product-ui / interaction-contract / product-e2e / learning-engine / verify:*） | **DONE** |
+
+验证：`tsc --noEmit` ✓ · `vite build` ✓ · `vitest tests/interaction-contract` ✓
+
+---
+
+## 3A. WAVE 1 — P0 Learning Data Safety（§8A / §23.5）
+
+| 项 | 状态 |
+|---|---|
+| 后端 `SessionRepository::end()` 幂等（已结束再 end 不重算 ended_at/duration） | **DONE** |
+| 后端 `end_session` 长时长 review 标记只在首次结束评估 | **DONE** |
+| 前端 `requestEnd` 顺序：先 endSession 落库 → ReadBack → UI ended → 再 flush note | **DONE** |
+| note 保存失败不阻塞结束（非阻塞收尾 + 可选补写入口） | **DONE** |
+| 前端防双击（`ending` 守卫） | **DONE** |
+| `src-tauri/tests/product2_data_safety.rs`（DATA-TC001..007） | **DONE — 7/7 PASS** |
+
+验证：`cargo fmt --check` ✓ · `cargo check` ✓ · `cargo test --test product2_data_safety` **7 passed**
+
+---
+
+## 3B. WAVE 2 — Today / Task + One Guidance Surface（§22 / §23 / §30B）
+
+| 项 | 状态 |
+|---|---|
+| `src/learning/startHere.ts` 确定性排序引擎（§0C.5，纯函数、无 LLM、无 IPC） | **DONE** |
+| `src/components/StartHere.tsx` 单一引导面（开始学习 / 换一个 / 为什么？） | **DONE** |
+| §22.1 Header 收口为 `[开始学习][新建任务]`；AI安排 移至底部次级入口 | **DONE** |
+| §22.2 Header 与 Task 区不再重复「+ 新建任务」 | **DONE** |
+| §22.3 Quick Add inline（Enter → title + today，不强制其它字段） | **DONE** |
+| §22.4 Task Row 一击开始；同任务进行中显示「继续」 | **DONE** |
+| §22.5 Active Study Bar（● 正在学习 / title / elapsed / 继续 / 结束一击） | **DONE** |
+| §22.6 Continue Last 仅作为 Start Here candidate（不再独立堆卡） | **DONE** |
+| §23.5 结束后非阻塞「已保存 <duration>」+ [补充记录]（无 Modal backdrop） | **DONE** |
+| 手动学习始终可用（quick_study 兜底候选 + Header 一击快速学习） | **DONE** |
+
+**Start Here 本轮类别（§0B.2）**：category 3 continue_last → 5 today_task → 6 quick_study。
+category 1（我有 X 分钟）/ 2（Recovery）/ 4（due review）依赖 Learner Model，
+按 §0C.2 / WAVE 6/7 顺延；引擎已预留 `availableMinutes` 入参与类别槽位。
+
+测试：`tests/learning-engine/startHere.test.ts`（28）+ `tests/product-ui/todayGuidance.test.tsx`（14）
+→ **42/42 PASS**；覆盖 LEARN-TC001/002/003/004/005/012/018/024/025 与 CONTINUE-TC001..005。
 
 ---
 
 ## 4. 下一步（Next exact action）
 
 见本文件末尾滚动更新。
+
