@@ -221,13 +221,31 @@ product2_planning_intake / profile_system / stage_b_core / daily_experience）
 |---|---|---|
 | 基线红，本轮**已修复** | `evaluation_system`（2）、`insight_review`（2）、`learning_hierarchy`（2）、`learning_loop::test_persistence_full_loop`、`profile_system`（2）、`stage_b_core`（2）、`batch0601::t18_t19` 之外的版本项 → 共 13 条 | 这些断言在基线即**停在 v029**（实际已是 v031），属**既存红**；本轮按 §5.1 更新到 v032，**恢复原语义「全部 migration 已应用」**，未删断言、未降低门槛 |
 | 基线红，本轮**未触碰**（与 learning_state / migration 无关的旧契约） | `android_startup_tests::boot_tc001`、`batch056::test_runtime_db_path_no_hardcoded_manifest_dir_only`、`batch061r`（5）、`batch062`（6）、`batch062r::r26`、`batch064_ui::u26_no_new_important`、`batch0652_release::r10_db_path_consistency`、`dev0076_f1::f1_tc004`、`dev0076_f2::f2_tc005`、`dev0077_3::runtime_tc015`、`dev0077_4_a1_f1::governance_production_call_graph` | 根因同族：这些用例读 **`src/lib.rs`**（`runtime_db_path` / `ai_start_run` / `compile_production_plan` / `create_pending_memory` 已重构迁出）或读 `src/styles.css`（`u26` 实测基线即为 **13** 处 `!important`，断言写的基线 5 早失效）。**`src-tauri/src/lib.rs` 本轮 0 diff** → 与本轮无关 |
-| 基线红 + 时间窗敏感 | `closed_loop_core::{cl003,cl004,cl010}`、`batch0601::t18_t19_apply_semantics` | 本地 **00:00 后**运行必红，**23:47 运行全绿**（本轮两种时刻各跑一次，结果与基线探针一致）。根因：`backdate_started_at()` 用 `datetime('now','-N minutes')`（**UTC**）回填，而 `today_local()` 用 **UTC+8** 本地日 → 本地 00:00–00:25 窗口内回填落到前一日；`t18_t19` 另有硬钉 `planned_date='2026-09-15'`，本地日期一过即永久出滚动窗口。**与本轮改动无关**（该路径无 Micro 事件参与） |
+| 基线红 + 时间窗敏感 | `closed_loop_core::{cl003,cl004,cl010}`、`batch0601::t18_t19_apply_semantics` | 本地 **00:00 后**运行必红，**23:47 运行全绿**（本轮两种时刻各跑一次，结果与基线探针一致）。提交后于 **2026-09-16 00:18 本地**复跑并取证：`cl003` panic 于 `closed_loop_core.rs:245` → `left: 0 / right: 25`（`today.actual_minutes`），`batch0601:509` → `future >= 1` 失败。根因：`backdate_started_at()` 用 `datetime('now','-N minutes')`（**UTC**）回填，而 `today_local()` 用 **UTC+8** 本地日 → 本地 00:00–00:25 窗口内回填落到前一日；`t18_t19` 另有硬钉 `planned_date='2026-09-15'`，本地日期一过即**永久**出滚动窗口。**与本轮改动无关**（`actual_minutes` 路径无 Micro 事件参与，`lib.rs` 0 diff） |
 | 本轮引入 → **已修复** | `learning_loop::test_a_migration_v002_applied_and_idempotent`（`count == 31` 漏改） | 已改为 32 并加注释；现 10 passed |
 | 本轮引入 → **按项目既有做法消解** | `batch064_ui::u28_no_src_tauri_src_diff`、`batch064r2_ui::r2_u23_backend_freeze` | 这两个 freeze-contract 断言的是「`src-tauri/src/**` 相对 HEAD 的 diff 必须落在授权白名单内」。按该文件**自身历史惯例**（DEV-0066/0070/0074/0075/0076/0077.x 每轮均追加授权注释）追加 PHASE 3/4 授权条目，并同步 `src/types.ts` 的 IPC 类型声明授权。**断言强度未改变**（仍要求逐文件白名单 + lib.rs 新增行关键词白名单） |
 
 > 纪律声明：`u28` / `r2_u23` 属任务书 §PHASE 22 明列的「旧 freeze-contract」（**不是** Hard Blocker）→ 修复后继续；未删除任何断言、未放宽任何判据。`u26` 实测为既存红（基线 13 处 > 断言里的 5），**未擅自修改**（待独立轮次处理）。
 
-_Last updated: 2026-09-15_
+### 提交后复跑（2026-09-16 00:18 本地，commit 86a082a）
+
+```text
+cargo test --test batch064_ui          27 passed / 1 failed  ← u26 既存红
+cargo test --test batch064r2_ui        27 passed / 0 failed  ← freeze 白名单提交后转绿
+cargo test --test daily_experience     16 passed / 0 failed
+cargo test --test learning_loop        10 passed / 0 failed
+cargo test --test closed_loop_core     20 passed / 3 failed  ← cl003/cl004/cl010 时间窗既存红
+cargo test --test batch0601            32 passed / 1 failed  ← t18_t19 硬编码日期既存红
+npx tsc --noEmit                       TSC_EXIT=0
+npx vitest run (4 dirs)                110 passed / 8 files
+```
+
+> **待架构决策（本轮不擅自修）**：`batch0601::t18_t19_apply_semantics` 自 **2026-09-16** 起为**永久红**
+> （硬钉绝对日期 `2026-08-21` / `2026-09-15` + 30 天滚动物化窗口随今天前移）。
+> `closed_loop_core::{cl003,cl004,cl010}` 为**每日 00:00–00:30 定时红**（UTC 回填 vs UTC+8 本地日）。
+> 二者均属既存红、与本轮无关；建议在后续独立轮次收敛为 `days_ago` 相对日期播种。
+
+_Last updated: 2026-09-16_
 
 ---
 
