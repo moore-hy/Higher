@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 /**
  * PRODUCT-2.0 §8A / §23.5 / §46A.3 — Learning Suite：P0 DATA SAFETY 的 UI 侧契约。
@@ -113,10 +113,14 @@ vi.mock("../../src/api", () => ({
   createRootLearningItem: vi.fn(),
   startQuickSession: vi.fn(),
   startTaskSession: vi.fn(),
+  startSession: vi.fn(),
   correctSessionTime: vi.fn(),
   confirmSessionDuration: vi.fn(),
   deleteSession: vi.fn(),
   updateLearningItemContent: vi.fn(),
+  // §M1-B / §M1-D：结束后「再来一点 / 看看下一步」必须重新读取的后端入口
+  getLearningState: vi.fn(async () => ({})),
+  getNextLearningAction: vi.fn(),
 }));
 
 import * as api from "../../src/api";
@@ -125,6 +129,40 @@ import LearningWorkspace from "../../src/pages/LearningWorkspace";
 const endSessionMock = vi.mocked(api.endSession);
 const updateSessionDocumentMock = vi.mocked(api.updateSessionDocument);
 const getSessionMock = vi.mocked(api.getSession);
+const getLearningStateMock = vi.mocked(api.getLearningState);
+const getNextLearningActionMock = vi.mocked(api.getNextLearningAction);
+const startQuickSessionMock = vi.mocked(api.startQuickSession);
+
+/** §M1-D 结束后视图的最小 NextLearningAction（字段与 Rust 投影一一对应）。 */
+function makeAction(over: Record<string, unknown> = {}) {
+  return {
+    profile_id: 1,
+    local_date: "2026-09-15",
+    action_type: "quick_study",
+    reason_code: "quick_study",
+    source_entity: { kind: "none" },
+    estimated_minutes: 3,
+    source_task_estimate_minutes: null,
+    available_minutes: null,
+    execution_payload: {
+      kind: "start_quick",
+      task_id: null,
+      learning_item_id: null,
+      session_id: null,
+      review_id: null,
+      entry_slice: false,
+      suggested_minutes: 3,
+    },
+    title: "快速学习",
+    subtitle: null,
+    reasons: ["不绑定任务，点一下就开始计时。"],
+    is_primary: true,
+    micro_action_only: false,
+    micro_action: null,
+    alternates: [],
+    ...over,
+  };
+}
 
 function renderWorkspace() {
   return render(
@@ -195,7 +233,11 @@ describe("Learning Suite — P0 结束链路", () => {
     expect(container.querySelector(".modal-overlay")).toBeNull();
     // 非阻塞收尾动作存在，但都不是强制的。
     expect(screen.getByTestId("learning-post-session-optional")).toBeInTheDocument();
-    expect(screen.getByText("返回今日")).toBeInTheDocument();
+    // §M1-D：结束后**不把用户丢回 dashboard**，而是给出三个锁定动作。
+    expect(screen.getByTestId("learning-session-end-actions")).toBeInTheDocument();
+    expect(screen.getByText("再来一点")).toBeInTheDocument();
+    expect(screen.getByText("看看下一步")).toBeInTheDocument();
+    expect(screen.getByText("今天结束")).toBeInTheDocument();
   });
 
   it("Pending / Double Click：连续两次点击「结束学习」只产生一次结束", async () => {
@@ -274,5 +316,94 @@ describe("Learning Suite — 基础渲染契约", () => {
     const timer = container.querySelector(".lw__timer");
     expect(timer).not.toBeNull();
     expect(timer?.textContent ?? "").toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+});
+
+/**
+ * §M1-D Session End Experience + §M1-B「再来一点」必须重算。
+ *
+ * 锁定规则：
+ * - 结束后**不把用户丢回 dashboard**，而是展示真实事实 + 三个锁定动作；
+ * - 「再来一点」「看看下一步」都必须**重新读取** LearningState 并重算 NextAction，
+ *   永远不是 `pack[index + 1]`，也不是本地任务列表的下一项。
+ */
+describe("M1-D / M1-B — Session End Experience", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** 结束当前学习并停在「结束后视图」（M1-D 三个动作出现的时机）。 */
+  async function endAndReachPostView() {
+    const user = userEvent.setup();
+    getSessionMock.mockResolvedValue(makeSession({}) as never);
+    endSessionMock.mockResolvedValue(
+      makeSession({
+        status: "completed",
+        ended_at: "2026-09-15 01:25:00",
+        duration_seconds: 1500,
+      }) as never
+    );
+    updateSessionDocumentMock.mockResolvedValue(undefined as never);
+    renderWorkspace();
+    await waitLoaded();
+    await user.click(screen.getByTestId("learning-end"));
+    await waitFor(() =>
+      expect(screen.getByTestId("learning-session-end-actions")).toBeInTheDocument()
+    );
+    return user;
+  }
+
+  it("只展示真实事实（本次时长 / 今天累计），不做无正确性证据的祝贺", async () => {
+    await endAndReachPostView();
+
+    // 真实事实：本次时长 25 分钟；今天累计来自 getLearningTotals(1500s) → 25m。
+    expect(screen.getByText(/25 分钟/)).toBeInTheDocument();
+    expect(screen.getByText(/今天累计 25m/)).toBeInTheDocument();
+    // 没有正确性证据时，不得出现任何「对了多少 / 正确率」式结论。
+    expect(screen.queryByText(/正确率/)).toBeNull();
+    expect(screen.queryByText(/答对/)).toBeNull();
+  });
+
+  it("『再来一点』重新读取后端状态并重算，绝不使用本地数组下标", async () => {
+    getNextLearningActionMock.mockResolvedValue(makeAction() as never);
+    startQuickSessionMock.mockResolvedValue(makeSession({ id: 99 }) as never);
+
+    const user = await endAndReachPostView();
+    await user.click(screen.getByText("再来一点"));
+
+    // 必须真正重新读取 LearningState + 重算 NextAction（0 LLM）。
+    await waitFor(() => expect(getLearningStateMock).toHaveBeenCalledWith(1));
+    expect(getNextLearningActionMock).toHaveBeenCalledWith(1, null);
+    // 并且执行的是后端返回的 execution_payload，而不是前端自选的目标。
+    await waitFor(() => expect(startQuickSessionMock).toHaveBeenCalledWith(1));
+  });
+
+  it("『看看下一步』只重新读取并展示新的下一步，不替用户开始学习", async () => {
+    getNextLearningActionMock.mockResolvedValue(
+      makeAction({
+        action_type: "planned_task",
+        title: "复习优先编码器",
+        reasons: ["上次回忆未通过。"],
+      }) as never
+    );
+
+    const user = await endAndReachPostView();
+    await user.click(screen.getByText("看看下一步"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("learning-next-peek")).toBeInTheDocument()
+    );
+    expect(screen.getByText("复习优先编码器")).toBeInTheDocument();
+    // 只读：不得开任何 Session。
+    expect(startQuickSessionMock).not.toHaveBeenCalled();
+    expect(vi.mocked(api.startTaskSession)).not.toHaveBeenCalled();
+  });
+
+  it("『今天结束』返回今日，不强行开始任何学习", async () => {
+    const user = await endAndReachPostView();
+    await user.click(screen.getByText("今天结束"));
+
+    await waitFor(() => expect(screen.getByTestId("today-page")).toBeInTheDocument());
+    expect(startQuickSessionMock).not.toHaveBeenCalled();
   });
 });

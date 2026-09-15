@@ -11191,6 +11191,38 @@ html.higher-qr-scanning body .qr-scan-frame,
   flex-wrap: wrap;
 }
 
+/* §M1-D Session End Experience：三个锁定动作（再来一点 / 看看下一步 / 今天结束）。
+   不把用户丢回 dashboard；只使用主题 token，避免新增任意颜色。 */
+.lw-ended__next {
+  display: flex;
+  align-items: center;
+  gap: var(--h-space-2);
+  flex-wrap: wrap;
+  margin-top: var(--h-space-2);
+}
+
+/* 「看看下一步」的**新鲜**结果（只读展示；点它不会替用户开始任何学习）。 */
+.lw-ended__peek {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-1);
+  margin-top: var(--h-space-2);
+  padding: var(--h-space-3) var(--h-space-4);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-md);
+  background: var(--h-surface-2);
+}
+
+.lw-ended__peek-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.lw-ended__peek-why {
+  font-size: 13px;
+}
+
 /* ============ PRODUCT-2.0 §22/§30B Today 单一学习引导面 ============
    约束（§4 视觉 LOCKED）：不设 background-image，沿用 --h-* 表面变量，
    让全局壁纸继续透出；不新增一级模块样式。 */
@@ -11254,6 +11286,17 @@ html.higher-qr-scanning body .qr-scan-frame,
 /* §PHASE 1 ③「为什么推荐」：一行事实，不是列表（完整证据仍折叠在「为什么？」后） */
 .starthere__why {
   margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--h-text-secondary);
+}
+
+/* §M2-G：反复卡住 → 换更轻的方式。只陈述事实 + 下一步，不使用警示色、不做羞辱播报。 */
+.starthere__friction {
+  margin: 0;
+  padding: var(--h-space-2) var(--h-space-3);
+  border-radius: var(--h-radius-sm);
+  background: var(--h-surface-2);
   font-size: 13px;
   line-height: 1.6;
   color: var(--h-text-secondary);

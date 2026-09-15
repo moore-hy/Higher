@@ -43,6 +43,7 @@ import type {
   LearningItem,
   LearningTotals,
   LearningStateSnapshot,
+  LearningPack,
   MicroLearningEvent,
   NextLearningAction,
   TimeBudgetKey,
@@ -1762,6 +1763,22 @@ export const getLearningState = (profileId: number) =>
 /** PHASE 2/3：唯一 Next Best Learning Action（budget ∈ 30s / 3m / 10m / 25m）。 */
 export const getNextLearningAction = (profileId: number, budget?: TimeBudgetKey | null) =>
   invoke<NextLearningAction>("get_next_learning_action", {
+    profileId,
+    budget: budget ?? null,
+  });
+
+/**
+ * M1-A：有限 Learning Pack（1..=3 条）—— **不是**第二套推荐引擎。
+ *
+ * 与 `getNextLearningAction` 消费同一份 LearningState 快照、同一套 canonical 候选与排序，
+ * 只做「截断 + 去重（同来源同动作 / 同语义主体）」，因此：
+ * - 只读、0 LLM、profile scoped、deterministic（同 DB 状态 → 同 Pack 含同序）；
+ * - 恒不超过 `PACK_MAX_ITEMS` 条，不存在「无限下一个」；
+ * - `is_micro = true` 的条目必须走 `recordMicroAction`，**不得**用其 `execution_payload`
+ *   去开 StudySession；`micro_action` 的 source/action/promptVariant 必须原样回传。
+ */
+export const getLearningPack = (profileId: number, budget?: TimeBudgetKey | null) =>
+  invoke<LearningPack>("get_learning_pack", {
     profileId,
     budget: budget ?? null,
   });

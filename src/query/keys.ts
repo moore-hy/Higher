@@ -69,6 +69,19 @@ export const queryKeys = {
   },
 
   /**
+   * M1-A：有限 Learning Pack（1..=3 条 canonical 候选的截断视图）。
+   *
+   * 与 `nextAction` 使用同一份快照与同一套排序 —— 二者必须一起失效，
+   * 否则会出现「Primary 已更新、Pack 还是旧的」这种自相矛盾状态。
+   * 因此失效时同时 invalidate `learningPack` + `nextAction`（见 Today 页）。
+   */
+  learningPack: {
+    for: (profileId: number, budget: string | null) =>
+      ["learningPack", profileId, budget] as const,
+    scope: (profileId: number) => ["learningPack", profileId] as const,
+  },
+
+  /**
    * PHASE 8：Review 的闭环数据（观察窗口内的 Task / Session / Evaluation /
    * Feedback / Adjustment）。profile-scoped + 窗口 scoped。
    *

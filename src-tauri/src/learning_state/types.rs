@@ -40,6 +40,11 @@ pub struct LearningStateSnapshot {
     /// 与 `learning_evidence` 并列消费同一份快照：`micro_learning_events` 不是
     /// 第二套 Evidence 世界，只是被本字段投影进 LearningState（任务书 §4.4）。
     pub micro: MicroEvidenceState,
+    /// M2 — LEARNING FRICTION V1：**只读**、deterministic、0 LLM 的摩擦投影。
+    ///
+    /// 它不是新系统也不是「疼痛评分」：只表达「这个点最近反复卡住」这件**可验证事实**，
+    /// 并据此调整支持方式（support level 0/1/2）与冷却，绝不推断人格 / 智力。
+    pub friction: LearningFrictionState,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -137,16 +142,129 @@ pub struct MicroActionCandidate {
     /// recall | self_explain | retry_recent_error | review_recent_concept
     pub action_type: String,
     /// §3.1 允许的来源类型（evaluation | learning_item | task | session | goal | none）
+    ///
+    /// **M0-B：`source_type / source_id` 表达「这条 Micro 为什么存在」（trigger source）**，
+    /// 不是「用户看到什么内容」。Session 触发必须是 `session`，Task 触发必须是 `task`，
+    /// 绝不为了显示一个主体名称就把它们改写成 `learning_item`。
     pub source_type: String,
     pub source_id: Option<i64>,
     /// 0-LLM 模板变体 key（如 `self_explain.one_sentence`）。
     pub prompt_variant: String,
+    /// M0-B：**非权威**展示主体 —— 当 trigger source 不是 learning_item（如 session / task）
+    /// 而展示需要一个知识名称时使用。它**绝不**回写 `source_type / source_id`。
+    pub subject_learning_item_id: Option<i64>,
+    /// M0-B：非权威展示主体标签（真实 LearningItem 名称；解析不到 → None，不伪造）。
+    pub subject_label: Option<String>,
     pub title: String,
     /// §3.2「直接模板」正文（无模型参与）。
     pub instruction: String,
     /// 「为什么推荐」：只陈述可验证事实。
     pub reason: String,
     pub estimated_seconds: i64,
+    /// M1-C：由这条 Micro 的 **trigger source** 派生出的正式学习锚点。
+    ///
+    /// 只决定「进入正式学习」走哪条**既有**生产路径（Task → LearningItem → Quick），
+    /// 不改写 trigger source，也**绝不**把 Micro 时长并入正式 StudySession。
+    pub formal_session_anchor: FormalSessionAnchor,
+}
+
+// =============== M1-C：Micro → 正式学习锚点 ===============
+
+/// 正式学习的锚点优先级（§M1-C 锁定顺序，不可调换）：
+/// 有效 Task → 有效 LearningItem → Quick Session。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FormalSessionAnchor {
+    Task { task_id: i64 },
+    LearningItem {
+        learning_item_id: i64,
+        /// 已知的关联任务（仅作为既有 `startSession` 的附加上下文）。
+        task_id: Option<i64>,
+    },
+    Quick,
+}
+
+impl FormalSessionAnchor {
+    /// 稳定字符串（审计 / 测试断言用）。
+    pub fn kind_str(self) -> &'static str {
+        match self {
+            Self::Task { .. } => "task",
+            Self::LearningItem { .. } => "learning_item",
+            Self::Quick => "quick",
+        }
+    }
+}
+
+// =============== M1-A：Finite Learning Pack ===============
+
+/// Pack 硬上限（§M1-A：`1..=3`，禁止「无限下一个」）。
+pub const PACK_MAX_ITEMS: usize = 3;
+
+/// 一条 Pack 条目 —— **不是**新的推荐结果，只是 canonical 候选的截断视图。
+///
+/// 执行元数据（`estimated_minutes` / `execution_payload`）与
+/// `NextLearningAction` 由**同一套规则**产出，前端不得自行推算或重排。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningPackItem {
+    /// Micro 条目同样携带类别标签（与 `NextLearningAction.action_type` 同源），
+    /// 便于 UI 复用同一套 badge 映射；`is_micro` 才是执行方式的分叉点。
+    pub action_type: Option<NextActionType>,
+    pub reason_code: String,
+    pub source_entity: ActionSource,
+    /// 语义主体（去重依据之一；解析不到 → None，绝不伪造）。
+    pub subject_learning_item_id: Option<i64>,
+    pub subject_label: Option<String>,
+    pub estimated_minutes: Option<i64>,
+    pub execution_payload: ExecutionPayload,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub reasons: Vec<String>,
+    /// 本条是否为 Micro primitive。true 时 UI 走 `record_micro_action`，
+    /// **不得**用 `execution_payload` 去开 StudySession。
+    pub is_micro: bool,
+    pub micro_action: Option<MicroActionCandidate>,
+}
+
+impl LearningPackItem {
+    /// §M1-A LP-04 去重键：同一 (来源, 动作) 只能出现一次。
+    pub fn source_action_key(&self) -> String {
+        format!(
+            "{}|{}|{}",
+            source_entity_key(&self.source_entity),
+            self.action_type.map(|a| a.as_str()).unwrap_or("micro"),
+            if self.is_micro { "micro" } else { "action" }
+        )
+    }
+}
+
+/// `ActionSource` 的稳定字符串键（用于去重；`ActionSource` 未派生 Hash）。
+pub fn source_entity_key(src: &ActionSource) -> String {
+    match src {
+        ActionSource::None => "none".to_string(),
+        ActionSource::Task { task_id } => format!("task#{}", task_id),
+        ActionSource::Session { session_id } => format!("session#{}", session_id),
+        ActionSource::LearningItem { learning_item_id } => format!("item#{}", learning_item_id),
+        ActionSource::Review { review_id } => match review_id {
+            Some(id) => format!("review#{}", id),
+            None => "review".to_string(),
+        },
+    }
+}
+
+/// §M1-A：有限 Pack（1..=3）。由 canonical 候选截断 + 去重得到，**没有**第二套排序。
+#[derive(Debug, serde::Serialize)]
+pub struct LearningPack {
+    pub profile_id: i64,
+    pub local_date: String,
+    /// 1..=3 条；数据库为空且无任何 grounded 来源时可能为 0（见 `items.is_empty()`）。
+    pub items: Vec<LearningPackItem>,
+    pub available_minutes: Option<i64>,
+    /// 参与截断的 canonical 候选总数（审计用）。
+    pub candidate_count: usize,
+    /// 因 (来源, 动作) 或语义主体重复而被丢弃的条数（审计用）。
+    pub deduped_count: usize,
+    /// Pack 上限（常数，供前端展示「不超过 N 条」）。
+    pub max_items: usize,
 }
 
 /// 来源聚合行（§4.3 `recent_touched_sources`）与已完成 Micro 事实在 LearningState
@@ -224,6 +342,146 @@ pub struct RecoveryState {
     pub should_take_primary: bool,
 }
 
+// =============== M2：Learning Friction V1 ===============
+
+/// 摩擦等级（稳定字符串，用于跨层断言与展示映射）。
+pub const FRICTION_LEVEL_UNKNOWN: &str = "unknown";
+pub const FRICTION_LEVEL_LOW: &str = "low";
+pub const FRICTION_LEVEL_MEDIUM: &str = "medium";
+pub const FRICTION_LEVEL_HIGH: &str = "high";
+
+/// 摩擦等级（deterministic；**不**度量「痛苦」，也**不**推断人格 / 智力）。
+///
+/// `Unknown` 的含义是「证据不足」，**不是**成功：缺失证据只能表示未知
+/// （§M2-B：Absence of Evidence means unknown, not success/failure）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrictionLevel {
+    Unknown,
+    Low,
+    Medium,
+    High,
+}
+
+impl FrictionLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => FRICTION_LEVEL_UNKNOWN,
+            Self::Low => FRICTION_LEVEL_LOW,
+            Self::Medium => FRICTION_LEVEL_MEDIUM,
+            Self::High => FRICTION_LEVEL_HIGH,
+        }
+    }
+
+    /// 供确定性排序 / 取「最高摩擦主体」使用（数字越大摩擦越高）。
+    pub fn rank(self) -> i32 {
+        match self {
+            Self::Unknown => 0,
+            Self::Low => 1,
+            Self::Medium => 2,
+            Self::High => 3,
+        }
+    }
+
+    /// §M2-D 锁定映射：unknown/low → 0（自由回忆）；medium → 1（一次线索）；high → 2（引导/候选）。
+    pub fn support_level(self) -> u8 {
+        match self {
+            Self::Unknown | Self::Low => 0,
+            Self::Medium => 1,
+            Self::High => 2,
+        }
+    }
+}
+
+/// 一条 friction 信号（只陈述可验证事实；禁止「你不行」类结论）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FrictionSignal {
+    /// 稳定 code（见 `friction::SIGNAL_*`）。
+    pub code: String,
+    pub count: i64,
+    /// 该信号最近一次发生时刻（UTC，可空 = 未知）。
+    pub latest_at: Option<String>,
+    /// 该信号**单独**是否足以提升摩擦等级。
+    ///
+    /// Micro done/partial 类信号恒为 `false`：它们只是 secondary context，
+    /// 绝不独立抬高 friction（§M2-B）。
+    pub authoritative: bool,
+}
+
+/// M2：单次快照的摩擦投影（只读 / deterministic / 0 LLM）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LearningFrictionState {
+    pub level: FrictionLevel,
+    /// 当前摩擦主体（无证据 → None；绝不伪造一个「学习项」）。
+    pub subject_learning_item_id: Option<i64>,
+    /// **非权威**展示名称（与 M0-B 的 `subject_*` 同规矩：不回写任何来源真相）。
+    pub subject_label: Option<String>,
+    /// 命中信号（稳定顺序）。
+    pub signals: Vec<FrictionSignal>,
+    /// §M2-D：0 = 自由回忆 / 1 = 一次线索 / 2 = 候选或引导。
+    pub recommended_support_level: u8,
+    /// §M2-F 冷却截止（UTC datetime 字符串）；非 High 恒为 None。
+    ///
+    /// 冷却期内的同一主体**不得**被反复锤击（见 `friction::is_cooldown_active`）。
+    pub cooldown_until: Option<String>,
+}
+
+/// 归一 UTC 文本，使两种来源可以安全比较：
+/// `YYYY-MM-DDTHH:MM:SSZ`（chrono）与 `YYYY-MM-DD HH:MM:SS`（SQLite）→ 统一为
+/// `YYYY-MM-DD HH:MM:SS`。两者都是 UTC，所以可直接按字典序比较。
+pub(crate) fn normalize_utc(raw: &str) -> String {
+    raw.trim().trim_end_matches('Z').trim_end_matches('z').replace('T', " ")
+}
+
+impl LearningFrictionState {
+    /// 无证据投影（新档案 / 旧库）：等级 = Unknown，不伪造主体。
+    pub fn unknown() -> Self {
+        Self {
+            level: FrictionLevel::Unknown,
+            subject_learning_item_id: None,
+            subject_label: None,
+            signals: Vec::new(),
+            recommended_support_level: 0,
+            cooldown_until: None,
+        }
+    }
+
+    /// §M2-F：给定「现在」（UTC）判断冷却是否仍然生效。
+    ///
+    /// 两种 UTC 文本都会被归一化后比较：
+    /// - SQLite `datetime()` → `YYYY-MM-DD HH:MM:SS`（冷却截止来自 SQL）；
+    /// - [`crate::learning_state::date::now_utc`] → `YYYY-MM-DDTHH:MM:SSZ`。
+    ///
+    /// 直接做字符串比较会因为 `'T' > ' '` 而得出**相反**的结论，故必须先归一化。
+    pub fn is_cooldown_active(&self, now_utc: &str) -> bool {
+        match &self.cooldown_until {
+            Some(until) => normalize_utc(now_utc) < normalize_utc(until),
+            None => false,
+        }
+    }
+
+    /// 某个学习项当前的 support level（0..2）。
+    ///
+    /// 只有**当前主体**才携带摩擦支持；其它学习项恒为 0（不污染无关项目）。
+    pub fn support_level_for(&self, subject_learning_item_id: Option<i64>) -> u8 {
+        match (subject_learning_item_id, self.subject_learning_item_id) {
+            (Some(a), Some(b)) if a == b => self.recommended_support_level,
+            _ => 0,
+        }
+    }
+
+    /// §M2-F 反锤击：该学习项是否正处于冷却中（只对 High 主体生效）。
+    pub fn is_subject_in_cooldown(&self, subject_learning_item_id: Option<i64>, now_utc: &str) -> bool {
+        let is_subject = matches!(
+            (subject_learning_item_id, self.subject_learning_item_id),
+            (Some(a), Some(b)) if a == b
+        );
+        is_subject
+            && self.level == FrictionLevel::High
+            && self.is_cooldown_active(now_utc)
+    }
+}
+
 // =============== PHASE 2：NextLearningAction ===============
 
 /// 统一动作类型（PHASE 2 指定集合）。
@@ -288,6 +546,9 @@ pub const REASON_PLANNED_TASK_SLICE: &str = "today_task_entry_slice";
 pub const REASON_CONTINUE_LAST: &str = "continue_last_recent_session";
 pub const REASON_QUICK_STUDY: &str = "quick_study_fallback";
 pub const REASON_MICRO_ACTION: &str = "micro_action_under_one_minute";
+/// M0-A：30 秒档请求了 Micro，但没有任何 grounded 来源候选 → `Micro unavailable`。
+/// 此时退回普通 NextAction（时间档降级到最小真实学时档），并如实说明原因。
+pub const REASON_MICRO_UNAVAILABLE: &str = "micro_unavailable_no_grounded_source";
 
 /// 执行载荷（UI 直接执行，不需要二次解释；禁止只返回展示文案）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -353,13 +614,18 @@ pub struct NextLearningAction {
     /// 恒为 true：同一时刻 exactly one primary（保留字段以固化契约）。
     pub is_primary: bool,
     /// PHASE 3：30 秒档 → 只允许 micro_action，绝不创建普通 StudySession。
+    ///
+    /// **M0-A：只有 `micro_action.is_some()` 时才可能为 true。**
+    /// 没有 grounded 候选时语义是 `Micro unavailable`，本字段恒为 false，
+    /// `execution_payload` 回落到普通 NextAction（见 `next_action::build_next_learning_action`）。
     pub micro_action_only: bool,
     /// PHASE 3 / 4：`micro_action_only = true` 时的**可执行** Micro primitive。
     ///
     /// 携带 `source_type / source_id / action_type / prompt_variant`，UI 完成后
     /// 原样回传给 `record_micro_action` 落 Evidence（§PHASE 4 闭环）。
-    /// 非 micro 档位恒为 `None`。候选已按 §3.1 排序并完成 §4.3 去重，
-    /// UI **不得**重排或自选。
+    /// 非 micro 档位恒为 `None`；**M0-A：没有 grounded 来源时同样为 `None`** ——
+    /// 绝不再产出「`micro_action_only = true` 但 `micro_action = None`」的不可执行结果。
+    /// 候选已按 §3.1 排序并完成 §4.3 去重，UI **不得**重排或自选。
     pub micro_action: Option<MicroActionCandidate>,
     /// 备选（最多 `MAX_ALTERNATIVES` 条）；UI 只能突出一个 Primary。
     pub alternates: Vec<NextActionAlternative>,

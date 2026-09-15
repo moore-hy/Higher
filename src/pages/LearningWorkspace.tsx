@@ -9,7 +9,9 @@ import {
   deleteSession,
   endSession,
   getLearningItemPath,
+  getLearningState,
   getLearningTotals,
+  getNextLearningAction,
   getSession,
   listAllTasksByProfile,
   listAttachmentsBySession,
@@ -18,6 +20,7 @@ import {
   listTodayTasksByProfile,
   organizeSessionIntoKnowledge,
   startQuickSession,
+  startSession,
   startTaskSession,
   updateLearningItemContent,
   updateSessionDocument,
@@ -36,7 +39,7 @@ import RichDocEditor, {
 import type { JSONContent } from "@tiptap/react";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
-import type { Goal, LearningAttachment, LearningItem, LearningTotals, StudySession, Task } from "../types";
+import type { Goal, LearningAttachment, LearningItem, LearningTotals, NextLearningAction, StudySession, Task } from "../types";
 import { formatDurationCompact, formatDurationTimer } from "../utils";
 
 type SaveStatus = "saved" | "dirty" | "saving" | "error";
@@ -118,6 +121,15 @@ export default function LearningWorkspace() {
   const [endTotals, setEndTotals] = useState<LearningTotals | null>(null);
   const [endPath, setEndPath] = useState<string | null>(null);
 
+  /**
+   * §M1-B / §M1-D：结束后「再来一点 / 看看下一步」的重新读取结果。
+   *
+   * **绝对规则**：「再来一点」永远不是 `pack[index + 1]`，也不是本地列表的下一项。
+   * 必须重新读后端快照 → 重算 NextAction → 再渲染/执行（本状态只缓存这次**新鲜**结果）。
+   */
+  const [oneMoreBusy, setOneMoreBusy] = useState(false);
+  const [nextPeek, setNextPeek] = useState<NextLearningAction | null>(null);
+
   /** End Sheet：整理候选与新建表单 */
   const [items, setItems] = useState<LearningItem[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -164,6 +176,7 @@ export default function LearningWorkspace() {
     setSheetTab("none");
     setEnding(false);
     setNoteSaveFailed(false);
+    setNextPeek(null);
     try {
       const s = await getSession(Number(sessionId));
       if (!s) {
@@ -457,6 +470,73 @@ export default function LearningWorkspace() {
     } catch (e) {
       if (guardStart(e)) return;
       setError(String(e));
+    }
+  }
+
+  /**
+   * §M1-B：重新读取 canonical 学习状态并重算唯一 NextAction。
+   *
+   * 顺序固定（不可调换、不可省略任一步）：
+   *   刚完成的学习事实已落库 → 重新读 LearningStateSnapshot →
+   *   后端重建候选 → 重算 NextLearningAction（0 Cloud）。
+   *
+   * 前端**不做任何**推荐决策：只消费后端返回的 `execution_payload`。
+   */
+  async function rereadNextAction(): Promise<NextLearningAction | null> {
+    const pid = activeProfile?.id;
+    if (pid == null) return null;
+    await getLearningState(pid);
+    const fresh = await getNextLearningAction(pid, null);
+    setNextPeek(fresh);
+    return fresh;
+  }
+
+  /**
+   * §M1-D「再来一点」：基于重新读取的新推荐**直接再开始一次真实学习**。
+   *
+   * 只执行后端 payload；`micro_action` / `open_review` 等不创建 StudySession 的分支
+   * 绝不在这里被当作「开始学习」处理（M1-F：30 秒档在 Gate 通过前不在 UI 暴露）。
+   */
+  async function handleOneMore() {
+    if (oneMoreBusy || !activeProfile) return;
+    setOneMoreBusy(true);
+    setError("");
+    try {
+      const a = await rereadNextAction();
+      if (!a) return;
+      const p = a.execution_payload;
+      if (p.kind === "start_task" && p.task_id != null) {
+        await startNext(() => startTaskSession(p.task_id as number));
+      } else if (p.kind === "start_item" && p.learning_item_id != null) {
+        await startNext(() =>
+          startSession(p.learning_item_id as number, p.task_id ?? undefined)
+        );
+      } else if (p.kind === "start_quick") {
+        await startNext(() => startQuickSession(activeProfile.id));
+      } else if (p.kind === "continue_session" && p.session_id != null) {
+        navigate(`/learn/${p.session_id}`);
+      }
+      // 其它载荷（micro_action / open_review / none）：保留新鲜结果供「看看下一步」展示，
+      // 不在此处凭空开一条 StudySession。
+    } catch (e) {
+      if (guardStart(e)) return;
+      setError(String(e));
+    } finally {
+      setOneMoreBusy(false);
+    }
+  }
+
+  /** §M1-D「看看下一步」：只重新读取并展示新的下一步（不替用户开始任何学习）。 */
+  async function handlePeekNext() {
+    if (oneMoreBusy) return;
+    setOneMoreBusy(true);
+    setError("");
+    try {
+      await rereadNextAction();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setOneMoreBusy(false);
     }
   }
 
@@ -833,12 +913,43 @@ export default function LearningWorkspace() {
             </span>
             <span>附件 {attachments.length} 个</span>
           </div>
-          <div className="btn-row">
-            <button className="btn btn--primary" onClick={() => navigate("/")}>
-              返回今日
+          {/* §M1-D Session End Experience：不把用户丢回 dashboard。
+              只展示真实事实（见 renderCompletion：本次时长 / 今天累计 / 主题），
+              然后给出**三个锁定动作**。
+              §M1-B：「再来一点」「看看下一步」都**重新读取** LearningState 后重算 NextAction，
+              绝不是 pack[index + 1]，也不是本地任务列表的下一项。 */}
+          <div className="lw-ended__next" data-testid="learning-session-end-actions">
+            <button
+              className="btn btn--primary"
+              onClick={() => void handleOneMore()}
+              disabled={oneMoreBusy}
+            >
+              {oneMoreBusy ? "正在重算…" : "再来一点"}
             </button>
-            <button className="btn" onClick={() => setNextOpen(!nextOpen)}>
-              开始下一个
+            <button
+              className="btn"
+              onClick={() => void handlePeekNext()}
+              disabled={oneMoreBusy}
+            >
+              看看下一步
+            </button>
+            <button className="btn btn--ghost" onClick={() => navigate("/")}>
+              今天结束
+            </button>
+          </div>
+          {nextPeek && (
+            <div className="lw-ended__peek" data-testid="learning-next-peek">
+              <span className="muted">下一步</span>
+              <span className="lw-ended__peek-title">{nextPeek.title}</span>
+              {nextPeek.reasons.length > 0 && (
+                <span className="muted lw-ended__peek-why">{nextPeek.reasons[0]}</span>
+              )}
+            </div>
+          )}
+          {/* 手动选择（可选旁路，不是推荐）：与 End Sheet 共用同一份本地任务列表 */}
+          <div className="btn-row">
+            <button className="btn btn--small" onClick={() => setNextOpen(!nextOpen)}>
+              手动选择下一个
             </button>
           </div>
           {nextOpen && nextList}

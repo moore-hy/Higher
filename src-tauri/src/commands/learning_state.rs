@@ -40,6 +40,25 @@ pub fn get_next_learning_action(
     learning_state::build_next_learning_action(&snapshot, parsed)
 }
 
+/// M1-A：有限 Learning Pack（1..=3 条）。
+///
+/// 与 `get_next_learning_action` 消费**同一份** canonical 候选 primitive，
+/// 只做截断 + 去重（没有第二套推荐引擎）。同样是**只读**：不写表、不调 AI。
+#[tauri::command]
+pub fn get_learning_pack(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    budget: Option<String>,
+) -> Result<learning_state::LearningPack, String> {
+    let parsed = match budget {
+        Some(ref key) if !key.trim().is_empty() => Some(TimeBudget::parse(key)?),
+        _ => None,
+    };
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let snapshot = learning_state::build_learning_state(&conn, profile_id)?;
+    learning_state::build_learning_pack(&snapshot, parsed)
+}
+
 /// PHASE 3 / PHASE 4：完成一次 Micro Action → 落 Micro Evidence。
 ///
 /// 这是 Micro 的**唯一写入口**。硬约束：

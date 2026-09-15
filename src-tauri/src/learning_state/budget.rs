@@ -55,6 +55,18 @@ impl TimeBudget {
         matches!(self, Self::Seconds30)
     }
 
+    /// M0-A：30 秒档**拿不到 grounded Micro** 时的降级档。
+    ///
+    /// 30 秒不是合法正式学时档（`apply_budget` 会把它钳成 0 分钟，产生无法执行的
+    /// 「0 分钟普通动作」）。因此当 Micro unavailable 时，按 §M1-E「3 分钟快速学习恒可用」
+    /// 退回最小真实学时档，而**不是**伪造一个没有来源的 micro。
+    pub fn normal_fallback(self) -> TimeBudget {
+        match self {
+            Self::Seconds30 => Self::Min3,
+            other => other,
+        }
+    }
+
     /// 解析时间档；非法输入必须显式失败（不静默降级）。
     pub fn parse(key: &str) -> Result<Self, String> {
         match key.trim().to_ascii_lowercase().as_str() {
@@ -70,49 +82,10 @@ impl TimeBudget {
     }
 }
 
-/// micro action 建议（30 秒档）：短 Recall / 重新解释一个概念 / 查看一个关键错误。
-/// 只返回**可执行的最小动作**，绝不创建 StudySession。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MicroActionKind {
-    ShortRecall,
-    ReexplainConcept,
-    ReviewKeyError,
-}
-
-impl MicroActionKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ShortRecall => "short_recall",
-            Self::ReexplainConcept => "reexplain_concept",
-            Self::ReviewKeyError => "review_key_error",
-        }
-    }
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::ShortRecall => "30 秒回顾一个关键点",
-            Self::ReexplainConcept => "30 秒用自己的话解释一个概念",
-            Self::ReviewKeyError => "30 秒看一个最近的关键错误",
-        }
-    }
-
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::ShortRecall => "时间不足一分钟，只看一条你已经学过的东西，不新增学习记录。",
-            Self::ReexplainConcept => "时间不足一分钟，用复述代替阅读，不新增学习记录。",
-            Self::ReviewKeyError => "时间不足一分钟，先看一个已记录的错误，不新增学习记录。",
-        }
-    }
-}
-
-/// 30 秒档的 deterministic 选择：有风险信号 → 先看关键错误；有可复述材料 → 复述；
-/// 否则 → 短 Recall。同一输入恒返回同一结果（无随机、无 LLM）。
-pub fn pick_micro_action(has_risk_signal: bool, has_reviewable_material: bool) -> MicroActionKind {
-    if has_risk_signal {
-        MicroActionKind::ReviewKeyError
-    } else if has_reviewable_material {
-        MicroActionKind::ReexplainConcept
-    } else {
-        MicroActionKind::ShortRecall
-    }
-}
+// M0-A：30 秒档的候选**必须**来自真实 grounding 来源（`learning_state::micro::generate_candidates`）。
+//
+// 这里刻意**不再**保留任何「两布尔启发式伪造 Micro」的降级函数：
+// 旧 `pick_micro_action(has_risk_signal, has_material)` 会在没有任何真实来源时
+// 凭 recovery / review 状态凭空造出一个 `MicroActionKind`，产出「micro action only」
+// 但 `micro_action = None` 的不可执行结果 —— 这正是 M0-A 明令删除的生产兜底。
+// 无 grounded 候选时的唯一合法语义是 `Micro unavailable`，退回普通 NextAction。

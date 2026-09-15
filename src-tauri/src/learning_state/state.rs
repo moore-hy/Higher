@@ -9,6 +9,7 @@
 
 use crate::ai::learning_load::build_learning_load_evidence;
 use crate::learning_state::date;
+use crate::learning_state::friction::build_friction_state;
 use crate::learning_state::micro::build_micro_evidence_state;
 use crate::learning_state::recovery::{classify_recovery, collect_recovery_signals};
 use crate::learning_state::types::{
@@ -191,12 +192,21 @@ pub fn build_learning_state_at(
         day_goal_id: report.day_goal_id,
     };
 
+    // ---- M2：Learning Friction（只读投影；必须先于 micro，因为 micro 消费它）----
+    //
+    // 只读 + deterministic + 0 LLM；数据源是**已有的**可信验证事实，
+    // 不新增表、不新增写语句。读取失败同样显式向上传播（与 learning_evidence 一致）。
+    let friction = build_friction_state(conn, profile_id)?;
+
     // ---- micro：PHASE 3 / 4 的统一投影（Micro Event Store + 既有事实，只读）----
     // 必须在 `report.tasks` / `recent_sessions` 被 move 进快照**之前**构建。
     //
     // 与 `learning_evidence` 一致：读取失败**显式向上传播**，绝不静默降级成空投影
     // （§0.1「不得静默」/ §0.2 fail-closed 的同一条原则）。
-    let micro = build_micro_evidence_state(conn, profile_id, &recent_sessions, &report.tasks)?;
+    //
+    // M2：micro 同时消费 friction —— 同一摩擦主体会带上 support 变体，并在冷却期内被延后。
+    let micro =
+        build_micro_evidence_state(conn, profile_id, &recent_sessions, &report.tasks, &friction)?;
 
     Ok(LearningStateSnapshot {
         profile_id,
@@ -218,5 +228,6 @@ pub fn build_learning_state_at(
         learning_evidence,
         recovery_state,
         micro,
+        friction,
     })
 }

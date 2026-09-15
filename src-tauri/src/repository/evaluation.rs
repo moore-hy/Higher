@@ -95,6 +95,24 @@ pub struct EvaluationStats {
     pub by_outcome: Vec<super::CountPair>,
 }
 
+/// M2 — LEARNING FRICTION V1：时间窗内**可信**验证记录的最小投影。
+///
+/// 只包含「learning_item 非空 + trust_state = trusted」的行：
+/// - `needs_review` 一律不进 trusted evidence（v021 §20 既有规则）；
+/// - 不绑定学习项的验证（全科模拟 / 阶段综合）不参与 friction 判定。
+///
+/// `cooldown_candidate` 由 SQL 直接给出 `datetime(occurred_at, '+N minutes')`，
+/// 只有 `outcome = 'failed'` 才非空 —— 这样「冷却截止」与「失败时间」出自同一行，
+/// 不会出现两套时间口径。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrustedEvaluationRow {
+    pub learning_item_id: i64,
+    pub title: String,
+    pub outcome: String,
+    pub occurred_at: String,
+    pub cooldown_candidate: Option<String>,
+}
+
 impl<'a> EvaluationRepository<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
@@ -288,6 +306,53 @@ impl<'a> EvaluationRepository<'a> {
              ORDER BY e.occurred_at DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![profile_id, limit], |row| parse_evaluation(row))?;
+        rows.collect()
+    }
+
+    /// M2 — LEARNING FRICTION V1：滚动窗口内的可信验证记录（Profile Scope）。
+    ///
+    /// 语义（全部在 SQL 层固定，避免 Rust 侧再定义一套时间窗口）：
+    /// - `trust_state = 'trusted'`（needs_review 不算证据）；
+    /// - `learning_item_id IS NOT NULL`（无主体的验证不参与 friction）；
+    /// - `occurred_at >= datetime('now', '-N days')`（与全仓 UTC 存储口径一致）。
+    ///
+    /// 只读；不做任何判定 —— 等级 / 冷却由 `learning_state::friction` 决定。
+    /// 顺序固定为 `occurred_at DESC, id DESC`，因此调用方可以直接从头部取
+    /// 「连续失败」序列。
+    pub fn list_trusted_in_window(
+        &self,
+        profile_id: i64,
+        window_days: i64,
+        cooldown_minutes: i64,
+    ) -> rusqlite::Result<Vec<TrustedEvaluationRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT learning_item_id, title, outcome, occurred_at,
+                    CASE WHEN outcome = 'failed'
+                         THEN datetime(occurred_at, ?3)
+                         ELSE NULL END
+             FROM evaluations
+             WHERE profile_id = ?1
+               AND trust_state = 'trusted'
+               AND learning_item_id IS NOT NULL
+               AND occurred_at >= datetime('now', ?2)
+             ORDER BY occurred_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                profile_id,
+                format!("-{} days", window_days),
+                format!("+{} minutes", cooldown_minutes)
+            ],
+            |row| {
+                Ok(TrustedEvaluationRow {
+                    learning_item_id: row.get(0)?,
+                    title: row.get(1)?,
+                    outcome: row.get(2)?,
+                    occurred_at: row.get(3)?,
+                    cooldown_candidate: row.get(4)?,
+                })
+            },
+        )?;
         rows.collect()
     }
 

@@ -27,8 +27,13 @@
 //! - **不可解析的来源 → 静默跳过**（fail-safe，绝不伪造来源或标题）；
 //! - deterministic：同一 DB 状态恒得同一候选序列（无随机、无时间抖动之外的因素）。
 
+use crate::learning_state::date;
+use crate::learning_state::friction::{
+    support_instruction, support_prompt_variant, FRICTION_COOLDOWN_MINUTES,
+};
 use crate::learning_state::types::{
-    MicroActionCandidate, MicroEvidenceState, MICRO_CANDIDATE_LIMIT,
+    FormalSessionAnchor, LearningFrictionState, MicroActionCandidate, MicroEvidenceState,
+    MICRO_CANDIDATE_LIMIT,
 };
 use crate::repository::daily_report::DailyTaskRow;
 use crate::repository::evaluation::EvaluationRepository;
@@ -36,7 +41,7 @@ use crate::repository::learning_item::LearningItemRepository;
 use crate::repository::micro_learning_event::{
     MicroLearningEventRepository, TouchedSource, ACTION_TYPES,
 };
-use crate::repository::study_session::StudySession;
+use crate::repository::study_session::{StudySession, StudySessionRepository};
 use rusqlite::Connection;
 
 /// §4.3 candidate dedupe 时间窗：同一来源 + 同一动作类型在该窗口内刚做过 → 不再推荐。
@@ -151,13 +156,14 @@ pub fn build_micro_evidence_state(
     profile_id: i64,
     recent_sessions: &[StudySession],
     today_tasks: &[DailyTaskRow],
+    friction: &LearningFrictionState,
 ) -> Result<MicroEvidenceState, String> {
     let repo = MicroLearningEventRepository::new(conn);
     let recent_micro_actions = repo.list_recent_by_profile(profile_id, RECENT_MICRO_LIMIT)?;
     let recent_touched_sources =
         repo.list_touched_sources(profile_id, MICRO_TOUCH_WINDOW_HOURS, TOUCHED_SOURCE_LIMIT)?;
 
-    let mut candidates = generate_candidates(
+    let candidates = generate_candidates(
         conn,
         profile_id,
         recent_sessions,
@@ -165,7 +171,15 @@ pub fn build_micro_evidence_state(
         &recent_touched_sources,
     )?;
 
+    // ---- M2：摩擦支持（support 0/1/2）+ §M2-F 冷却窗口 ----
+    let now_utc = date::now_utc();
+    let mut candidates: Vec<MicroActionCandidate> = candidates
+        .into_iter()
+        .map(|c| apply_friction(c, friction))
+        .collect();
+
     // §4.3 candidate dedupe：刚做过的（同一来源 + 同一动作）不再出现。
+    // M2：High 摩擦主体在冷却期内使用更长的去重窗口（见 `dedupe_window_minutes_for`）。
     let mut kept: Vec<MicroActionCandidate> = Vec::new();
     for c in candidates.drain(..) {
         let dup = repo.recently_completed_same(
@@ -173,7 +187,7 @@ pub fn build_micro_evidence_state(
             &c.source_type,
             c.source_id,
             &c.action_type,
-            MICRO_DEDUPE_WINDOW_MINUTES,
+            dedupe_window_minutes_for(&c, friction, &now_utc),
         )?;
         if !dup {
             kept.push(c);
@@ -189,6 +203,51 @@ pub fn build_micro_evidence_state(
     })
 }
 
+/// M2：把摩擦支持叠加到候选上。
+///
+/// - `support == 0`（unknown/low，或**非当前摩擦主体**）→ 原样返回：
+///   无摩擦路径与引入 M2 之前逐字节一致；
+/// - `support > 0` → 原 `prompt_variant` 追加 `+supportN`，并替换为更轻的引导文案
+///   （§M2-D / §M2-E：medium = 一个线索；high = 候选/引导，降低一次性负荷）。
+///
+/// **不**在这里丢弃候选 —— §M2-D 的 high 策略要求「换成更轻的方式」而不是「什么都不给」。
+/// 「不要反复锤击」由 [`dedupe_window_minutes_for`] 的冷却窗口实现（见下）。
+///
+/// 只影响摩擦主体本身 —— 无关学习项恒为 support 0，不被污染。
+fn apply_friction(
+    mut c: MicroActionCandidate,
+    friction: &LearningFrictionState,
+) -> MicroActionCandidate {
+    let support = friction.support_level_for(c.subject_learning_item_id);
+    if support > 0 {
+        c.prompt_variant = support_prompt_variant(&c.prompt_variant, support);
+        let label = c.subject_label.clone().unwrap_or_default();
+        if let Some(instruction) = support_instruction(support, &label) {
+            c.instruction = instruction;
+        }
+    }
+    c
+}
+
+/// §M2-F 冷却窗口：High 摩擦主体在冷却期内的「同一来源 + 同一动作」去重窗口被拉长。
+///
+/// 这就是「defer immediate repetition / schedule cooldown before retry」的落点：
+/// - 普通情况：`MICRO_DEDUPE_WINDOW_MINUTES`（§4.3 既有语义，不变）；
+/// - High 且冷却中：整段冷却期内不再重复**同一个动作**，但**换一种更轻的动作**仍然允许。
+///
+/// 冷却结束后自动恢复到普通窗口（不是永久封禁）。
+fn dedupe_window_minutes_for(
+    c: &MicroActionCandidate,
+    friction: &LearningFrictionState,
+    now_utc: &str,
+) -> i64 {
+    if friction.is_subject_in_cooldown(c.subject_learning_item_id, now_utc) {
+        FRICTION_COOLDOWN_MINUTES
+    } else {
+        MICRO_DEDUPE_WINDOW_MINUTES
+    }
+}
+
 /// §3.1 来源阶梯 → 候选序列（顺序 = 优先级，不可调换）。
 fn generate_candidates(
     conn: &Connection,
@@ -202,11 +261,7 @@ fn generate_candidates(
 
     // ---- ① 最近错误 Evaluation → retry_recent_error ----
     if let Some(ev) = latest_error_evaluation(conn, profile_id)? {
-        let subject = ev
-            .title
-            .clone()
-            .trim()
-            .to_string();
+        let subject = ev.title.clone().trim().to_string();
         let subject = if subject.is_empty() {
             // learning_item_id 为空且标题为空 → 无可用主体，跳过（不伪造）
             None
@@ -217,13 +272,17 @@ fn generate_candidates(
             let t = MicroActionType::RetryRecentError;
             out.push(MicroActionCandidate {
                 action_type: t.as_str().to_string(),
+                // M0-B：Evaluation 触发 → source 恒为 evaluation#evaluation_id。
                 source_type: "evaluation".to_string(),
                 source_id: Some(ev.id),
                 prompt_variant: t.prompt_variant().to_string(),
+                subject_learning_item_id: ev.learning_item_id,
+                subject_label: Some(subject.clone()),
                 title: t.title(&subject),
                 instruction: t.instruction(&subject),
                 reason: t.reason().to_string(),
                 estimated_seconds: MICRO_DEFAULT_SECONDS,
+                formal_session_anchor: anchor_for_evaluation(conn, profile_id, &ev)?,
             });
         }
     }
@@ -245,19 +304,29 @@ fn generate_candidates(
                 let t = MicroActionType::ReviewRecentConcept;
                 out.push(MicroActionCandidate {
                     action_type: t.as_str().to_string(),
-                    source_type: "learning_item".to_string(),
-                    source_id: Some(item_id),
+                    // M0-B：Session 触发 → source 恒为 session#session_id。
+                    // 展示所需的知识名称走**非权威** subject_* 字段，
+                    // 绝不为了显示一个名字就把 trigger source 改写成 learning_item。
+                    source_type: "session".to_string(),
+                    source_id: Some(s.id),
                     prompt_variant: t.prompt_variant().to_string(),
+                    subject_learning_item_id: Some(item_id),
+                    subject_label: Some(name.clone()),
                     title: t.title(&name),
                     instruction: t.instruction(&name),
                     reason: t.reason().to_string(),
                     estimated_seconds: MICRO_DEFAULT_SECONDS,
+                    formal_session_anchor: anchor_from_ids(s.task_id, s.learning_item_id),
                 });
             }
         }
     }
 
     // ---- ③ 最近 Micro 接触过的来源 → recall ----
+    //
+    // 只把「直接 item 触发」纳入本阶梯步：`recent_touched_sources` 已由 M0-D 过滤掉
+    // `skipped`，因此这里是「用户最近**真的做过** Micro 的那个 Knowledge Item」。
+    // 非 learning_item 的接触来源不在此步伪造主体，直接跳过（fail-safe）。
     for touch in touched {
         if touch.source_type != "learning_item" {
             continue;
@@ -267,13 +336,17 @@ fn generate_candidates(
             let t = MicroActionType::Recall;
             out.push(MicroActionCandidate {
                 action_type: t.as_str().to_string(),
+                // 直接 LearningItem 触发 → source 恒为 learning_item#learning_item_id。
                 source_type: "learning_item".to_string(),
                 source_id: Some(id),
                 prompt_variant: t.prompt_variant().to_string(),
+                subject_learning_item_id: Some(id),
+                subject_label: Some(name.clone()),
                 title: t.title(&name),
                 instruction: t.instruction(&name),
                 reason: t.reason().to_string(),
                 estimated_seconds: MICRO_DEFAULT_SECONDS,
+                formal_session_anchor: anchor_from_ids(None, Some(id)),
             });
             break; // 只取最近一个来源，避免候选爆炸
         }
@@ -291,19 +364,58 @@ fn generate_candidates(
                 let k = MicroActionType::SelfExplain;
                 out.push(MicroActionCandidate {
                     action_type: k.as_str().to_string(),
-                    source_type: "learning_item".to_string(),
-                    source_id: Some(item_id),
+                    // M0-B：Task 触发 → source 恒为 task#task_id。
+                    source_type: "task".to_string(),
+                    source_id: Some(t.id),
                     prompt_variant: k.prompt_variant().to_string(),
+                    subject_learning_item_id: Some(item_id),
+                    subject_label: Some(name.clone()),
                     title: k.title(&name),
                     instruction: k.instruction(&name),
                     reason: k.reason().to_string(),
                     estimated_seconds: MICRO_DEFAULT_SECONDS,
+                    // Task 触发 → 锚点就是这条任务本身（§M1-C 最高优先级）
+                    formal_session_anchor: FormalSessionAnchor::Task { task_id: t.id },
                 });
             }
         }
     }
 
     Ok(out)
+}
+
+/// M1-C：锚点优先级（§M1-C 锁定顺序，不可调换）：**有效 Task → 有效 LearningItem → Quick**。
+fn anchor_from_ids(task_id: Option<i64>, item_id: Option<i64>) -> FormalSessionAnchor {
+    match (task_id, item_id) {
+        (Some(task_id), _) => FormalSessionAnchor::Task { task_id },
+        (None, Some(learning_item_id)) => FormalSessionAnchor::LearningItem {
+            learning_item_id,
+            task_id: None,
+        },
+        (None, None) => FormalSessionAnchor::Quick,
+    }
+}
+
+/// Evaluation 触发：沿 evaluation 自身已有的真实 `session_id` 引用继续解析，
+/// 以便在可能时命中更高优先级的 Task 锚点。跨档案 / 悬空引用 → 退回到
+/// evaluation 自身的 learning_item，再不行则 Quick（fail-safe，绝不猜测）。
+fn anchor_for_evaluation(
+    conn: &Connection,
+    profile_id: i64,
+    ev: &crate::repository::evaluation::Evaluation,
+) -> Result<FormalSessionAnchor, String> {
+    if let Some(session_id) = ev.session_id {
+        let session = StudySessionRepository::new(conn)
+            .get(session_id)
+            .map_err(|e| e.to_string())?;
+        if let Some(s) = session {
+            if s.profile_id == profile_id {
+                let item = s.learning_item_id.or(ev.learning_item_id);
+                return Ok(anchor_from_ids(s.task_id, item));
+            }
+        }
+    }
+    Ok(anchor_from_ids(None, ev.learning_item_id))
 }
 
 /// 最近一条「真实出错」的 Evaluation（failed / partial，且 trusted）。
@@ -379,15 +491,24 @@ pub fn record_micro_action(
     )
 }
 
-/// `response_summary` 截断（§4.1：不得无边界存大量文本）。按字符截断，保留可读前缀。
+/// `response_summary` 截断（§4.1 / M0-C：不得无边界存大量文本）。按**字符**截断，绝不按字节切。
+///
+/// **硬不变量（M0-C）：`response_summary.chars().count() <= 200`。**
+/// 旧实现 `take(MAX)` 之后再 `push('…')` 得到 **201** 字符 → 必然被
+/// `MicroLearningEventRepository::create`（`> MAX → Err`）拒绝，
+/// 于是「>200 字符的真实用户输入」会让整条 Evidence 写入失败。
+/// 正确算法：`take(MAX - 1)` + `'…'` ⇒ 恰好 `MAX`。
+/// 该不变量必须由**真实写路径**（`record_micro_action` → repository → DB）验证，
+/// 纯 helper 单测不足以证明。
 fn truncate_summary(raw: &str) -> String {
     const MAX: usize = crate::repository::micro_learning_event::RESPONSE_SUMMARY_MAX_CHARS;
     let trimmed = raw.trim();
     if trimmed.chars().count() <= MAX {
         return trimmed.to_string();
     }
-    let mut s: String = trimmed.chars().take(MAX).collect();
+    let mut s: String = trimmed.chars().take(MAX - 1).collect();
     s.push('…');
+    debug_assert_eq!(s.chars().count(), MAX);
     s
 }
 
@@ -420,9 +541,48 @@ mod unit_tests {
 
     #[test]
     fn summary_truncation_is_bounded() {
+        const MAX: usize = crate::repository::micro_learning_event::RESPONSE_SUMMARY_MAX_CHARS;
         let long = "字".repeat(500);
         let out = truncate_summary(&long);
-        assert!(out.chars().count() <= 201, "截断后必须仍有界");
+        // M0-C 硬不变量：截断结果必须 <= MAX（旧实现产出 201 字符，会被仓储拒绝）
+        assert!(
+            out.chars().count() <= MAX,
+            "截断后必须 <= {} 字符，实际 {}",
+            MAX,
+            out.chars().count()
+        );
+        assert_eq!(
+            out.chars().count(),
+            MAX,
+            "M0-C：超过上限的输入必须恰好截到上限（take(MAX-1) + '…'）"
+        );
         assert!(out.ends_with('…'));
+        // 按字符而非字节截断：不得出现 UTF-8 半个多字节字符
+        assert!(out.chars().count() > 0 && std::str::from_utf8(out.as_bytes()).is_ok());
+        // 未超限时必须原样返回（不做无意义改写）
+        assert_eq!(truncate_summary("短句"), "短句");
+        assert_eq!(truncate_summary(&"a".repeat(MAX)), "a".repeat(MAX));
+    }
+
+    #[test]
+    fn micro_unavailable_when_no_grounded_source() {
+        // M0-A：没有真实来源时不得伪造 Micro。本单测锁定「公共入口不再存在
+        // 两布尔启发式兜底」这一事实：budget 模块已删除 `pick_micro_action` /
+        // `MicroActionKind`，唯一可执行的 Micro 只能来自 `generate_candidates`。
+        // 真实 SQLite 行为由 tests/daily_experience.rs 的 AR-01 / AR-02 覆盖。
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::migrations::run_migrations(&conn).unwrap();
+        let profile_id = crate::repository::study_profile::StudyProfileRepository::new(&conn)
+            .create("M0-A-COLD", None, None, None, None, None)
+            .unwrap()
+            .id;
+        let state =
+            build_micro_evidence_state(&conn, profile_id, &[], &[], &LearningFrictionState::unknown())
+                .unwrap();
+        assert!(
+            state.candidates.is_empty(),
+            "冷档案不得凭空产出 Micro 候选"
+        );
     }
 }

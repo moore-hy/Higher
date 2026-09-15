@@ -1206,8 +1206,9 @@ export interface CanvasEmbed {
 /** PHASE 3：有限时间档（只允许这四档，禁止任意分钟数）。 */
 export type TimeBudgetKey = "30s" | "3m" | "10m" | "25m";
 
-/** PHASE 3：30 秒档的 micro action 类型。 */
-export type MicroActionKind = "short_recall" | "reexplain_concept" | "review_key_error";
+// M0-A：`MicroActionKind = "short_recall" | "reexplain_concept" | "review_key_error"`
+// 已随后端 `budget::MicroActionKind` / `pick_micro_action` 一并删除 ——
+// 它是「无真实来源时伪造 Micro」的兜底类型，唯一合法语义是 `Micro unavailable`。
 
 export interface LearningStateProfile {
   profile_id: number;
@@ -1297,16 +1298,34 @@ export interface RecoveryState {
 export interface MicroActionCandidate {
   /** recall | self_explain | retry_recent_error | review_recent_concept */
   action_type: string;
-  /** evaluation | learning_item | task | session | goal | none */
+  /**
+   * evaluation | learning_item | task | session | goal | none
+   *
+   * M0-B：`source_type / source_id` 表达「这条 Micro 为什么存在」（trigger source），
+   * 不是「用户看到什么内容」。Session 触发恒为 `session`、Task 触发恒为 `task`，
+   * 绝不为了显示一个知识名称就把它们改写成 `learning_item`。
+   */
   source_type: string;
   source_id: number | null;
   /** 0-LLM 模板变体 key（如 self_explain.one_sentence） */
   prompt_variant: string;
+  /**
+   * M0-B：**非权威**展示主体。trigger source 不是 learning_item 时，
+   * 展示所需的知识名称走这两个字段；它们不回写 source_type / source_id。
+   */
+  subject_learning_item_id: number | null;
+  subject_label: string | null;
   title: string;
   /** 0-LLM 直接模板正文 */
   instruction: string;
   reason: string;
   estimated_seconds: number;
+  /**
+   * M1-C：由这条 Micro 的 **trigger source** 派生出的正式学习锚点
+   * （Task → LearningItem → Quick）。只决定「进入正式学习」走哪条既有路径，
+   * 不改写 trigger source，也**绝不**把 Micro 时长并入正式 StudySession。
+   */
+  formal_session_anchor: FormalSessionAnchor;
 }
 
 /** PHASE 4：已完成的一条 Micro 事实。 */
@@ -1361,6 +1380,48 @@ export interface LearningStateSnapshot {
   recovery_state: RecoveryState;
   /** PHASE 3/4：Micro primitive + Micro Evidence 的统一投影。 */
   micro: MicroEvidenceState;
+  /** M2：只读、deterministic、0 LLM 的学习摩擦投影（不是「疼痛评分」）。 */
+  friction: LearningFrictionState;
+}
+
+// ===================== M2：Learning Friction V1 =====================
+
+/**
+ * M2：摩擦等级。`unknown` 的含义是「证据不足」——**不是**成功，也不是失败。
+ */
+export type FrictionLevel = "unknown" | "low" | "medium" | "high";
+
+/** M2：support level（§M2-D 锁定映射）：0 自由回忆 / 1 一次线索 / 2 候选或引导。 */
+export type FrictionSupportLevel = 0 | 1 | 2;
+
+/** M2：一条摩擦信号 —— 只陈述可验证事实。 */
+export interface FrictionSignal {
+  /** 稳定 code（trusted_failed_evaluations / consecutive_grounded_failures / ...）。 */
+  code: string;
+  count: number;
+  latest_at: string | null;
+  /**
+   * 该信号**单独**是否足以提升摩擦等级。
+   * Micro done/partial 类信号恒为 `false`：它们只是 secondary context。
+   */
+  authoritative: boolean;
+}
+
+/** M2：单次快照的摩擦投影。 */
+export interface LearningFrictionState {
+  level: FrictionLevel;
+  /** 当前摩擦主体（无证据 → null；绝不伪造）。 */
+  subject_learning_item_id: number | null;
+  /** **非权威**展示名称（不回写任何来源真相）。 */
+  subject_label: string | null;
+  signals: FrictionSignal[];
+  /** §M2-D：0 = 自由回忆 / 1 = 一次线索 / 2 = 候选或引导。 */
+  recommended_support_level: FrictionSupportLevel;
+  /**
+   * §M2-F 冷却截止（UTC datetime）；非 `high` 恒为 null。
+   * 冷却期内的同一主体不得被反复锤击（换一种更轻的方式，而不是重复同一步）。
+   */
+  cooldown_until: string | null;
 }
 
 /** PHASE 2：统一动作类型。 */
@@ -1420,13 +1481,78 @@ export interface NextLearningAction {
   subtitle: string | null;
   reasons: string[];
   is_primary: boolean;
-  /** 30 秒档 → 只能 micro_action，绝不创建普通 StudySession。 */
+  /**
+   * 30 秒档 → 只能 micro_action，绝不创建普通 StudySession。
+   *
+   * M0-A：只有 `micro_action != null` 时才可能为 true。没有 grounded 来源候选时
+   * 语义是 `Micro unavailable`（`reason_code = "micro_unavailable_no_grounded_source"`），
+   * 本字段为 false，`execution_payload` 回落到普通 NextAction。
+   */
   micro_action_only: boolean;
   /**
    * PHASE 3/4：`micro_action_only = true` 时的可执行 Micro primitive。
    * UI 完成后必须**原样**把 source_type / source_id / action_type / prompt_variant
    * 回传给 `recordMicroAction`；不得自选、不得重排。非 micro 档位恒为 null。
+   * M0-A：没有 grounded 来源时同样恒为 null —— 绝不再出现
+   * 「micro_action_only = true 但 micro_action = null」的不可执行结果。
    */
   micro_action: MicroActionCandidate | null;
   alternates: NextActionAlternative[];
+}
+
+// ===================== M1：Daily Learning Loop =====================
+
+/**
+ * M1-C：Micro 完成后进入**正式学习**的锚点（锁定优先级 Task → LearningItem → Quick）。
+ *
+ * 只决定走哪条**既有**生产路径，不改写 Micro 的 trigger source，
+ * 也**绝不**把 Micro 时长并入正式 StudySession。
+ */
+export type FormalSessionAnchor =
+  | { kind: "task"; task_id: number }
+  | { kind: "learning_item"; learning_item_id: number; task_id: number | null }
+  | { kind: "quick" };
+
+/** §M1-A：Pack 硬上限（1..=3，禁止「无限下一个」）。与后端 `PACK_MAX_ITEMS` 同源。 */
+export const PACK_MAX_ITEMS = 3;
+
+/**
+ * §M1-A：一条 Pack 条目 —— **不是**新的推荐结果，只是 canonical 候选的截断视图。
+ *
+ * 执行元数据与 `NextLearningAction` 由同一套规则产出，前端不得自行推算或重排。
+ */
+export interface LearningPackItem {
+  /** Micro 条目同样携带类别标签（与 NextLearningAction.action_type 同源）。 */
+  action_type: NextActionType | null;
+  reason_code: string;
+  source_entity: ActionSource;
+  /** 语义主体（去重依据之一；解析不到 → null，绝不伪造）。 */
+  subject_learning_item_id: number | null;
+  subject_label: string | null;
+  estimated_minutes: number | null;
+  execution_payload: ExecutionPayload;
+  title: string;
+  subtitle: string | null;
+  reasons: string[];
+  /**
+   * 本条是否为 Micro primitive。true 时 UI 走 `recordMicroAction`，
+   * **不得**用 `execution_payload` 去开 StudySession。
+   */
+  is_micro: boolean;
+  micro_action: MicroActionCandidate | null;
+}
+
+/** §M1-A：有限 Pack（1..=3）。canonical 候选截断 + 去重，**没有**第二套排序。 */
+export interface LearningPack {
+  profile_id: number;
+  local_date: string;
+  /** 1..=3 条；数据库为空且无任何 grounded 来源时可能为 0。 */
+  items: LearningPackItem[];
+  available_minutes: number | null;
+  /** 参与截断的 canonical 候选总数（审计用）。 */
+  candidate_count: number;
+  /** 因 (来源, 动作) 或语义主体重复被丢弃的条数（审计用）。 */
+  deduped_count: number;
+  /** Pack 上限（常数，供前端展示「不超过 N 条」）。 */
+  max_items: number;
 }

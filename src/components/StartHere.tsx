@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { NextLearningAction, TimeBudgetKey } from "../types";
+import { useEffect, useMemo, useState } from "react";
+import type { LearningFrictionState, NextLearningAction, TimeBudgetKey } from "../types";
 
 /**
  * PHASE 3：有限时间档（与后端 `TimeBudget::ALL` 严格一致，顺序不可换）。
@@ -58,6 +58,7 @@ export default function StartHere({
   busy,
   onStart,
   onAnother,
+  friction,
 }: {
   action: NextLearningAction;
   /** 当前时间档；null = 未选择（后端按完整计划推荐）。 */
@@ -67,6 +68,8 @@ export default function StartHere({
   busy?: boolean;
   onStart: () => void;
   onAnother: () => void;
+  /** M2：只读摩擦投影（用于 §M2-G 的「换成更轻的方式」提示；缺失 = 不提示）。 */
+  friction?: LearningFrictionState | null;
 }) {
   const [whyOpen, setWhyOpen] = useState(false);
 
@@ -81,6 +84,24 @@ export default function StartHere({
   const duration = durationLabel(action);
   /** §PHASE 1 ③：只取第一条理由作为「为什么推荐」的一行答案（完整列表仍在折叠区）。 */
   const why = action.reasons.length > 0 ? action.reasons[0] : null;
+
+  /**
+   * §M2-G 摩擦提示：**只在**当前建议确实指向摩擦主体、且摩擦等级为 medium/high 时出现。
+   *
+   * 措辞只允许「陈述事实 + 下一步」：
+   *   ✅ 这个点最近反复卡住了。这次换一种更轻的方式。
+   *   ❌ 你又错了 / 你已经失败 N 次（除非用户主动打开详细分析）
+   */
+  const frictionNote = useMemo(() => {
+    if (!friction || friction.level === "unknown" || friction.level === "low") return null;
+    const subject =
+      action.micro_action?.subject_learning_item_id ??
+      (action.source_entity.kind === "learning_item"
+        ? action.source_entity.learning_item_id
+        : null);
+    if (subject == null || subject !== friction.subject_learning_item_id) return null;
+    return { title: "这个点最近反复卡住了。", body: "这次换一种更轻的方式。" };
+  }, [friction, action.micro_action, action.source_entity]);
 
   return (
     <section className="card starthere" aria-label="从这里开始">
@@ -110,6 +131,14 @@ export default function StartHere({
 
       {/* ③ 为什么推荐（一行事实；完整证据仍在下面折叠） */}
       {why && <p className="starthere__why">{why}</p>}
+
+      {/* §M2-G：反复卡住时改用更轻的方式（只陈述事实 + 下一步，不做羞辱式播报） */}
+      {frictionNote && (
+        <p className="starthere__friction" data-testid="starthere-friction-note">
+          {frictionNote.title}
+          {frictionNote.body}
+        </p>
+      )}
 
       {whyOpen && (
         <ul className="starthere__reasons">

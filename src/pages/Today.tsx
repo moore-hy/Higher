@@ -449,6 +449,7 @@ function Today() {
           busy={starting || actionQuery.isFetching}
           onStart={() => void handleStartHere()}
           onAnother={handleAnother}
+          friction={snapshot?.friction ?? null}
         />
       )}
 

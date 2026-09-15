@@ -409,19 +409,42 @@ fn cl006_tight_budget_never_returns_overlong_action() {
     let a10 = build_next_learning_action(&snap, Some(TimeBudget::Min10)).unwrap();
     assert!(a10.estimated_minutes.unwrap() <= 10);
 
-    // ---- 30 秒档：只能 micro_action，绝不创建普通 StudySession ----
+    // ---- 30 秒档 + 无 grounded Micro 来源 → M0-A：Micro unavailable ----
+    //
+    // 本用例的档案没有任何 Knowledge Item 绑定的来源（任务不绑 item、无 Session、
+    // 无 Evaluation），因此 `micro.candidates` 为空。M0-A 锁定语义：
+    // 绝不伪造一个没有来源的 micro，而是**退回普通 NextAction**（时间档降级到
+    // 最小真实学时档 3 分钟），并如实标注 `micro_unavailable_no_grounded_source`。
     let m = build_next_learning_action(&snap, Some(TimeBudget::Seconds30)).unwrap();
-    assert!(m.micro_action_only);
-    assert_eq!(m.available_minutes, Some(0));
-    assert_eq!(m.estimated_minutes, Some(0));
-    assert_eq!(m.execution_payload.kind, "micro_action");
-    assert_eq!(m.execution_payload.suggested_minutes, 0);
-    assert_eq!(m.execution_payload.task_id, None);
-    assert_eq!(m.execution_payload.session_id, None);
-    assert!(m.execution_payload.review_id.is_none());
     assert!(
-        !m.execution_payload.kind.starts_with("start_"),
-        "30 秒档不得给出会创建 StudySession 的载荷"
+        !m.micro_action_only,
+        "M0-A：无 grounded 候选时不得声称『只做 micro action』"
+    );
+    assert!(
+        m.micro_action.is_none(),
+        "M0-A：无 grounded 候选时不得伪造 Micro primitive"
+    );
+    assert_ne!(
+        m.execution_payload.kind, "micro_action",
+        "M0-A：Micro unavailable 时不得返回 micro_action 载荷"
+    );
+    assert_eq!(
+        m.reason_code, "micro_unavailable_no_grounded_source",
+        "M0-A：必须如实标注 Micro unavailable"
+    );
+    assert_eq!(
+        m.available_minutes,
+        Some(3),
+        "M0-A：30 秒档降级为最小真实学时档（3 分钟）"
+    );
+    // 降级后仍是一个**可执行**的普通动作（本用例是 25 分钟任务 → 只做入口切片）
+    assert_eq!(m.execution_payload.kind, "start_task");
+    assert_eq!(m.execution_payload.suggested_minutes, 3);
+    assert!(m.execution_payload.entry_slice);
+    assert_eq!(m.source_task_estimate_minutes, Some(25));
+    assert!(
+        m.estimated_minutes.unwrap() <= 3,
+        "CL006：降级后仍不得超出时间档"
     );
 
     // ---- 非法时间档必须显式失败，不静默降级 ----

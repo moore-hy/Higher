@@ -176,6 +176,10 @@ impl<'a> MicroLearningEventRepository<'a> {
     }
 
     /// §4.2 `recent_micro_actions`：本档案最近 N 条（completed_at DESC，id DESC 稳定序）。
+    ///
+    /// **M0-D：包含 `skipped`** —— 它是真实发生过的用户行为（作为**历史**可读），
+    /// 只是不代表「用户执行了这个学习动作」。因此本查询**不过滤** result；
+    /// 「最近接触过的来源」的过滤在 [`Self::list_touched_sources`] 内完成。
     pub fn list_recent_by_profile(
         &self,
         profile_id: i64,
@@ -204,6 +208,14 @@ impl<'a> MicroLearningEventRepository<'a> {
     ///
     /// 纯 SQL 聚合，不依赖任何业务判断；「命中时间窗」由 SQLite 的 `datetime('now')`
     /// 与 UTC 存储口径决定（`completed_at` 全仓均为 UTC）。
+    ///
+    /// **M0-D：`skipped` 语义**（`skipped = 用户没有执行这个学习动作`）：
+    /// - `recent_micro_actions` 仍保留 skipped 作为**历史**（见 [`Self::list_recent_by_profile`]）；
+    /// - 但本查询是「最近**接触**过的来源」，必须只算 `done` / `partial`。
+    ///   skipped 既没有提高 recency 的资格，也不得声称「你最近在这里学过」。
+    /// 过滤放在 SQL 层（`result IN ('done','partial')`），内外两侧同时生效，
+    /// 保证「最近一次动作」与「计数」口径一致 —— 否则会出现「最近一次 = skipped、
+    /// 计数 = 1」这种自相矛盾的行。
     pub fn list_touched_sources(
         &self,
         profile_id: i64,
@@ -218,9 +230,11 @@ impl<'a> MicroLearningEventRepository<'a> {
                           WHERE m2.profile_id = m.profile_id
                             AND m2.source_type = m.source_type
                             AND (m2.source_id IS m.source_id)
+                            AND m2.result IN ('done','partial')
                             AND m2.completed_at >= datetime('now', ?2))
                  FROM micro_learning_events m
                  WHERE m.profile_id = ?1
+                   AND m.result IN ('done','partial')
                    AND m.completed_at >= datetime('now', ?2)
                  ORDER BY m.completed_at DESC, m.id DESC",
             )
@@ -298,6 +312,48 @@ impl<'a> MicroLearningEventRepository<'a> {
             .query_row(
                 "SELECT COUNT(*) FROM micro_learning_events WHERE profile_id = ?1",
                 params![profile_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
+
+    /// M2 — LEARNING FRICTION V1：某学习项上 `done` / `partial` 的 Micro 次数。
+    ///
+    /// 这是 **secondary context only**：它**绝不**独立提升 friction 等级，
+    /// 只用于「这个点最近确实反复在做」这一条上下文。
+    ///
+    /// 主体解析是**只读派生**（与 M0-B 在 `next_action` 中的做法一致）：
+    ///   learning_item → 自身 / session → sessions.learning_item_id /
+    ///   task → tasks.learning_item_id；
+    ///   evaluation / goal / none 无法可靠解析 → 不计入（不猜测、不伪造）。
+    ///
+    /// 仍然只算 `done` / `partial`（M0-D：skipped 不算「做过」）。
+    pub fn count_done_partial_for_subject(
+        &self,
+        profile_id: i64,
+        learning_item_id: i64,
+        window_hours: i64,
+    ) -> Result<i64, String> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM micro_learning_events m
+                  LEFT JOIN study_sessions s
+                         ON m.source_type = 'session' AND s.id = m.source_id
+                  LEFT JOIN tasks t
+                         ON m.source_type = 'task' AND t.id = m.source_id
+                  WHERE m.profile_id = ?1
+                    AND m.result IN ('done','partial')
+                    AND m.completed_at >= datetime('now', ?2)
+                    AND (
+                          (m.source_type = 'learning_item' AND m.source_id = ?3)
+                       OR (m.source_type = 'session' AND s.learning_item_id = ?3)
+                       OR (m.source_type = 'task' AND t.learning_item_id = ?3)
+                    )",
+                params![
+                    profile_id,
+                    format!("-{} hours", window_hours),
+                    learning_item_id
+                ],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())

@@ -21,21 +21,36 @@
 
 pub mod budget;
 pub mod date;
+pub mod friction;
 pub mod micro;
 pub mod next_action;
+pub mod pack;
 pub mod recovery;
 pub mod state;
 pub mod types;
 
-pub use budget::{pick_micro_action, MicroActionKind, TimeBudget};
+// M0-A：`pick_micro_action` / `MicroActionKind` 已删除 —— 它们是「无 grounded 来源时
+// 伪造 Micro」的生产兜底，唯一合法语义是 `Micro unavailable`（退回普通 NextAction）。
+pub use budget::TimeBudget;
 pub use micro::{
     build_micro_evidence_state, record_micro_action, MicroActionType, MICRO_DEDUPE_WINDOW_MINUTES,
     MICRO_TOUCH_WINDOW_HOURS,
 };
 pub use next_action::{
-    build_next_learning_action, parse_planned_minutes, parse_utc_ms, QUICK_STUDY_DEFAULT_MINUTES,
-    RECOVERY_DEFAULT_MINUTES,
+    build_next_learning_action, parse_planned_minutes, parse_utc_ms, MICRO_UNAVAILABLE_REASON,
+    QUICK_STUDY_DEFAULT_MINUTES, RECOVERY_DEFAULT_MINUTES,
+};
+// M1-A：有限 Learning Pack（同一份 canonical primitive，只截断 + 去重）
+pub use pack::build_learning_pack;
+pub use types::{
+    FormalSessionAnchor, LearningPack, LearningPackItem, MicroActionCandidate, PACK_MAX_ITEMS,
 };
 pub use recovery::{classify_recovery, collect_recovery_signals};
 pub use state::{build_learning_state, build_learning_state_at, RECENT_SESSION_LIMIT};
 pub use types::*;
+
+// M2 — LEARNING FRICTION V1（只读投影 + 0-LLM 支持模板）
+pub use friction::{
+    build_friction_state, support_instruction, support_prompt_variant, SUPPORT_FREE_RECALL,
+    SUPPORT_GUIDED, SUPPORT_ONE_CUE,
+};

@@ -18,13 +18,13 @@
 //!
 //! 0 LLM：本模块不引用任何 provider / runtime / agent 符号。
 
-use crate::learning_state::budget::{pick_micro_action, TimeBudget};
+use crate::learning_state::budget::TimeBudget;
 use crate::learning_state::types::{
     ActionSource, ExecutionPayload, LearningStateSnapshot, MicroActionCandidate,
     NextActionAlternative, NextActionType, NextLearningAction, CONTINUE_LAST_WINDOW_DAYS,
     MAX_ALTERNATIVES, REASON_ACTIVE_SESSION, REASON_CONTINUE_LAST, REASON_MICRO_ACTION,
-    REASON_PLANNED_TASK, REASON_PLANNED_TASK_CORE, REASON_PLANNED_TASK_SLICE, REASON_QUICK_STUDY,
-    REASON_RECOVERY, REASON_REVIEW_DUE,
+    REASON_MICRO_UNAVAILABLE, REASON_PLANNED_TASK, REASON_PLANNED_TASK_CORE,
+    REASON_PLANNED_TASK_SLICE, REASON_QUICK_STUDY, REASON_RECOVERY, REASON_REVIEW_DUE,
 };
 use crate::repository::daily_report::DailyTaskRow;
 use std::cmp::Ordering;
@@ -33,6 +33,9 @@ use std::cmp::Ordering;
 pub const QUICK_STUDY_DEFAULT_MINUTES: i64 = 25;
 /// PHASE 6：Recovery 默认动作时长（“2 分钟恢复动作”）。
 pub const RECOVERY_DEFAULT_MINUTES: i64 = 2;
+/// M0-A：30 秒档拿不到 grounded Micro 时，如实告知用户「Micro 不可用」的固定文案。
+pub const MICRO_UNAVAILABLE_REASON: &str =
+    "这一档需要一条有真实来源的小步，现在还没有。已换成 3 分钟的小步，仍然不会创建学习记录。";
 
 // =============== 迁移的纯函数工具 ===============
 
@@ -85,32 +88,34 @@ fn minutes_fit_of(estimated: Option<i64>, available: Option<i64>) -> i64 {
 
 // =============== 候选 ===============
 
+/// canonical 候选 Primitive（**唯一**一份；M1-A 的 Learning Pack 直接消费它，
+/// 不做第二套推荐引擎、不重排）。
 #[derive(Debug, Clone)]
-struct Candidate {
-    action_type: NextActionType,
-    reason_code: String,
-    source: ActionSource,
-    title: String,
-    subtitle: Option<String>,
-    reasons: Vec<String>,
-    payload_kind: String,
-    task_id: Option<i64>,
-    learning_item_id: Option<i64>,
-    session_id: Option<i64>,
-    review_id: Option<i64>,
+pub(crate) struct Candidate {
+    pub(crate) action_type: NextActionType,
+    pub(crate) reason_code: String,
+    pub(crate) source: ActionSource,
+    pub(crate) title: String,
+    pub(crate) subtitle: Option<String>,
+    pub(crate) reasons: Vec<String>,
+    pub(crate) payload_kind: String,
+    pub(crate) task_id: Option<i64>,
+    pub(crate) learning_item_id: Option<i64>,
+    pub(crate) session_id: Option<i64>,
+    pub(crate) review_id: Option<i64>,
     /// 动作的自然时长（任务估时 / 上次实际时长 / Recovery 默认 / 快速学习默认）。
-    base_estimate: Option<i64>,
+    pub(crate) base_estimate: Option<i64>,
     /// 是否为任务级动作（entry_slice 只对任务级动作有意义）。
-    task_scoped: bool,
+    pub(crate) task_scoped: bool,
     /// 是否天然允许被时间档裁剪（Recovery / quick_study）。
-    slice_by_design: bool,
+    pub(crate) slice_by_design: bool,
 
     // ---- tie-break keys（迁移自 §0C.5）----
-    deadline_minutes: Option<i64>,
-    priority_rank: i32,
-    minutes_fit: i64,
-    recency: i64,
-    stable_id: i64,
+    pub(crate) deadline_minutes: Option<i64>,
+    pub(crate) priority_rank: i32,
+    pub(crate) minutes_fit: i64,
+    pub(crate) recency: i64,
+    pub(crate) stable_id: i64,
 }
 
 /// §0C.5 tie-break #1～#6（迁移自 `compareStartHere`，不依赖任何外部状态）。
@@ -481,21 +486,55 @@ fn planned_task_candidates(
     }
 
     // PHASE 4 §4.3「next action filtering」：Micro Evidence 参与候选排序与理由。
-    // learning_item_id → (最近接触 ms, 最近结果)。只消费 LearningState 已投影的
-    // `recent_touched_sources`（同一份 primitive 来源），不另算一套统计。
+    //
+    // M0-B：`recent_touched_sources` 的 `source_type / source_id` 是**trigger source truth**
+    // （session 触发就是 session，task 触发就是 task），不得为了这里的便利被改写。
+    // 因此这里只做**只读派生**解析，把它映射回对应的 Knowledge Item：
+    //   learning_item → 自身                                   （直接 item 触发）
+    //   session       → `recent_sessions[].learning_item_id`    （正式/快速学习的学习项）
+    //   task          → `today_tasks[].learning_item_id`        （任务的学习项）
+    //   evaluation / goal → 本快照不足以可靠解析 → 跳过（不猜测、不伪造）
+    // 解析结果只用于 recency / 理由文案，绝不回写 Micro 的 source。
     let mut micro_touch: std::collections::HashMap<i64, (i64, String)> =
         std::collections::HashMap::new();
     for touch in &snapshot.micro.recent_touched_sources {
-        if touch.source_type != "learning_item" {
-            continue;
-        }
-        let Some(item_id) = touch.source_id else { continue };
+        let item_id = match touch.source_type.as_str() {
+            "learning_item" => touch.source_id,
+            "session" => touch.source_id.and_then(|sid| {
+                snapshot
+                    .recent_sessions
+                    .iter()
+                    .find(|s| s.id == sid && s.profile_id == snapshot.profile_id)
+                    .and_then(|s| s.learning_item_id)
+            }),
+            "task" => touch.source_id.and_then(|tid| {
+                snapshot
+                    .today_tasks
+                    .iter()
+                    .find(|t| t.id == tid)
+                    .and_then(|t| t.learning_item_id)
+            }),
+            _ => None,
+        };
+        let Some(item_id) = item_id else { continue };
         let ms = parse_utc_ms(Some(touch.last_completed_at.as_str()));
         let entry = micro_touch.entry(item_id).or_insert((ms, String::new()));
         if ms >= entry.0 {
             *entry = (ms, touch.last_result.clone());
         }
     }
+
+    // M2 §M2-F 反锤击（deterministic）：High 摩擦主体在冷却期内**不得**因为
+    // 「最近刚做过」而被再次抬高 —— 否则会形成「越卡越推荐、越推荐越卡」的锤击循环。
+    //
+    // 这里只丢弃 **recency 提升**，不丢弃任务本身：任务仍然是合法的今日计划项，
+    // 只是不再额外插队。冷却结束后（或有新证据推翻 High）自动恢复。
+    let now_utc = crate::learning_state::date::now_utc();
+    micro_touch.retain(|item_id, _| {
+        !snapshot
+            .friction
+            .is_subject_in_cooldown(Some(*item_id), &now_utc)
+    });
 
     snapshot
         .today_tasks
@@ -518,6 +557,10 @@ fn planned_task_candidates(
                 None => "未设置预计时长，可自由安排。".to_string(),
             });
             // §4.3：刚发生过 Micro 的来源必须让「下一次推荐」可观察到变化。
+            //
+            // M0-D：`recent_touched_sources` 在 SQL 层就排除了 `skipped`
+            // （`result IN ('done','partial')`），所以这里只可能有两种结果 ——
+            // 不再保留「跳过」分支，避免出现暗示「用户被记录了一次跳过」的措辞。
             let touched = t
                 .learning_item_id
                 .and_then(|iid| micro_touch.get(&iid).cloned())
@@ -525,10 +568,10 @@ fn planned_task_candidates(
             if let Some((_, ref result)) = touched {
                 reasons.push(format!(
                     "你最近在这里做过一次 Micro 动作（{}）。",
-                    match result.as_str() {
-                        "partial" => "部分完成",
-                        "skipped" => "跳过",
-                        _ => "已完成",
+                    if result == "partial" {
+                        "部分完成"
+                    } else {
+                        "已完成"
                     }
                 ));
             }
@@ -624,16 +667,16 @@ fn to_payload(c: &Candidate, budget: Option<TimeBudget>) -> (ExecutionPayload, O
     (payload, estimated, entry_slice)
 }
 
-// =============== 正式入口 ===============
-
-/// 生产入口：给定统一状态快照，返回**唯一** Primary 动作（+ 备选）。
-pub fn build_next_learning_action(
+/// M1-A：canonical 候选序列（**与 NextAction 完全同一套构造 + 同一套排序**）。
+///
+/// 唯一用途：让 `learning_state::pack` 复用同一份 primitive 源，
+/// 杜绝「pack 第二套推荐引擎」（§15 / LP-06）。
+/// 调用方**不得重排**，只允许截断与去重。
+pub(crate) fn build_ranked_candidates(
     snapshot: &LearningStateSnapshot,
-    budget: Option<TimeBudget>,
-) -> Result<NextLearningAction, String> {
-    let available = budget.map(|b| b.minutes());
+    available: Option<i64>,
+) -> Vec<Candidate> {
     let today = snapshot.local_date.as_str();
-
     let mut candidates: Vec<Candidate> = Vec::new();
     if let Some(active) = active_session_candidate(snapshot) {
         candidates.push(active);
@@ -649,8 +692,45 @@ pub fn build_next_learning_action(
     }
     candidates.extend(planned_task_candidates(snapshot, available));
     candidates.push(quick_study_candidate(available));
-
     candidates.sort_by(compare_candidates);
+    candidates
+}
+
+/// 候选 → 执行视图（payload / 建议分钟 / 是否入口切片）。
+/// `pack` 通过它取得与 NextAction **完全一致** 的执行元数据（LP-06：前端无需自行推算）。
+pub(crate) fn candidate_view(
+    c: &Candidate,
+    budget: Option<TimeBudget>,
+) -> (ExecutionPayload, Option<i64>, bool) {
+    to_payload(c, budget)
+}
+
+// =============== 正式入口 ===============
+
+/// 生产入口：给定统一状态快照，返回**唯一** Primary 动作（+ 备选）。
+pub fn build_next_learning_action(
+    snapshot: &LearningStateSnapshot,
+    budget: Option<TimeBudget>,
+) -> Result<NextLearningAction, String> {
+    // ---- M0-A：Micro 只在存在**真实 grounding 来源**候选时可用 ----
+    //
+    // `snapshot.micro.candidates` 全部由 `micro::generate_candidates` 从
+    // evaluation / session / task / learning_item 等真实事实产出，并已完成 §4.3 去重。
+    // 候选为空 ⇒ `Micro unavailable`：绝不伪造 micro、绝不调 Cloud 去「凑」一个。
+    let micro_candidate: Option<MicroActionCandidate> = match budget {
+        Some(bud) if bud.is_micro() => snapshot.micro.candidates.first().cloned(),
+        _ => None,
+    };
+    // Micro 不可用时把 30 秒档降级成最小**真实**学时档（3 分钟），
+    // 这样「Normal NextAction / Quick Study remains available」才是一个可执行动作
+    // （30 秒档会被 `apply_budget` 钳成 0 分钟，产出无法执行的载荷）。
+    let effective_budget = match budget {
+        Some(bud) if bud.is_micro() && micro_candidate.is_none() => Some(bud.normal_fallback()),
+        other => other,
+    };
+    let available = effective_budget.map(|b| b.minutes());
+
+    let candidates = build_ranked_candidates(snapshot, available);
 
     // PHASE 2 硬规则：Active Session → Primary 必须 Continue Active
     if snapshot.active_session.is_some() {
@@ -659,28 +739,26 @@ pub fn build_next_learning_action(
             .find(|c| c.action_type == NextActionType::ActiveSession)
             .ok_or_else(|| "内部错误：active session 未生成候选".to_string())?
             .clone();
-        return Ok(finish(active, Vec::new(), snapshot, budget, false));
+        return Ok(finish(active, Vec::new(), snapshot, effective_budget));
     }
 
-    // PHASE 3：30 秒档只返回 micro_action（绝不创建普通 StudySession）
-    if let Some(bud) = budget {
-        if bud.is_micro() {
-            let context = candidates
-                .first()
-                .cloned()
-                .unwrap_or_else(|| quick_study_candidate(available));
-            let alternates = candidates
-                .iter()
-                .skip(1)
-                .take(MAX_ALTERNATIVES)
-                .map(|c| to_alternative(c, budget))
-                .collect::<Vec<_>>();
-            return Ok(finish(context, alternates, snapshot, budget, true));
-        }
+    // PHASE 3：30 秒档 + **有 grounded Micro** → 只返回 micro_action（绝不创建普通 StudySession）
+    if let Some(cand) = micro_candidate {
+        let alternates = candidates
+            .iter()
+            .skip(1)
+            .take(MAX_ALTERNATIVES)
+            .map(|c| to_alternative(c, budget))
+            .collect::<Vec<_>>();
+        let context = candidates
+            .first()
+            .cloned()
+            .unwrap_or_else(|| quick_study_candidate(available));
+        return Ok(finish_micro(cand, context, alternates, snapshot, budget));
     }
 
     // 类别优先级为权威（迁移规则）；在同一类别内优先选择能完整放入时间档的候选。
-    let primary_idx = match budget {
+    let primary_idx = match effective_budget {
         Some(bud) => {
             let top_cat = candidates[0].action_type.category_rank();
             candidates
@@ -697,10 +775,19 @@ pub fn build_next_learning_action(
         .enumerate()
         .filter(|(i, _)| *i != primary_idx)
         .take(MAX_ALTERNATIVES)
-        .map(|(_, c)| to_alternative(c, budget))
+        .map(|(_, c)| to_alternative(c, effective_budget))
         .collect::<Vec<_>>();
 
-    Ok(finish(primary, alternates, snapshot, budget, false))
+    let mut action = finish(primary, alternates, snapshot, effective_budget);
+
+    // M0-A：用户选了 30 秒档但没有任何 grounded Micro → 如实说明「Micro 不可用」，
+    // 并把它替换成最小真实学时档。不允许静默改变用户看到的时间语义。
+    if matches!(budget, Some(b) if b.is_micro()) && micro_candidate.is_none() {
+        action.reason_code = REASON_MICRO_UNAVAILABLE.to_string();
+        action.reasons.insert(0, MICRO_UNAVAILABLE_REASON.to_string());
+    }
+
+    Ok(action)
 }
 
 fn to_alternative(c: &Candidate, budget: Option<TimeBudget>) -> NextActionAlternative {
@@ -722,101 +809,18 @@ fn to_alternative(c: &Candidate, budget: Option<TimeBudget>) -> NextActionAltern
     }
 }
 
+/// 组装普通（非 micro）Primary 动作。
+///
+/// **M0-A**：本函数不再承担任何「伪造 Micro」的职责 —— 旧签名里的 `micro: bool`
+/// 分支会在无 grounded 候选时凭 recovery / review 状态凭空造一个 micro，
+/// 已被删除。Micro 的组装统一走 [`finish_micro`]，且只在
+/// `snapshot.micro.candidates.first()` 真实存在时才会被调用。
 fn finish(
     primary: Candidate,
     alternates: Vec<NextActionAlternative>,
     snapshot: &LearningStateSnapshot,
     budget: Option<TimeBudget>,
-    micro: bool,
 ) -> NextLearningAction {
-    if micro {
-        // PHASE 3：只返回 micro_action，绝不落到 start_* 载荷。
-        //
-        // 优先使用**真实来源绑定**的 Micro primitive（`micro.candidates`，已按 §3.1 阶梯
-        // 排序并完成 §4.3 去重）。来源不足时才降级到 deterministic 启发式 ——
-        // §3.2 明确「数据不够 → 降级，绝不调用 Cloud 只为了凑 Micro」。
-        if let Some(cand) = snapshot.micro.candidates.first() {
-            return NextLearningAction {
-                profile_id: snapshot.profile_id,
-                local_date: snapshot.local_date.clone(),
-                action_type: primary.action_type,
-                reason_code: REASON_MICRO_ACTION.to_string(),
-                source_entity: micro_source_entity(cand),
-                estimated_minutes: Some(0),
-                source_task_estimate_minutes: primary.task_id.and(primary.base_estimate),
-                available_minutes: budget.map(|b| b.minutes()),
-                execution_payload: ExecutionPayload {
-                    kind: "micro_action".to_string(),
-                    // 30 秒档刻意不携带任何「可开始 Session」的目标：
-                    // 来源只通过 source_entity 与 micro_action 表达，UI 无从误开 StudySession。
-                    task_id: None,
-                    learning_item_id: None,
-                    session_id: None,
-                    review_id: None,
-                    entry_slice: false,
-                    suggested_minutes: 0,
-                },
-                title: cand.title.clone(),
-                subtitle: Some(format!(
-                    "micro action · {} · {}",
-                    cand.action_type, cand.prompt_variant
-                )),
-                reasons: vec![
-                    cand.reason.clone(),
-                    format!(
-                        "只做这一小步（约 {} 秒），不会创建学习记录。",
-                        cand.estimated_seconds
-                    ),
-                ],
-                is_primary: true,
-                micro_action_only: true,
-                micro_action: Some(cand.clone()),
-                alternates,
-            };
-        }
-
-        let has_risk_signal = snapshot.recovery_state.active
-            || matches!(
-                snapshot.review_state.risk_state.as_str(),
-                "near_safety" | "below_safety" | "off_reach"
-            );
-        let has_material = !snapshot.recent_sessions.is_empty()
-            || snapshot.learning_evidence.pace_sample_count > 0;
-        let micro_kind = pick_micro_action(has_risk_signal, has_material);
-        let mut reasons = vec![micro_kind.reason().to_string()];
-        if let Some(first) = primary.reasons.first() {
-            reasons.push(format!("当前上下文：{}", first));
-        }
-        return NextLearningAction {
-            profile_id: snapshot.profile_id,
-            local_date: snapshot.local_date.clone(),
-            action_type: primary.action_type,
-            reason_code: REASON_MICRO_ACTION.to_string(),
-            source_entity: primary.source.clone(),
-            estimated_minutes: Some(0),
-            source_task_estimate_minutes: primary.task_id.and(primary.base_estimate),
-            available_minutes: budget.map(|b| b.minutes()),
-            execution_payload: ExecutionPayload {
-                kind: "micro_action".to_string(),
-                // 30 秒档刻意不携带任何「可开始 Session」的目标：
-                // 上下文只通过 source_entity 表达，UI 无从误开 StudySession。
-                task_id: None,
-                learning_item_id: None,
-                session_id: None,
-                review_id: None,
-                entry_slice: false,
-                suggested_minutes: 0,
-            },
-            title: micro_kind.title().to_string(),
-            subtitle: Some(format!("micro action · {}", micro_kind.as_str())),
-            reasons,
-            is_primary: true,
-            micro_action_only: true,
-            micro_action: None,
-            alternates,
-        };
-    }
-
     let (payload, estimated, entry_slice) = to_payload(&primary, budget);
     let reason_code = if entry_slice {
         REASON_PLANNED_TASK_SLICE.to_string()
@@ -840,6 +844,55 @@ fn finish(
         is_primary: true,
         micro_action_only: false,
         micro_action: None,
+        alternates,
+    }
+}
+
+/// 组装 30 秒档的 Micro Primary（PHASE 3 / PHASE 4）。
+///
+/// **前置条件（M0-A）：`cand` 一定来自 `snapshot.micro.candidates`，即一定有真实 grounding 来源。**
+/// 载荷刻意不携带任何「可开始 Session」的目标：来源只通过 `source_entity` 与
+/// `micro_action` 表达，UI 无从误开 StudySession（§4.5）。
+fn finish_micro(
+    cand: MicroActionCandidate,
+    context: Candidate,
+    alternates: Vec<NextActionAlternative>,
+    snapshot: &LearningStateSnapshot,
+    budget: Option<TimeBudget>,
+) -> NextLearningAction {
+    NextLearningAction {
+        profile_id: snapshot.profile_id,
+        local_date: snapshot.local_date.clone(),
+        action_type: context.action_type,
+        reason_code: REASON_MICRO_ACTION.to_string(),
+        source_entity: micro_source_entity(&cand),
+        estimated_minutes: Some(0),
+        source_task_estimate_minutes: context.task_id.and(context.base_estimate),
+        available_minutes: budget.map(|b| b.minutes()),
+        execution_payload: ExecutionPayload {
+            kind: "micro_action".to_string(),
+            task_id: None,
+            learning_item_id: None,
+            session_id: None,
+            review_id: None,
+            entry_slice: false,
+            suggested_minutes: 0,
+        },
+        title: cand.title.clone(),
+        subtitle: Some(format!(
+            "micro action · {} · {}",
+            cand.action_type, cand.prompt_variant
+        )),
+        reasons: vec![
+            cand.reason.clone(),
+            format!(
+                "只做这一小步（约 {} 秒），不会创建学习记录。",
+                cand.estimated_seconds
+            ),
+        ],
+        is_primary: true,
+        micro_action_only: true,
+        micro_action: Some(cand),
         alternates,
     }
 }

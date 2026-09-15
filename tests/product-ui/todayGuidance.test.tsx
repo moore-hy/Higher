@@ -218,6 +218,15 @@ function snapshot(over: Partial<LearningStateSnapshot> = {}): LearningStateSnaps
       candidates: [],
       dedupe_window_minutes: 30,
     },
+    // M2：Learning Friction 投影（默认 Unknown = 无证据；测试按需覆盖）
+    friction: {
+      level: "unknown",
+      subject_learning_item_id: null,
+      subject_label: null,
+      signals: [],
+      recommended_support_level: 0,
+      cooldown_until: null,
+    },
     ...over,
   };
 }
