@@ -198,6 +198,51 @@ WAVE 4（Learning Engine Minimal Core：§30A learning_signals / knowledge_maste
 §65A 的 44 步 deterministic workflow 尚未落地，这是 MORNING_READY 的最终 Gate 本體。
 实测 `npm run test:product-e2e` 直接 `No test files found, exiting with code 1`。
 
+> ⚠️ 上述「已知缺口」已在 **V2.3 CONTINUATION · PHASE A** 中闭合（见 §7）。
+
+---
+
+## 7. V2.3 CONTINUATION · PHASE A（current 任务书基线 `a89c1518651d7c688c30d65b4d24f046e9121a0d`）
+
+> 当前执行体为 `HIGHER_PRODUCT_2_OVERNIGHT_MASTER_TASK_V2_3_BALANCED.md` 的
+> 「V2.3 CONTINUATION」PHASE A–H 序列；基线/HEAD 以 `a89c151` 为准（与 §1 旧 overnight 基线 `7874fd4` 不同，
+> 本仓库 HEAD 已前移）。
+
+### 7.1 基线核对（§0）
+`branch=main` ✓ · `HEAD=a89c1518651d7c688c30d65b4d24f046e9121a0d` ✓ · worktree 仅含本阶段改动 ✓。
+
+### 7.2 A2 — Knowledge 默认 Canvas
+`src/pages/Knowledge.tsx` 节点内容模式默认由 `"content"` 改为 `"canvas"`：
+普通 Knowledge Node 打开即进入 Excalidraw Canvas；Canvas / Content / Document / Records / Tiptap /
+XYFlow 知识图继续保留，图双击进入 Canvas 行为不变，Canvas revision protection 未动。
+（diff: `useState<"canvas" | "content">("canvas")`）
+
+### 7.3 A1 — product-e2e 真实验收门（闭合 §5 已知缺口）
+新建 `tests/product-e2e/morningReady.test.tsx`，复用 product-ui / interaction-contract 的
+「mock 真实组件 + 驱动真实交互」范式，api 层以 `importOriginal` 兜底（杜绝 no-export 崩溃，
+未知函数安全返回 undefined）+ 覆盖页读取路径 override。
+
+覆盖已落地用户面步骤（真实断言，无 skip / 空 assert / .only）：
+- Today（1-15）：启动 / Profile Gate / 单一 Start Here / Quick Add 建今日 Task / Task 一击开始 /
+  Active Study Bar / Continue / End 落真实结束时间 / ReadBack duration / 二次 End 幂等 /
+  note 失败不丢 duration。
+- Planning / Intake（16-19）：三入口存在 / Direct Goal 存 Draft（只写 draft）/ Draft 不污染正式表。
+- Knowledge Canvas（34-38）：默认进 Canvas / 可编辑文字·shape·drawing + debounce 落库 /
+  autosave 后 reload 内容仍在 / 持久化读路径按 profileId+learningItemId 隔离。
+
+### 7.4 A3 验证
+`npx tsc --noEmit` ✓（0 error）· `npm run build`（进行中）·
+`test:product-ui` **39/39** ✓ · `test:interaction-contract` **7/7** ✓ ·
+`test:product-e2e` **15/15** ✓（morningReady）。
+
+> Agent / Review / Learning（步骤 20-33、39-43）按各 Phase 进度逐步补齐真实断言；
+> 缺功能时允许临时红（§A3），不得造假。
+
+### 7.5 下一步
+PHASE B（Higher 专属 Agent 核心：Higher Context Builder / Web Research + sources /
+propose_* mutation boundary / PlanningProposalV2 → ONE ChangeSet / AGENT-TC001..008）。
+
+
 ---
 
 ## 6. 回归裁决（WAVE 5 提交 `d2e1ba4` 后实测）

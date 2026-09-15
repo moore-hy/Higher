@@ -260,8 +260,11 @@ function Knowledge() {
    * - canvas  = §34 Excalidraw spatial base（空间笔记）
    * - content = 既有 Workspace V2 时间线（Document 仍用 Tiptap + Records，不迁移，§39）
    * 知识图双击（onOpen）直接落到 canvas，不再要求用户先点「打开工作区」。
+   *
+   * PRODUCT-2.0 V2.3 PHASE A2：选中普通 Knowledge Node 的**默认**模式 = Canvas。
+   * Canvas 是知识节点的空间底座，内容时间线仍可一键切回（§39 共存，不迁移 Tiptap）。
    */
-  const [nodeMode, setNodeMode] = useState<"canvas" | "content">("content");
+  const [nodeMode, setNodeMode] = useState<"canvas" | "content">("canvas");
 
   // DEV-0053 §50-52：未归类学习（learning_item_id IS NULL 的 Session；虚拟入口，非 Knowledge Node）
   const [unassigned, setUnassigned] = useState<StudySession[]>([]);
@@ -427,6 +430,8 @@ function Knowledge() {
       setRenamingDocId(null);
       setTimeFixFor(null);
       setMenuForId(null);
+      // PRODUCT-2.0 V2.3 PHASE A2：每次选中知识节点都回到默认 Canvas（内容仍可切回）
+      setNodeMode("canvas");
       // DEV-MOBILE-002 §27：Android 选择节点（含搜索结果选中，均经 selectNode）
       // 后自动关闭目录 Drawer；桌面窄窗行为不变
       if (IS_ANDROID) setTreeDrawerOpen(false);
