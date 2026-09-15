@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   endSession,
-  getActiveSession,
-  getDailyLearningReport,
   getGoalTree,
-  getPlanningReviewRisk,
-  isPlanningReviewDue,
+  getLearningState,
+  getNextLearningAction,
   listLearningItemsByProfile,
-  listRecentSessionsByProfile,
   materializeRecurringRolling,
   startQuickSession,
   startSession,
@@ -25,20 +23,16 @@ import { PLAN_REQUEST_MESSAGE } from "../components/FinalGoalCard";
 import StartHere from "../components/StartHere";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
-import {
-  buildStartHereCandidates,
-  nextStartHere,
-  rankStartHere,
-  type StartHereCandidate,
-} from "../learning/startHere";
+import { queryKeys } from "../query/keys";
 // DEV-MOBILE-002 §13：Android 顶部按钮收口（AI安排 降级为底部次级入口）
 import { IS_ANDROID } from "../platform/runtimePlatform";
 import type {
-  DailyReport,
   Goal,
   GoalTreeNode,
   LearningItem,
+  NextLearningAction,
   StudySession,
+  TimeBudgetKey,
 } from "../types";
 import { friendlyDate, todayDate } from "../utils";
 
@@ -64,133 +58,195 @@ function flattenGoalTree(node: GoalTreeNode, acc: Goal[] = []): Goal[] {
 }
 
 /**
- * Today —— PRODUCT-2.0 §22 / §30B 单一学习引导面。
+ * Today —— HIGHER CLOSED LOOP V1 §PHASE 4 / §PHASE 8。
  *
- * 最终顺序（§30B）：
- *   Date / compact summary
- *   [开始学习] [新建任务]
- *   Active Study Bar（有 active 时）
- *   Start Here（**无 active 时**，最多一个）
- *   Today Tasks（含 inline Quick Add）
- *   Today Activity
- *   被动 Review / Recovery signal（只有真正需要时）
+ * 首页第一屏优先级（§PHASE 4，顺序不可调换）：
+ *   当前状态 → 唯一 Next Action → 时间预算 → Today Tasks
  *
- * 硬约束（§0B.1 / §0B.2 / §22 / §23）：
- * - 同一时刻最多一个「你应该做什么」主建议：有 active 时 Start Here 整体隐藏
- * - 「开始学习」一击开始计时，不强制选 Task / Goal / Knowledge / 标题
- * - Start 一击，不打开详情再开始
- * - §22.1：Header 只保留 [开始学习][新建任务]；AI安排 移到页面底部次级入口
- * - §22.2：Today Header 与 Task section 不重复出现「+ 新建任务」主按钮
+ * 数据来源（§PHASE 4 硬约束）：
+ * - 推荐部分只消费 `LearningStateSnapshot` + `NextLearningAction`
+ *   （不再自己 DailyReport + Items + Goals + Recent Sessions 拼候选）；
+ * - 闭环数据走 TanStack Query（profile-scoped key + 精准 invalidate），
+ *   不再依赖 `refreshKey`；
+ * - 「参考数据」（LearningItem 列表 / Goal 树）仍各自查询，不属于学习状态。
+ *
+ * 保留的既有优势：Active Study Bar / Quick Add / Task 一击开始 / Quick Study /
+ * Session Data Safety（结束幂等由后端保证，前端只做防双击）。
  */
 function Today() {
   const navigate = useNavigate();
-  const { activeProfile, refreshKey } = useActiveProfile();
-  const [report, setReport] = useState<DailyReport | null>(null);
-  const [items, setItems] = useState<LearningItem[]>([]);
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [active, setActive] = useState<StudySession | null>(null);
-  /** §22.6：Continue Last 候选的数据源（profile-scoped recent sessions） */
-  const [recent, setRecent] = useState<StudySession[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const qc = useQueryClient();
+  const { activeProfile } = useActiveProfile();
+  const profileId = activeProfile?.id ?? null;
+
+  /** PHASE 3：用户选择的时间档（null = 未选择）。 */
+  const [budget, setBudget] = useState<TimeBudgetKey | null>(null);
+  /** 「换一个」：0 = Primary，其余为 alternates 下标。 */
+  const [altIdx, setAltIdx] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   /** §22.5：Active Study Bar 结束中的锁定态（防双击） */
   const [barEnding, setBarEnding] = useState(false);
   /** §23.5：结束后非阻塞提示「已保存 <duration>」 */
   const [barSaved, setBarSaved] = useState<{ id: number; text: string } | null>(null);
+  const [dismissedStale, setDismissedStale] = useState(false);
+  const [dismissedReview, setDismissedReview] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const markedT5 = useRef(false);
 
   const { runAction: aiRunAction, sendChat, setPageContext } = useAiPanel();
   const { conflict, guard, close } = useActiveSessionConflict();
 
   const [now, setNow] = useState(() => Date.now());
-  const [dismissedStale, setDismissedStale] = useState(false);
-  // DEV-0059 §18/§30：阶段复盘提醒 + 风险 Banner（启动只读；不自动调 AI）
-  const [reviewDue, setReviewDue] = useState(false);
-  const [riskState, setRiskState] = useState("unknown");
-  const [dismissedReview, setDismissedReview] = useState(false);
-  /** §30B：手动换过的 Start Here 建议（null = 用排序第一名） */
-  const [startHereId, setStartHereId] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
 
-  const refresh = useCallback(async () => {
-    if (!activeProfile) return;
-    setLoading(true);
-    setError("");
-    try {
-      const today = todayDate();
-      // DEV-0061R §52：Today 刷新 → Rolling Horizon 30 天 materialize（幂等；失败静默）
-      await materializeRecurringRolling(activeProfile.id, today).catch(() => {});
-      const [rep, itemList, tree, activeSess, due, risk, recentSessions] = await Promise.all([
-        getDailyLearningReport(activeProfile.id, today),
-        listLearningItemsByProfile(activeProfile.id),
-        getGoalTree(activeProfile.id).catch(() => null),
-        getActiveSession().catch(() => null),
-        isPlanningReviewDue(activeProfile.id).catch(() => false),
-        getPlanningReviewRisk(activeProfile.id).catch(() => "unknown"),
-        // §22.6 Continue Last：失败不阻塞 Today（§0B.1 #8）
-        listRecentSessionsByProfile(activeProfile.id, 20).catch(() => [] as StudySession[]),
-      ]);
-      // DEV-0077.2 Part A §五：T5 = Today page critical data loaded
-      startupMark("t5_today_critical_ready");
-      setReport(rep);
-      setItems(itemList);
-      setGoals(tree ? flattenGoalTree(tree.final_goal) : []);
-      setActive(activeSess);
-      setRecent(recentSessions);
-      setReviewDue(due);
-      setRiskState(risk);
-      // 任务/规则变化后对齐系统学习提醒（fire-and-forget，失败静默）
-      void syncNotifications().catch(() => {});
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [activeProfile, refreshKey]);
+  // ---- PHASE 1：唯一学习状态（不自己拼）----
+  const stateQuery = useQuery({
+    queryKey: queryKeys.learningState.all(profileId ?? -1),
+    queryFn: () => getLearningState(profileId as number),
+    enabled: profileId != null,
+  });
+  const snapshot = stateQuery.data ?? null;
+
+  // ---- PHASE 2/3：唯一 Next Action（时间档变化只重取这一项）----
+  const actionQuery = useQuery({
+    queryKey: queryKeys.nextAction.for(profileId ?? -1, budget),
+    queryFn: () => getNextLearningAction(profileId as number, budget),
+    enabled: profileId != null,
+  });
+  const action = actionQuery.data ?? null;
+
+  // ---- 参考数据（不是学习状态）----
+  const itemsQuery = useQuery({
+    queryKey: queryKeys.learningItems.byProfile(profileId ?? -1),
+    queryFn: () => listLearningItemsByProfile(profileId as number),
+    enabled: profileId != null,
+  });
+  const goalsQuery = useQuery({
+    queryKey: queryKeys.goals.tree(profileId ?? -1),
+    queryFn: () => getGoalTree(profileId as number),
+    enabled: profileId != null,
+  });
+
+  const items: LearningItem[] = itemsQuery.data ?? [];
+  const goals: Goal[] = useMemo(
+    () => (goalsQuery.data ? flattenGoalTree(goalsQuery.data.final_goal) : []),
+    [goalsQuery.data]
+  );
+
+  /**
+   * §PHASE 8：闭环数据只通过 Query invalidation 更新。
+   * Session End / Task Complete 之后调用它即可，不需要 refreshKey。
+   */
+  const invalidateClosedLoop = useCallback(() => {
+    if (profileId == null) return;
+    void qc.invalidateQueries({ queryKey: queryKeys.learningState.all(profileId) });
+    void qc.invalidateQueries({ queryKey: queryKeys.nextAction.scope(profileId) });
+    // PHASE 8：Review 的闭环数据同源失效（Review 不再依赖 refreshKey）
+    void qc.invalidateQueries({ queryKey: queryKeys.review.scope(profileId) });
+  }, [qc, profileId]);
+
+  // 首屏：Rolling Horizon materialize（幂等；失败静默）→ 刷新快照
+  useEffect(() => {
+    if (profileId == null) return;
+    let cancelled = false;
+    void materializeRecurringRolling(profileId, todayDate())
+      .then((n) => {
+        if (!cancelled && n > 0) invalidateClosedLoop();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, invalidateClosedLoop]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    if (!activeProfile) return;
+    if (profileId == null) return;
     const t = window.setInterval(() => {
-      void materializeRecurringRolling(activeProfile.id, todayDate())
-        .then((n) => (n > 0 ? refresh() : undefined))
+      void materializeRecurringRolling(profileId, todayDate())
+        .then((n) => (n > 0 ? invalidateClosedLoop() : undefined))
         .catch(() => {});
     }, 30000);
     return () => window.clearInterval(t);
-  }, [activeProfile, refresh]);
+  }, [profileId, invalidateClosedLoop]);
+
+  // 任务/规则变化后对齐系统学习提醒（fire-and-forget，失败静默）
+  useEffect(() => {
+    if (!snapshot) return;
+    void syncNotifications().catch(() => {});
+    if (!markedT5.current) {
+      markedT5.current = true;
+      // DEV-0077.2 Part A §五：T5 = Today page critical data loaded
+      startupMark("t5_today_critical_ready");
+    }
+  }, [snapshot]);
 
   useEffect(() => {
+    const active = snapshot?.active_session;
     if (!active) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.id]);
+  }, [snapshot?.active_session?.id]);
 
   useEffect(() => {
     setDismissedStale(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active?.id]);
+  }, [snapshot?.active_session?.id]);
 
   useEffect(() => {
     if (activeProfile) setPageContext({ page: "today", pageLabel: "今日任务" });
   }, [activeProfile, setPageContext]);
 
+  // 时间档或推荐变化 → 「换一个」回到 Primary（旧备选不滞留）
+  useEffect(() => {
+    setAltIdx(0);
+  }, [budget, action?.reason_code, action?.title]);
+
+  const active = snapshot?.active_session ?? null;
+  const tasks = snapshot?.today_tasks ?? [];
+  const activities = snapshot?.today_activities ?? [];
+
   const itemOf = (id: number | null) => (id == null ? undefined : items.find((i) => i.id === id));
+
+  /**
+   * 「换一个」：只在后端返回的 alternates 内循环（不记录失败、不改计划）。
+   * options[0] 恒为 Primary，其余为 alternates —— 同一时刻仍只有一个 Primary。
+   */
+  const actionOptions: NextLearningAction[] = useMemo(() => {
+    if (!action) return [];
+    const asView = (a: NextLearningAction["alternates"][number]): NextLearningAction => ({
+      ...action,
+      action_type: a.action_type,
+      reason_code: a.reason_code,
+      source_entity: a.source_entity,
+      estimated_minutes: a.estimated_minutes,
+      execution_payload: a.execution_payload,
+      title: a.title,
+      subtitle: a.subtitle,
+      reasons: a.reasons,
+    });
+    return [action, ...action.alternates.map(asView)];
+  }, [action]);
+
+  const displayAction: NextLearningAction | null = actionOptions[altIdx] ?? actionOptions[0] ?? null;
+
+  function handleAnother() {
+    if (actionOptions.length === 0) return;
+    setAltIdx((i) => (i + 1) % actionOptions.length);
+  }
 
   /** ⚡ 快速学习（§23.1 入口保持：一键创建 Session 直达编辑页）；Start Guard 冲突 → 弹窗 */
   async function handleQuickStart() {
-    if (!activeProfile) return;
-    setError("");
+    if (profileId == null) return;
+    setActionError("");
     try {
-      const s = await startQuickSession(activeProfile.id);
+      const s = await startQuickSession(profileId);
+      invalidateClosedLoop();
       navigate(`/learn/${s.id}`);
     } catch (e) {
       if (guard(e)) return;
-      setError(String(e));
+      setActionError(String(e));
     }
   }
 
@@ -198,15 +254,15 @@ function Today() {
   async function handleEndActive() {
     if (!active || barEnding) return;
     setBarEnding(true);
-    setError("");
+    setActionError("");
     try {
       const endedId = active.id;
       const s = await endSession(endedId);
       const mins = Math.max(0, Math.round((s.duration_seconds ?? 0) / 60));
-      setBarSaved({ id: endedId, text: mins > 0 ? `已保存 ${mins} 分钟` : "已保存本次学习" });
-      await refresh();
+      setBarSaved({ id: endedId, text: mins > 0 ? `已保存 ${mins} 分钟` : `已保存本次学习` });
+      invalidateClosedLoop();
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBarEnding(false);
     }
@@ -221,64 +277,56 @@ function Today() {
     void aiRunAction("daily_review");
   }
 
-  const activeItemName = active
-    ? itemOf(active.learning_item_id)?.name ?? active.title
-    : "";
+  const activeItemName = active ? itemOf(active.learning_item_id)?.name ?? active.title : "";
 
   /** §24：已进行时长（>60min 显示 13h05m，禁止 785m） */
   const activeElapsed = active
     ? elapsedShort(Math.floor(Math.max(0, now - parseUtcMs(active.started_at)) / 60000))
     : "";
 
-  // ---- Start Here（§0B.2 / §0C.5 / §30B）----
-  const candidates = useMemo(() => {
-    if (!activeProfile) return [] as StartHereCandidate[];
-    return buildStartHereCandidates({
-      profileId: activeProfile.id,
-      tasks: report?.tasks ?? [],
-      recentSessions: recent,
-      // active 存在时 Start Here 整体不渲染（category 0），无需进引擎
-    });
-  }, [activeProfile, report, recent]);
-
-  const ranked = useMemo(() => rankStartHere(candidates), [candidates]);
-
-  const current = useMemo(
-    () => ranked.find((c) => c.id === startHereId) ?? ranked[0] ?? null,
-    [ranked, startHereId]
-  );
-
-  /** §30B「换一个」：循环候选，不记失败、不改计划 */
-  function handleAnother() {
-    const nxt = nextStartHere(candidates, current?.id ?? null);
-    if (nxt) setStartHereId(nxt.id);
-  }
-
-  /** §30B「开始学习」：一击执行建议动作（Task / LearningItem / Quick） */
-  async function handleStartHere(c: StartHereCandidate) {
-    if (!activeProfile || starting) return;
+  /** PHASE 2/3：一击执行后端给出的 execution_payload（前端不做任何重新决策）。 */
+  async function handleStartHere() {
+    if (profileId == null || starting || !displayAction) return;
     setStarting(true);
-    setError("");
+    setActionError("");
+    const payload = displayAction.execution_payload;
     try {
-      let s: StudySession;
-      if (c.action.type === "start_task") {
-        s = await startTaskSession(c.action.taskId);
-      } else if (c.action.type === "start_item") {
-        s = await startSession(c.action.learningItemId, c.action.taskId ?? undefined);
-      } else {
-        s = await startQuickSession(activeProfile.id);
+      if (payload.kind === "start_task" && payload.task_id != null) {
+        const s = await startTaskSession(payload.task_id);
+        invalidateClosedLoop();
+        navigate(`/learn/${s.id}`);
+      } else if (payload.kind === "start_item" && payload.learning_item_id != null) {
+        const s = await startSession(
+          payload.learning_item_id,
+          payload.task_id ?? undefined
+        );
+        invalidateClosedLoop();
+        navigate(`/learn/${s.id}`);
+      } else if (payload.kind === "start_quick") {
+        const s = await startQuickSession(profileId);
+        invalidateClosedLoop();
+        navigate(`/learn/${s.id}`);
+      } else if (payload.kind === "continue_session" && payload.session_id != null) {
+        // 绝不新开第二条 Session：直接回到已有的那条
+        navigate(`/learn/${payload.session_id}`);
+      } else if (payload.kind === "open_review") {
+        navigate("/planning");
       }
-      navigate(`/learn/${s.id}`);
+      // micro_action：30 秒档由 UI 直接拦掉开始按钮（PHASE 3），此处不产生任何 Session
     } catch (e) {
       if (guard(e)) return;
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setStarting(false);
     }
   }
 
-  /** 非空任务时才有 Today Tasks 之外的补充提示；本轮不做 AI 自动请求（§30B 禁止） */
   const hasActive = active != null;
+  const today = snapshot?.today ?? null;
+  const reviewState = snapshot?.review_state ?? null;
+  const riskState = reviewState?.risk_state ?? "unknown";
+  const loading = stateQuery.isLoading && !snapshot;
+  const error = actionError || (stateQuery.error ? String(stateQuery.error) : "");
 
   return (
     <div className="page page--wide">
@@ -286,13 +334,15 @@ function Today() {
       <header className="page__header today-head">
         <div className="today-head__info">
           <h1 className="page__title">{friendlyDate(todayDate())}</h1>
+          {/* 第一屏优先级 ①：当前状态 */}
           <p className="today-head__sub">
-            已学习 <b>{minutesShort(report?.actual_minutes ?? 0)}</b>
+            已学习 <b>{minutesShort(today?.actual_minutes ?? 0)}</b>
             {" · "}
             <b>
-              完成 {report?.task_completed ?? 0}/{report?.task_total ?? 0}
+              完成 {today?.task_completed ?? 0}/{today?.task_total ?? 0}
             </b>
             {active && " · 1 项学习进行中"}
+            {snapshot?.recovery_state.active && " · 恢复模式"}
           </p>
         </div>
         <div className="today-head__btns">
@@ -351,10 +401,7 @@ function Today() {
         <section className="card today-saved" aria-label="学习已保存">
           <span className="today-saved__text">✓ {barSaved.text}</span>
           <div className="today-banner__actions">
-            <button
-              className="btn btn--small"
-              onClick={() => navigate(`/learn/${barSaved.id}`)}
-            >
+            <button className="btn btn--small" onClick={() => navigate(`/learn/${barSaved.id}`)}>
               补充记录
             </button>
             <button className="btn btn--small btn--ghost" onClick={() => setBarSaved(null)}>
@@ -364,13 +411,14 @@ function Today() {
         </section>
       )}
 
-      {/* §30B Start Here：无 active 时最多一个主建议；有 active 时整体隐藏 */}
-      {!hasActive && current && (
+      {/* 第一屏优先级 ②③：唯一 Next Action + 时间预算（有 active 时让位给 Active Study Bar） */}
+      {!hasActive && displayAction && (
         <StartHere
-          candidate={current}
-          alternativeCount={Math.max(0, ranked.length - 1)}
-          busy={starting}
-          onStart={() => void handleStartHere(current)}
+          action={displayAction}
+          budget={budget}
+          onBudgetChange={setBudget}
+          busy={starting || actionQuery.isFetching}
+          onStart={() => void handleStartHere()}
           onAnother={handleAnother}
         />
       )}
@@ -392,19 +440,19 @@ function Today() {
             </button>
           )}
         </div>
-        {loading && !report ? (
+        {loading ? (
           <p className="muted">加载中…</p>
         ) : (
-          activeProfile && (
+          profileId != null && (
             <DailyTasksSection
-              profileId={activeProfile.id}
-              tasks={report?.tasks ?? []}
+              profileId={profileId}
+              tasks={tasks}
               items={items}
               goals={goals}
               defaultDate={todayDate()}
               createOpen={showCreate}
               onCreateClose={() => setShowCreate(false)}
-              onChanged={refresh}
+              onChanged={invalidateClosedLoop}
               emptyNote="今天没有计划任务。"
               onEmptyQuickStart={() => void handleQuickStart()}
               quickAdd
@@ -417,16 +465,16 @@ function Today() {
       {/* ===== 区二：今日活动（§86-92） ===== */}
       <section className="card today__section">
         <h2 className="card__title">今日活动</h2>
-        {loading && !report ? (
+        {loading ? (
           <p className="muted">加载中…</p>
         ) : (
-          activeProfile && (
+          profileId != null && (
             <DailyActivitiesSection
-              profileId={activeProfile.id}
-              activities={report?.activities ?? []}
+              profileId={profileId}
+              activities={activities}
               items={items}
               goals={goals}
-              onChanged={refresh}
+              onChanged={invalidateClosedLoop}
               emptyNote="今天还没有学习记录。"
               onEmptyQuickStart={() => void handleQuickStart()}
             />
@@ -435,7 +483,7 @@ function Today() {
       </section>
 
       {/* 6 · Review / 风险提示：被动 signal，只有真正需要时才出现 */}
-      {!dismissedReview && reviewDue && (
+      {!dismissedReview && reviewState?.due && (
         <section className="card today-banner today-banner--quiet today-banner--review">
           <div className="today-banner__main">
             <span className="today-banner__label">阶段复盘</span>
@@ -501,7 +549,7 @@ function Today() {
       <ActiveSessionConflictModal
         conflict={conflict}
         onClose={close}
-        onResolved={() => void refresh()}
+        onResolved={invalidateClosedLoop}
       />
     </div>
   );

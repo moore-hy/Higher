@@ -1195,3 +1195,180 @@ export interface CanvasEmbed {
   created_at: string;
   updated_at: string;
 }
+
+// ============================================================================
+// HIGHER CLOSED LOOP V1 —— PHASE 1 / 2 / 3 / 6 IPC 契约
+//
+// 与 `src-tauri/src/learning_state/types.rs` 一一对应。字段名与取值必须严格一致：
+// 后端是唯一真相源，这里只是手写镜像（未加 ts_rs 导出，因此不生成到 src/generated）。
+// ============================================================================
+
+/** PHASE 3：有限时间档（只允许这四档，禁止任意分钟数）。 */
+export type TimeBudgetKey = "30s" | "3m" | "10m" | "25m";
+
+/** PHASE 3：30 秒档的 micro action 类型。 */
+export type MicroActionKind = "short_recall" | "reexplain_concept" | "review_key_error";
+
+export interface LearningStateProfile {
+  profile_id: number;
+  name: string;
+  has_confirmed_personalization: boolean;
+}
+
+export interface LearningStateToday {
+  date: string;
+  planned_minutes: number;
+  actual_minutes: number;
+  planned_task_actual_minutes: number;
+  task_total: number;
+  task_completed: number;
+  task_completion_rate: number | null;
+  unestimated_task_count: number;
+  needs_review_count: number;
+  learning_status: string;
+  day_goal: string | null;
+  day_goal_id: number | null;
+}
+
+export interface LearningStateGoal {
+  active_target_count: number;
+  primary_title: string | null;
+  primary_scenario_type: string | null;
+  primary_target_date: string | null;
+  primary_target_id: number | null;
+}
+
+export interface LearningStatePlanning {
+  has_active_blueprint: boolean;
+  blueprint_id: number | null;
+  blueprint_title: string | null;
+  review_interval_days: number | null;
+  next_review_at: string | null;
+  phase_count: number;
+  current_phase_title: string | null;
+  milestone_count: number;
+  milestone_done_count: number;
+  /** milestone 完成率 0..1；无 milestone → null（不伪造 0 进度）。 */
+  planning_progress: number | null;
+}
+
+export interface LearningStateReview {
+  due: boolean;
+  risk_state: string;
+  open_review_id: number | null;
+  open_review_status: string | null;
+}
+
+export interface LearningStateEvidence {
+  evidence_generated_at: string;
+  /** insufficient | low | medium | high */
+  quality: string;
+  quality_reasons: string[];
+  pace_sample_count: number;
+  observed_study_minutes_30d: number;
+  stated_daily_minutes: number | null;
+  observed_daily_minutes_14d: number | null;
+  active_study_days_30d: number;
+  calibrated_ratio: number;
+}
+
+/** PHASE 6：Recovery 触发信号（deterministic，可复算）。 */
+export interface RecoverySignals {
+  days_since_last_session: number | null;
+  sessions_completed_7d: number;
+  has_learning_history: boolean;
+  open_task_today: number;
+  today_task_total: number;
+  overdue_task_count_7d: number;
+  task_total_7d: number;
+  completion_rate_7d: number | null;
+  planned_daily_minutes_14d: number | null;
+  observed_daily_minutes_14d: number | null;
+}
+
+export interface RecoveryState {
+  active: boolean;
+  reason_codes: string[];
+  signals: RecoverySignals;
+  should_take_primary: boolean;
+}
+
+/** PHASE 1：唯一运行时只读投影（不是新的数据库真相源）。 */
+export interface LearningStateSnapshot {
+  profile_id: number;
+  generated_at: string;
+  local_date: string;
+  profile: LearningStateProfile;
+  today: LearningStateToday;
+  today_tasks: DailyTaskRow[];
+  today_activities: DailyActivityRow[];
+  active_session: StudySession | null;
+  recent_sessions: StudySession[];
+  goal_state: LearningStateGoal;
+  planning_state: LearningStatePlanning;
+  review_state: LearningStateReview;
+  learning_evidence: LearningStateEvidence;
+  recovery_state: RecoveryState;
+}
+
+/** PHASE 2：统一动作类型。 */
+export type NextActionType =
+  | "active_session"
+  | "recovery"
+  | "review_due"
+  | "planned_task"
+  | "continue_last"
+  | "quick_study";
+
+/** PHASE 2：推荐来源实体（可溯源，不是展示文案）。 */
+export type ActionSource =
+  | { kind: "none" }
+  | { kind: "task"; task_id: number }
+  | { kind: "session"; session_id: number }
+  | { kind: "learning_item"; learning_item_id: number }
+  | { kind: "review"; review_id: number | null };
+
+/** PHASE 2/3：执行载荷（UI 直接执行；禁止只返回展示文案）。 */
+export interface ExecutionPayload {
+  /** start_task | start_item | start_quick | continue_session | open_review | micro_action | none */
+  kind: string;
+  task_id: number | null;
+  learning_item_id: number | null;
+  session_id: number | null;
+  review_id: number | null;
+  /** 仅执行任务入口切片；**任务不会因此完成**。 */
+  entry_slice: boolean;
+  suggested_minutes: number;
+}
+
+export interface NextActionAlternative {
+  action_type: NextActionType;
+  reason_code: string;
+  source_entity: ActionSource;
+  estimated_minutes: number | null;
+  execution_payload: ExecutionPayload;
+  title: string;
+  subtitle: string | null;
+  reasons: string[];
+}
+
+/** PHASE 2：唯一主推荐（同一时刻 exactly one primary）。 */
+export interface NextLearningAction {
+  profile_id: number;
+  local_date: string;
+  action_type: NextActionType;
+  reason_code: string;
+  source_entity: ActionSource;
+  estimated_minutes: number | null;
+  /** 关联任务的原始估时（仅溯源，不是本次动作时长）。 */
+  source_task_estimate_minutes: number | null;
+  available_minutes: number | null;
+  execution_payload: ExecutionPayload;
+  title: string;
+  subtitle: string | null;
+  reasons: string[];
+  is_primary: boolean;
+  /** 30 秒档 → 只能 micro_action，绝不创建普通 StudySession。 */
+  micro_action_only: boolean;
+  alternates: NextActionAlternative[];
+}

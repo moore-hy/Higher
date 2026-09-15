@@ -42,6 +42,9 @@ import type {
   LearningAttachment,
   LearningItem,
   LearningTotals,
+  LearningStateSnapshot,
+  NextLearningAction,
+  TimeBudgetKey,
   MemoryRecord,
   PlanningIntakeDraft,
   KnowledgeCanvas,
@@ -1745,6 +1748,22 @@ export const isPlanningReviewDue = (profileId: number) =>
 
 export const getPlanningReviewRisk = (profileId: number) =>
   invoke<string>("get_planning_review_risk", { profileId });
+
+// =============== HIGHER CLOSED LOOP V1（PHASE 1 / 2）===============
+//
+// Today 的推荐部分只消费这两个入口：不再自己 Promise.all 多个 API 拼状态。
+// 两者都是只读、0 LLM。
+
+/** PHASE 1：唯一运行时只读投影（Unified Learning State）。 */
+export const getLearningState = (profileId: number) =>
+  invoke<LearningStateSnapshot>("get_learning_state", { profileId });
+
+/** PHASE 2/3：唯一 Next Best Learning Action（budget ∈ 30s / 3m / 10m / 25m）。 */
+export const getNextLearningAction = (profileId: number, budget?: TimeBudgetKey | null) =>
+  invoke<NextLearningAction>("get_next_learning_action", {
+    profileId,
+    budget: budget ?? null,
+  });
 
 /** DEV-0059.1 §3：准备复盘 AI——置 running + 构建 evidence snapshot（不调 Provider）；返回快照 JSON */
 export const preparePlanningReviewAi = (profileId: number, reviewId: number) =>

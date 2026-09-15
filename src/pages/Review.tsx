@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createChildLearningItem,
   createTask,
@@ -24,6 +25,7 @@ import FeedbackCard from "../components/FeedbackCard";
 import FeedbackModal from "../components/FeedbackModal";
 import NoteView from "../components/NoteView";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
+import { queryKeys } from "../query/keys";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import type {
   Adjustment,
@@ -93,14 +95,15 @@ interface ItemAgg {
  * 不新增 Review 数据表，不伪造 AI 分析。
  */
 function Review() {
-  const { activeProfile, refreshKey } = useActiveProfile();
+  const { activeProfile } = useActiveProfile();
+  const profileId = activeProfile?.id ?? null;
+  const qc = useQueryClient();
   // DEV-0022：AI 统一进入右侧 Panel
   const { runAction: aiRunAction, sendChat: aiSendChat, setPageContext } = useAiPanel();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sessions, setSessions] = useState<StudySession[]>([]);
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [items, setItems] = useState<LearningItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showRaw, setShowRaw] = useState(false);
 
@@ -183,52 +186,51 @@ function Review() {
     });
   }, [activeProfile, setPageContext, range, windowKind, stageName]);
 
-  const refresh = useCallback(async () => {
-    if (range == null) {
-      // 当前阶段缺少时间范围：仅加载基础数据供提示
-      setLoading(true);
-      try {
+  /**
+   * HIGHER CLOSED LOOP V1 §PHASE 8：Review 的闭环数据统一走 TanStack Query。
+   *
+   * - key = `review.range(profileId, start, end)`（profile-scoped + 窗口 scoped）；
+   * - 不再依赖 `refreshKey`：Session End / Task Complete / Review Apply 之后
+   *   由 `queryKeys.review.scope(profileId)` 精准作废并自动重取。
+   */
+  const rangeQuery = useQuery({
+    queryKey: queryKeys.review.range(
+      profileId ?? -1,
+      range?.start ?? null,
+      range?.end ?? null
+    ),
+    enabled: profileId != null,
+    queryFn: async () => {
+      const id = profileId as number;
+      if (range == null) {
+        // 当前阶段缺少时间范围：仅加载基础数据供提示（不伪造窗口）
         const [itemList, fbList] = await Promise.all([
-          listLearningItemsByProfile(activeProfile!.id),
-          listFeedbacksByProfile(activeProfile!.id),
+          listLearningItemsByProfile(id),
+          listFeedbacksByProfile(id),
         ]);
-        setItems(itemList);
-        setFeedbacks(fbList);
-        setTasks([]);
-        setSessions([]);
-        setEvaluations([]);
-        setRangeFeedbacksCreated([]);
-        setRangeFeedbacksResolved([]);
-        setRangeAdjustments([]);
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setLoading(false);
+        return {
+          tasks: [] as Task[],
+          sessions: [] as StudySession[],
+          evaluations: [] as Evaluation[],
+          items: itemList,
+          feedbacks: fbList,
+          created: [] as Feedback[],
+          resolved: [] as Feedback[],
+          adjustments: [] as Adjustment[],
+          evalHasFeedback: {} as Record<number, boolean>,
+        };
       }
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
       const [taskList, sessList, evalList, itemList, fbList, fbCreated, fbResolved, adjList] =
         await Promise.all([
-          getProfileRangeTasks(activeProfile!.id, range.start, range.end),
-          getProfileRangeSessions(activeProfile!.id, range.start, range.end),
-          getProfileRangeEvaluations(activeProfile!.id, range.start, range.end),
-          listLearningItemsByProfile(activeProfile!.id),
-          listFeedbacksByProfile(activeProfile!.id),
-          getProfileRangeFeedbacksCreated(activeProfile!.id, range.start, range.end),
-          getProfileRangeFeedbacksResolved(activeProfile!.id, range.start, range.end),
-          getProfileRangeAdjustments(activeProfile!.id, range.start, range.end),
+          getProfileRangeTasks(id, range.start, range.end),
+          getProfileRangeSessions(id, range.start, range.end),
+          getProfileRangeEvaluations(id, range.start, range.end),
+          listLearningItemsByProfile(id),
+          listFeedbacksByProfile(id),
+          getProfileRangeFeedbacksCreated(id, range.start, range.end),
+          getProfileRangeFeedbacksResolved(id, range.start, range.end),
+          getProfileRangeAdjustments(id, range.start, range.end),
         ]);
-      setTasks(taskList);
-      setSessions(sessList);
-      setEvaluations(evalList);
-      setItems(itemList);
-      setFeedbacks(fbList);
-      setRangeFeedbacksCreated(fbCreated);
-      setRangeFeedbacksResolved(fbResolved);
-      setRangeAdjustments(adjList);
 
       // 当窗口 partial/failed 验证是否已记录为问题（并行查询）
       const flagged = evalList.filter(
@@ -244,24 +246,49 @@ function Review() {
           }
         })
       );
-      setEvalHasFeedback(Object.fromEntries(checks));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [activeProfile, refreshKey, range?.start, range?.end]);
+      return {
+        tasks: taskList,
+        sessions: sessList,
+        evaluations: evalList,
+        items: itemList,
+        feedbacks: fbList,
+        created: fbCreated,
+        resolved: fbResolved,
+        adjustments: adjList,
+        evalHasFeedback: Object.fromEntries(checks) as Record<number, boolean>,
+      };
+    },
+  });
 
+  // 查询结果 → 本地派生状态（保持既有渲染路径不变）
   useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refresh]);
+    const d = rangeQuery.data;
+    if (!d) return;
+    setTasks(d.tasks);
+    setSessions(d.sessions);
+    setEvaluations(d.evaluations);
+    setItems(d.items);
+    setFeedbacks(d.feedbacks);
+    setRangeFeedbacksCreated(d.created);
+    setRangeFeedbacksResolved(d.resolved);
+    setRangeAdjustments(d.adjustments);
+    setEvalHasFeedback(d.evalHasFeedback);
+    if (!rangeQuery.isError) setError("");
+  }, [rangeQuery.data, rangeQuery.isError]);
 
-  // 加载当前阶段（active 优先）及其时间范围
+  const loading = profileId != null && rangeQuery.isLoading;
+  /** PHASE 8：Review Apply 之后由 Query invalidation 重取，不再靠 refreshKey。 */
+  const invalidateReview = useCallback(async () => {
+    if (profileId == null) return;
+    await qc.invalidateQueries({ queryKey: queryKeys.review.scope(profileId) });
+  }, [qc, profileId]);
+
+  // 加载当前阶段（active 优先）及其时间范围（profile-scoped，不依赖 refreshKey）
   useEffect(() => {
+    if (profileId == null) return;
     (async () => {
       try {
-        const goals = await listGoalsByProfile(activeProfile!.id);
+        const goals = await listGoalsByProfile(profileId);
         const goal = goals.find((g) => g.status === "active") ?? goals[0] ?? null;
         if (!goal) {
           setStageRange(null);
@@ -292,11 +319,7 @@ function Review() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProfile, refreshKey]);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  }, [profileId]);
 
   const itemPath = useCallback(
     (id: number) => {
@@ -799,7 +822,7 @@ function Review() {
                       onClick={async () => {
                         try {
                           await resolveFeedback(f.id);
-                          await refresh();
+                          await invalidateReview();
                         } catch (err) {
                           setError(String(err));
                         }
@@ -850,7 +873,7 @@ function Review() {
               {openFeedbacks.length > 0 && (
                 <ul className="review-feedback">
                   {openFeedbacks.map((f) => (
-                    <FeedbackCard key={f.id} feedback={f} onChanged={() => void refresh()} />
+                    <FeedbackCard key={f.id} feedback={f} onChanged={() => void invalidateReview()} />
                   ))}
                 </ul>
               )}
@@ -1039,7 +1062,7 @@ function Review() {
           onClose={() => setFeedbackFor(null)}
           onCreated={() => {
             setFeedbackFor(null);
-            void refresh();
+            void invalidateReview();
           }}
         />
       )}
@@ -1117,7 +1140,7 @@ function Review() {
           onSaved={(where) => {
             setSummaryFor(null);
             setActionHint(where === "append" ? "已追加到知识内容" : "已创建子知识");
-            void refresh();
+            void invalidateReview();
           }}
           onError={(e) => setActionError(e)}
         />

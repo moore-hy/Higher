@@ -8,6 +8,7 @@ pub mod agent;
 pub mod data;
 pub mod intake;
 pub mod knowledge;
+pub mod learning_state;
 pub mod planning;
 pub mod profile;
 pub mod recurrence;

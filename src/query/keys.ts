@@ -47,6 +47,40 @@ export const queryKeys = {
     daily: (profileId: number, date: string) => ["report", "daily", profileId, date] as const,
   },
 
+  /**
+   * HIGHER CLOSED LOOP V1（PHASE 1 / 2 / 8）：
+   * Today / Review 的闭环数据只走这两个 key —— 禁止再用 refreshKey 驱动刷新。
+   *
+   * 失效策略（精准 invalidate，不整库刷）：
+   * - Session End / Task Complete / Review Apply → `learningState.all(profileId)`
+   *   （快照里同时含 today_tasks / active_session / recent_sessions / evidence）
+   * - 时间档变化 → 只重取 `nextAction`（预算变了，快照没变）
+   */
+  learningState: {
+    all: (profileId: number) => ["learningState", profileId] as const,
+  },
+
+  nextAction: {
+    /** budget = null 表示「未选择时间档」。 */
+    for: (profileId: number, budget: string | null) =>
+      ["nextAction", profileId, budget] as const,
+    /** 该档案的全部时间档（结束/完成任务后一次性作废）。 */
+    scope: (profileId: number) => ["nextAction", profileId] as const,
+  },
+
+  /**
+   * PHASE 8：Review 的闭环数据（观察窗口内的 Task / Session / Evaluation /
+   * Feedback / Adjustment）。profile-scoped + 窗口 scoped。
+   *
+   * Session End / Task Complete / Review Apply → invalidate `review.scope(profileId)`
+   * （前缀匹配该档案的所有窗口查询），Review 页面不得再依赖 refreshKey。
+   */
+  review: {
+    range: (profileId: number, start: string | null, end: string | null) =>
+      ["review", profileId, "range", start, end] as const,
+    scope: (profileId: number) => ["review", profileId] as const,
+  },
+
   data: {
     totals: (profileId: number) => ["data", "totals", profileId] as const,
     trends: (profileId: number, range: string) => ["data", "trends", profileId, range] as const,

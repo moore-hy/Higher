@@ -16,6 +16,7 @@
  * / profile_system.rs / ai_agent_web_research.rs）覆盖，后续 Phase 逐步补齐前端断言。
  */
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -165,6 +166,109 @@ vi.mock("../../src/api", async (importOriginal) => {
     listAllTasksByProfile: vi.fn(async () => []),
     // report / planning truth
     getDailyLearningReport: vi.fn(async () => DEFAULT_REPORT),
+    // HIGHER CLOSED LOOP V1：Today 的推荐部分只消费这两个入口（PHASE 1/2）
+    getLearningState: vi.fn(async () => ({
+      profile_id: 1,
+      generated_at: "2026-09-15T01:00:00Z",
+      local_date: "2026-09-15",
+      profile: { profile_id: 1, name: "测试档案", has_confirmed_personalization: false },
+      today: {
+        date: "2026-09-15",
+        planned_minutes: 25,
+        actual_minutes: 0,
+        planned_task_actual_minutes: 0,
+        task_total: 0,
+        task_completed: 0,
+        task_completion_rate: null,
+        unestimated_task_count: 0,
+        needs_review_count: 0,
+        learning_status: "planned",
+        day_goal: null,
+        day_goal_id: null,
+      },
+      today_tasks: [],
+      today_activities: [],
+      active_session: null,
+      recent_sessions: [],
+      goal_state: {
+        active_target_count: 0,
+        primary_title: null,
+        primary_scenario_type: null,
+        primary_target_date: null,
+        primary_target_id: null,
+      },
+      planning_state: {
+        has_active_blueprint: false,
+        blueprint_id: null,
+        blueprint_title: null,
+        review_interval_days: null,
+        next_review_at: null,
+        phase_count: 0,
+        current_phase_title: null,
+        milestone_count: 0,
+        milestone_done_count: 0,
+        planning_progress: null,
+      },
+      review_state: {
+        due: false,
+        risk_state: "unknown",
+        open_review_id: null,
+        open_review_status: null,
+      },
+      learning_evidence: {
+        evidence_generated_at: "2026-09-15T01:00:00Z",
+        quality: "insufficient",
+        quality_reasons: [],
+        pace_sample_count: 0,
+        observed_study_minutes_30d: 0,
+        stated_daily_minutes: null,
+        observed_daily_minutes_14d: null,
+        active_study_days_30d: 0,
+        calibrated_ratio: 1,
+      },
+      recovery_state: {
+        active: false,
+        reason_codes: [],
+        signals: {
+          days_since_last_session: null,
+          sessions_completed_7d: 0,
+          has_learning_history: false,
+          open_task_today: 0,
+          today_task_total: 0,
+          overdue_task_count_7d: 0,
+          task_total_7d: 0,
+          completion_rate_7d: null,
+          planned_daily_minutes_14d: null,
+          observed_daily_minutes_14d: null,
+        },
+        should_take_primary: false,
+      },
+    })),
+    getNextLearningAction: vi.fn(async () => ({
+      profile_id: 1,
+      local_date: "2026-09-15",
+      action_type: "quick_study",
+      reason_code: "quick_study_fallback",
+      source_entity: { kind: "none" },
+      estimated_minutes: 25,
+      source_task_estimate_minutes: null,
+      available_minutes: null,
+      execution_payload: {
+        kind: "start_quick",
+        task_id: null,
+        learning_item_id: null,
+        session_id: null,
+        review_id: null,
+        entry_slice: false,
+        suggested_minutes: 25,
+      },
+      title: "快速学习",
+      subtitle: "不绑定任务，立刻开始计时",
+      reasons: ["不绑定任务、不要求填任何字段，点一下就开始计时。"],
+      is_primary: true,
+      micro_action_only: false,
+      alternates: [],
+    })),
     materializeRecurringRolling: vi.fn(async () => 0),
     listLearningItemsByProfile: vi.fn(async () => []),
     getGoalTree: vi.fn(async () => null),
@@ -304,18 +408,171 @@ function mockReport(over: Record<string, unknown> = {}) {
 }
 
 // ============================================================
+// HIGHER CLOSED LOOP V1 · Today 的闭环数据源（PHASE 1 / 2 / 4）
+// ------------------------------------------------------------
+// Today 的推荐部分不再消费 DailyReport，改为消费：
+//   get_learning_state  → LearningStateSnapshot（唯一只读投影）
+//   get_next_learning_action → NextLearningAction（唯一 Primary）
+// 这里给出「默认快照 / 默认动作」并支持覆盖，供各步骤按需播种真实数据。
+// ============================================================
+const DEFAULT_STATE: Record<string, unknown> = {
+  profile_id: 1,
+  generated_at: "2026-09-15T01:00:00Z",
+  local_date: "2026-09-15",
+  profile: { profile_id: 1, name: "测试档案", has_confirmed_personalization: false },
+  today: {
+    date: "2026-09-15",
+    planned_minutes: 25,
+    actual_minutes: 0,
+    planned_task_actual_minutes: 0,
+    task_total: 0,
+    task_completed: 0,
+    task_completion_rate: null,
+    unestimated_task_count: 0,
+    needs_review_count: 0,
+    learning_status: "planned",
+    day_goal: null,
+    day_goal_id: null,
+  },
+  today_tasks: [],
+  today_activities: [],
+  active_session: null,
+  recent_sessions: [],
+  goal_state: {
+    active_target_count: 0,
+    primary_title: null,
+    primary_scenario_type: null,
+    primary_target_date: null,
+    primary_target_id: null,
+  },
+  planning_state: {
+    has_active_blueprint: false,
+    blueprint_id: null,
+    blueprint_title: null,
+    review_interval_days: null,
+    next_review_at: null,
+    phase_count: 0,
+    current_phase_title: null,
+    milestone_count: 0,
+    milestone_done_count: 0,
+    planning_progress: null,
+  },
+  review_state: { due: false, risk_state: "unknown", open_review_id: null, open_review_status: null },
+  learning_evidence: {
+    evidence_generated_at: "2026-09-15T01:00:00Z",
+    quality: "insufficient",
+    quality_reasons: [],
+    pace_sample_count: 0,
+    observed_study_minutes_30d: 0,
+    stated_daily_minutes: null,
+    observed_daily_minutes_14d: null,
+    active_study_days_30d: 0,
+    calibrated_ratio: 1,
+  },
+  recovery_state: {
+    active: false,
+    reason_codes: [],
+    signals: {
+      days_since_last_session: null,
+      sessions_completed_7d: 0,
+      has_learning_history: false,
+      open_task_today: 0,
+      today_task_total: 0,
+      overdue_task_count_7d: 0,
+      task_total_7d: 0,
+      completion_rate_7d: null,
+      planned_daily_minutes_14d: null,
+      observed_daily_minutes_14d: null,
+    },
+    should_take_primary: false,
+  },
+};
+
+const DEFAULT_ACTION: Record<string, unknown> = {
+  profile_id: 1,
+  local_date: "2026-09-15",
+  action_type: "quick_study",
+  reason_code: "quick_study_fallback",
+  source_entity: { kind: "none" },
+  estimated_minutes: 25,
+  source_task_estimate_minutes: null,
+  available_minutes: null,
+  execution_payload: {
+    kind: "start_quick",
+    task_id: null,
+    learning_item_id: null,
+    session_id: null,
+    review_id: null,
+    entry_slice: false,
+    suggested_minutes: 25,
+  },
+  title: "快速学习",
+  subtitle: "不绑定任务，立刻开始计时",
+  reasons: ["不绑定任务、不要求填任何字段，点一下就开始计时。"],
+  is_primary: true,
+  micro_action_only: false,
+  alternates: [],
+};
+
+/** 以「默认快照 + 覆盖」响应 get_learning_state。 */
+function mockState(over: Record<string, unknown> = {}) {
+  vi.mocked(api.getLearningState).mockResolvedValue({ ...DEFAULT_STATE, ...over } as never);
+}
+/** 一次性响应：用于 End Session / Task Complete 后的「状态真实改变」回流。 */
+function mockStateOnce(over: Record<string, unknown> = {}) {
+  vi.mocked(api.getLearningState).mockResolvedValueOnce({ ...DEFAULT_STATE, ...over } as never);
+}
+function mockAction(over: Record<string, unknown> = {}) {
+  vi.mocked(api.getNextLearningAction).mockResolvedValue({ ...DEFAULT_ACTION, ...over } as never);
+}
+/** 计划任务型 Next Action：Start Here 唯一 Primary 落在具体 Task 上。 */
+function plannedAction(taskId = TASK.id, title = TASK.title, minutes = 25) {
+  return {
+    action_type: "planned_task",
+    reason_code: "planned_task_core",
+    source_entity: { kind: "task", task_id: taskId },
+    estimated_minutes: minutes,
+    source_task_estimate_minutes: minutes,
+    execution_payload: {
+      kind: "start_task",
+      task_id: taskId,
+      learning_item_id: null,
+      session_id: null,
+      review_id: null,
+      entry_slice: false,
+      suggested_minutes: minutes,
+    },
+    title,
+    subtitle: `先做 ${minutes} 分钟就够`,
+    reasons: ["今日计划中的核心任务，完成它最接近你的目标。"],
+    is_primary: true,
+    micro_action_only: false,
+    alternates: [],
+  };
+}
+/** PHASE 8：闭环数据走 TanStack Query，每次渲染用干净 client。 */
+function newQueryClient() {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+  });
+}
+
+// ============================================================
 // PHASE H · MORNING READY 44-STEP GATE
 // ============================================================
 
 describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
   function renderToday() {
+    // PHASE 4/8：Today 的推荐部分改为消费 TanStack Query（profile-scoped keys）。
     return render(
-      <MemoryRouter initialEntries={["/"]}>
-        <Routes>
-          <Route path="/" element={<Today />} />
-          <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
-        </Routes>
-      </MemoryRouter>
+      <QueryClientProvider client={newQueryClient()}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<Today />} />
+            <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
     );
   }
   async function waitLoaded() {
@@ -323,7 +580,8 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
   }
 
   it("1-5：App 启动 → Profile Gate 完成 → Today 正常渲染且无 ErrorBoundary", async () => {
-    mockReport();
+    mockState();
+    mockAction();
     renderToday();
     await waitLoaded();
     // 单一 Start Here 已渲染 = 页面无崩溃
@@ -336,7 +594,8 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
   });
 
   it("6-7：页面只存在单一 Start Here；Quick Add 可创建今天 Task", async () => {
-    mockReport({ tasks: [] });
+    mockState({ today_tasks: [] });
+    mockAction();
     vi.mocked(api.createTaskV2).mockResolvedValue({ id: 1 } as never);
     renderToday();
     await waitLoaded();
@@ -354,7 +613,11 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
   });
 
   it("8-9：新 Task 出现在 Today；Task 可一击开始", async () => {
-    mockReport();
+    mockState({
+      today_tasks: [TASK],
+      today: { ...(DEFAULT_STATE.today as Record<string, unknown>), task_total: 1, planned_minutes: 25 },
+    });
+    mockAction(plannedAction());
     vi.mocked(api.startTaskSession).mockResolvedValue({ ...SESSION, id: 902, task_id: 11 } as never);
     renderToday();
     await waitLoaded();
@@ -370,10 +633,8 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
   });
 
   it("10-11：Active Study Bar 出现；Continue 可进入当前 Session", async () => {
-    mockReport();
-    vi.mocked(api.getActiveSession)
-      .mockResolvedValueOnce({ ...SESSION, id: 701, task_id: 11 } as never)
-      .mockResolvedValue(null);
+    mockState({ active_session: { ...SESSION, id: 701, task_id: 11 } });
+    mockAction();
     renderToday();
     await waitLoaded();
     const bar = screen.getByLabelText("正在学习");
@@ -384,10 +645,9 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
   });
 
   it("12-13：End Study 首次保存真实结束时间；ReadBack 读取真实 duration", async () => {
-    mockReport();
-    vi.mocked(api.getActiveSession)
-      .mockResolvedValueOnce({ ...SESSION, id: 77, ended_at: null } as never)
-      .mockResolvedValue(null);
+    mockStateOnce({ active_session: { ...SESSION, id: 77, ended_at: null } });
+    mockState({ active_session: null });
+    mockAction();
     vi.mocked(api.endSession).mockResolvedValue({
       ...SESSION,
       id: 77,
@@ -404,16 +664,14 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
   });
 
   it("14：第二次 End 不重复累加 duration（幂等 finalization）", async () => {
-    mockReport();
+    mockStateOnce({ active_session: { ...SESSION, id: 77, ended_at: null } });
+    mockState({ active_session: null });
+    mockAction();
     let calls = 0;
     vi.mocked(api.endSession).mockImplementation(async () => {
       calls += 1;
       return { ...SESSION, id: 77, status: "completed", ended_at: "2026-09-15 01:25:00", duration_seconds: 1500 } as never;
     });
-    vi.mocked(api.getActiveSession)
-      .mockResolvedValueOnce({ ...SESSION, id: 77, ended_at: null } as never)
-      .mockResolvedValueOnce({ ...SESSION, id: 77, ended_at: "2026-09-15 01:25:00", duration_seconds: 1500, status: "completed" } as never)
-      .mockResolvedValue(null);
     renderToday();
     await waitLoaded();
     const user = userEvent.setup();
@@ -425,10 +683,9 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
   });
 
   it("15：Note 保存失败模拟不导致 duration 丢失（endSession 先于 note flush）", async () => {
-    mockReport();
-    vi.mocked(api.getActiveSession)
-      .mockResolvedValueOnce({ ...SESSION, id: 77, ended_at: null } as never)
-      .mockResolvedValue(null);
+    mockStateOnce({ active_session: { ...SESSION, id: 77, ended_at: null } });
+    mockState({ active_session: null });
+    mockAction();
     vi.mocked(api.endSession).mockResolvedValue({
       ...SESSION, id: 77, status: "completed", ended_at: "2026-09-15 01:25:00", duration_seconds: 1500,
     } as never);
@@ -582,12 +839,14 @@ describe("MORNING_READY · Review（步骤 39 Due Review / 42 14-Day Review 表�
   });
   function renderReview() {
     return render(
-      <MemoryRouter initialEntries={["/review"]}>
-        <Routes>
-          <Route path="/review" element={<Review />} />
-          <Route path="/knowledge" element={<div data-testid="knowledge-page" />} />
-        </Routes>
-      </MemoryRouter>
+      <QueryClientProvider client={newQueryClient()}>
+        <MemoryRouter initialEntries={["/review"]}>
+          <Routes>
+            <Route path="/review" element={<Review />} />
+            <Route path="/knowledge" element={<div data-testid="knowledge-page" />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
     );
   }
   async function waitLoadedReview() {
@@ -699,24 +958,34 @@ describe("MORNING_READY · Planning → ONE ChangeSet → Today（步骤 20, 28-
     // 正式任务读路径（步骤 29 / 32）：初始不含计划 Task，apply 后由后端写入。
     vi.mocked(api.listAllTasksByProfile).mockResolvedValue([] as never);
     mockReport({ tasks: [TASK] });
+    // Today 的闭环数据源（PHASE 4）：默认只有 TASK，计划 Task 在 apply 后接入。
+    mockState({
+      today_tasks: [TASK],
+      today: { ...(DEFAULT_STATE.today as Record<string, unknown>), task_total: 1, planned_minutes: 25 },
+    });
+    mockAction(plannedAction());
   });
 
   function renderChangeSet() {
     return render(
-      <MemoryRouter>
-        <ChangeSetReview profileId={1} changeSetId={555} onClose={() => {}} />
-      </MemoryRouter>
+      <QueryClientProvider client={newQueryClient()}>
+        <MemoryRouter>
+          <ChangeSetReview profileId={1} changeSetId={555} onClose={() => {}} />
+        </MemoryRouter>
+      </QueryClientProvider>
     );
   }
 
   function renderTodayPg() {
     return render(
-      <MemoryRouter initialEntries={["/"]}>
-        <Routes>
-          <Route path="/" element={<Today />} />
-          <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
-        </Routes>
-      </MemoryRouter>
+      <QueryClientProvider client={newQueryClient()}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<Today />} />
+            <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
     );
   }
   async function waitLoadedPg() {
@@ -776,9 +1045,17 @@ describe("MORNING_READY · Planning → ONE ChangeSet → Today（步骤 20, 28-
     csView.unmount();
     vi.mocked(api.listAllTasksByProfile).mockResolvedValue([PLANNED_TASK] as never);
     mockReport({ tasks: [TASK, PLANNED_TASK] });
+    mockState({
+      today_tasks: [TASK, PLANNED_TASK],
+      today: { ...(DEFAULT_STATE.today as Record<string, unknown>), task_total: 2, planned_minutes: 25 },
+    });
+    mockAction(plannedAction(PLANNED_TASK.id, PLANNED_TASK.title));
     renderTodayPg();
     await waitLoadedPg();
-    expect(screen.getByText("极限定义练习")).toBeInTheDocument();
+    // 计划 Task 已由「今日任务」正式读路径（LearningState.today_tasks）承载。
+    // 注意：同一标题也会出现在 Start Here 的 Next Action 上，故按区块限定断言。
+    const tasksSection = screen.getByText("今日任务").closest("section") as HTMLElement;
+    expect(within(tasksSection).getByText("极限定义练习")).toBeInTheDocument();
   });
 });
 

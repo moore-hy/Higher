@@ -3,6 +3,7 @@ pub mod app;
 pub mod commands;
 pub mod db;
 pub mod ipc;
+pub mod learning_state;
 pub mod migrations;
 pub mod notifications;
 pub mod platform;

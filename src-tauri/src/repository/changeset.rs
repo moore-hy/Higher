@@ -265,6 +265,21 @@ impl<'a> ChangeSetRepository<'a> {
              WHERE profile_id=?1 AND change_set_id=?2 AND status='waiting_approval'",
             params![profile_id, id],
         );
+        // HIGHER CLOSED LOOP V1 §PHASE 7：复盘确认后必须刷新 14 天 cadence，
+        // 否则 `is_review_due`（只看 next_review_at）会永远为真，
+        // Today 会一直提示「该进行阶段复盘了」，闭环无法收口。
+        // 与 `complete_no_change_with` 使用同一口径（last/next_review_at + review_interval_days）。
+        // 只作用于「本 ChangeSet 关联过复盘」的档案，且只刷新当前 active 蓝图。
+        let _ = tx.execute(
+            "UPDATE planning_blueprints
+                SET last_review_at=datetime('now'),
+                    next_review_at=datetime('now', printf('+%d days', review_interval_days)),
+                    updated_at=datetime('now')
+              WHERE profile_id=?1 AND status='active'
+                AND EXISTS (SELECT 1 FROM planning_reviews pr
+                            WHERE pr.profile_id=?1 AND pr.change_set_id=?2)",
+            params![profile_id, id],
+        );
         tx.commit().map_err(|e| e.to_string())?;
         // true = 本次真正落库（§26.4：调用方据此决定是否做 apply 后副作用）
         Ok(true)

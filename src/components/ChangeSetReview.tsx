@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   applyAiChangeSet,
   getAiChangeSet,
@@ -9,6 +10,7 @@ import {
   setAiChangeOpSelected,
   undoAiChangeSet,
 } from "../api";
+import { queryKeys } from "../query/keys";
 import { formatDateTime } from "../utils";
 import type { ChangeOperation, ChangeSet } from "../types";
 
@@ -44,6 +46,7 @@ export default function ChangeSetReview({
   onApplied?: (lines?: string[]) => void;
 }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [cs, setCs] = useState<ChangeSet | null>(null);
   const [ops, setOps] = useState<ChangeOperation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -196,6 +199,12 @@ export default function ChangeSetReview({
         await undoAiChangeSet(profileId, changeSetId);
         setDoneMsg("已撤销本次修改");
       }
+      // PHASE 7/8 闭环收口：ChangeSet 应用 → Planning 真正改变 →
+      // 必须让 Unified Learning State 重算，从而 NextAction 随新 Planning 改变。
+      void qc.invalidateQueries({ queryKey: queryKeys.learningState.all(profileId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.nextAction.scope(profileId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.review.scope(profileId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.goals.list(profileId) });
       await load();
     } catch (e) {
       setError(String(e));

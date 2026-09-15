@@ -1,22 +1,32 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  DailyTaskRow,
+  LearningStateSnapshot,
+  NextLearningAction,
+  StudySession,
+} from "../../src/types";
 
 /**
- * PRODUCT-2.0 §22 / §30B / §64 —— Today 单一学习引导面交互契约。
+ * HIGHER CLOSED LOOP V1 §PHASE 4 / §PHASE 8 —— Today 单一学习引导面交互契约。
  *
- * 覆盖（Critical UI，§64 禁止 PENDING HUMAN）：
- *   LEARN-TC001  no active -> at most ONE Start Here recommendation
- *   LEARN-TC002  active session -> Start Here hidden, Active Study Bar wins
+ * 分层（任务书 §PHASE 9）：
+ * - 推荐**逻辑**（类别优先级 / tie-break / Time Budget / Recovery）由 Rust
+ *   `src-tauri/tests/closed_loop_core.rs` 的真实集成测试负责；
+ * - 本文件只负责 **UI 验收**：Today 是否正确消费
+ *   `LearningStateSnapshot` + `NextLearningAction`，以及交互契约是否保持。
+ *
+ * 覆盖：
+ *   LEARN-TC001  no active -> at most ONE Next Action 卡
+ *   LEARN-TC002  active session -> Start Here 让位给 Active Study Bar
  *   LEARN-TC003  manual Task Start works regardless of recommendation
- *   LEARN-TC004  dismiss/swap recommendation does not mutate plan/task
- *   CONTINUE-TC001 recent ended session visible as Continue Last
- *   §22.1 Header 不出现 AI安排（已移至底部次级入口）
- *   §22.2 不重复「新建任务」主按钮
- *   §22.3 Quick Add：Enter 创建 title + today
- *   §22.5 Active Study Bar 结束一击 → 非阻塞「已保存」
- *   Today Start（开始学习）= 一击创建 Quick Session
+ *   LEARN-TC004  「换一个」只在 alternates 内切换，不改任何正式数据
+ *   CONTINUE-TC001 旧合约（continue_last 徽标）
+ *   §PHASE 3    时间预算四档可切换，且 30 秒档不出现「开始学习」按钮
+ *   §22.1/§22.2/§22.3/§22.4 Today 结构收口
  */
 
 // ---- 引用稳定的上下文 mock（对象每次新建会引发无限重渲染）----
@@ -67,13 +77,12 @@ vi.mock("../../src/components/ActiveSessionConflictModal", () => ({
 
 vi.mock("../../src/api", () => ({
   materializeRecurringRolling: vi.fn(async () => 0),
-  getDailyLearningReport: vi.fn(),
+  // ---- CLOSED LOOP V1：Today 只消费这两个入口 ----
+  getLearningState: vi.fn(),
+  getNextLearningAction: vi.fn(),
+  // ---- 参考数据 ----
   listLearningItemsByProfile: vi.fn(async () => []),
   getGoalTree: vi.fn(async () => null),
-  getActiveSession: vi.fn(async () => null),
-  isPlanningReviewDue: vi.fn(async () => false),
-  getPlanningReviewRisk: vi.fn(async () => "unknown"),
-  listRecentSessionsByProfile: vi.fn(async () => []),
   syncNotifications: vi.fn(async () => undefined),
   startQuickSession: vi.fn(),
   startSession: vi.fn(),
@@ -91,7 +100,7 @@ vi.mock("../../src/api", () => ({
 import * as api from "../../src/api";
 import Today from "../../src/pages/Today";
 
-const TASK = {
+const TASK: DailyTaskRow = {
   id: 11,
   title: "学习极限定义",
   status: "planned",
@@ -105,7 +114,9 @@ const TASK = {
   deep_link: "",
 };
 
-const SESSION = {
+const TASK_B: DailyTaskRow = { ...TASK, id: 12, title: "背单词", priority: "normal" };
+
+const SESSION: StudySession = {
   id: 77,
   profile_id: 1,
   goal_id: null,
@@ -121,40 +132,158 @@ const SESSION = {
   created_at: "2026-09-15 01:00:00",
   updated_at: "2026-09-15 01:00:00",
   time_corrected: 0,
+  activity_kind: "unplanned",
+  duration_review_state: "normal",
 };
 
-const REPORT = {
-  date: "2026-09-15",
-  planned_minutes: 25,
-  unestimated_task_count: 0,
-  actual_minutes: 0,
-  planned_task_actual_minutes: 0,
-  task_total: 1,
-  task_completed: 0,
-  task_completion_rate: 0,
-  day_goal: null,
-  day_goal_id: null,
-  day_goal_progress: null,
-  time_execution_rate: null,
-  tasks: [TASK],
-  activities: [],
-};
-
-function mockReport(over: Record<string, unknown> = {}) {
-  vi.mocked(api.getDailyLearningReport).mockResolvedValue({
-    ...REPORT,
+/** PHASE 1：LearningStateSnapshot 夹具（字段与 Rust 端严格一致）。 */
+function snapshot(over: Partial<LearningStateSnapshot> = {}): LearningStateSnapshot {
+  const tasks = over.today_tasks ?? [TASK];
+  return {
+    profile_id: 1,
+    generated_at: "2026-09-15T01:00:00Z",
+    local_date: "2026-09-15",
+    profile: { profile_id: 1, name: "测试档案", has_confirmed_personalization: false },
+    today: {
+      date: "2026-09-15",
+      planned_minutes: 25,
+      actual_minutes: 0,
+      planned_task_actual_minutes: 0,
+      task_total: tasks.length,
+      task_completed: 0,
+      task_completion_rate: 0,
+      unestimated_task_count: 0,
+      needs_review_count: 0,
+      learning_status: "planned",
+      day_goal: null,
+      day_goal_id: null,
+    },
+    today_tasks: tasks,
+    today_activities: [],
+    active_session: null,
+    recent_sessions: [],
+    goal_state: {
+      active_target_count: 0,
+      primary_title: null,
+      primary_scenario_type: null,
+      primary_target_date: null,
+      primary_target_id: null,
+    },
+    planning_state: {
+      has_active_blueprint: false,
+      blueprint_id: null,
+      blueprint_title: null,
+      review_interval_days: null,
+      next_review_at: null,
+      phase_count: 0,
+      current_phase_title: null,
+      milestone_count: 0,
+      milestone_done_count: 0,
+      planning_progress: null,
+    },
+    review_state: { due: false, risk_state: "unknown", open_review_id: null, open_review_status: null },
+    learning_evidence: {
+      evidence_generated_at: "2026-09-15T01:00:00Z",
+      quality: "insufficient",
+      quality_reasons: [],
+      pace_sample_count: 0,
+      observed_study_minutes_30d: 0,
+      stated_daily_minutes: null,
+      observed_daily_minutes_14d: null,
+      active_study_days_30d: 0,
+      calibrated_ratio: 1,
+    },
+    recovery_state: {
+      active: false,
+      reason_codes: [],
+      signals: {
+        days_since_last_session: null,
+        sessions_completed_7d: 0,
+        has_learning_history: false,
+        open_task_today: tasks.length,
+        today_task_total: tasks.length,
+        overdue_task_count_7d: 0,
+        task_total_7d: 0,
+        completion_rate_7d: null,
+        planned_daily_minutes_14d: null,
+        observed_daily_minutes_14d: null,
+      },
+      should_take_primary: false,
+    },
     ...over,
-  } as never);
+  };
+}
+
+/** PHASE 2：NextLearningAction 夹具。 */
+function action(over: Partial<NextLearningAction> = {}): NextLearningAction {
+  return {
+    profile_id: 1,
+    local_date: "2026-09-15",
+    action_type: "planned_task",
+    reason_code: "today_task_core_priority",
+    source_entity: { kind: "task", task_id: 11 },
+    estimated_minutes: 25,
+    source_task_estimate_minutes: 25,
+    available_minutes: null,
+    execution_payload: {
+      kind: "start_task",
+      task_id: 11,
+      learning_item_id: null,
+      session_id: null,
+      review_id: null,
+      entry_slice: false,
+      suggested_minutes: 25,
+    },
+    title: "学习极限定义",
+    subtitle: "预计 25 分钟",
+    reasons: ["今天计划中优先级最高（核心）。", "计划时间 09:00。"],
+    is_primary: true,
+    micro_action_only: false,
+    alternates: [
+      {
+        action_type: "planned_task",
+        reason_code: "today_task_in_plan",
+        source_entity: { kind: "task", task_id: 12 },
+        estimated_minutes: 25,
+        execution_payload: {
+          kind: "start_task",
+          task_id: 12,
+          learning_item_id: null,
+          session_id: null,
+          review_id: null,
+          entry_slice: false,
+          suggested_minutes: 25,
+        },
+        title: "背单词",
+        subtitle: "预计 25 分钟",
+        reasons: ["今天计划中的任务。"],
+      },
+    ],
+    ...over,
+  };
+}
+
+function mockClosedLoop(
+  snap: LearningStateSnapshot = snapshot(),
+  act: NextLearningAction = action()
+) {
+  vi.mocked(api.getLearningState).mockResolvedValue(snap as never);
+  vi.mocked(api.getNextLearningAction).mockResolvedValue(act as never);
 }
 
 function renderToday() {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
   return render(
-    <MemoryRouter initialEntries={["/"]}>
-      <Routes>
-        <Route path="/" element={<Today />} />
-        <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
-      </Routes>
-    </MemoryRouter>
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Today />} />
+          <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
   );
 }
 
@@ -162,9 +291,9 @@ async function waitLoaded() {
   await waitFor(() => expect(screen.queryByText("加载中…")).not.toBeInTheDocument());
 }
 
-describe("LEARN-TC001 — 同一时刻最多一个 Start Here 主建议", () => {
-  it("无 active：Start Here 只渲染一次，且「开始学习」是其中唯一主推荐按钮", async () => {
-    mockReport();
+describe("LEARN-TC001 — 同一时刻最多一个 Next Action 主建议", () => {
+  it("无 active：Next Action 卡只渲染一次，且「开始学习」是其中唯一主推荐按钮", async () => {
+    mockClosedLoop();
     renderToday();
     await waitLoaded();
 
@@ -179,8 +308,8 @@ describe("LEARN-TC001 — 同一时刻最多一个 Start Here 主建议", () => 
     expect(within(card).getByRole("button", { name: "为什么？" })).toBeInTheDocument();
   });
 
-  it("Start Here 默认不展开理由（禁止自动展开，§30B）", async () => {
-    mockReport();
+  it("Next Action 默认不展开理由（禁止自动展开，§30B）", async () => {
+    mockClosedLoop();
     renderToday();
     await waitLoaded();
 
@@ -192,8 +321,8 @@ describe("LEARN-TC001 — 同一时刻最多一个 Start Here 主建议", () => 
     expect(within(card).getByRole("list")).toBeInTheDocument();
   });
 
-  it("Start Here 推荐的是今日高优先任务，且展示预计时长", async () => {
-    mockReport();
+  it("Next Action 展示后端给出的标题与预计时长", async () => {
+    mockClosedLoop();
     renderToday();
     await waitLoaded();
 
@@ -203,10 +332,105 @@ describe("LEARN-TC001 — 同一时刻最多一个 Start Here 主建议", () => 
   });
 });
 
-describe("LEARN-TC002 — 有 active 时 Start Here 让位给 Active Study Bar", () => {
-  it("active session 存在 → 无 Start Here，Active Study Bar 可见且可一击结束", async () => {
-    mockReport();
-    vi.mocked(api.getActiveSession).mockResolvedValue(SESSION as never);
+describe("PHASE 3 — 时间预算（四档 + 30 秒档不出开始按钮）", () => {
+  it("四档预算可选择，选择后按新时间档重新取推荐", async () => {
+    mockClosedLoop();
+    renderToday();
+    await waitLoaded();
+
+    const card = screen.getAllByLabelText("从这里开始")[0];
+    const group = within(card).getByRole("group", { name: "时间预算" });
+    expect(within(group).getByRole("button", { name: "30 秒" })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "3 分钟" })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "10 分钟" })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "25 分钟" })).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(group).getByRole("button", { name: "3 分钟" }));
+    await waitFor(() =>
+      expect(vi.mocked(api.getNextLearningAction)).toHaveBeenCalledWith(1, "3m")
+    );
+  });
+
+  it("30 秒档：micro_action 不渲染任何「开始学习」按钮（不得创建 StudySession）", async () => {
+    mockClosedLoop(
+      snapshot(),
+      action({
+        action_type: "planned_task",
+        reason_code: "micro_action_under_one_minute",
+        estimated_minutes: 0,
+        micro_action_only: true,
+        title: "30 秒回顾一个关键点",
+        subtitle: "micro action · short_recall",
+        execution_payload: {
+          kind: "micro_action",
+          task_id: null,
+          learning_item_id: null,
+          session_id: null,
+          review_id: null,
+          entry_slice: false,
+          suggested_minutes: 0,
+        },
+      })
+    );
+    renderToday();
+    await waitLoaded();
+
+    const card = screen.getAllByLabelText("从这里开始")[0];
+    expect(within(card).queryByRole("button", { name: "开始学习" })).not.toBeInTheDocument();
+    expect(within(card).getByText(/不会创建学习记录/)).toBeInTheDocument();
+  });
+
+  it("入口切片：显式说明「任务不会因此完成」", async () => {
+    mockClosedLoop(
+      snapshot(),
+      action({
+        estimated_minutes: 3,
+        execution_payload: {
+          kind: "start_task",
+          task_id: 11,
+          learning_item_id: null,
+          session_id: null,
+          review_id: null,
+          entry_slice: true,
+          suggested_minutes: 3,
+        },
+      })
+    );
+    renderToday();
+    await waitLoaded();
+
+    const card = screen.getAllByLabelText("从这里开始")[0];
+    expect(within(card).getByText(/任务不会因此完成/)).toBeInTheDocument();
+  });
+});
+
+describe("LEARN-TC002 — 有 active 时 Next Action 让位给 Active Study Bar", () => {
+  it("active session 存在 → 无推荐卡，Active Study Bar 可见且可一击结束", async () => {
+    vi.mocked(api.getLearningState).mockResolvedValue(
+      snapshot({ active_session: SESSION }) as never
+    );
+    vi.mocked(api.getNextLearningAction).mockResolvedValue(
+      action({
+        action_type: "active_session",
+        reason_code: "active_session_in_progress",
+        source_entity: { kind: "session", session_id: 77 },
+        estimated_minutes: null,
+        execution_payload: {
+          kind: "continue_session",
+          task_id: null,
+          learning_item_id: null,
+          session_id: 77,
+          review_id: null,
+          entry_slice: false,
+          suggested_minutes: 0,
+        },
+        title: "快速学习",
+        subtitle: "已有一条进行中的学习记录",
+        alternates: [],
+      }) as never
+    );
+
     renderToday();
     await waitLoaded();
 
@@ -218,11 +442,14 @@ describe("LEARN-TC002 — 有 active 时 Start Here 让位给 Active Study Bar",
   });
 
   it("§22.5 结束一击：endSession 被调用，结束后显示非阻塞「已保存」", async () => {
-    mockReport();
-    // 结束后 refresh 会重新拉 active：第二次起必须为 null，否则 bar 会「复活」
-    vi.mocked(api.getActiveSession)
-      .mockResolvedValueOnce(SESSION as never)
-      .mockResolvedValue(null);
+    const withActive = snapshot({ active_session: SESSION });
+    const withoutActive = snapshot({ active_session: null });
+    vi.mocked(api.getLearningState)
+      .mockResolvedValueOnce(withActive as never)
+      .mockResolvedValue(withoutActive as never);
+    vi.mocked(api.getNextLearningAction).mockResolvedValue(
+      action({ action_type: "quick_study", alternates: [] }) as never
+    );
     vi.mocked(api.endSession).mockResolvedValue({
       ...SESSION,
       status: "completed",
@@ -234,20 +461,26 @@ describe("LEARN-TC002 — 有 active 时 Start Here 让位给 Active Study Bar",
     await waitLoaded();
 
     const user = userEvent.setup();
-    await user.click(within(screen.getByLabelText("正在学习")).getByRole("button", { name: "结束" }));
+    await user.click(
+      within(screen.getByLabelText("正在学习")).getByRole("button", { name: "结束" })
+    );
 
     await waitFor(() => expect(api.endSession).toHaveBeenCalledWith(77));
     const saved = await screen.findByLabelText("学习已保存");
     expect(within(saved).getByText(/已保存 32 分钟/)).toBeInTheDocument();
-    // 结束后不再有 active bar（无 Modal 阻塞）
-    expect(screen.queryByLabelText("正在学习")).not.toBeInTheDocument();
+    // 结束后不再有 active bar（Query invalidation 拿到新快照，无 Modal 阻塞）
+    await waitFor(() => expect(screen.queryByLabelText("正在学习")).not.toBeInTheDocument());
   });
 });
 
 describe("LEARN-TC003 / Today Start — 一击开始学习", () => {
-  it("Start Here「开始学习」一击 → startTaskSession + 跳转学习页", async () => {
-    mockReport();
-    vi.mocked(api.startTaskSession).mockResolvedValue({ ...SESSION, id: 900, task_id: 11 } as never);
+  it("Next Action「开始学习」一击 → 按 execution_payload 执行 start_task + 跳转学习页", async () => {
+    mockClosedLoop();
+    vi.mocked(api.startTaskSession).mockResolvedValue({
+      ...SESSION,
+      id: 900,
+      task_id: 11,
+    } as never);
 
     renderToday();
     await waitLoaded();
@@ -261,14 +494,30 @@ describe("LEARN-TC003 / Today Start — 一击开始学习", () => {
   });
 
   it("Header「开始学习」一击 → 立即创建 Quick Session（不强制任何字段）", async () => {
-    mockReport({ tasks: [] });
+    mockClosedLoop(
+      snapshot({ today_tasks: [] }),
+      action({
+        action_type: "quick_study",
+        source_entity: { kind: "none" },
+        title: "快速学习",
+        alternates: [],
+        execution_payload: {
+          kind: "start_quick",
+          task_id: null,
+          learning_item_id: null,
+          session_id: null,
+          review_id: null,
+          entry_slice: false,
+          suggested_minutes: 25,
+        },
+      })
+    );
     vi.mocked(api.startQuickSession).mockResolvedValue({ ...SESSION, id: 901 } as never);
 
     renderToday();
     await waitLoaded();
 
     const user = userEvent.setup();
-    // 作用域限定 Header：Start Here 内也有一颗「开始学习」
     const header = document.querySelector(".today-head") as HTMLElement;
     await user.click(within(header).getByRole("button", { name: "开始学习" }));
 
@@ -278,8 +527,8 @@ describe("LEARN-TC003 / Today Start — 一击开始学习", () => {
 });
 
 describe("LEARN-TC004 — 换建议不改动正式数据", () => {
-  it("「换一个」只切换展示，不创建/结束/修改任何 Session 或 Task", async () => {
-    mockReport({ tasks: [{ ...TASK, id: 11 }, { ...TASK, id: 12, title: "背单词" }] });
+  it("「换一个」只在 alternates 内切换，不创建/结束/修改任何 Session 或 Task", async () => {
+    mockClosedLoop(snapshot({ today_tasks: [TASK, TASK_B] }));
     renderToday();
     await waitLoaded();
 
@@ -311,19 +560,20 @@ describe("LEARN-TC004 — 换建议不改动正式数据", () => {
   });
 });
 
-describe("CONTINUE-TC001 — 继续上次学习并入 Start Here", () => {
-  it("近期已结束 Session → 显示「继续上次」候选，不额外堆第二张卡", async () => {
-    mockReport({ tasks: [] });
-    vi.mocked(api.listRecentSessionsByProfile).mockResolvedValue([
-      {
-        ...SESSION,
-        id: 500,
+describe("CONTINUE-TC001 — continue_last 徽标", () => {
+  it("后端给出 continue_last → 卡片显示「继续上次」，不额外堆第二张卡", async () => {
+    mockClosedLoop(
+      snapshot({ today_tasks: [], recent_sessions: [] }),
+      action({
+        action_type: "continue_last",
+        reason_code: "continue_last_recent_session",
+        source_entity: { kind: "session", session_id: 500 },
         title: "英语四级 · 翻译",
-        status: "completed",
-        ended_at: new Date(Date.now() - 60_000).toISOString(),
-        duration_seconds: 1500,
-      },
-    ] as never);
+        subtitle: "上次学习 25 分钟",
+        reasons: ["你最近一次学习停在这里，接着学会更快进入状态。"],
+        alternates: [],
+      })
+    );
 
     renderToday();
     await waitLoaded();
@@ -335,14 +585,56 @@ describe("CONTINUE-TC001 — 继续上次学习并入 Start Here", () => {
   });
 });
 
+describe("PHASE 6 — Recovery 状态在首屏可见", () => {
+  it("recovery_state.active → 当前状态行出现「恢复模式」且 Primary 是恢复动作", async () => {
+    const snap = snapshot({
+      recovery_state: {
+        active: true,
+        reason_codes: ["task_backlog"],
+        signals: {
+          days_since_last_session: 10,
+          sessions_completed_7d: 0,
+          has_learning_history: true,
+          open_task_today: 1,
+          today_task_total: 1,
+          overdue_task_count_7d: 4,
+          task_total_7d: 5,
+          completion_rate_7d: 0.2,
+          planned_daily_minutes_14d: 3,
+          observed_daily_minutes_14d: 1,
+        },
+        should_take_primary: true,
+      },
+    });
+    mockClosedLoop(
+      snap,
+      action({
+        action_type: "recovery",
+        reason_code: "recovery_task_backlog",
+        estimated_minutes: 2,
+        title: "回顾昨天的错题",
+        subtitle: "先做 2 分钟就够",
+        alternates: [],
+      })
+    );
+
+    renderToday();
+    await waitLoaded();
+
+    expect(screen.getByText(/恢复模式/)).toBeInTheDocument();
+    const card = screen.getAllByLabelText("从这里开始")[0];
+    expect(within(card).getByText("恢复")).toBeInTheDocument();
+    expect(within(card).getByText("回顾昨天的错题")).toBeInTheDocument();
+  });
+});
+
 describe("§22 Today 结构收口", () => {
   it("§22.1：Header 不再出现「AI安排」，但底部次级入口仍保留 AI 能力", async () => {
-    mockReport();
+    mockClosedLoop();
     renderToday();
     await waitLoaded();
 
     const aiPlan = screen.getByRole("button", { name: /AI安排/ });
-    // 必须不在 Header 内
     const header = document.querySelector(".today-head");
     expect(header).not.toBeNull();
     expect(header!.contains(aiPlan)).toBe(false);
@@ -350,7 +642,7 @@ describe("§22 Today 结构收口", () => {
   });
 
   it("§22.2：「新建任务」主按钮只出现一次（Header），Task 区不重复", async () => {
-    mockReport();
+    mockClosedLoop();
     renderToday();
     await waitLoaded();
 
@@ -359,7 +651,7 @@ describe("§22 Today 结构收口", () => {
   });
 
   it("§22.3：Quick Add 输入 Enter 创建 title + today", async () => {
-    mockReport({ tasks: [] });
+    mockClosedLoop(snapshot({ today_tasks: [] }), action({ alternates: [] }));
     vi.mocked(api.createTaskV2).mockResolvedValue({ id: 1 } as never);
 
     renderToday();
@@ -375,7 +667,6 @@ describe("§22 Today 结构收口", () => {
         expect.objectContaining({ profileId: 1, title: "做三道积分题" })
       )
     );
-    // 只传 title（+ today），不强制 Goal / Knowledge / priority / estimated_minutes
     const payload = vi.mocked(api.createTaskV2).mock.calls[0][0] as Record<string, unknown>;
     expect(payload.goalId).toBeUndefined();
     expect(payload.learningItemId).toBeUndefined();
@@ -385,8 +676,12 @@ describe("§22 Today 结构收口", () => {
   });
 
   it("§22.4：Task Row 可一击开始（不打开详情）", async () => {
-    mockReport();
-    vi.mocked(api.startTaskSession).mockResolvedValue({ ...SESSION, id: 902, task_id: 11 } as never);
+    mockClosedLoop();
+    vi.mocked(api.startTaskSession).mockResolvedValue({
+      ...SESSION,
+      id: 902,
+      task_id: 11,
+    } as never);
 
     renderToday();
     await waitLoaded();
@@ -399,14 +694,17 @@ describe("§22 Today 结构收口", () => {
   });
 
   it("§22.4：正在学习的任务在 Task Row 显示「继续」并直接回到该 Session", async () => {
-    mockReport();
-    vi.mocked(api.getActiveSession).mockResolvedValue({ ...SESSION, task_id: 11 } as never);
+    vi.mocked(api.getLearningState).mockResolvedValue(
+      snapshot({ active_session: { ...SESSION, task_id: 11 } }) as never
+    );
+    vi.mocked(api.getNextLearningAction).mockResolvedValue(
+      action({ action_type: "active_session", alternates: [] }) as never
+    );
 
     renderToday();
     await waitLoaded();
 
     const user = userEvent.setup();
-    // 作用域限定任务列表：Active Study Bar 里也有一颗「继续」
     const list = document.querySelector(".today__tasklist") as HTMLElement;
     expect(list).not.toBeNull();
     await user.click(within(list).getByRole("button", { name: "继续" }));

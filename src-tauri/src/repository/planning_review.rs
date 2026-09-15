@@ -294,7 +294,11 @@ impl<'a> PlanningReviewRepository<'a> {
         period_end: &str,
     ) -> Result<String, String> {
         // Active Blueprint（未显式指定时取当前 active）
-        let bp = match blueprint_id {
+        // §PHASE 7 修正：此处必须得到**扁平**的 `Option<Value>`。历史实现把
+        // `Result<Option<Value>, String>` 直接塞进 JSON，导致快照里出现
+        // `"active_blueprint": {"Ok": {...}}`——前端 PlanningTruthSummary 与 AI
+        // prompt 都按普通对象读取，会拿不到 version/title。
+        let bp: Option<serde_json::Value> = match blueprint_id {
             Some(bid) => {
                 let mut stmt = conn
                     .prepare(
@@ -314,7 +318,7 @@ impl<'a> PlanningReviewRepository<'a> {
                         }))
                     })
                     .map_err(|e| e.to_string())?;
-                rows.next().transpose().map_err(|e| e.to_string())
+                rows.next().transpose().map_err(|e| e.to_string())?
             }
             None => {
                 let mut stmt = conn
@@ -333,13 +337,13 @@ impl<'a> PlanningReviewRepository<'a> {
                         }))
                     })
                     .map_err(|e| e.to_string())?;
-                rows.next().transpose().map_err(|e| e.to_string())
+                rows.next().transpose().map_err(|e| e.to_string())?
             }
         };
         // Phase / Milestone（属于 Blueprint）
         let mut phases: Vec<serde_json::Value> = Vec::new();
         let mut milestones: Vec<serde_json::Value> = Vec::new();
-        if let Ok(Some(ref bpv)) = bp {
+        if let Some(ref bpv) = bp {
             let bp_id = bpv.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
             let mut ps = conn
                 .prepare(
@@ -480,6 +484,12 @@ impl<'a> PlanningReviewRepository<'a> {
         let active_goal_targets = gts
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
+        // §PHASE 7：复用唯一 canonical 学习行为 Evidence（纯只读、0 LLM）。
+        // 失败不阻断复盘（Evidence 缺失时 snapshot 该键为 null，绝不伪造统计）。
+        let learning_load_evidence =
+            crate::ai::learning_load::build_learning_load_evidence(conn, profile_id, period_end)
+                .ok()
+                .and_then(|e| serde_json::to_value(e).ok());
         let snapshot = serde_json::json!({
             "built_at": crate::repository::planning::today_utc8(),
             "period": { "start": period_start, "end": period_end },
@@ -491,6 +501,12 @@ impl<'a> PlanningReviewRepository<'a> {
             "trusted_evaluations": trusted_evaluations,
             "personal_profile": personal_profile,
             "active_goal_targets": active_goal_targets,
+            // HIGHER CLOSED LOOP V1 §PHASE 7：学习行为 Evidence **优先复用**现有
+            // `LearningLoadEvidence`（唯一 canonical 学习统计源），Planning Review
+            // 自己只额外补 GoalTarget / Blueprint / Phase / Milestone / Planning progress。
+            // 禁止长期维护两套互相漂移的学习统计：上面的 period_tasks / trusted_sessions /
+            // trusted_evaluations 仅作为**周期明细**保留，不承担统计口径。
+            "learning_load_evidence": learning_load_evidence,
         });
         serde_json::to_string(&snapshot).map_err(|e| e.to_string())
     }

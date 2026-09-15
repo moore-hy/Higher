@@ -4,6 +4,7 @@
 use crate::commands::agent::*;
 use crate::commands::data::*;
 use crate::commands::knowledge::*;
+use crate::commands::learning_state::*;
 use crate::commands::planning::*;
 use crate::commands::profile::*;
 use crate::commands::recurrence::*;
@@ -283,6 +284,9 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             set_planning_review_status,
             is_planning_review_due,
             get_planning_review_risk,
+            // HIGHER CLOSED LOOP V1 §PHASE 1 / §PHASE 2
+            get_learning_state,
+            get_next_learning_action,
             prepare_current_planning_review,
             prepare_planning_review_ai,
             run_planning_review_ai,
