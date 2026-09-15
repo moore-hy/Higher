@@ -333,14 +333,15 @@ describe("LEARN-TC001 — 同一时刻最多一个 Next Action 主建议", () =>
 });
 
 describe("PHASE 3 — 时间预算（四档 + 30 秒档不出开始按钮）", () => {
-  it("四档预算可选择，选择后按新时间档重新取推荐", async () => {
+  it("§PHASE 0.3 HOTFIX-06：Today 默认无 30 秒入口（只暴露 3m / 10m / 25m）", async () => {
     mockClosedLoop();
     renderToday();
     await waitLoaded();
 
     const card = screen.getAllByLabelText("从这里开始")[0];
     const group = within(card).getByRole("group", { name: "时间预算" });
-    expect(within(group).getByRole("button", { name: "30 秒" })).toBeInTheDocument();
+    // 30 秒档默认隐藏：即使 Rust 端仍支持 30s，也必须待 PHASE 16 Gate 全部 VERIFIED 后才恢复。
+    expect(within(group).queryByRole("button", { name: "30 秒" })).not.toBeInTheDocument();
     expect(within(group).getByRole("button", { name: "3 分钟" })).toBeInTheDocument();
     expect(within(group).getByRole("button", { name: "10 分钟" })).toBeInTheDocument();
     expect(within(group).getByRole("button", { name: "25 分钟" })).toBeInTheDocument();
@@ -402,6 +403,57 @@ describe("PHASE 3 — 时间预算（四档 + 30 秒档不出开始按钮）", (
 
     const card = screen.getAllByLabelText("从这里开始")[0];
     expect(within(card).getByText(/任务不会因此完成/)).toBeInTheDocument();
+  });
+});
+
+describe("§PHASE 0.1 HOTFIX-01 / HOTFIX-02 — Next Action 错误不得静默", () => {
+  it("HOTFIX-01：LearningState 成功但 NextAction IPC 失败 → 用户可见错误，推荐卡不静默消失", async () => {
+    vi.mocked(api.getLearningState).mockResolvedValue(snapshot() as never);
+    vi.mocked(api.getNextLearningAction).mockRejectedValue(
+      new Error("NextAction 拉取失败 (IPC)")
+    );
+
+    renderToday();
+    await waitLoaded();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/NextAction 拉取失败/);
+    // 推荐卡不得静默“消失成空白”——错误可见即代表失败被上报（不是自动降级成假推荐）
+    expect(screen.queryByLabelText("从这里开始")).not.toBeInTheDocument();
+    // 必须提供「重新计算推荐」
+    expect(within(alert).getByRole("button", { name: "重新计算推荐" })).toBeInTheDocument();
+  });
+
+  it("HOTFIX-02：点击「重新计算推荐」→ 只重新请求 NextAction（不自己算推荐、不触发任何副作用）", async () => {
+    let fail = true;
+    vi.mocked(api.getLearningState).mockResolvedValue(snapshot() as never);
+    vi.mocked(api.getNextLearningAction).mockImplementation(() =>
+      fail
+        ? Promise.reject(new Error("NextAction 拉取失败 (IPC)"))
+        : Promise.resolve(action() as never)
+    );
+
+    renderToday();
+    await waitLoaded();
+
+    const alert = await screen.findByRole("alert");
+    const before = vi.mocked(api.getNextLearningAction).mock.calls.length;
+
+    const user = userEvent.setup();
+    await user.click(within(alert).getByRole("button", { name: "重新计算推荐" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.getNextLearningAction).mock.calls.length).toBeGreaterThan(before)
+    );
+    // 重试成功后：推荐卡出现、错误消失
+    await waitFor(() =>
+      expect(screen.queryByLabelText("从这里开始")).toBeInTheDocument()
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // 前端只重取，不自己决策——不得触发任何会话/任务副作用
+    expect(api.startQuickSession).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(api.startTaskSession).not.toHaveBeenCalled();
   });
 });
 

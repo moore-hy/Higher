@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import type { NextLearningAction, TimeBudgetKey } from "../types";
 
-/** PHASE 3：有限时间档（与后端 `TimeBudget::ALL` 严格一致，顺序不可换）。 */
+/**
+ * PHASE 3：有限时间档（与后端 `TimeBudget::ALL` 严格一致，顺序不可换）。
+ *
+ * HIGHER DAILY EXPERIENCE V1 §PHASE 0.3 / §PHASE 16：`30 秒` 入口默认**隐藏**。
+ * 即使 Rust 端 `TimeBudget` 仍支持 `30s`，前端也不得显示——30 秒只能在 PHASE 16
+ * Gate 全部 VERIFIED 后恢复。当前正式只暴露 3m / 10m / 25m。
+ */
 export const TIME_BUDGETS: { key: TimeBudgetKey; label: string }[] = [
-  { key: "30s", label: "30 秒" },
   { key: "3m", label: "3 分钟" },
   { key: "10m", label: "10 分钟" },
   { key: "25m", label: "25 分钟" },

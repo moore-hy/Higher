@@ -484,12 +484,30 @@ impl<'a> PlanningReviewRepository<'a> {
         let active_goal_targets = gts
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        // §PHASE 7：复用唯一 canonical 学习行为 Evidence（纯只读、0 LLM）。
-        // 失败不阻断复盘（Evidence 缺失时 snapshot 该键为 null，绝不伪造统计）。
-        let learning_load_evidence =
-            crate::ai::learning_load::build_learning_load_evidence(conn, profile_id, period_end)
-                .ok()
-                .and_then(|e| serde_json::to_value(e).ok());
+        // HIGHER DAILY EXPERIENCE V1 §PHASE 0.2 —— Planning Review Evidence 必须 fail closed。
+        //
+        // `LearningLoadEvidence` 是会改变正式 Planning 的 AI Review 的**唯一 canonical** 学习行为
+        // 证据源。本函数（build_snapshot）在 `prepare_current` / `prepare_planning_review_ai` 中于
+        // 进入 AI Assessment 之前被调用；若证据**构建失败**（真实数据库/投影错误），绝不允许用
+        // `.ok()` 把错误吞掉后继续推进——那会导致：
+        //   - 伪造统计（snapshot 里 learning_load_evidence 悄悄变 null）
+        //   - 进入 AI Assessment
+        //   - 生成 Recommendation / ChangeSet
+        //   - 正式 Planning 被静默改动
+        // 正确行为（fail closed）：快照构建直接返回 Err，复盘停在进入 AI 评估之前，正式 Planning
+        // 不变，前端收到 "学习证据读取失败，请重试。" 并向用户展示。
+        //
+        // 重要边界：`build_learning_load_evidence` 在**数据为空**时仍返回 `Ok(...)`（空聚合），
+        // 只有**真实错误**才返回 `Err`。"Evidence 缺失 ≠ 用户没有学习"——本分支只拦截真实失败，
+        // 不拦截空数据。
+        let learning_load_evidence = crate::ai::learning_load::build_learning_load_evidence(
+            conn,
+            profile_id,
+            period_end,
+        )
+        .map_err(|e| format!("学习证据读取失败，请重试。({e})"))?;
+        let learning_load_evidence = serde_json::to_value(learning_load_evidence)
+            .map_err(|e| format!("学习证据读取失败，请重试。({e})"))?;
         let snapshot = serde_json::json!({
             "built_at": crate::repository::planning::today_utc8(),
             "period": { "start": period_start, "end": period_end },

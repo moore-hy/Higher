@@ -145,6 +145,17 @@ function Today() {
     void qc.invalidateQueries({ queryKey: queryKeys.review.scope(profileId) });
   }, [qc, profileId]);
 
+  /**
+   * §PHASE 0.1：Next Action 失败后的「重新计算推荐」。
+   * 只能重新请求 NextAction（必要时顺带刷新 LearningState），绝不让前端自己重新算推荐、
+   * 自动降级成假推荐、或静默消失。业务决策唯一来源是 Rust NextAction。
+   */
+  const retryRecommendation = useCallback(() => {
+    if (profileId == null) return;
+    setActionError("");
+    void actionQuery.refetch();
+  }, [profileId, actionQuery.refetch]);
+
   // 首屏：Rolling Horizon materialize（幂等；失败静默）→ 刷新快照
   useEffect(() => {
     if (profileId == null) return;
@@ -326,7 +337,12 @@ function Today() {
   const reviewState = snapshot?.review_state ?? null;
   const riskState = reviewState?.risk_state ?? "unknown";
   const loading = stateQuery.isLoading && !snapshot;
-  const error = actionError || (stateQuery.error ? String(stateQuery.error) : "");
+  // §PHASE 0.1：错误展示至少合并 actionError / stateQuery.error / actionQuery.error。
+  // 若 Learning State 成功但 Next Action IPC 失败，用户必须明确看到错误，而非推荐卡静默消失。
+  const error =
+    actionError ||
+    (actionQuery.error ? String(actionQuery.error) : "") ||
+    (stateQuery.error ? String(stateQuery.error) : "");
 
   return (
     <div className="page page--wide">
@@ -360,7 +376,20 @@ function Today() {
         </div>
       </header>
 
-      {error && <div className="alert alert--error">{error}</div>}
+      {error && (
+        <div className="alert alert--error" role="alert">
+          <span>{error}</span>
+          {actionQuery.error && (
+            <button
+              type="button"
+              className="btn btn--small"
+              onClick={() => retryRecommendation()}
+            >
+              重新计算推荐
+            </button>
+          )}
+        </div>
+      )}
 
       {/* §22.5 Active Study Bar：● 正在学习 / title / elapsed / 继续 / 结束（一击） */}
       {active && (
