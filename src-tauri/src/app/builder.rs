@@ -233,6 +233,13 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             crate::commands::intake::save_planning_intake_draft,
             crate::commands::intake::set_planning_intake_status,
             crate::commands::intake::discard_planning_intake_draft,
+            // PRODUCT-2.0 §34-§38 Knowledge Canvas
+            crate::commands::knowledge::get_knowledge_canvas,
+            crate::commands::knowledge::save_knowledge_canvas,
+            crate::commands::knowledge::list_canvas_embeds,
+            crate::commands::knowledge::add_canvas_embed,
+            crate::commands::knowledge::update_canvas_embed_geometry,
+            crate::commands::knowledge::delete_canvas_embed,
             list_ai_memories,
             confirm_ai_memory,
             reject_ai_memory,

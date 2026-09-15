@@ -31,6 +31,7 @@ pub mod v027_memory_confirmation_lifecycle;
 pub mod v028_local_sync_foundation;
 pub mod v029_local_sync_backfill_outbox;
 pub mod v030_planning_intake_drafts;
+pub mod v031_knowledge_canvas;
 
 /// 单个 Migration 定义。
 ///
@@ -196,6 +197,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 30,
         name: "planning_intake_drafts",
         up: v030_planning_intake_drafts::up,
+    },
+    Migration {
+        version: 31,
+        name: "knowledge_canvas",
+        up: v031_knowledge_canvas::up,
     },
 ];
 

@@ -11,6 +11,7 @@ pub mod feedback;
 pub mod goal;
 pub mod goal_target;
 pub mod insight;
+pub mod knowledge_canvas;
 pub mod knowledge_document;
 pub mod knowledge_workspace;
 pub mod learning_data;

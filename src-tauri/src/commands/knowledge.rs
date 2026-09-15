@@ -644,3 +644,108 @@ pub fn list_attachments_by_document(
         .list_by_document(document_id)
         .map_err(|e| e.to_string())
 }
+
+// =============== PRODUCT-2.0 §34-§38 Knowledge Canvas ===============
+
+/// 读取节点画布（未创建 → None；前端按空画布渲染，不隐式落库）。
+#[tauri::command]
+pub fn get_knowledge_canvas(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    learning_item_id: i64,
+) -> Result<Option<repository::knowledge_canvas::KnowledgeCanvas>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_canvas::KnowledgeCanvasRepository::new(&conn)
+        .get(profile_id, learning_item_id)
+        .map_err(|e| e.to_string())
+}
+
+/// §38 保存画布：带 revision 冲突检测（不覆盖更新的内容，也不清 dirty）。
+#[tauri::command]
+pub fn save_knowledge_canvas(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    learning_item_id: i64,
+    elements_json: String,
+    app_state_json: Option<String>,
+    base_revision: i64,
+) -> Result<repository::knowledge_canvas::KnowledgeCanvas, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_canvas::KnowledgeCanvasRepository::new(&conn).save(
+        profile_id,
+        learning_item_id,
+        &elements_json,
+        app_state_json.as_deref(),
+        base_revision,
+    )
+}
+
+/// §37 Canvas Embed Layer：列出节点画布上的媒体 / 链接叠加。
+#[tauri::command]
+pub fn list_canvas_embeds(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    learning_item_id: i64,
+) -> Result<Vec<repository::knowledge_canvas::CanvasEmbed>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_canvas::KnowledgeCanvasRepository::new(&conn)
+        .list_embeds(profile_id, learning_item_id)
+        .map_err(|e| e.to_string())
+}
+
+/// §36 拖入 → 生成叠加层（二进制走既有 attachment，§35.1）。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn add_canvas_embed(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    learning_item_id: i64,
+    kind: String,
+    attachment_id: Option<i64>,
+    url: Option<String>,
+    title: Option<String>,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<repository::knowledge_canvas::CanvasEmbed, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_canvas::KnowledgeCanvasRepository::new(&conn).add_embed(
+        profile_id,
+        learning_item_id,
+        &kind,
+        attachment_id,
+        url.as_deref(),
+        title.as_deref(),
+        x,
+        y,
+        width,
+        height,
+    )
+}
+
+/// 移动 / 缩放叠加层。
+#[tauri::command]
+pub fn update_canvas_embed_geometry(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_canvas::KnowledgeCanvasRepository::new(&conn)
+        .update_embed_geometry(profile_id, id, x, y, width, height)
+}
+
+#[tauri::command]
+pub fn delete_canvas_embed(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    id: i64,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    repository::knowledge_canvas::KnowledgeCanvasRepository::new(&conn).delete_embed(profile_id, id)
+}

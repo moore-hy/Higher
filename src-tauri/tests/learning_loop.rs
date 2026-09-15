@@ -115,7 +115,7 @@ fn test_a_migration_v002_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 29, "幂等性失败：重复执行后不应有新记录");
+    assert_eq!(count, 31, "幂等性失败：重复执行后不应有新记录");
 }
 
 #[test]

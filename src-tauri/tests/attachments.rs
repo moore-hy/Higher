@@ -59,7 +59,7 @@ fn test_migration_v009_applied_and_idempotent() {
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29
+            25, 26, 27, 28, 29, 30, 31
         ]
     );
 
@@ -95,7 +95,7 @@ fn test_migration_v009_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 29);
+    assert_eq!(count, 31);
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn test_v008_to_v009_upgrade_preserves_old_data() {
     };
     // DEV-0076 §四：最新 = v027
     // DEV-SYNC-001：最新 = v028
-    assert_eq!(versions.last(), Some(&29));
+    assert_eq!(versions.last(), Some(&31));
 }
 
 #[test]

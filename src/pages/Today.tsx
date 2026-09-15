@@ -378,8 +378,19 @@ function Today() {
       {/* ===== 区一：今日任务（§22.2/§22.3/§22.4） ===== */}
       <section className="card today__section">
         <div className="today__section-head">
-          {/* §22.2：不重复「+ 新建任务」主按钮（Header 已有 primary） */}
           <h2 className="card__title">今日任务</h2>
+          {/* §22.2：桌面不重复「+ 新建任务」主按钮（Header 已有 primary）；
+              但 Android 仍保留卡片级小 + icon（DEV-MOBILE-002 §15），它不是主按钮 */}
+          {IS_ANDROID && (
+            <button
+              className="btn btn--small mp-iconbtn mp-iconbtn--ghost"
+              title="新建任务"
+              aria-label="新建任务"
+              onClick={() => setShowCreate(true)}
+            >
+              ＋
+            </button>
+          )}
         </div>
         {loading && !report ? (
           <p className="muted">加载中…</p>

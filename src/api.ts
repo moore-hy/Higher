@@ -44,6 +44,8 @@ import type {
   LearningTotals,
   MemoryRecord,
   PlanningIntakeDraft,
+  KnowledgeCanvas,
+  CanvasEmbed,
   NextAction,
   PersonalizationProfile,
   PersonalizationSource,
@@ -1098,12 +1100,16 @@ export const readAttachmentImage = (id: number) =>
 export const deleteAttachment = (id: number) =>
   invoke<void>("delete_attachment", { id });
 
-/** 从 base64 创建附件（DEV-0024：编辑器 Ctrl+V / 拖入；数据复制进 Higher Sandbox） */
+/** 从 base64 创建附件（DEV-0024：编辑器 Ctrl+V / 拖入；数据复制进 Higher Sandbox）
+ *
+ * PRODUCT-2.0 §36：Knowledge Canvas 拖入 pdf/file 也要走 attachment storage，
+ * 因此 attachmentType 扩展为 image | video | file（后端 add_attachment_from_base64
+ * 本就接受任意 type，只是此前 TS 面收窄）。 */
 export const addAttachmentFromBase64 = (args: {
   profileId: number;
   learningItemId: number | null;
   sessionId?: number | null;
-  attachmentType: "image" | "video";
+  attachmentType: "image" | "video" | "file";
   fileName: string;
   mimeType?: string | null;
   dataBase64: string;
@@ -2268,3 +2274,65 @@ export const setPlanningIntakeStatus = (
 
 export const discardPlanningIntakeDraft = (profileId: number) =>
   invoke<void>("discard_planning_intake_draft", { profileId });
+
+// =============== PRODUCT-2.0 §34-§38 Knowledge Canvas ===============
+
+export const getKnowledgeCanvas = (profileId: number, learningItemId: number) =>
+  invoke<KnowledgeCanvas | null>("get_knowledge_canvas", { profileId, learningItemId });
+
+/** §38：`baseRevision` 为本地最后一次成功读到的 revision；冲突时后端拒绝保存。 */
+export const saveKnowledgeCanvas = (args: {
+  profileId: number;
+  learningItemId: number;
+  elementsJson: string;
+  appStateJson?: string | null;
+  baseRevision: number;
+}) =>
+  invoke<KnowledgeCanvas>("save_knowledge_canvas", {
+    profileId: args.profileId,
+    learningItemId: args.learningItemId,
+    elementsJson: args.elementsJson,
+    appStateJson: args.appStateJson ?? null,
+    baseRevision: args.baseRevision,
+  });
+
+export const listCanvasEmbeds = (profileId: number, learningItemId: number) =>
+  invoke<CanvasEmbed[]>("list_canvas_embeds", { profileId, learningItemId });
+
+/** §36 拖入 → 叠加层（二进制走 attachment，§35.1）。 */
+export const addCanvasEmbed = (args: {
+  profileId: number;
+  learningItemId: number;
+  kind: "image" | "video" | "file" | "link";
+  attachmentId?: number | null;
+  url?: string | null;
+  title?: string | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) =>
+  invoke<CanvasEmbed>("add_canvas_embed", {
+    profileId: args.profileId,
+    learningItemId: args.learningItemId,
+    kind: args.kind,
+    attachmentId: args.attachmentId ?? null,
+    url: args.url ?? null,
+    title: args.title ?? null,
+    x: args.x,
+    y: args.y,
+    width: args.width,
+    height: args.height,
+  });
+
+export const updateCanvasEmbedGeometry = (args: {
+  profileId: number;
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) => invoke<void>("update_canvas_embed_geometry", args);
+
+export const deleteCanvasEmbed = (profileId: number, id: number) =>
+  invoke<void>("delete_canvas_embed", { profileId, id });

@@ -43,7 +43,7 @@ fn migration_v030_creates_intake_table() {
         )
         .unwrap();
     assert_eq!(n, 1, "v030 应创建 planning_intake_drafts");
-    assert_eq!(app_lib::migrations::latest_version(), 30);
+    assert_eq!(app_lib::migrations::latest_version(), 31);
 }
 
 #[test]

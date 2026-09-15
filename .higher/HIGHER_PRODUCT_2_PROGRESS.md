@@ -22,16 +22,23 @@ taskbook §0C.3 给出的 `v030/v031/...` 只是「预期槽位名称」，且�
 
 ```text
 v030  PlanningIntake   — §24.3（planning_intake_drafts）      【WAVE 3 已占用 ✓】
-v031  Secrets          — Foundation D（Native SecretStore）
-v032  Recurrence       — Foundation H（RFC5545 / rrule）
-v033  SearchV2         — Foundation J（FTS5 + jieba）
-v034  KnowledgeCanvas  — §35（knowledge_canvases + knowledge_canvas_embeds）
+v031  KnowledgeCanvas  — §35（knowledge_canvases + knowledge_canvas_embeds）【WAVE 5 已占用 ✓】
+v032  Secrets          — Foundation D（Native SecretStore）
+v033  Recurrence       — Foundation H（RFC5545 / rrule）
+v034  SearchV2         — Foundation J（FTS5 + jieba）
 v035  LearningSignals  — §30A.1（learning_signals）
 v036  KnowledgeMastery — §30A.2（knowledge_mastery）
 v037+ 顺延，实际新增前必须回写本 Ledger
 ```
 
 **本文件为唯一 Ledger。任何新增 migration 前先在此登记。**
+
+> 连带影响（已处理）：仓库内多处**锁死版本号**的断言（`latest_version()` / `COUNT(*) FROM schema_migrations`）
+> 必须随每个新 migration 一起前移。WAVE 5 已把 15 个测试文件中的版本断言统一从 `29` 前移到 `31`
+> （`adjustment_system` / `attachments` / `batch03` / `batch049` / `batch058` / `batch0601` / `batch062` /
+> `evaluation_system` / `feedback_system` / `knowledge_workspace` / `learning_loop` /
+> `migration_v025_upgrade` / `profile_system` / `product2_planning_intake`）。
+> **后续每个新 migration 都必须重复这一步**，否则回归会以「版本号」形式假失败。
 
 ---
 
@@ -118,7 +125,7 @@ category 1（我有 X 分钟）/ 2（Recovery）/ 4（due review）依赖 Learne
 
 ---
 
-## 4. WAVE 3 — Planning Intake / Agent Critical Path（§24 / §26）· 进行中
+## 4. WAVE 3 — Planning Intake / Agent Critical Path（§24 / §26）· 完成
 
 | 项 | 状态 |
 |---|---|
@@ -139,10 +146,55 @@ category 1（我有 X 分钟）/ 2（Recovery）/ 4（due review）依赖 Learne
 
 ---
 
+## 4A. WAVE 5 — Knowledge Canvas / Document / Records（§34-§40 · §0C.7 Morning Critical）· 完成
+
+| 项 | 状态 |
+|---|---|
+| §35 migration v031 `knowledge_canvases` + `knowledge_canvas_embeds` | **DONE** |
+| §35/§38 `repository/knowledge_canvas.rs`（get / save+revision / delete / embeds CRUD） | **DONE** |
+| §34 6 条命令注册（`get/save_knowledge_canvas`、`list/add/update_geometry/delete_canvas_embed`） | **DONE** |
+| §34 `src/features/knowledge/canvas/KnowledgeCanvas.tsx`（官方 Excalidraw，lazy 边界） | **DONE** |
+| §38 `useKnowledgeCanvas.ts`（autosave 900ms / flush / revision 冲突 / 失败不清 dirty） | **DONE** |
+| §35.1/§36/§37 `canvasSerialization.ts` + `CanvasEmbedLayer.tsx` + `CanvasDropzone.tsx` | **DONE** |
+| §39 Canvas 与 Document/Records 共存（画布 / 内容 Segmented Control；Tiptap 不迁移） | **DONE** |
+| UX-TC005 知识图双击 → 直接进入该节点 Canvas | **DONE** |
+| §40 删除旧 DrawModal 入口 | **DEFERRED**（见下） |
+| §0C.7 Canvas Morning Gate（open / text / freehand / shape / save / reload / Document / 图双击） | **DONE** |
+| §0C.7 Canvas Final Gate（image / video / file / URL / overlay / mobile touch） | 前端已实现 + 单测覆盖；**真机 overlay / 触控待验** |
+
+测试：
+- `src-tauri/tests/product2_knowledge_canvas.rs` **14/14 PASS**（含 §50 CANVAS-TC001/003/004/005/015、
+  弱引用不连坐删文件、revision 冲突不丢数据、以及 UI 接线源码契约）
+- `tests/learning-engine/canvasSerialization.test.ts` **16 PASS**（序列化 / 平移换算 / 容错）
+- `tests/product-ui/knowledgeCanvas.test.tsx` **11 PASS**（TC001/002/003/004/005/008/009/010/011 + 冲突 UX）
+
+关键防御（本轮实现时发现并堵住的真实风险）：
+- **Excalidraw 挂载时会回灌一次 onChange**。若此时状态里还是上一节点（或空）的场景，
+  这次回灌会被当成「用户清空了画布」写回库 → 覆盖真实内容。
+  两道防线：① 钩子暴露 `loadedItemId`，数据未归属当前节点时**不挂载**画布组件；
+  ② 每次装载 / 重载后武装 `skipFirstChange`，忽略挂载回灌。
+- **保存失败绝不产生假「已保存」**：失败保留 dirty + 显式「重试」；revision 冲突给
+  「用我的版本覆盖」/「放弃本地改动」二选一，绝不静默取舍任何一侧。
+- **二进制不进画布**：`elements_json` 永远只有矢量与 `customData.higherAttachmentId`；
+  媒体字节走既有 attachment storage（测试断言 payload 中不含 base64）。
+
+§40 延后理由（范围纪律，不自行扩张）：§40 的前置条件是「Excalidraw Canvas 的
+**handwriting / image / save / reload** 通过」，其中 image 属于 §0C.7 的 **Final Gate**，
+尚未做真机验证；且现存 `DrawModal` 的唯一owner是 `LearningEditor`（Session 编辑器）与
+`RichDocEditor`（Document 编辑器），删除会直接破坏 §39 要求「Document 仍可用」。
+因此本轮**不动** DrawModal，等 Final Gate 影像链路真机通过后再单独处理。
+
+---
+
 ## 5. 下一步（Next exact action）
 
-WAVE 4/5（Learning Engine Minimal Core / Knowledge Canvas）与 WAVE 3 的
-§25 Agent Context、§27 propose_* 工具、§26 PlanningProposalV2 均未完成。
-详见最终 `OVERNIGHT REPORT`（会话结束时追加）。
+WAVE 4（Learning Engine Minimal Core：§30A learning_signals / knowledge_mastery、
+§0C.7 的 Recovery / due review 槽位）、WAVE 3 收尾（§25 Agent Context、§27 propose_* 工具、
+§26 PlanningProposalV2）、WAVE 11（Legacy Cleanup + MORNING_READY 单命令验收）均未完成。
+
+**已知缺口（必须补，否则 `verify:overnight` 必然失败）**：
+`package.json` 声明了 `test:product-e2e` → `tests/product-e2e/` 与
+`test:morning-ready` → `tests/product-e2e/morningReady.test.tsx`，但**该目录尚不存在**。
+§65A 的 44 步 deterministic workflow 尚未落地，这是 MORNING_READY 的最终 Gate 本體。
 
 

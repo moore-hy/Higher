@@ -149,8 +149,8 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
         })
         .unwrap();
     assert_eq!(
-        ver, 29,
-        "升级后 schema = v029（v025→v029 连跑，v025 语义仍被完整验证）"
+        ver, 31,
+        "升级后 schema = v031（v025→v031 连跑，v025 语义仍被完整验证）"
     );
 
     // ---- ① 数据完整：全字段值逐一比对（run-old-1）----
@@ -328,5 +328,5 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 27, "幂等：不重复应用");
+    assert_eq!(n, 31, "幂等：不重复应用");
 }

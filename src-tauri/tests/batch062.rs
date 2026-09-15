@@ -134,8 +134,8 @@ fn t01_latest_schema_v024() {
         .unwrap();
     // DEV-0076 §四：v027（memory_confirmation_lifecycle）已追加
     // DEV-SYNC-001：v028（local_sync_foundation）已追加
-    assert_eq!(v, 29, "T01: schema = v029");
-    assert_eq!(app_lib::migrations::latest_version(), 29);
+    assert_eq!(v, 31, "T01: schema = v031");
+    assert_eq!(app_lib::migrations::latest_version(), 31);
     // 新表存在
     assert_eq!(
         count(&conn, "ai_provider_profiles"),

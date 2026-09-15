@@ -1,5 +1,7 @@
 import {
   Fragment,
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -53,6 +55,12 @@ import { durationShort, studyClockHHMM } from "../components/DailyActivitiesSect
 import type { JSONContent } from "@tiptap/react";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
+
+/**
+ * PRODUCT-2.0 §34：Knowledge Canvas 主体 lazy 加载。
+ * Excalidraw 体积大，绝不能进 Knowledge 页面首屏 chunk（§34 不 fork、直接官方组件）。
+ */
+const KnowledgeCanvas = lazy(() => import("../features/knowledge/canvas/KnowledgeCanvas"));
 // DEV-MOBILE-002 §27：Android Drawer 收口（选中自动关闭）
 import { IS_ANDROID } from "../platform/runtimePlatform";
 import type {
@@ -246,6 +254,14 @@ function Knowledge() {
   const [recentEvals, setRecentEvals] = useState<Evaluation[]>([]);
 
   const [viewMode, setViewMode] = useState<"workspace" | "graph">("workspace");
+
+  /**
+   * PRODUCT-2.0 §39 / UX-TC005：节点内容分两种模式。
+   * - canvas  = §34 Excalidraw spatial base（空间笔记）
+   * - content = 既有 Workspace V2 时间线（Document 仍用 Tiptap + Records，不迁移，§39）
+   * 知识图双击（onOpen）直接落到 canvas，不再要求用户先点「打开工作区」。
+   */
+  const [nodeMode, setNodeMode] = useState<"canvas" | "content">("content");
 
   // DEV-0053 §50-52：未归类学习（learning_item_id IS NULL 的 Session；虚拟入口，非 Knowledge Node）
   const [unassigned, setUnassigned] = useState<StudySession[]>([]);
@@ -1179,6 +1195,8 @@ function Knowledge() {
             currentId={selectedId}
             onOpen={(itemId) => {
               setViewMode("workspace");
+              // UX-TC005：双击知识图节点直接进入该知识点的 Canvas。
+              setNodeMode("canvas");
               void selectNode(itemId, true);
             }}
             onCreateRoot={async (name) => {
@@ -1296,6 +1314,25 @@ function Knowledge() {
             {/* Header（§27） */}
             <div className="kws__head">
               <div className="knowledge__breadcrumb">{breadcrumb}</div>
+              {/* PRODUCT-2.0 §39：Canvas（空间笔记）与内容（文档 / 学习记录）共存且互不迁移 */}
+              <div className="seg" role="tablist" aria-label="节点内容模式">
+                <button
+                  className={"seg__item" + (nodeMode === "canvas" ? " seg__item--active" : "")}
+                  role="tab"
+                  aria-selected={nodeMode === "canvas"}
+                  onClick={() => setNodeMode("canvas")}
+                >
+                  画布
+                </button>
+                <button
+                  className={"seg__item" + (nodeMode === "content" ? " seg__item--active" : "")}
+                  role="tab"
+                  aria-selected={nodeMode === "content"}
+                  onClick={() => setNodeMode("content")}
+                >
+                  内容
+                </button>
+              </div>
               <div className="knowledge__title-row">
                 <input
                   className="knowledge__title"
@@ -1358,8 +1395,20 @@ function Knowledge() {
               </div>
             </div>
 
-            {/* 内容时间线（§28-34） */}
-            {workspace == null ? (
+            {/* PRODUCT-2.0 §34-§38：画布模式（Excalidraw spatial base，lazy chunk）。
+                Document / Records 不迁移，切回「内容」即回到既有时间线（§39）。 */}
+            {nodeMode === "canvas" && activeProfile != null ? (
+              <Suspense
+                fallback={<p className="muted kws__loading">正在加载画布…</p>}
+              >
+                <KnowledgeCanvas
+                  profileId={activeProfile.id}
+                  learningItemId={selectedItem.id}
+                  nodeName={title}
+                />
+              </Suspense>
+            ) : /* 内容时间线（§28-34） */
+            workspace == null ? (
               <p className="muted kws__loading">加载中…</p>
             ) : workspace.documents.length === 0 && workspace.sessions.length === 0 ? (
               <p className="muted kws__empty">

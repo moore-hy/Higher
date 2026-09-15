@@ -1162,3 +1162,36 @@ export interface PlanningIntakeDraft {
   created_at: string;
   updated_at: string;
 }
+
+// =============== PRODUCT-2.0 §35 Knowledge Canvas ===============
+
+/** 节点画布（Excalidraw spatial base；二进制不入此表，§35.1）。 */
+export interface KnowledgeCanvas {
+  id: number;
+  profile_id: number;
+  learning_item_id: number;
+  elements_json: string;
+  app_state_json: string | null;
+  /** 单调递增；保存时作为 base_revision 做冲突检测（§38） */
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Higher Embed Layer 叠加（§37）：image / video / file / link。 */
+export interface CanvasEmbed {
+  id: number;
+  profile_id: number;
+  learning_item_id: number;
+  kind: "image" | "video" | "file" | "link";
+  attachment_id: number | null;
+  url: string | null;
+  title: string | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  z_index: number;
+  created_at: string;
+  updated_at: string;
+}
