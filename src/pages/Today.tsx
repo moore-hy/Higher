@@ -50,6 +50,15 @@ function elapsedShort(minutes: number): string {
   return `${m}m`;
 }
 
+/**
+ * §PHASE 1.2：轻状态文案 —— 只说「已经发生了什么」，绝不做债务播报。
+ * <60 分钟用「N 分钟」（自然可读）；≥60 分钟沿用 §24 的 h/m 紧凑写法。
+ */
+function spentLabel(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  return m < 60 ? `${m} 分钟` : elapsedShort(m);
+}
+
 /** 目标树 → 扁平 Goal[]（任务编辑 Modal 的 Goal 选择器数据源）。 */
 function flattenGoalTree(node: GoalTreeNode, acc: Goal[] = []): Goal[] {
   acc.push(node);
@@ -58,10 +67,14 @@ function flattenGoalTree(node: GoalTreeNode, acc: Goal[] = []): Goal[] {
 }
 
 /**
- * Today —— HIGHER CLOSED LOOP V1 §PHASE 4 / §PHASE 8。
+ * Today —— HIGHER CLOSED LOOP V1 §PHASE 4 / §PHASE 8 + HIGHER DAILY EXPERIENCE V1 §PHASE 1。
  *
- * 首页第一屏优先级（§PHASE 4，顺序不可调换）：
- *   当前状态 → 唯一 Next Action → 时间预算 → Today Tasks
+ * Today 是**学习启动面**（Learning Start Surface），不是任务管理首页。
+ * 第一屏固定优先级（§PHASE 1，顺序不可调换）：
+ *   当前轻状态 → Primary Next Action → 3m/10m/25m → 开始 → Secondary Actions → Today Tasks
+ *
+ * §PHASE 1.2：第一屏禁止债务轰炸（不出现逾期数 / 计划完成率 / 连续 N 天没完成），
+ * 只允许陈述「已经发生了什么」（今天已学习 N 分钟 / 完成 N 件事 / 恢复模式）。
  *
  * 数据来源（§PHASE 4 硬约束）：
  * - 推荐部分只消费 `LearningStateSnapshot` + `NextLearningAction`
@@ -346,33 +359,20 @@ function Today() {
 
   return (
     <div className="page page--wide">
-      {/* Header（§22.1）：Primary 开始学习 / Secondary 新建任务；不再出现 AI安排 */}
+      {/* Header（§PHASE 1.2）：只放「当前轻状态」——不堆债务、不放竞争性 CTA。
+          所有可执行入口（快速学习 / 新建任务 / AI）统一下移到 Primary CTA 之后的
+          Secondary Actions，避免用户在第一屏面对多个「开始」而需要选择。 */}
       <header className="page__header today-head">
         <div className="today-head__info">
           <h1 className="page__title">{friendlyDate(todayDate())}</h1>
-          {/* 第一屏优先级 ①：当前状态 */}
+          {/* 第一屏优先级 ①：当前轻状态（已发生的事实，非债务） */}
           <p className="today-head__sub">
-            已学习 <b>{minutesShort(today?.actual_minutes ?? 0)}</b>
+            今天已学习 <b>{spentLabel(today?.actual_minutes ?? 0)}</b>
             {" · "}
-            <b>
-              完成 {today?.task_completed ?? 0}/{today?.task_total ?? 0}
-            </b>
+            <b>完成 {today?.task_completed ?? 0} 件事</b>
             {active && " · 1 项学习进行中"}
             {snapshot?.recovery_state.active && " · 恢复模式"}
           </p>
-        </div>
-        <div className="today-head__btns">
-          <button
-            className="btn btn--primary"
-            onClick={() => void handleQuickStart()}
-            disabled={hasActive}
-            title="立即开始一次快速学习（不绑定任务）"
-          >
-            开始学习
-          </button>
-          <button className="btn" onClick={() => setShowCreate(true)}>
-            ＋ 新建任务
-          </button>
         </div>
       </header>
 
@@ -452,11 +452,45 @@ function Today() {
         />
       )}
 
+      {/* ===== 第一屏优先级 ⑤：Secondary Actions =====
+          §PHASE 1：位于 Primary CTA「开始」**之后**。这里没有任何 btn--primary，
+          因此「开始」在同一时刻只有一个主入口；这些是可选旁路，不是第二个决策点。
+          §22.1：AI安排 / AI复盘 从 Header 移到这里（AI 能力不删除）。 */}
+      <nav className="today__secondary" aria-label="其他入口">
+        <button
+          className="btn btn--ghost"
+          onClick={() => void handleQuickStart()}
+          disabled={hasActive}
+          title="立即开始一次快速学习（不绑定任务）"
+        >
+          快速学习
+        </button>
+        <button className="btn btn--ghost" onClick={() => setShowCreate(true)}>
+          ＋ 新建任务
+        </button>
+        {!IS_ANDROID && (
+          <button
+            className="btn btn--ghost"
+            onClick={() => {
+              // DEV-0058 §51-53：三入口统一 Planner（Planning「AI 生成计划」/对话写意图同一管线）
+              // DEV-0065.1：AI 恒驻，pending-send 事件自动展开 rail
+              void sendChat(PLAN_REQUEST_MESSAGE);
+            }}
+            title="根据最终目标安排未来14天计划（助手模式下生成可应用计划）"
+          >
+            ✨ AI安排
+          </button>
+        )}
+        <button className="btn btn--ghost" onClick={runTodayReview} title="AI 复盘今天的学习">
+          ✨ AI复盘今天
+        </button>
+      </nav>
+
       {/* ===== 区一：今日任务（§22.2/§22.3/§22.4） ===== */}
       <section className="card today__section">
         <div className="today__section-head">
           <h2 className="card__title">今日任务</h2>
-          {/* §22.2：桌面不重复「+ 新建任务」主按钮（Header 已有 primary）；
+          {/* §22.2 / §PHASE 1：桌面不重复「＋ 新建任务」（已在 Secondary Actions 出现一次）；
               但 Android 仍保留卡片级小 + icon（DEV-MOBILE-002 §15），它不是主按钮 */}
           {IS_ANDROID && (
             <button
@@ -554,25 +588,8 @@ function Today() {
         </section>
       )}
 
-      {/* AI 次级入口（§22.1：AI安排 从 Header 移到这里 + AI复盘；AI 能力不删除） */}
-      <div className="today__ai-secondary">
-        {!IS_ANDROID && (
-          <button
-            className="btn btn--ghost"
-            onClick={() => {
-              // DEV-0058 §51-53：三入口统一 Planner（Planning「AI 生成计划」/对话写意图同一管线）
-              // DEV-0065.1：AI 恒驻，pending-send 事件自动展开 rail
-              void sendChat(PLAN_REQUEST_MESSAGE);
-            }}
-            title="根据最终目标安排未来14天计划（助手模式下生成可应用计划）"
-          >
-            ✨ AI安排
-          </button>
-        )}
-        <button className="btn btn--ghost" onClick={runTodayReview} title="AI 复盘今天的学习">
-          ✨ AI复盘今天
-        </button>
-      </div>
+      {/* AI 次级入口已上移到 Primary CTA 之后的 `.today__secondary`（§PHASE 1 Secondary Actions）。
+          §22.1：Header 不再出现「AI安排」，AI 能力仍保留在次级入口。 */}
 
       {/* Start Guard 冲突弹窗（PHASE F） */}
       <ActiveSessionConflictModal

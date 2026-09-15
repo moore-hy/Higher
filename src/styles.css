@@ -10428,6 +10428,16 @@ button.datapage__bar-main:disabled {
   padding: var(--space-1) 0;
 }
 
+/* §PHASE 1 ⑤：Secondary Actions（Primary CTA「开始」之后的旁路入口）。
+   刻意不含任何 .btn--primary —— 第一屏同一时刻只有一个主入口。 */
+.today__secondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
 /* §91：分类默认不作为首要文本——统一极弱小标签（11px muted，无色彩区分） */
 .actrow__kind {
   font-size: var(--fs-xs);
@@ -11231,6 +11241,21 @@ html.higher-qr-scanning body .qr-scan-frame,
 
 .starthere__meta {
   font-size: 13px;
+  color: var(--h-text-secondary);
+}
+
+/* §PHASE 1 ②「大约多久」：与标题同级可读，但不抢标题权重 */
+.starthere__time {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+/* §PHASE 1 ③「为什么推荐」：一行事实，不是列表（完整证据仍折叠在「为什么？」后） */
+.starthere__why {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--h-text-secondary);
 }
 

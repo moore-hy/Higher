@@ -587,10 +587,12 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
     // 单一 Start Here 已渲染 = 页面无崩溃
     expect(screen.getByLabelText("从这里开始")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    // Header 主入口存在（作用域限定 Header：Start Here 内也有一颗「开始学习」）
-    const header = document.querySelector(".today-head") as HTMLElement;
-    expect(within(header).getByRole("button", { name: "开始学习" })).toBeInTheDocument();
-    expect(within(header).getByRole("button", { name: /新建任务/ })).toBeInTheDocument();
+    // §PHASE 1：入口能力仍在，但已从 Header 下移到 Primary CTA「开始」之后的 Secondary Actions
+    // （Header 只保留「当前轻状态」，避免第一屏出现多个竞争性开始入口）
+    const secondary = document.querySelector(".today__secondary") as HTMLElement;
+    expect(secondary).not.toBeNull();
+    expect(within(secondary).getByRole("button", { name: "快速学习" })).toBeInTheDocument();
+    expect(within(secondary).getByRole("button", { name: /新建任务/ })).toBeInTheDocument();
   });
 
   it("6-7：页面只存在单一 Start Here；Quick Add 可创建今天 Task", async () => {
@@ -625,9 +627,9 @@ describe("MORNING_READY · Today / Session（步骤 1-15）", () => {
     // 推荐任务出现在 Today（Start Here 主建议即今日高优先 Task）
     const card = screen.getByLabelText("从这里开始");
     expect(within(card).getByText("学习极限定义")).toBeInTheDocument();
-    // Task 一击开始（Start Here 内的「开始学习」= 对该 Task 起 Session）
+    // Task 一击开始（Start Here 内的「开始」= 对该 Task 起 Session）
     const user = userEvent.setup();
-    await user.click(within(card).getByRole("button", { name: "开始学习" }));
+    await user.click(within(card).getByRole("button", { name: "开始" }));
     await waitFor(() => expect(api.startTaskSession).toHaveBeenCalledWith(11));
     expect(await screen.findByTestId("learn-page")).toBeInTheDocument();
   });
