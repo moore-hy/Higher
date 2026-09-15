@@ -351,6 +351,112 @@ Pack 内不重复锤击同一主体                 MF-09                       
 
 ---
 
+## F4. M3 施工与验收明细（2026-09-16 02:12–02:26）
+
+### 产出物
+
+```text
+后端（新增 2 / 修改 6）
+  learning_state/contribution.rs            (NEW, ~400 行) 唯一生产入口 + 完整策略 + 4 条单元测试
+  learning_state/types.rs                   ContributionSource / ContributionBreakdown /
+                                            MeaningfulLearningContribution / CONTRIBUTION_SOURCES
+  learning_state/mod.rs                     pub mod contribution + M3 再导出
+  learning_state/state.rs                   接入 build_learning_state_at（复用 report.tasks）
+  repository/micro_learning_event.rs        GroundedMicroRow + list_grounded_by_local_day
+  repository/evaluation.rs                  TrustedEvaluationDayRow + list_trusted_by_local_day
+  tests/learning_contribution.rs            (NEW) 14 条真实 SQLite 集成测试
+前端（2）
+  src/types.ts                              ContributionSource / ContributionBreakdown /
+                                            MeaningfulLearningContribution + snapshot.contribution
+  tests/product-ui/todayGuidance.test.tsx   snapshot() 夹具补齐 contribution 字段
+```
+
+### 输出契约（字段与任务书 §M3-B 示例一一对应）
+
+```rust
+MeaningfulLearningContribution {
+  today_total: i64,                    // 有界内部单位（min(Σ已衰减, today_cap)）
+  today_cap: i64,                      // = CONTRIB_TODAY_CAP = 40
+  sources: ContributionBreakdown,      // micro_done / micro_partial / evaluation / session /
+                                       // task / correction / persistence（皆已衰减）
+  diminishing_factor: f32,             // Σ已衰减 / Σ未衰减；无事件 = 1.0
+  updated_at: String,                  // UTC（可由 *(_at) 入口注入以便复算）
+}
+```
+
+### 锁定策略（deterministic，0 LLM）
+
+```text
+基础单位（内部值，UI 不展示公式 —— §M3-B 明令禁止可见兑换表）
+  done Micro            3        可信验证（未通过）      2   ← 真实尝试，不是「失败奖励」
+  partial Micro         2        可信验证（通过）        5
+  完成 Session          8        完成且有学习关系的 Task 4
+奖励（§M3-B）
+  correction            3        真的通过了一个「此前可信失败过」的点
+  persistence           1        在一个曾失败过的点上继续 grounded 尝试（回到难点）
+递减（§M3-C）
+  同一来源第 n 次：factor(n) = max(250, 1000 − 300×(n−1)) 千分点
+  贡献 = round(base × factor / 1000)（整数四舍五入，无浮点误差）
+上限（§M3-C）
+  today_total = min(Σ, 40)；天花板**只**饱和陪伴贡献，绝不削减真实学习记录
+```
+
+**恒为 0（结构上不产生事件，而非「乘 0」）**：打开 App / 挂着 App / 后台常驻 / 点宠物 /
+开始远征 / skipped Micro（仓储层 `result IN ('done','partial')` 直接排除）/
+无完成证据的空转计时器 / `needs_review` 验证 / 未完成或 **无真实学习关系** 的 Task。
+
+### 一处刻意的设计取舍（需要评审注意）
+
+`tasks` 表**没有** `completed_at` 列（v002 起就只有 `created_at` / `updated_at`）。因此：
+
+- 绝不用 `updated_at` 冒充「完成时刻」（任何编辑都会刷新它 → 会造假）；
+- 「今日 Task」复用 `DailyReportRepository` 既有真相（`planned_date = 本学习日`，
+  与全站同一口径），并要求 `status='completed' AND learning_item_id IS NOT NULL`；
+- Task 事件不参与需要**严格先后关系**的 correction / persistence 判定（无时间戳 → 不猜）。
+
+同理，Session 贡献要求 `status='completed' AND ended_at IS NOT NULL AND duration > 60s`：
+「进行中」与「瞬断」不构成有意义的学习（这正是 M3-A「idle timer with no completion evidence = 0」）。
+
+### M3 PASS GATE 逐项
+
+```text
+MLC-01 app open alone = 0                    mlc01（新档案 → today_total 0，sources 全 0）      ✓
+MLC-02 skipped micro = 0                     mlc02（连写 5 条 skipped → 仍为 0）                ✓
+MLC-03 done micro > 0                        mlc03（= 3）                                      ✓
+MLC-04 partial grounded attempt > 0 but 有界  mlc04（= 2，且 ≤ cap）                            ✓
+MLC-05 real session contributes              mlc05（completed 30min → 8，且 > 单次 Micro）      ✓
+MLC-06 repeated grinding diminishes           mlc06（5 次 = 8 < 满权重 15；factor 0<f<1）        ✓
+MLC-07 daily cap works                       mlc07（80 次 → today_total == 40）                 ✓
+MLC-08 profile isolation                     mlc08（B 只吃自己的证据，session/evaluation 均 0）  ✓
+MLC-09 deterministic same evidence → same     mlc09（同证据 + 同 now → 字段全等，且 > 0）        ✓
+```
+
+补充边界（§M3-A / §M3-B / §M3-D）：`mlc10` 修正奖励只在真有「此前可信失败」时成立；
+`mlc11` 失败尝试 2 < 通过 5（不给失败奖励），但努力 + 坚持仍 > 0；
+`mlc12` Task 仅在「完成 + 真实学习关系」下贡献；`mlc13` 进行中 / 瞬断 Session /
+`needs_review` 验证 → 0；`mlc14` 全链路 0 Cloud 调用。
+
+### 验收结果
+
+```text
+cargo test --test learning_contribution   14 passed / 0 failed   （NEW）
+cargo test --lib                          49 passed / 0 failed   （M2 的 45 + contribution 4 条单元测试）
+cargo test --test daily_experience        38 passed / 0 failed   （M0/M1 未回归）
+cargo test --test learning_friction         9 passed / 0 failed   （M2 未回归）
+cargo test --test closed_loop_core        22 passed / 1 failed   （cl010 = 基线红，见 §E；与 M3 无关）
+cargo check --lib                          0 error（0 条新增 warning）
+npx tsc --noEmit                           0 error
+npx vitest run                             114 passed / 8 files  （M1/M2 未回归）
+```
+
+`cl010` 的失败断言是 `after.action_type == PlannedTask`，属 §E 已记录的
+「UTC vs UTC+8 `next_review_at` 归日口径」缺陷，位于 M7-B 修复清单。
+M3 未触碰 review_state / next_action / date 归日逻辑，与之无因果关系。
+
+**M3 = VERIFIED**。
+
+---
+
 ## C. 阶段状态表
 
 | Phase | 内容 | 状态 | commit | files changed | targeted tests | module tests | known baseline reds | next exact action |
@@ -358,7 +464,7 @@ Pack 内不重复锤击同一主体                 MF-09                       
 | M0 | Phase 3/4 audit repair（4 defects） | **VERIFIED** | 无（BLK-01，见 §B2；快照 `.higher/.overnight_backup/M0/`） | 9 文件：`learning_state/{budget,micro,mod,next_action,types}.rs`、`repository/micro_learning_event.rs`、`tests/{daily_experience,closed_loop_core}.rs`、`src/types.ts` | `cargo test --test daily_experience` **28 passed / 0 failed**（含 AR-01..AR-12 + M0-C 真实写路径 + M0-B round-trip）；`--test closed_loop_v1_audit_hotfix` 3/0；`--test learning_loop` 10/0 | `cargo check --lib` 0 error；`cargo test --lib` 38/0；`npx tsc --noEmit` 0；`vitest` 110 passed/8 files；`npm run build` ✓ 11.64s | `closed_loop_core` 1 红：`cl010`（UTC vs UTC+8，见 §F）；`batch064_ui` 2 红：`u26`（既存）+`u27`（**BLK-01 造成**）；`batch064r2_ui` 1 红：`r2_u24`（**BLK-01 造成**） | 已进入 M1 |
 | M1 | Daily Learning Loop completion（Pack / recompute / Micro→Session / Session End / Cold Start / 30s gate） | **VERIFIED** | 无（BLK-01，见 §B2；快照 `.higher/.overnight_backup/M1/`） | 后端 7 文件：`learning_state/{mod,types,next_action,micro,pack}.rs`、`commands/learning_state.rs`、`app/builder.rs`、`tests/daily_experience.rs`；前端 6 文件：`src/{types.ts,api.ts,query/keys.ts,pages/LearningWorkspace.tsx,styles.css}`、`tests/product-ui/learningEnd.test.tsx` | `cargo test --test daily_experience` **38 passed / 0 failed**（含 LP-01..06 / RC-01..05 / M1-C ×2 / M1-E）；`vitest learningEnd` **9 passed**（含 M1-D ×4） | `cargo check` 0 error；`cargo test --lib` 40/0；`npx tsc --noEmit` 0；`vitest run` 依 M1 收尾重跑（见 §G） | 同 M0 三条基线红（`cl010` / `batch064_ui::{u26,u27}` / `batch064r2_ui::r2_u24`），均未新增 | 已完成，进入 M2 |
 | M2 | Learning Friction V1（LearningFrictionState / support 0-2 / 冷却反锤击 / 0 LLM） | **VERIFIED** | 无（BLK-01 恢复后统一 commit，见 §B2 修复记录） | 后端 7 文件：`learning_state/{friction(new),types,mod,state,micro,next_action}.rs`、`repository/{evaluation,micro_learning_event}.rs`、`tests/learning_friction.rs(new)`；前端 4 文件：`src/{types.ts,components/StartHere.tsx,pages/Today.tsx,styles.css}` | `cargo test --test learning_friction` **9 passed / 0 failed**（MF-01..MF-09）；`cargo test --lib` **45 passed / 0 failed** | `cargo check` 0 error；`cargo test --test daily_experience` 38/0（M2 未回归）；`tsc` / `vitest` 见 §G | 同 M0 三条基线红，未新增 | 已完成，进入 M3 |
-| M3 | Meaningful Learning Contribution V1 | PENDING | — | — | — | — | — | — |
+| M3 | Meaningful Learning Contribution V1 | **VERIFIED** | 待提交（见 §F4） | 后端 6 文件：`learning_state/{contribution.rs(new),types,mod,state}`、`repository/{micro_learning_event,evaluation}.rs`、`tests/learning_contribution.rs(new)`；前端 2 文件：`src/types.ts`、`tests/product-ui/todayGuidance.test.tsx` | `cargo test --test learning_contribution` **14 passed / 0 failed**（MLC-01..09 + mlc10..mlc14） | `cargo check` 0 error（0 新增 warning）；`cargo test --lib` **49/0**；`cargo test --test {daily_experience,learning_friction}` 38/0、9/0（未回归）；`tsc` 0；`vitest` 114/8 files | 同 M0 三条基线红（`cl010` / `batch064_ui::{u26,u27}` / `batch064r2_ui::r2_u24`），未新增 | 已完成，进入 M4 |
 | M4 | Companion Skill V1 | PENDING | — | — | — | — | — | — |
 | M5 | Companion World + Expedition + Return | PENDING | — | — | — | — | — | — |
 | M6 | Home/Today integration + full E2E | PENDING | — | — | — | — | — | — |

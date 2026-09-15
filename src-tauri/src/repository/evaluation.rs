@@ -84,6 +84,15 @@ fn default_trust_state() -> String {
     "trusted".into()
 }
 
+/// M3 — MEANINGFUL LEARNING CONTRIBUTION V1：本学习日内可信验证的最小投影。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrustedEvaluationDayRow {
+    /// 可为空（不绑定知识节点的真实验证，如全科模拟）—— 仍是 grounded 的尝试。
+    pub learning_item_id: Option<i64>,
+    pub outcome: String,
+    pub occurred_at: String,
+}
+
 pub struct EvaluationRepository<'a> {
     conn: &'a Connection,
 }
@@ -353,6 +362,36 @@ impl<'a> EvaluationRepository<'a> {
                 })
             },
         )?;
+        rows.collect()
+    }
+
+    /// M3 — MEANINGFUL LEARNING CONTRIBUTION V1：本学习日（UTC+8）内的可信验证。
+    ///
+    /// 只取 `trust_state = 'trusted'`：`needs_review` 不是可信证据，
+    /// 不得计入「有意义的贡献」。
+    ///
+    /// 学习日边界与全仓一致 = `date(occurred_at, '+8 hours') = local_date`
+    /// （见 `DailyReportRepository` 对今日 Session 的同一口径）。
+    pub fn list_trusted_by_local_day(
+        &self,
+        profile_id: i64,
+        local_date: &str,
+    ) -> rusqlite::Result<Vec<TrustedEvaluationDayRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT learning_item_id, outcome, occurred_at
+             FROM evaluations
+             WHERE profile_id = ?1
+               AND trust_state = 'trusted'
+               AND date(occurred_at, '+8 hours') = ?2
+             ORDER BY occurred_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![profile_id, local_date], |row| {
+            Ok(TrustedEvaluationDayRow {
+                learning_item_id: row.get(0)?,
+                outcome: row.get(1)?,
+                occurred_at: row.get(2)?,
+            })
+        })?;
         rows.collect()
     }
 

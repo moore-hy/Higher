@@ -63,6 +63,23 @@ pub struct TouchedSource {
     pub event_count: i64,
 }
 
+/// M3 — MEANINGFUL LEARNING CONTRIBUTION V1：本学习日内**已完成/部分完成**的 Micro。
+///
+/// `learning_item_id` 是**只读派生**（与 M2 `count_done_partial_for_subject` 同一口径）：
+///   learning_item → 自身 / session → sessions.learning_item_id /
+///   task → tasks.learning_item_id；
+///   evaluation / goal / none 无法可靠解析 → NULL（不猜测、不伪造）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GroundedMicroRow {
+    pub id: i64,
+    pub source_type: String,
+    pub source_id: Option<i64>,
+    pub action_type: String,
+    pub result: String,
+    pub completed_at: String,
+    pub learning_item_id: Option<i64>,
+}
+
 pub struct MicroLearningEventRepository<'a> {
     conn: &'a Connection,
 }
@@ -314,6 +331,58 @@ impl<'a> MicroLearningEventRepository<'a> {
                 params![profile_id],
                 |r| r.get(0),
             )
+            .map_err(|e| e.to_string())
+    }
+
+    /// M3 — MEANINGFUL LEARNING CONTRIBUTION V1：本学习日（UTC+8）内已发生的 Micro。
+    ///
+    /// 只返回 `result IN ('done','partial')`：
+    /// - `skipped` **零贡献**（M3-A：skipped Micro = 0），因此不进入「有意义的贡献」；
+    /// - 学习日边界与全仓一致 = `date(completed_at, '+8 hours') = local_date`
+    ///   （与 `DailyReportRepository` 对今日 Session 的同一口径）。
+    ///
+    /// 顺序固定为 `completed_at ASC, id ASC`：调用方据此获得**确定性**的事件序列，
+    /// 不必依赖查询返回顺序。
+    pub fn list_grounded_by_local_day(
+        &self,
+        profile_id: i64,
+        local_date: &str,
+    ) -> Result<Vec<GroundedMicroRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT m.id, m.source_type, m.source_id, m.action_type, m.result, m.completed_at,
+                        CASE
+                          WHEN m.source_type = 'learning_item' THEN m.source_id
+                          WHEN m.source_type = 'session' THEN s.learning_item_id
+                          WHEN m.source_type = 'task'    THEN t.learning_item_id
+                          ELSE NULL
+                        END AS resolved_learning_item_id
+                   FROM micro_learning_events m
+                   LEFT JOIN study_sessions s
+                          ON m.source_type = 'session' AND s.id = m.source_id
+                   LEFT JOIN tasks t
+                          ON m.source_type = 'task' AND t.id = m.source_id
+                  WHERE m.profile_id = ?1
+                    AND m.result IN ('done','partial')
+                    AND date(m.completed_at, '+8 hours') = ?2
+                  ORDER BY m.completed_at ASC, m.id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![profile_id, local_date], |row| {
+                Ok(GroundedMicroRow {
+                    id: row.get(0)?,
+                    source_type: row.get(1)?,
+                    source_id: row.get(2)?,
+                    action_type: row.get(3)?,
+                    result: row.get(4)?,
+                    completed_at: row.get(5)?,
+                    learning_item_id: row.get(6)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| e.to_string())
     }
 

@@ -227,6 +227,22 @@ function snapshot(over: Partial<LearningStateSnapshot> = {}): LearningStateSnaps
       recommended_support_level: 0,
       cooldown_until: null,
     },
+    // M3：Meaningful Learning Contribution 投影（默认 0 = 无 grounded 证据）
+    contribution: {
+      today_total: 0,
+      today_cap: 40,
+      sources: {
+        micro_done: 0,
+        micro_partial: 0,
+        evaluation: 0,
+        session: 0,
+        task: 0,
+        correction: 0,
+        persistence: 0,
+      },
+      diminishing_factor: 1,
+      updated_at: "2026-09-15T00:00:00Z",
+    },
     ...over,
   };
 }

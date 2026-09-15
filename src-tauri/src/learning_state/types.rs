@@ -45,6 +45,11 @@ pub struct LearningStateSnapshot {
     /// 它不是新系统也不是「疼痛评分」：只表达「这个点最近反复卡住」这件**可验证事实**，
     /// 并据此调整支持方式（support level 0/1/2）与冷却，绝不推断人格 / 智力。
     pub friction: LearningFrictionState,
+    /// M3 — MEANINGFUL LEARNING CONTRIBUTION V1：**只读**、deterministic、0 LLM 的有界贡献投影。
+    ///
+    /// 它是「学习真相 → 陪伴世界」的桥（M4/M5 消费），**不是货币**：
+    /// 只有 grounded 证据才计数，且有每日上限与重复递减（详见 `contribution` 模块）。
+    pub contribution: MeaningfulLearningContribution,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -479,6 +484,155 @@ impl LearningFrictionState {
         is_subject
             && self.level == FrictionLevel::High
             && self.is_cooldown_active(now_utc)
+    }
+}
+
+// =============== M3：Meaningful Learning Contribution V1 ===============
+
+/// 贡献来源的稳定字符串（仅用于跨层断言 / 展示映射，**不**参与判断）。
+pub const CONTRIB_SRC_MICRO_DONE: &str = "micro_done";
+pub const CONTRIB_SRC_MICRO_PARTIAL: &str = "micro_partial";
+pub const CONTRIB_SRC_EVALUATION: &str = "evaluation";
+pub const CONTRIB_SRC_SESSION: &str = "session";
+pub const CONTRIB_SRC_TASK: &str = "task";
+pub const CONTRIB_SRC_CORRECTION: &str = "correction";
+pub const CONTRIB_SRC_PERSISTENCE: &str = "persistence";
+
+/// 「有意义的贡献」来源分类。
+///
+/// **不是货币**，也不构成任何可见的固定兑换表（§M3-B）：
+/// 它只是「真实学习发生了」这一事实的**有界**聚合维度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContributionSource {
+    MicroDone,
+    MicroPartial,
+    Evaluation,
+    Session,
+    Task,
+    Correction,
+    Persistence,
+}
+
+/// 全部来源的固定顺序（供确定性遍历 / 测试断言使用）。
+pub const CONTRIBUTION_SOURCES: [ContributionSource; 7] = [
+    ContributionSource::MicroDone,
+    ContributionSource::MicroPartial,
+    ContributionSource::Evaluation,
+    ContributionSource::Session,
+    ContributionSource::Task,
+    ContributionSource::Correction,
+    ContributionSource::Persistence,
+];
+
+impl ContributionSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MicroDone => CONTRIB_SRC_MICRO_DONE,
+            Self::MicroPartial => CONTRIB_SRC_MICRO_PARTIAL,
+            Self::Evaluation => CONTRIB_SRC_EVALUATION,
+            Self::Session => CONTRIB_SRC_SESSION,
+            Self::Task => CONTRIB_SRC_TASK,
+            Self::Correction => CONTRIB_SRC_CORRECTION,
+            Self::Persistence => CONTRIB_SRC_PERSISTENCE,
+        }
+    }
+
+    /// 确定性排序键（**只**用于稳定事件流，不表达「重要性」）。
+    pub fn order(self) -> i32 {
+        match self {
+            Self::MicroDone => 1,
+            Self::MicroPartial => 2,
+            Self::Evaluation => 3,
+            Self::Session => 4,
+            Self::Task => 5,
+            Self::Correction => 6,
+            Self::Persistence => 7,
+        }
+    }
+}
+
+/// 本学习日各来源的**已衰减**贡献（内部单位，不向 UI 暴露公式）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ContributionBreakdown {
+    pub micro_done: i64,
+    pub micro_partial: i64,
+    pub evaluation: i64,
+    pub session: i64,
+    pub task: i64,
+    pub correction: i64,
+    pub persistence: i64,
+}
+
+impl ContributionBreakdown {
+    /// 未封顶前的合计（封顶由 [`MeaningfulLearningContribution::today_cap`] 表达）。
+    pub fn total(&self) -> i64 {
+        self.micro_done
+            + self.micro_partial
+            + self.evaluation
+            + self.session
+            + self.task
+            + self.correction
+            + self.persistence
+    }
+
+    pub fn get(&self, source: ContributionSource) -> i64 {
+        match source {
+            ContributionSource::MicroDone => self.micro_done,
+            ContributionSource::MicroPartial => self.micro_partial,
+            ContributionSource::Evaluation => self.evaluation,
+            ContributionSource::Session => self.session,
+            ContributionSource::Task => self.task,
+            ContributionSource::Correction => self.correction,
+            ContributionSource::Persistence => self.persistence,
+        }
+    }
+
+    pub fn add(&mut self, source: ContributionSource, value: i64) {
+        match source {
+            ContributionSource::MicroDone => self.micro_done += value,
+            ContributionSource::MicroPartial => self.micro_partial += value,
+            ContributionSource::Evaluation => self.evaluation += value,
+            ContributionSource::Session => self.session += value,
+            ContributionSource::Task => self.task += value,
+            ContributionSource::Correction => self.correction += value,
+            ContributionSource::Persistence => self.persistence += value,
+        }
+    }
+}
+
+/// M3：单次快照的「有意义的贡献」投影（只读 / deterministic / 0 LLM）。
+///
+/// 它是**学习真相 → 陪伴世界**的桥（§M3 开头），因此：
+/// - 只有 grounded 证据才会提升它；
+/// - 打开 App / 挂后台 / 点宠物 / 开始远征 / skipped Micro / 空转计时器 → 恒为 0；
+/// - 重复刷同一机制 → 递减；每日有硬上限（天花板只作用于陪伴贡献，**不**削减真实学习记录）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MeaningfulLearningContribution {
+    /// 本学习日**有界**累计（内部单位；上限见 `today_cap`）。
+    pub today_total: i64,
+    /// 本学习日的确定性上限。
+    pub today_cap: i64,
+    pub sources: ContributionBreakdown,
+    /// 当日衰减系数（1.0 = 未发生衰减；越小 = 重复越多）。
+    ///
+    /// 定义：`Σ已衰减 / Σ未衰减`（皆为整数内部单位的比值）。
+    /// 无任何 grounded 事件时定义为 `1.0`（「没有衰减」而非「衰减到 0」）。
+    pub diminishing_factor: f32,
+    /// 本投影的构建时刻（UTC，仅溯源用）。
+    pub updated_at: String,
+}
+
+impl MeaningfulLearningContribution {
+    /// 空投影（新档案 / 无 grounded 证据的一天）：贡献为 0，且**不**伪造任何来源。
+    pub fn empty(cap: i64, now_utc: &str) -> Self {
+        Self {
+            today_total: 0,
+            today_cap: cap,
+            sources: ContributionBreakdown::default(),
+            diminishing_factor: 1.0,
+            updated_at: now_utc.to_string(),
+        }
     }
 }
 

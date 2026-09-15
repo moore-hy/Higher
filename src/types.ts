@@ -1382,6 +1382,12 @@ export interface LearningStateSnapshot {
   micro: MicroEvidenceState;
   /** M2：只读、deterministic、0 LLM 的学习摩擦投影（不是「疼痛评分」）。 */
   friction: LearningFrictionState;
+  /**
+   * M3：只读、deterministic、0 LLM 的**有界**贡献投影（学习真相 → 陪伴世界 的桥）。
+   *
+   * 它**不是货币**：只有 grounded 证据才计数，且有每日上限与重复递减。
+   */
+  contribution: MeaningfulLearningContribution;
 }
 
 // ===================== M2：Learning Friction V1 =====================
@@ -1422,6 +1428,54 @@ export interface LearningFrictionState {
    * 冷却期内的同一主体不得被反复锤击（换一种更轻的方式，而不是重复同一步）。
    */
   cooldown_until: string | null;
+}
+
+// ===================== M3：Meaningful Learning Contribution V1 =====================
+
+/**
+ * M3：贡献来源分类。
+ *
+ * 这是「真实学习发生过」这一事实的聚合维度，**不构成任何可见的兑换表**。
+ */
+export type ContributionSource =
+  | "micro_done"
+  | "micro_partial"
+  | "evaluation"
+  | "session"
+  | "task"
+  | "correction"
+  | "persistence";
+
+/** M3：本学习日各来源的**已衰减**贡献（内部单位，UI 不展示公式）。 */
+export interface ContributionBreakdown {
+  micro_done: number;
+  micro_partial: number;
+  evaluation: number;
+  session: number;
+  task: number;
+  correction: number;
+  persistence: number;
+}
+
+/**
+ * M3：单次快照的「有意义的贡献」投影。
+ *
+ * 恒为 0 的行为：打开 App / 挂着 App / 后台常驻 / 点宠物 / 开始远征 /
+ * skipped Micro / 无完成证据的空转计时器。
+ */
+export interface MeaningfulLearningContribution {
+  /** 本学习日**有界**累计（内部单位；上限见 `today_cap`）。 */
+  today_total: number;
+  /** 本学习日的确定性上限。 */
+  today_cap: number;
+  sources: ContributionBreakdown;
+  /**
+   * 当日衰减系数：1.0 = 未发生衰减；越小 = 重复越多。
+   * 无任何 grounded 事件时定义为 1.0（「没有衰减」而非「衰减到 0」）。
+   */
+  diminishing_factor: number;
+  /** 本投影的构建时刻（UTC，仅溯源用）。 */
+  updated_at: string;
 }
 
 /** PHASE 2：统一动作类型。 */

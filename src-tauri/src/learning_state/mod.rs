@@ -20,6 +20,7 @@
 //! - 同一输入恒得同一输出（deterministic）。
 
 pub mod budget;
+pub mod contribution;
 pub mod date;
 pub mod friction;
 pub mod micro;
@@ -53,4 +54,10 @@ pub use types::*;
 pub use friction::{
     build_friction_state, support_instruction, support_prompt_variant, SUPPORT_FREE_RECALL,
     SUPPORT_GUIDED, SUPPORT_ONE_CUE,
+};
+
+// M3 — MEANINGFUL LEARNING CONTRIBUTION V1（学习真相 → 陪伴世界 的桥；有界、只读、0 LLM）
+pub use contribution::{
+    build_meaningful_contribution, build_meaningful_contribution_at,
+    SESSION_MIN_CONTRIB_SECONDS, CONTRIB_TODAY_CAP,
 };

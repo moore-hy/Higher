@@ -8,6 +8,7 @@
 //!   复用 `ai::learning_load::build_learning_load_evidence`。
 
 use crate::ai::learning_load::build_learning_load_evidence;
+use crate::learning_state::contribution::build_meaningful_contribution;
 use crate::learning_state::date;
 use crate::learning_state::friction::build_friction_state;
 use crate::learning_state::micro::build_micro_evidence_state;
@@ -198,6 +199,14 @@ pub fn build_learning_state_at(
     // 不新增表、不新增写语句。读取失败同样显式向上传播（与 learning_evidence 一致）。
     let friction = build_friction_state(conn, profile_id)?;
 
+    // ---- M3：Meaningful Learning Contribution（只读投影；学习真相 → 陪伴世界 的桥）----
+    //
+    // 只读 + deterministic + 0 LLM；复用本函数已取得的 `report.tasks` 作为「今日 Task」
+    // 真相（不另立一套口径），故**必须先于** `report.tasks` 被 move 进快照。
+    // 读取失败同样显式向上传播（§0.1「不得静默」）。
+    let contribution =
+        build_meaningful_contribution(conn, profile_id, today, &report.tasks)?;
+
     // ---- micro：PHASE 3 / 4 的统一投影（Micro Event Store + 既有事实，只读）----
     // 必须在 `report.tasks` / `recent_sessions` 被 move 进快照**之前**构建。
     //
@@ -229,5 +238,6 @@ pub fn build_learning_state_at(
         recovery_state,
         micro,
         friction,
+        contribution,
     })
 }
