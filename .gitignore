@@ -13,6 +13,9 @@ src-tauri/target/
 # DEV-MOBILE-002/F2 前端 mobile 测试编译产物（npm run test:mobile）
 .mobile-test-build/
 
+# 前端 sync 测试编译产物（npm run test:sync）——与上两条同类，此前遗漏
+.sync-test-build/
+
 # DEV-MOBILE-004-F1 取证/构建临时文件（Clean-Higher-Android-Workspace 安全清理范围）
 .higher/tmp/
 
