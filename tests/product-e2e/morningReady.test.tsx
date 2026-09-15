@@ -244,6 +244,7 @@ import Today from "../../src/pages/Today";
 import PlanningIntake from "../../src/components/PlanningIntake";
 import KnowledgeCanvas from "../../src/features/knowledge/canvas/KnowledgeCanvas";
 import ChangeSetReview from "../../src/components/ChangeSetReview";
+import Review from "../../src/pages/Review";
 import { AUTOSAVE_DEBOUNCE_MS } from "../../src/features/knowledge/canvas/canvasSerialization";
 
 // ============================================================
@@ -546,6 +547,78 @@ describe("MORNING_READY · Knowledge Canvas（步骤 34-38）", () => {
     // 画布按 profileId + learningItemId 读取，验证档案/节点隔离读路径真实生效
     expect(api.getKnowledgeCanvas).toHaveBeenCalledWith(1, 5);
     expect(api.listCanvasEmbeds).toHaveBeenCalledWith(1, 5);
+  });
+});
+
+describe("MORNING_READY · Review（步骤 39 Due Review / 42 14-Day Review 表面）", () => {
+  const ITEM = {
+    id: 5, name: "光合作用", parent_id: null, goal_id: 1, profile_id: 1,
+    content: null, status: "active", created_at: "", updated_at: "",
+  };
+  const SESSIONS = [{
+    id: 1, profile_id: 1, goal_id: null, task_id: null, learning_item_id: 5,
+    title: "光合作用学习", started_at: "2026-09-15 09:00:00", ended_at: "2026-09-15 09:25:00",
+    duration_seconds: 1500, status: "completed", note: "理解了光反应", note_document_json: null,
+    created_at: "2026-09-15 09:00:00", updated_at: "2026-09-15 09:25:00",
+    time_corrected: 0, activity_kind: "planned", duration_review_state: "normal",
+  }];
+  const EVALS = [{
+    id: 9, profile_id: 1, learning_item_id: 5, evaluation_type: "recall",
+    outcome: "failed", title: "光合作用小测", correct_items: 1, total_items: 3,
+    created_at: "2026-09-15 09:30:00",
+  }];
+  beforeEach(() => {
+    vi.mocked(api.getProfileRangeTasks).mockResolvedValue([] as never);
+    vi.mocked(api.getProfileRangeSessions).mockResolvedValue(SESSIONS as never);
+    vi.mocked(api.getProfileRangeEvaluations).mockResolvedValue(EVALS as never);
+    vi.mocked(api.listLearningItemsByProfile).mockResolvedValue([ITEM] as never);
+    vi.mocked(api.listFeedbacksByProfile).mockResolvedValue([] as never);
+    vi.mocked(api.getProfileRangeFeedbacksCreated).mockResolvedValue([] as never);
+    vi.mocked(api.getProfileRangeFeedbacksResolved).mockResolvedValue([] as never);
+    vi.mocked(api.getProfileRangeAdjustments).mockResolvedValue([] as never);
+    vi.mocked(api.listFeedbacksByEvaluation).mockResolvedValue([] as never);
+    // listGoalsByProfile 返回空 → 阶段效果提前返回，不会调用 listStudyStages（避免无数据崩溃）
+    vi.mocked(api.listGoalsByProfile).mockResolvedValue([] as never);
+  });
+  function renderReview() {
+    return render(
+      <MemoryRouter initialEntries={["/review"]}>
+        <Routes>
+          <Route path="/review" element={<Review />} />
+          <Route path="/knowledge" element={<div data-testid="knowledge-page" />} />
+        </Routes>
+      </MemoryRouter>
+    );
+  }
+  async function waitLoadedReview() {
+    await waitFor(() => expect(screen.queryByText("加载中…")).not.toBeInTheDocument());
+  }
+  it("39/42：复盘页读取真实后端数据并渲染今日轨迹 / 真正学到的内容 / 验证", async () => {
+    renderReview();
+    await waitLoadedReview();
+    expect(screen.getByText("学习复盘")).toBeInTheDocument();
+    // 真实 Session → 今日真正学到的内容（按知识聚合，非编造）
+    expect(screen.getByText("今天真正学到的内容")).toBeInTheDocument();
+    const learnedToday = screen.getByText("今天真正学到的内容").closest("section") as HTMLElement;
+    expect(within(learnedToday).getByText("光合作用")).toBeInTheDocument();
+    // 真实 Evaluation → 今天的验证
+    expect(screen.getByText("今天的验证")).toBeInTheDocument();
+  });
+  it("39：失败验证在「记录为问题」中可解释呈现（Due Review 不伪造掌握度结论）", async () => {
+    renderReview();
+    await waitLoadedReview();
+    // failed 验证暴露为可记录问题（确定性规则，非人格化结论）
+    expect(screen.getByText("从今天验证记录问题")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "记录为问题" })).toBeInTheDocument();
+  });
+  it("42：可切换到周期复盘窗口（本周）并复用同一真实数据路径", async () => {
+    renderReview();
+    await waitLoadedReview();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "本周" }));
+    await waitFor(() => expect(screen.getByText("本周真正学到的内容")).toBeInTheDocument());
+    const learnedWeek = screen.getByText("本周真正学到的内容").closest("section") as HTMLElement;
+    expect(within(learnedWeek).getByText("光合作用")).toBeInTheDocument();
   });
 });
 
