@@ -425,13 +425,10 @@ describe("§PHASE 0.1 HOTFIX-01 / HOTFIX-02 — Next Action 错误不得静默",
   });
 
   it("HOTFIX-02：点击「重新计算推荐」→ 只重新请求 NextAction（不自己算推荐、不触发任何副作用）", async () => {
-    let fail = true;
     vi.mocked(api.getLearningState).mockResolvedValue(snapshot() as never);
-    vi.mocked(api.getNextLearningAction).mockImplementation(() =>
-      fail
-        ? Promise.reject(new Error("NextAction 拉取失败 (IPC)"))
-        : Promise.resolve(action() as never)
-    );
+    vi.mocked(api.getNextLearningAction)
+      .mockRejectedValueOnce(new Error("NextAction ???? (IPC)"))
+      .mockResolvedValue(action() as never);
 
     renderToday();
     await waitLoaded();
