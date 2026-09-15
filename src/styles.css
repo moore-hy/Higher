@@ -11319,6 +11319,244 @@ html.higher-qr-scanning body .qr-scan-frame,
   gap: var(--h-space-2);
 }
 
+/* ============ HIGHER 1.0 §M6-A：顶层 hero（Companion glance | Primary Next Action） ============
+   视觉纪律（与 §4 / §30B 的 Today 收口一致）：不设 background-image、不新增一级模块样式、
+   沿用 --h-* 表面变量让全局壁纸继续透出。
+   窄屏由 auto-fit 自动纵向堆叠，顺序恒为 Companion glance → Primary Next Action（§M6-A）。 */
+.today-hero {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+  gap: var(--h-space-4);
+}
+
+.today-hero__action {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ---- §M6-B Companion / World glance ---- */
+.companion-glance {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-3);
+  padding: var(--h-space-4) var(--h-space-5);
+}
+
+.companion-glance__head {
+  display: flex;
+  align-items: center;
+  gap: var(--h-space-2);
+}
+
+.companion-glance__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--h-accent);
+}
+
+.companion-glance__scene {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--h-text-secondary);
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  padding: 1px 8px;
+}
+
+.companion-glance__body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--h-space-3);
+  min-width: 0;
+}
+
+.companion-avatar {
+  flex: 0 0 auto;
+  line-height: 0;
+}
+
+/* 状态只做极轻微的存在感差异，不做情绪评级、不做闪烁动画 */
+.companion-avatar--quiet {
+  opacity: 0.78;
+}
+
+.companion-avatar--away {
+  opacity: 0.6;
+}
+
+.companion-glance__info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-1);
+  min-width: 0;
+}
+
+.companion-glance__name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.companion-glance__line {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.companion-glance__dialogue {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--h-text-secondary);
+}
+
+.companion-glance__trip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--h-space-2);
+}
+
+.companion-glance__trip-label {
+  font-size: 12px;
+  color: var(--h-text-muted);
+}
+
+.companion-glance__hint,
+.companion-glance__meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--h-text-muted);
+}
+
+.companion-glance__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--h-space-2);
+}
+
+/* §M6-B：卡内**唯一**的主 CTA。
+   刻意不用 .btn--primary —— 第一屏唯一的主入口仍然是学习卡的「开始」（§PHASE 1），
+   这里用 accent 软底表达「本卡的主动作」，不与之竞争。 */
+.companion-glance__cta {
+  background: var(--h-accent-soft);
+  border-color: var(--h-accent-border);
+  color: var(--h-text);
+  font-weight: 600;
+}
+
+.companion-glance__cta:hover {
+  background: var(--h-accent-soft);
+  border-color: var(--h-accent);
+}
+
+.companion-glance__quiet {
+  display: flex;
+  align-items: center;
+  gap: var(--h-space-2);
+}
+
+.companion-glance__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--h-danger);
+}
+
+/* ---- §M5-E 返回结果：内联面板（不是 Modal，不夺焦点、不阻塞离开） ---- */
+.companion-return {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-2);
+  padding: var(--h-space-3);
+  border: 1px solid var(--h-accent-border);
+  border-radius: var(--h-radius-sm);
+  background: var(--h-accent-soft);
+}
+
+.companion-return__head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.companion-return__dialogue {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--h-text);
+}
+
+.companion-return__memory {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--h-space-2) var(--h-space-3);
+  border-radius: var(--h-radius-sm);
+  background: var(--h-surface-2);
+}
+
+.companion-return__kind {
+  font-size: 11px;
+  color: var(--h-text-muted);
+}
+
+.companion-return__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.companion-return__body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--h-text-secondary);
+}
+
+.companion-return__actions {
+  display: flex;
+  gap: var(--h-space-2);
+}
+
+/* ---- §M4-G / §M6-D 学习邀请（最多一条，非自动弹出，谢绝零惩罚） ---- */
+.companion-nudge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-2);
+  padding: var(--h-space-3);
+  border: 1px dashed var(--h-border-strong);
+  border-radius: var(--h-radius-sm);
+}
+
+.companion-nudge__text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--h-text);
+}
+
+.companion-nudge__meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--h-text-secondary);
+}
+
+.companion-nudge__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--h-space-2);
+}
+
+.companion-nudge__accept {
+  border-color: var(--h-accent-border);
+  background: var(--h-accent-soft);
+  font-weight: 600;
+}
+
 /* ---- §22.3 Quick Add（inline，Enter 即建） ---- */
 .quickadd {
   display: flex;

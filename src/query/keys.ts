@@ -94,6 +94,28 @@ export const queryKeys = {
     scope: (profileId: number) => ["review", profileId] as const,
   },
 
+  /**
+   * M4 / M5 / M6：Companion / World 只读投影（独立子系统，独立 lifecycle）。
+   *
+   * 与 `learningState` **分域**：Companion 有自己的一套状态（身份 / 世界 / 远征 /
+   * 记忆 / 对白），只有在「远征开始 / 结算 / 收取」时才变化，因此不复用学习状态的 key。
+   *
+   * 但两者的失效是**单向联动**的：
+   * - 学习闭环事件（Session End / Task Complete / Micro 写入）会改变
+   *   Meaningful Contribution → 进而改变远征就绪度，因此学习侧 invalidate 时
+   *   必须同时失效 `companion.scope(profileId)`；
+   * - Companion 侧的变化**绝不**反向失效学习状态（§M4-A：Companion 不拥有学习真相，
+   *   点宠物 / 打招呼 / 远征不会改变任何学习数据）。
+   */
+  companion: {
+    /** §M4-D `get_companion_state`（含世界状态 / 行为 / 就绪度 / 对白）。 */
+    state: (profileId: number) => ["companion", "state", profileId] as const,
+    /** §M4-D `get_companion_memories`（收藏 / 场景记忆，倒序）。 */
+    memories: (profileId: number) => ["companion", "memories", profileId] as const,
+    /** 该档案的全部 companion 查询（前缀失效）。 */
+    scope: (profileId: number) => ["companion", profileId] as const,
+  },
+
   data: {
     totals: (profileId: number) => ["data", "totals", profileId] as const,
     trends: (profileId: number, range: string) => ["data", "trends", profileId, range] as const,

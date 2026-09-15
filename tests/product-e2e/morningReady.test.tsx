@@ -330,6 +330,16 @@ vi.mock("../../src/api", async (importOriginal) => {
     getLearningTotals: vi.fn(async () => ({ today_seconds: 0, today_tasks_completed: 0, today_tasks_total: 0 })),
     searchHigher: vi.fn(async () => []),
     listMemoryRecords: vi.fn(async () => []),
+    // ===== M6：Companion / World glance（§M4-D 的 7 条命令）=====
+    // 默认 = 持久身份 + idle + NOT_READY + 无远征；步骤 44 的 M6 检查按需覆盖。
+    // 注意：这里只捕获绑定（惰性求值），DEFAULT_COMPANION 在模块求值后才被读取。
+    getCompanionState: vi.fn(async () => DEFAULT_COMPANION),
+    interactCompanion: vi.fn(async () => DEFAULT_COMPANION),
+    startCompanionExpedition: vi.fn(async () => DEFAULT_COMPANION),
+    settleCompanionExpeditions: vi.fn(async () => 0),
+    collectCompanionReturn: vi.fn(),
+    getCompanionMemories: vi.fn(async () => []),
+    getCompanionLearningNudge: vi.fn(async () => null),
   };
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(actual)) {
@@ -555,6 +565,52 @@ function newQueryClient() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
   });
+}
+
+// ============================================================
+// M6 · Companion / World glance（§M6-A..F）
+// ------------------------------------------------------------
+// Today 的顶层 hero = 「Companion glance | Primary Next Action」两条动机并列。
+// 这里给出默认伙伴状态与覆盖入口，供 §M6 的步骤断言使用。
+// ============================================================
+const DEFAULT_COMPANION: Record<string, unknown> = {
+  profile_id: 1,
+  profile: {
+    id: 1,
+    profile_id: 1,
+    companion_id: "haven-companion",
+    archetype: "sprout-guide",
+    nickname: null,
+    personality_seed: 11,
+    created_at: "2026-09-15 01:00:00",
+    updated_at: "2026-09-15 01:00:00",
+  },
+  world: {
+    id: 1,
+    profile_id: 1,
+    expedition_readiness: "NOT_READY",
+    readiness_updated_at: null,
+    current_scene: "home",
+    current_behavior: "idle",
+    last_interaction_at: null,
+    last_nudge_at: null,
+    updated_at: "2026-09-15 01:00:00",
+  },
+  behavior: "idle",
+  readiness: "NOT_READY",
+  available_durations: [],
+  open_expedition: null,
+  ready_expedition: null,
+  memory_count: 0,
+  dialogue: { event: "first_visit_today", variant: 0, text: "今天也一起吧。" },
+  nudge_available: true,
+};
+
+function mockCompanion(over: Record<string, unknown> = {}) {
+  vi.mocked(api.getCompanionState).mockResolvedValue({
+    ...DEFAULT_COMPANION,
+    ...over,
+  } as never);
 }
 
 // ============================================================
@@ -1058,6 +1114,256 @@ describe("MORNING_READY · Planning → ONE ChangeSet → Today（步骤 20, 28-
     // 注意：同一标题也会出现在 Start Here 的 Next Action 上，故按区块限定断言。
     const tasksSection = screen.getByText("今日任务").closest("section") as HTMLElement;
     expect(within(tasksSection).getByText("极限定义练习")).toBeInTheDocument();
+  });
+});
+
+// ============================================================
+// MORNING_READY · Companion / World（§M6 + §M7-A 步骤 45-52）
+// ------------------------------------------------------------
+// §M7-A 的真实旅程在「Today 学习闭环」之后还有一段陪伴侧闭环：
+//   see Companion glance + Primary Action
+//   → collect companion event if present
+//   → at most one subtle learning nudge
+//   → choose 3 minutes → start → Evidence written → contribution changes
+//   → expedition readiness reflects real contribution
+//   → start expedition → clock progresses without background tick
+//   → reopen → settle return → collect return → optional canonical invitation → decline
+//
+// 其中「Evidence → contribution → readiness」的**因果**由 Rust 真实集成测试
+// （learning_contribution / companion_world 的 CW-01/CW-02）证明；本套只负责
+// UI 侧契约：前端只消费后端给出的就绪度与档位，绝不自己算、也绝不产生学习副作用。
+// ============================================================
+
+describe("MORNING_READY · Companion / World（§M6 + §M7-A 步骤 45-52）", () => {
+  function renderToday() {
+    return render(
+      <QueryClientProvider client={newQueryClient()}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<Today />} />
+            <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+  }
+  async function waitLoaded() {
+    await waitFor(() => expect(screen.queryByText("加载中…")).not.toBeInTheDocument());
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.getCompanionState).mockResolvedValue(DEFAULT_COMPANION as never);
+    vi.mocked(api.interactCompanion).mockResolvedValue(DEFAULT_COMPANION as never);
+    vi.mocked(api.startCompanionExpedition).mockResolvedValue(DEFAULT_COMPANION as never);
+    vi.mocked(api.settleCompanionExpeditions).mockResolvedValue(0 as never);
+    vi.mocked(api.getCompanionLearningNudge).mockResolvedValue(null);
+  });
+
+  it("45-48：打开即同时看到 glance 与 Primary Action；互动后最多一条 subtle 邀请", async () => {
+    mockState({
+      today_tasks: [TASK],
+      today: { ...(DEFAULT_STATE.today as Record<string, unknown>), task_total: 1, planned_minutes: 25 },
+    });
+    mockAction(plannedAction());
+    mockCompanion({ behavior: "curious", readiness: "READY_SHORT", available_durations: [1200] });
+
+    renderToday();
+    await waitLoaded();
+
+    // 45：一个连贯 hero 同时承载两条动机（谁也不被埋没）
+    const hero = document.querySelector(".today-hero") as HTMLElement;
+    expect(hero).not.toBeNull();
+    expect(hero.contains(screen.getByLabelText("伙伴"))).toBe(true);
+    expect(hero.contains(screen.getByLabelText("从这里开始"))).toBe(true);
+
+    // 46-47：邀请不是自动弹出 —— 挂载阶段一次都没请求
+    expect(api.getCompanionLearningNudge).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("companion-nudge")).not.toBeInTheDocument();
+
+    // 48：用户主动打招呼 → 最多一条邀请，来源是 canonical NextAction
+    vi.mocked(api.getCompanionLearningNudge).mockResolvedValue({
+      text: "都来了，要不要顺手做一个很小的？",
+      action_type: "planned_task",
+      reason_code: "planned_task_core",
+      title: "学习极限定义",
+      estimated_minutes: 25,
+      suggested_minutes: 25,
+    } as never);
+
+    const user = userEvent.setup();
+    await user.click(within(screen.getByLabelText("伙伴")).getByRole("button", { name: "打招呼" }));
+    await waitFor(() => expect(api.interactCompanion).toHaveBeenCalledWith(1, "greet"));
+    const nudges = await screen.findAllByTestId("companion-nudge");
+    expect(nudges).toHaveLength(1);
+    expect(within(nudges[0]).getByText(/学习极限定义/)).toBeInTheDocument();
+  });
+
+  it("49：接受邀请不自动开 Session；选 3 分钟仍回后端重取；开始走 canonical 一击", async () => {
+    mockState({
+      today_tasks: [TASK],
+      today: { ...(DEFAULT_STATE.today as Record<string, unknown>), task_total: 1, planned_minutes: 25 },
+    });
+    mockAction(plannedAction());
+    mockCompanion({ behavior: "curious", readiness: "READY_SHORT", available_durations: [1200] });
+    vi.mocked(api.getCompanionLearningNudge).mockResolvedValue({
+      text: "都来了，要不要顺手做一个很小的？",
+      action_type: "planned_task",
+      reason_code: "planned_task_core",
+      title: "学习极限定义",
+      estimated_minutes: 25,
+      suggested_minutes: 25,
+    } as never);
+    vi.mocked(api.startTaskSession).mockResolvedValue({ ...SESSION, id: 902, task_id: 11 } as never);
+
+    renderToday();
+    await waitLoaded();
+
+    const user = userEvent.setup();
+    await user.click(within(screen.getByLabelText("伙伴")).getByRole("button", { name: "打招呼" }));
+    const nudge = await screen.findByTestId("companion-nudge");
+    await user.click(within(nudge).getByRole("button", { name: "好，做一点点" }));
+
+    // 接受邀请只是把注意力交还给学习卡：不产生任何 Session / 证据
+    expect(api.startTaskSession).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(api.startQuickSession).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("companion-nudge")).not.toBeInTheDocument();
+
+    // 时间档仍然只重取后端 NextAction（前端不排序）
+    const card = screen.getByLabelText("从这里开始");
+    await user.click(
+      within(within(card).getByRole("group", { name: "时间预算" })).getByRole("button", {
+        name: "3 分钟",
+      })
+    );
+    await waitFor(() => expect(api.getNextLearningAction).toHaveBeenCalledWith(1, "3m"));
+
+    // 开始 = 一击执行后端 execution_payload
+    await user.click(within(screen.getByLabelText("从这里开始")).getByRole("button", { name: "开始" }));
+    await waitFor(() => expect(api.startTaskSession).toHaveBeenCalledWith(11));
+    expect(await screen.findByTestId("learn-page")).toBeInTheDocument();
+  });
+
+  it("50-52：就绪度→出发→无后台 tick 结算→收取返回→可选邀请→谢绝零惩罚", async () => {
+    mockState({ today_tasks: [] });
+    mockAction();
+    const user = userEvent.setup();
+
+    // 50：就绪度由后端按真实贡献派生 —— 前端只消费 available_durations
+    mockCompanion({ behavior: "curious", readiness: "READY_SHORT", available_durations: [1200] });
+    const second = renderToday();
+    await waitLoaded();
+    await user.click(
+      within(screen.getByLabelText("伙伴")).getByRole("button", { name: "20 分钟" })
+    );
+    await waitFor(() => expect(api.startCompanionExpedition).toHaveBeenCalledWith(1, 1200));
+    second.unmount();
+
+    // 51：关掉 App 再打开 —— 只凭时间戳判定（无后台 tick），展示剩余时间
+    mockCompanion({
+      behavior: "expedition",
+      readiness: "NOT_READY",
+      available_durations: [],
+      world: {
+        ...(DEFAULT_COMPANION.world as Record<string, unknown>),
+        current_scene: "wilds",
+        current_behavior: "expedition",
+      },
+      open_expedition: {
+        id: 501,
+        profile_id: 1,
+        status: "running",
+        started_at: "2026-09-15 01:00:00",
+        duration_seconds: 1200,
+        finished_at: new Date(Date.now() + 18 * 60 * 1000)
+          .toISOString()
+          .replace("T", " ")
+          .slice(0, 19),
+        readiness_tier_at_start: "READY_SHORT",
+        seed: 4242,
+        theme: "General",
+        collected_at: null,
+      },
+    });
+    const third = renderToday();
+    await waitLoaded();
+    expect(
+      within(screen.getByLabelText("伙伴")).getByTestId("companion-line")
+    ).toHaveTextContent(/远行中 · 还有约 18 分钟/);
+    third.unmount();
+
+    // 52：到点 → 收取返回（确定性故事）→ 最多一条 canonical 邀请 → 谢绝零惩罚
+    vi.mocked(api.collectCompanionReturn).mockResolvedValue({
+      expedition: {
+        id: 501,
+        profile_id: 1,
+        status: "collected",
+        started_at: "2026-09-15 01:00:00",
+        duration_seconds: 1200,
+        finished_at: "2026-09-15 01:20:00",
+        readiness_tier_at_start: "READY_SHORT",
+        seed: 4242,
+        theme: "General",
+        collected_at: "2026-09-15 06:00:00",
+      },
+      memory: {
+        id: 9,
+        profile_id: 1,
+        kind: "expedition_return",
+        title: "一颗被水磨圆的小石头",
+        body: "它没走远，就在屋子边上转了一圈。",
+        source_type: "expedition",
+        source_id: 501,
+        created_at: "2026-09-15 06:00:00",
+      },
+      dialogue: { event: "expedition_return", variant: 1, text: "我把这个带回来了。" },
+      nudge: {
+        text: "都来了，要不要顺手做一个很小的？",
+        action_type: "quick_study",
+        reason_code: "quick_study_fallback",
+        title: "快速学习",
+        estimated_minutes: 25,
+        suggested_minutes: 25,
+      },
+    } as never);
+    mockCompanion({
+      behavior: "returning",
+      ready_expedition: {
+        id: 501,
+        profile_id: 1,
+        status: "ready",
+        started_at: "2026-09-15 01:00:00",
+        duration_seconds: 1200,
+        finished_at: "2026-09-15 01:20:00",
+        readiness_tier_at_start: "READY_SHORT",
+        seed: 4242,
+        theme: "General",
+        collected_at: null,
+      },
+    });
+
+    renderToday();
+    await waitLoaded();
+    await user.click(
+      within(screen.getByLabelText("伙伴")).getByRole("button", { name: "回来了 · 查看" })
+    );
+
+    await waitFor(() => expect(api.collectCompanionReturn).toHaveBeenCalledWith(1, 501));
+    const panel = await screen.findByTestId("companion-return");
+    expect(within(panel).getByText("一颗被水磨圆的小石头")).toBeInTheDocument();
+    expect(within(panel).getByText("它没走远，就在屋子边上转了一圈。")).toBeInTheDocument();
+
+    // 收取之后最多一条邀请；「今天先这样」= 零惩罚、零学习证据
+    const nudge = await screen.findByTestId("companion-nudge");
+    await user.click(within(nudge).getByRole("button", { name: "今天先这样" }));
+    await waitFor(() => expect(api.interactCompanion).toHaveBeenCalledWith(1, "decline_nudge"));
+    expect(api.startTaskSession).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(api.startQuickSession).not.toHaveBeenCalled();
+    // 谢绝后不再二次邀请
+    await waitFor(() =>
+      expect(screen.queryByTestId("companion-nudge")).not.toBeInTheDocument()
+    );
   });
 });
 

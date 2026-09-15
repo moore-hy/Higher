@@ -76,27 +76,76 @@ vi.mock("../../src/components/ActiveSessionConflictModal", () => ({
   useActiveSessionConflict: () => ({ conflict: null, guard: () => false, close: () => {} }),
 }));
 
-vi.mock("../../src/api", () => ({
-  materializeRecurringRolling: vi.fn(async () => 0),
-  // ---- CLOSED LOOP V1：Today 只消费这两个入口 ----
-  getLearningState: vi.fn(),
-  getNextLearningAction: vi.fn(),
-  // ---- 参考数据 ----
-  listLearningItemsByProfile: vi.fn(async () => []),
-  getGoalTree: vi.fn(async () => null),
-  syncNotifications: vi.fn(async () => undefined),
-  startQuickSession: vi.fn(),
-  startSession: vi.fn(),
-  startTaskSession: vi.fn(),
-  endSession: vi.fn(),
-  // DailyTasksSection 依赖
-  createTaskV2: vi.fn(),
-  updateTaskV2: vi.fn(),
-  completeTask: vi.fn(),
-  uncompleteTask: vi.fn(),
-  deleteTask: vi.fn(),
-  archiveTask: vi.fn(),
-}));
+vi.mock("../../src/api", () => {
+  /**
+   * M6：Today 顶层 hero 的 Companion / World glance 默认状态。
+   *
+   * 必须**内联**在工厂里（vi.mock 会被提升到 import 之前），字段与 Rust
+   * `companion::types::CompanionState` 严格一致：idle + NOT_READY + 无远征。
+   */
+  const companionIdle = () => ({
+    profile_id: 1,
+    profile: {
+      id: 1,
+      profile_id: 1,
+      companion_id: "haven-companion",
+      archetype: "sprout-guide",
+      nickname: null,
+      personality_seed: 11,
+      created_at: "2026-09-15 01:00:00",
+      updated_at: "2026-09-15 01:00:00",
+    },
+    world: {
+      id: 1,
+      profile_id: 1,
+      expedition_readiness: "NOT_READY",
+      readiness_updated_at: null,
+      current_scene: "home",
+      current_behavior: "idle",
+      last_interaction_at: null,
+      last_nudge_at: null,
+      updated_at: "2026-09-15 01:00:00",
+    },
+    behavior: "idle",
+    readiness: "NOT_READY",
+    available_durations: [],
+    open_expedition: null,
+    ready_expedition: null,
+    memory_count: 0,
+    dialogue: { event: "first_visit_today", variant: 0, text: "今天也一起吧。" },
+    nudge_available: true,
+  });
+
+  return {
+    materializeRecurringRolling: vi.fn(async () => 0),
+    // ---- CLOSED LOOP V1：Today 只消费这两个入口 ----
+    getLearningState: vi.fn(),
+    getNextLearningAction: vi.fn(),
+    // ---- M6：Companion 子系统（附加能力，读失败也不得影响学习面）----
+    getCompanionState: vi.fn(async () => companionIdle()),
+    interactCompanion: vi.fn(async () => companionIdle()),
+    startCompanionExpedition: vi.fn(async () => companionIdle()),
+    settleCompanionExpeditions: vi.fn(async () => 0),
+    collectCompanionReturn: vi.fn(),
+    getCompanionMemories: vi.fn(async () => []),
+    getCompanionLearningNudge: vi.fn(async () => null),
+    // ---- 参考数据 ----
+    listLearningItemsByProfile: vi.fn(async () => []),
+    getGoalTree: vi.fn(async () => null),
+    syncNotifications: vi.fn(async () => undefined),
+    startQuickSession: vi.fn(),
+    startSession: vi.fn(),
+    startTaskSession: vi.fn(),
+    endSession: vi.fn(),
+    // DailyTasksSection 依赖
+    createTaskV2: vi.fn(),
+    updateTaskV2: vi.fn(),
+    completeTask: vi.fn(),
+    uncompleteTask: vi.fn(),
+    deleteTask: vi.fn(),
+    archiveTask: vi.fn(),
+  };
+});
 
 import * as api from "../../src/api";
 import Today from "../../src/pages/Today";

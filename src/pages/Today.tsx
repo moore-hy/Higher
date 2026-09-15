@@ -21,6 +21,7 @@ import DailyTasksSection, { minutesShort } from "../components/DailyTasksSection
 import DailyActivitiesSection from "../components/DailyActivitiesSection";
 import { PLAN_REQUEST_MESSAGE } from "../components/FinalGoalCard";
 import StartHere from "../components/StartHere";
+import CompanionGlance from "../components/companion/CompanionGlance";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
 import { queryKeys } from "../query/keys";
@@ -156,6 +157,14 @@ function Today() {
     void qc.invalidateQueries({ queryKey: queryKeys.nextAction.scope(profileId) });
     // PHASE 8：Review 的闭环数据同源失效（Review 不再依赖 refreshKey）
     void qc.invalidateQueries({ queryKey: queryKeys.review.scope(profileId) });
+    /**
+     * M6 / §M5-C：学习闭环事件会改变 Meaningful Contribution，进而改变远征就绪度，
+     * 因此学习侧失效时必须**同时**失效 companion 投影。
+     *
+     * 反向不成立：Companion 的任何变化（打招呼 / 点宠物 / 出发 / 收取）都
+     * **不**失效学习状态 —— 那正是 §M4-A 的真相边界。
+     */
+    void qc.invalidateQueries({ queryKey: queryKeys.companion.scope(profileId) });
   }, [qc, profileId]);
 
   /**
@@ -345,6 +354,27 @@ function Today() {
     }
   }
 
+  /**
+   * §M6-D：接受伙伴的学习邀请（「好，做一点点」）。
+   *
+   * 前端**不做任何推荐决策**：
+   * ① 时间档归一到「未选择」—— 这正是邀请所依据的 canonical 条件
+   *    （后端 `get_companion_learning_nudge` 使用的就是 budget = null 的 Primary），
+   *    因此归一后学习卡展示的就是同一条动作，不会出现「邀请说的是 A、卡片给的是 B」；
+   * ② 把注意力交还给唯一的学习启动卡，**不**自动开 Session ——
+   *    是否真的开始、开始什么，仍由用户点学习卡上的「开始」决定。
+   *
+   * 这样既避免了「点了邀请就莫名多出一条 StudySession」，也没有引入第二套推荐逻辑。
+   */
+  function handleAcceptInvitation() {
+    setAltIdx(0);
+    setBudget(null);
+    const el = document.getElementById("primary-next-action");
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+
   const hasActive = active != null;
   const today = snapshot?.today ?? null;
   const reviewState = snapshot?.review_state ?? null;
@@ -440,18 +470,35 @@ function Today() {
         </section>
       )}
 
-      {/* 第一屏优先级 ②③：唯一 Next Action + 时间预算（有 active 时让位给 Active Study Bar） */}
-      {!hasActive && displayAction && (
-        <StartHere
-          action={displayAction}
-          budget={budget}
-          onBudgetChange={setBudget}
-          busy={starting || actionQuery.isFetching}
-          onStart={() => void handleStartHere()}
-          onAnother={handleAnother}
-          friction={snapshot?.friction ?? null}
-        />
-      )}
+      {/* ===== §M6-A：顶层 hero —— 一个连贯区域同时承载两条动机 =====
+          宽屏：Companion glance | Primary Next Action（并列，谁也不被埋没）
+          窄屏：Companion glance ↓ Primary Next Action（纵向堆叠）
+          §M6-E：今日任务 / 今日活动 / 统计 / 计划控件全部保持在本区域**之下**，
+          不回到「管理看板第一屏」。 */}
+      <div className="today-hero">
+        {profileId != null && (
+          <CompanionGlance
+            profileId={profileId}
+            learningActive={hasActive}
+            onInvitationAccepted={handleAcceptInvitation}
+          />
+        )}
+
+        {/* 第一屏优先级 ②③：唯一 Next Action + 时间预算（有 active 时让位给 Active Study Bar） */}
+        {!hasActive && displayAction && (
+          <div className="today-hero__action" id="primary-next-action">
+            <StartHere
+              action={displayAction}
+              budget={budget}
+              onBudgetChange={setBudget}
+              busy={starting || actionQuery.isFetching}
+              onStart={() => void handleStartHere()}
+              onAnother={handleAnother}
+              friction={snapshot?.friction ?? null}
+            />
+          </div>
+        )}
+      </div>
 
       {/* ===== 第一屏优先级 ⑤：Secondary Actions =====
           §PHASE 1：位于 Primary CTA「开始」**之后**。这里没有任何 btn--primary，

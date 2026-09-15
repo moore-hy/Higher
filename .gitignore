@@ -19,6 +19,9 @@ src-tauri/target/
 # DEV-MOBILE-004-F1 取证/构建临时文件（Clean-Higher-Android-Workspace 安全清理范围）
 .higher/tmp/
 
+# BLK-01（git 对象库损坏）期间的本地恢复快照：源码副本，绝不入库
+.higher/.overnight_backup/
+
 # 发布产物（DEV-0065.2R §21：安装包不进 git）
 release/
 

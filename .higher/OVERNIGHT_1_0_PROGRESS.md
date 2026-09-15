@@ -622,6 +622,156 @@ npx tsc --noEmit · npx vitest run     0 error · 114 passed
 
 ---
 
+## F7. M6 施工与验收明细（2026-09-16 02:38–03:0x）
+
+### 产出物（纯前端；**未修改任何 Rust 代码**）
+
+```text
+新增（3）
+  src/components/companion/CompanionGlance.tsx   §M6-A/B：glance 卡（优先级 + 一个 CTA + 出门档位）
+  src/components/companion/CompanionNudge.tsx    §M6-D：主动学习邀请（最多一条、非自动弹出、谢绝零惩罚）
+  src/components/companion/CompanionReturn.tsx   §M5-E：返回结果内联面板（不是 Modal）
+修改（5）
+  src/pages/Today.tsx                 顶层 hero 组合（glance | Primary Next Action）+ 接受邀请的归一化
+  src/query/keys.ts                   companion.scope / state / memories（与新失效纪律）
+  src/styles.css                      .today-hero + .companion-*（仅用既有 --h-* token，无 !important）
+  tests/product-ui/todayGuidance.test.tsx    api mock 补 7 条 companion 命令（M6 影响的连带修复）
+  tests/product-e2e/morningReady.test.tsx    api 覆盖 + DEFAULT_COMPANION + §M7-A 步骤 45-52
+新增测试（1）
+  tests/product-ui/companionGlance.test.tsx  18 条前端契约测试
+```
+
+### §M6-A 顶层 hero：一个连贯区域，两条动机
+
+```text
+结构      : <div class="today-hero"> 内并列「Companion glance」与「Primary Next Action」
+宽屏      : grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)) → 两栏并列
+窄屏      : 同一规则自动塌成单栏，DOM 顺序恒为 glance → action（与 §M6-A 的窄屏示意一致）
+取舍      : 用 auto-fit 而不是媒体查询 —— 不需要两套断点，也不会出现「只有一张卡时
+            半宽留白」的视觉破洞；两张卡同处一个 region，谁也**不**被埋没。
+§M6-E     : 今日任务 / 今日活动 / 统计 / 计划控件全部在该 region **之下**（M6A-02 断言 DOM 顺序）
+失败降级  : companion 读取失败 → 卡**静默不渲染**，Today 学习启动面完全不受影响
+            （M6A-03：无「伙伴」region，但「从这里开始」与「开始」照常可用）
+```
+
+### §M6-B 优先级与「一个 CTA」
+
+```text
+priority（glanceTier，纯函数）：
+  ① ready_expedition  → 「回来了 · 查看」（primary CTA = 收取）
+  ② open_expedition   → 「远行中 · 还有约 N 分钟」（**只陈述事实**，无可执行主 CTA）
+                        + 一个 ghost「看看回来了吗」= 显式结算检查（无后台 tick 的对应动作）
+  ③ 新的事件          → behavior ∈ {returning, celebrating, recovery}
+  ④ 当前状态          → behavior ∈ {curious, resting, idle} → 「在窗边发呆」+ primary CTA「打招呼」
+```
+
+**一处需要评审的实现级取舍（已记录，非架构决策）**：任务书 §M6-B 的第三档「new companion
+event」没有给出字段定义。本轮**不**新增第二份事件真相（§15 唯一真相源），而是把这一档
+映射到后端**已经派生**的行为状态（returning / celebrating / recovery）。理由是：这三种
+行为状态本身就是「有值得被看见的新事」的确定性表达，而暴露 `companion_events` 列表会
+引入「已读/未读」前端状态，且每次 greet 都会立刻产生一条新事件 → 优先级自我循环。
+映射是纯展示层的，不改任何后端语义。
+
+```text
+一个 CTA  : 卡内恒只渲染**一个** .companion-glance__cta（M6B-03 断言 length === 1）
+不抢主入口: 该 CTA **刻意不用** .btn--primary —— 第一屏唯一的主入口仍是学习卡的「开始」
+            （§PHASE 1「同一时刻只有一个主入口」）。M6C-02 断言整个 .today-hero 内
+            .btn--primary 恰好出现 1 次。这样既满足 §M6-B「One primary companion CTA
+            maximum」，又不与既有的 §PHASE 1 不变量冲突。
+```
+
+### §M6-C 学习动作仍是 canonical
+
+```text
+StartHere 仍是唯一学习启动卡（what / how long / why / 开始 / 3-10-25），结构未改动。
+时间档变化 → 仍只重取 getNextLearningAction(profileId, budget)（M6C-01 / morningReady 49）。
+前端新增的**唯一**交互是：接受邀请时 setBudget(null) + setAltIdx(0) + 滚动到学习卡。
+  理由：budget = null 正是后端产出该邀请时所依据的条件（get_companion_learning_nudge
+  内部用 build_next_learning_action(snapshot, None)），归一后学习卡展示的就是**同一条**
+  动作，不会出现「邀请说的是 A、卡片给的是 B」；并且**绝不**自动开 Session。
+```
+
+### §M6-D 邀请：非自动弹出 / 只在主动互动后 / 谢绝零证据
+
+```text
+产生时机  : **只有**用户主动 greet 或收取返回之后才请求（挂载阶段 0 请求 —— M6D-01）
+来源      : 逐字段来自 canonical NextAction（M6D-02 断言标题一致）
+已开始学习: learningActive → 不请求（M6D-05）
+后端冷却  : nudge_available=false → 不请求（M6D-06）
+同一来访  : declinedThisVisit 本地守卫 —— 因为后端的 180 分钟窗口**不**覆盖
+            「本次来访已谢绝」这一语义（M6D-04 断言谢绝后只请求过 1 次）
+谢绝      : interact_companion(decline_nudge)，零学习副作用（M6D-04 断言 4 个学习 API 未被调用）
+接受      : 只把注意力交还学习卡，不自动开 Session（M6D-03 断言 3 个 start* 未被调用）
+```
+
+### §M6-F UI 质量 / §M5-C 无钱包
+
+```text
+- 无原始 JSON、无 debug 占位（M6F-01 / M6F-02）
+- **没有** XP / 经验值 / 能量 / 学习币 / 燃料 / 体力 / 等级 / 装备 任何经济化措辞（M6F-01）
+- 就绪度只表达「可以出门：20 分钟 / 1 小时 / 3 小时」，全部来自后端 available_durations
+  （M6B-04 断言档位与文案逐项相等；M6B-05 断言 NOT_READY 时无任何档位）
+- 形象是**原创中性几何 SVG**（圆 + 芽 + 两片叶），不依赖最终美术、不引入任何第三方
+  宠物素材；architecture 不依赖该形象（BEHAVIOR_MOOD 只提供 CSS class）
+- 只使用既有 --h-* token；本阶段**新增 0 处** !important
+```
+
+### M6 PASS GATE 逐项
+
+```text
+§M6-A one coherent top hero, not two dashboards      M6A-01 + morningReady 45
+§M6-B uncollected return > active expedition >
+      new event > current state                      M6B-01 / M6B-02 / M6B-03
+§M6-B one primary companion CTA maximum              M6B-03（.companion-glance__cta === 1）
+§M6-B not a list of 15 companion events              卡内无事件列表组件（单一 line + 单条对白）
+§M6-C what / how long / why / Start / 3-10-25        M6C-01 / M6C-02 + morningReady 49
+§M6-C time budget re-requests backend action          M6C-01 + morningReady 49（(1, "3m")）
+§M6-C do not move ranking to frontend                M6B-04（档位来自后端）/ M6C-01（0 副作用）
+§M6-D one small grounded invitation                  M6D-02（canonical title）
+§M6-D must not be an auto-popup                      M6D-01（挂载 0 请求）
+§M6-D never block user from leaving                  内联面板（非 Modal），无 backdrop / 无自动跳转
+§M6-E daily tasks remain secondary                   M6A-02（hero → secondary → 今日任务 → 今日活动）
+§M6-F no placeholder debug panels / no raw JSON      M6F-01 / M6F-02
+§M6-F no "XP +37" economy                            M6F-01
+§M6-F use existing design tokens / no mass !important 仅 --h-*；新增 !important = 0
+§M6-F original neutral placeholder allowed           原创几何 SVG；无第三方资产
+§M7-A see Companion glance + Primary Action          morningReady 45
+§M7-A collect companion event if present             morningReady 52 + M6B-01
+§M7-A at most one subtle learning nudge              morningReady 45 + M6D-02
+§M7-A choose 3 minutes → start → canonical           morningReady 49
+§M7-A readiness reflects real contribution           companion_world::cw01（Rust 侧因果）+ morningReady 50
+§M7-A start expedition                               morningReady 50（1200s）
+§M7-A clock progresses without background tick       morningReady 51（剩余时间仅由时间戳得出）
+§M7-A settle / collect return                        morningReady 52 + M6B-01
+§M7-A optional canonical invitation → decline        morningReady 52 + M6D-04
+```
+
+### 验收结果
+
+```text
+npx tsc --noEmit                          0 error
+npm run build                             ✓ EXIT=0
+npm run check:types                       0（src/generated 无漂移；7 条新命令不改变 IPC DTO 导出面）
+npx vitest run                            **9 files / 135 passed / 0 failed**（M1/M2/M4/M5 未回归）
+  └ 新增 tests/product-ui/companionGlance.test.tsx  18 passed（M6A/M6B/M6C/M6D/M6F）
+  └ tests/product-e2e/morningReady.test.tsx         +3 passed（§M7-A 步骤 45-52）
+cargo check --lib                         0 error
+cargo test --lib                          68 passed / 0 failed
+cargo test --test companion_skill         11 passed / 0 failed
+cargo test --test companion_world         13 passed / 0 failed
+cargo test --test daily_experience        38 passed / 0 failed
+cargo test --test learning_contribution   14 passed / 0 failed
+cargo test --test learning_friction        9 passed / 0 failed
+```
+
+跨阶段说明：M4/M5 已交付后端世界/远征/返回语义，其**前端呈现**按当时的记录归入本阶段，
+现已落地（glance / 出门档位 / 剩余时间 / 返回面板 / 一键收取）—— 未改动任何 M4/M5 后端文件。
+全仓回归与既有基线红的分离裁决见 M7。
+
+**M6 = VERIFIED**。
+
+---
+
 ## C. 阶段状态表
 
 | Phase | 内容 | 状态 | commit | files changed | targeted tests | module tests | known baseline reds | next exact action |
@@ -632,7 +782,7 @@ npx tsc --noEmit · npx vitest run     0 error · 114 passed
 | M3 | Meaningful Learning Contribution V1 | **VERIFIED** | 待提交（见 §F4） | 后端 6 文件：`learning_state/{contribution.rs(new),types,mod,state}`、`repository/{micro_learning_event,evaluation}.rs`、`tests/learning_contribution.rs(new)`；前端 2 文件：`src/types.ts`、`tests/product-ui/todayGuidance.test.tsx` | `cargo test --test learning_contribution` **14 passed / 0 failed**（MLC-01..09 + mlc10..mlc14） | `cargo check` 0 error（0 新增 warning）；`cargo test --lib` **49/0**；`cargo test --test {daily_experience,learning_friction}` 38/0、9/0（未回归）；`tsc` 0；`vitest` 114/8 files | 同 M0 三条基线红（`cl010` / `batch064_ui::{u26,u27}` / `batch064r2_ui::r2_u24`），未新增 | 已完成，进入 M4 |
 | M4 | Companion Skill V1 | **VERIFIED** | 见 §F5 | 后端 13 文件：`migrations/{v033_companion_skill.rs(new),mod}.rs`、`companion/{mod,types,deterministic,dialogue,story,readiness,repository,service}.rs(new ×8)`、`commands/companion.rs(new)`、`commands/mod.rs`、`app/builder.rs`、`lib.rs`、`tests/{companion_skill.rs(new),daily_experience.rs}`；前端 2 文件：`src/{types.ts,api.ts}` | `cargo test --test companion_skill` **11 passed / 0 failed**（CS-01..09 + cs10/cs11） | `cargo check` 0 error（0 新增 warning）；`cargo test --lib` **68/0**；`cargo test --test daily_experience` 38/0（DE024/DE025 迁移契约随 v033 更新）；`tsc` 0；`vitest` 114/8 | 同 M0 三条基线红，未新增 | 已完成，进入 M5 |
 | M5 | Companion World + Expedition + Return | **VERIFIED** | 见 §F6 | 复用 M4 的 `companion/*`（readiness/story/service/repository）+ `tests/companion_world.rs(new)` | `cargo test --test companion_world` **13 passed / 0 failed**（CW-01..11 + cw01b/cw03b/cw12） | 同上；`cargo test --test {companion_skill,learning_contribution,learning_friction,daily_experience}` 11/14/9/38 全绿 | 同 M0 三条基线红，未新增 | 已完成，进入 M6 |
-| M6 | Home/Today integration + full E2E | PENDING | — | — | — | — | — | — |
+| M6 | Home/Today integration + full E2E | **VERIFIED** | 见 §F7 | 前端：新增 `src/components/companion/{CompanionGlance,CompanionNudge,CompanionReturn}.tsx`、`tests/product-ui/companionGlance.test.tsx`；修改 `src/pages/Today.tsx`、`src/query/keys.ts`、`src/styles.css`、`tests/product-ui/todayGuidance.test.tsx`、`tests/product-e2e/morningReady.test.tsx`；**Rust 0 改动** | `npx vitest run` **9 files / 135 passed / 0 failed**（新增 companionGlance 18 条 + morningReady 步骤 45-52）；`cargo test --lib` 68/0；`--test {companion_skill,companion_world,daily_experience,learning_contribution,learning_friction}` 11/13/38/14/9 全绿 | `npx tsc --noEmit` 0；`npm run build` ✓；`npm run check:types` 0（src/generated 无漂移）；`cargo check --lib` 0 error（0 条新增 warning） | 同 M0 三条基线红，未新增 | 已完成，进入 M7 |
 | M7 | Regression + test-debt stabilization | PENDING | — | — | — | — | — | — |
 | S1 | Resource Governor V1 | PENDING | — | — | — | — | — | — |
 | S2 | Local/no-auth provider contract | PENDING | — | — | — | — | — | — |
@@ -685,4 +835,4 @@ M7-B 明确要求修复 `batch0601::t18_t19` 与 `closed_loop_core::{cl003,cl004
 
 ---
 
-_Last updated: 2026-09-16 01:1x_
+_Last updated: 2026-09-16 03:0x · M6 = VERIFIED（§F7）；下一阶段 = M7（全仓回归 + 测试债修复 + 冻结契约授权清单）_
