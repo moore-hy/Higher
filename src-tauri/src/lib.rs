@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod app;
 pub mod commands;
+pub mod companion;
 pub mod db;
 pub mod ipc;
 pub mod learning_state;

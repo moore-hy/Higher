@@ -47,6 +47,12 @@ import type {
   MicroLearningEvent,
   NextLearningAction,
   TimeBudgetKey,
+  // M4 / M5：Companion Skill + World / Expedition / Return
+  CompanionInteraction,
+  CompanionMemory,
+  CompanionNudge,
+  CompanionReturn,
+  CompanionState,
   MemoryRecord,
   PlanningIntakeDraft,
   KnowledgeCanvas,
@@ -1812,6 +1818,61 @@ export const recordMicroAction = (
     responseSummary: payload.responseSummary ?? null,
     durationSeconds: payload.durationSeconds,
   });
+
+// ===================== M4 / M5：Companion Skill + World / Expedition / Return =====================
+
+/**
+ * §M4-D / §M5：读取伙伴状态（首访会建立**持久**身份）。
+ *
+ * 该命令会结算到点的远征并落库 companion 侧状态，但**绝不**写任何学习表
+ * （tasks / sessions / evaluations / micro events）—— Companion 不拥有学习真相。
+ */
+export const getCompanionState = (profileId: number) =>
+  invoke<CompanionState>("get_companion_state", { profileId });
+
+/**
+ * §M4-D：与伙伴互动（greet / pet / cheer / decline_nudge）。
+ *
+ * 点宠物 / 打招呼 / 鼓励**不产生任何学习收益**；谢绝邀请立刻生效、零内疚、
+ * 同一来访不再二次邀请（§M4-G）。
+ */
+export const interactCompanion = (
+  profileId: number,
+  interaction: CompanionInteraction
+) => invoke<CompanionState>("interact_companion", { profileId, interaction });
+
+/**
+ * §M4-D / §M5-B：开始一次远征（只允许 20m / 60m / 3h，且受就绪度约束）。
+ *
+ * 就绪度不足或时长不合法 → 后端显式报错（fail-closed）。
+ */
+export const startCompanionExpedition = (
+  profileId: number,
+  durationSeconds: number
+) => invoke<CompanionState>("start_companion_expedition", { profileId, durationSeconds });
+
+/** §M4-D / §M5-B：结算到点的远征（返回本次新结算条数；无后台 tick）。 */
+export const settleCompanionExpeditions = (profileId: number) =>
+  invoke<number>("settle_companion_expeditions", { profileId });
+
+/** §M4-D / §M5-E：收取返回结果（确定性故事 / 收藏 / 场景记忆）。 */
+export const collectCompanionReturn = (profileId: number, expeditionId: number) =>
+  invoke<CompanionReturn>("collect_companion_return", { profileId, expeditionId });
+
+/** §M4-D：读取收藏 / 记忆列表（只读，倒序）。 */
+export const getCompanionMemories = (profileId: number, limit?: number | null) =>
+  invoke<CompanionMemory[]>("get_companion_memories", {
+    profileId,
+    limit: limit ?? null,
+  });
+
+/**
+ * §M4-D / §M4-G：取出**最多一条**主动学习邀请（来源必须是 canonical NextAction）。
+ *
+ * 没有可发出的邀请时返回 `null`（不是错误）。
+ */
+export const getCompanionLearningNudge = (profileId: number) =>
+  invoke<CompanionNudge | null>("get_companion_learning_nudge", { profileId });
 
 /** DEV-0059.1 §3：准备复盘 AI——置 running + 构建 evidence snapshot（不调 Provider）；返回快照 JSON */
 export const preparePlanningReviewAi = (profileId: number, reviewId: number) =>

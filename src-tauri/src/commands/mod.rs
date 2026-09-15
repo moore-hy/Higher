@@ -5,6 +5,7 @@
 // `repository`, `domain`, `agent`, `search`, `recurrence`, and `platform`.
 // Existing Tauri command *names* are preserved so the front-end is unaffected.
 pub mod agent;
+pub mod companion;
 pub mod data;
 pub mod intake;
 pub mod knowledge;

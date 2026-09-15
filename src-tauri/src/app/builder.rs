@@ -291,6 +291,14 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             record_micro_action,
             // HIGHER 1.0 §M1-A 有限 Learning Pack
             get_learning_pack,
+            // HIGHER 1.0 §M4 / §M5 Companion Skill + World / Expedition / Return
+            crate::commands::companion::get_companion_state,
+            crate::commands::companion::interact_companion,
+            crate::commands::companion::start_companion_expedition,
+            crate::commands::companion::settle_companion_expeditions,
+            crate::commands::companion::collect_companion_return,
+            crate::commands::companion::get_companion_memories,
+            crate::commands::companion::get_companion_learning_nudge,
             prepare_current_planning_review,
             prepare_planning_review_ai,
             run_planning_review_ai,

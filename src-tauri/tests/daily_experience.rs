@@ -983,6 +983,33 @@ fn de023_fresh_db_has_micro_table_and_constraints() {
 
 // =============== DE024 ===============
 
+/// v033（§M4 Companion Skill）新增的表。
+///
+/// 迁移契约测试需要「回退到 v031」这一前置状态；随着连续迁移版本增加，
+/// 回退步骤必须把**所有**晚于 v031 的迁移一起撤掉（绝不只撤 v032），
+/// 否则 `MAX(version)` 与「新增表集合」都会被后续迁移污染。
+const V033_TABLES: [&str; 5] = [
+    "companion_profiles",
+    "companion_world_state",
+    "companion_events",
+    "companion_expeditions",
+    "companion_memories",
+];
+
+/// 把库回退到 v031 状态（**仅供迁移契约测试使用**）。
+fn rollback_to_v031(conn: &Connection) {
+    conn.execute_batch(
+        "DROP TABLE micro_learning_events;
+         DROP TABLE companion_events;
+         DROP TABLE companion_expeditions;
+         DROP TABLE companion_memories;
+         DROP TABLE companion_profiles;
+         DROP TABLE companion_world_state;
+         DELETE FROM schema_migrations WHERE version >= 32;",
+    )
+    .unwrap();
+}
+
 #[test]
 fn de024_forward_migration_from_old_schema_preserves_data() {
     let conn = setup();
@@ -993,12 +1020,8 @@ fn de024_forward_migration_from_old_schema_preserves_data() {
     let s = seed_completed_session(&conn, p, Some(item), 1, 20);
     let e = mk_evaluation(&conn, p, item, "旧数据验证", "passed");
 
-    // 模拟一个「已升到 v031 的库」：移除 v032 的表与 ledger 行
-    conn.execute_batch(
-        "DROP TABLE micro_learning_events;
-         DELETE FROM schema_migrations WHERE version = 32;",
-    )
-    .unwrap();
+    // 模拟一个「已升到 v031 的库」：移除 v032 与 v033 的表与 ledger 行
+    rollback_to_v031(&conn);
     let ver_before: u32 = conn
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
@@ -1009,7 +1032,11 @@ fn de024_forward_migration_from_old_schema_preserves_data() {
     let ver_after: u32 = conn
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(ver_after, 32);
+    assert_eq!(
+        ver_after,
+        app_lib::migrations::latest_version(),
+        "DE024：前向迁移必须一路推进到当前最新版本"
+    );
 
     // 旧数据一条不丢
     for (sql, expect, label) in [
@@ -1035,6 +1062,11 @@ fn de024_forward_migration_from_old_schema_preserves_data() {
     let snap = build_learning_state_at(&conn, p, &today).unwrap();
     assert_eq!(snap.micro.recent_micro_actions.len(), 1);
 
+    // 迁移后 Companion 闭环也立刻可用（v033 同阶段完成）
+    let companion =
+        app_lib::companion::build_companion_state_at(&conn, p, "2026-09-16 02:00:00").unwrap();
+    assert_eq!(companion.profile.profile_id, p);
+
     // 幂等：再跑一次不得重复应用
     app_lib::migrations::run_migrations(&conn).unwrap();
     let n32: i64 = conn
@@ -1045,6 +1077,14 @@ fn de024_forward_migration_from_old_schema_preserves_data() {
         )
         .unwrap();
     assert_eq!(n32, 1, "DE024：v032 必须幂等");
+    let n33: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 33",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n33, 1, "DE024：v033 必须幂等");
 }
 
 // =============== DE025 ===============
@@ -1058,11 +1098,7 @@ fn de025_micro_migration_only_adds_one_table() {
     let cols_sessions_after = table_columns(&conn, "study_sessions");
 
     // 回退到 v031 状态
-    conn.execute_batch(
-        "DROP TABLE micro_learning_events;
-         DELETE FROM schema_migrations WHERE version = 32;",
-    )
-    .unwrap();
+    rollback_to_v031(&conn);
     let tables_without_micro = table_names(&conn);
 
     // 重新前向迁移
@@ -1074,10 +1110,17 @@ fn de025_micro_migration_only_adds_one_table() {
         .filter(|t| !tables_without_micro.contains(t))
         .cloned()
         .collect();
+    // v032（Micro）+ v033（Companion）新增的全部表；`table_names` 按名称排序。
+    let mut expected_added: Vec<String> = V033_TABLES.iter().map(|t| t.to_string()).collect();
+    expected_added.push("micro_learning_events".to_string());
+    expected_added.sort();
     assert_eq!(
-        added,
-        vec!["micro_learning_events".to_string()],
-        "DE025：v032 只允许新增一张表，不得改动其它表结构"
+        added, expected_added,
+        "DE025：v031 → 最新版本只允许**新增表**，不得改动其它表结构"
+    );
+    assert!(
+        added.contains(&"micro_learning_events".to_string()),
+        "DE025：v032 必须且只能新增 micro_learning_events 这一张表（除后续迁移外）"
     );
     assert_eq!(tables_final, tables_with_micro, "DE025：表集合必须收敛回同一状态");
 
@@ -1114,8 +1157,16 @@ fn de025_micro_migration_only_adds_one_table() {
         )
         .unwrap();
     assert_eq!(name32, "micro_learning_events");
+    let name33: String = conn
+        .query_row(
+            "SELECT name FROM schema_migrations WHERE version = 33",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(name33, "companion_skill", "DE025：v033 ledger 名称必须固定");
 
-    // 历史版本行必须仍然是连续的 1..=32，且无重复
+    // 历史版本行必须仍然连续（1..=最新版本），且无重复、无空洞
     let versions: Vec<u32> = {
         let mut stmt = conn
             .prepare("SELECT version FROM schema_migrations ORDER BY version")
@@ -1125,7 +1176,11 @@ fn de025_micro_migration_only_adds_one_table() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    assert_eq!(versions, (1..=32u32).collect::<Vec<_>>());
+    assert_eq!(
+        versions,
+        (1..=app_lib::migrations::latest_version()).collect::<Vec<_>>(),
+        "DE025：版本历史必须连续 1..=latest（不得跳号、不得重复）"
+    );
 }
 
 // ============================================================================

@@ -33,6 +33,7 @@ pub mod v029_local_sync_backfill_outbox;
 pub mod v030_planning_intake_drafts;
 pub mod v031_knowledge_canvas;
 pub mod v032_micro_learning_events;
+pub mod v033_companion_skill;
 
 /// 单个 Migration 定义。
 ///
@@ -208,6 +209,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 32,
         name: "micro_learning_events",
         up: v032_micro_learning_events::up,
+    },
+    Migration {
+        version: 33,
+        name: "companion_skill",
+        up: v033_companion_skill::up,
     },
 ];
 

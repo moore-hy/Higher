@@ -1478,6 +1478,160 @@ export interface MeaningfulLearningContribution {
   updated_at: string;
 }
 
+// ===================== M4 / M5：Companion Skill + World / Expedition / Return =====================
+
+/**
+ * M4-B：**确定性**基础行为状态机（刻意只有七个状态，不做几十种情绪）。
+ *
+ * 迁移只由可验证输入决定：远征状态 / 近期有意义学习 / 近期返回 /
+ * recovery 状态 / 近期互动 / 距上次访问的时间。**不需要 LLM**。
+ */
+export type BehaviorState =
+  | "idle"
+  | "curious"
+  | "resting"
+  | "expedition"
+  | "returning"
+  | "celebrating"
+  | "recovery";
+
+/**
+ * M5-C：远征就绪度（**派生**状态）。
+ *
+ * 它**不是**余额：没有能量值、没有学习币、没有燃料钱包。
+ * 它只表达「此刻可以出发去多久」。
+ *
+ * - `NOT_READY` → 远征不可用
+ * - `READY_SHORT` → 可用 20m
+ * - `READY_MEDIUM` → 可用 20m / 60m
+ * - `READY_LONG` → 可用 20m / 60m / 3h
+ */
+export type ExpeditionReadiness =
+  | "NOT_READY"
+  | "READY_SHORT"
+  | "READY_MEDIUM"
+  | "READY_LONG";
+
+export type ExpeditionStatus = "running" | "ready" | "collected";
+
+/** M5-D：主题只改变故事/收藏风味，不改变掌握度、不给学习增益。 */
+export type ExpeditionTheme =
+  | "English"
+  | "Math"
+  | "Programming"
+  | "Electronics"
+  | "General";
+
+/** M4-A：Companion 拥有的身份（持久，不随每次访问重建）。 */
+export interface CompanionProfile {
+  id: number;
+  profile_id: number;
+  companion_id: string;
+  archetype: string;
+  /** 用户起的名字（null = 未起名） */
+  nickname: string | null;
+  personality_seed: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** M4-A / M5-C：世界状态（每档案一行）。 */
+export interface CompanionWorldState {
+  id: number;
+  profile_id: number;
+  expedition_readiness: ExpeditionReadiness;
+  readiness_updated_at: string | null;
+  /** V1 取值：home | wilds */
+  current_scene: string;
+  current_behavior: BehaviorState;
+  last_interaction_at: string | null;
+  /** §M4-G：本次来访是否已发过主动学习邀请 */
+  last_nudge_at: string | null;
+  updated_at: string;
+}
+
+/** M5-B：远征事实（含确定性结算所需的全部字段）。 */
+export interface CompanionExpedition {
+  id: number;
+  profile_id: number;
+  status: ExpeditionStatus;
+  started_at: string;
+  duration_seconds: number;
+  /** 开始时一次算定 = started_at + duration_seconds（无需后台 tick） */
+  finished_at: string | null;
+  readiness_tier_at_start: ExpeditionReadiness;
+  /** 确定性结果的全部输入（同一 seed + tier → 同一故事） */
+  seed: number;
+  theme: string;
+  collected_at: string | null;
+}
+
+/** M5-E：返回时留下的记忆 / 收藏（纯文本，无二进制资产）。 */
+export interface CompanionMemory {
+  id: number;
+  profile_id: number;
+  kind: string;
+  title: string;
+  body: string;
+  source_type: string | null;
+  source_id: number | null;
+  created_at: string;
+}
+
+/** M4-E：一条确定性对白（变体由稳定 seed 选出）。 */
+export interface CompanionDialogue {
+  event: string;
+  variant: number;
+  text: string;
+}
+
+/** M4-D：允许的 companion 交互类型。 */
+export type CompanionInteraction = "greet" | "pet" | "cheer" | "decline_nudge";
+
+/**
+ * M4-D `get_companion_state(profile_id)` 的返回。
+ *
+ * 注意：这里**没有**任何学习真相字段 —— 学习信息一律由
+ * `get_learning_state` / `get_next_learning_action` 提供（Companion 只读，不复制）。
+ */
+export interface CompanionState {
+  profile_id: number;
+  profile: CompanionProfile;
+  world: CompanionWorldState;
+  behavior: BehaviorState;
+  readiness: ExpeditionReadiness;
+  /** 该就绪度下可选的远征时长（秒，升序；NOT_READY → 空） */
+  available_durations: number[];
+  open_expedition: CompanionExpedition | null;
+  ready_expedition: CompanionExpedition | null;
+  memory_count: number;
+  dialogue: CompanionDialogue;
+  /** §M4-G：此刻是否允许发出主动学习邀请（每次来访最多一次） */
+  nudge_available: boolean;
+}
+
+/**
+ * M4-G / M5-F 的主动学习邀请：**来源必须是 canonical 学习状态**
+ * （Companion 不自己排序学习任务）。
+ */
+export interface CompanionNudge {
+  text: string;
+  action_type: string;
+  reason_code: string;
+  title: string;
+  estimated_minutes: number;
+  suggested_minutes: number | null;
+}
+
+/** M5-E：收取返回事件的结果（确定性）。 */
+export interface CompanionReturn {
+  expedition: CompanionExpedition;
+  memory: CompanionMemory;
+  dialogue: CompanionDialogue;
+  /** §M5-F：收取之后最多一条学习邀请 */
+  nudge: CompanionNudge | null;
+}
+
 /** PHASE 2：统一动作类型。 */
 export type NextActionType =
   | "active_session"

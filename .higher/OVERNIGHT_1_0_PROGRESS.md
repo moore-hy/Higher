@@ -457,6 +457,171 @@ M3 未触碰 review_state / next_action / date 归日逻辑，与之无因果关
 
 ---
 
+## F5. M4 施工与验收明细（2026-09-16 02:26–02:34）
+
+### 产出物
+
+```text
+后端（新增 9 / 修改 4）
+  migrations/v033_companion_skill.rs     (NEW) v033：五张 companion 表 + 3 个索引
+  migrations/mod.rs                      注册 v033（施工前实测 latest = 32 → 连续下一版）
+  companion/mod.rs / types.rs / deterministic.rs / dialogue.rs /
+  story.rs / readiness.rs / repository.rs / service.rs   (NEW ×8)
+  commands/companion.rs                  (NEW) 7 条 §M4-D 命令
+  commands/mod.rs · app/builder.rs · lib.rs   注册
+  tests/companion_skill.rs               (NEW) 11 条真实 SQLite 集成测试
+  tests/daily_experience.rs              迁移契约测试（DE024/DE025）随连续迁移更新
+前端（2）
+  src/types.ts                           Companion* 类型镜像
+  src/api.ts                             7 条命令包装（getCompanionState / interactCompanion / ...）
+```
+
+### §M4-A 真相边界（架构级）
+
+```text
+Companion 拥有（写 companion_*，v033）：identity / personality seed / behavior state /
+  world & expedition state / memories / bounded dialogue / collectibles / cooldowns
+Companion 不拥有（只读 canonical learning_state）：task truth / mastery truth /
+  today minutes truth / evaluation truth / next action ranking truth
+```
+
+**物理保证**：`companion::repository` 唯一会写的表是 `companion_*`；
+唯一读取的非 companion 表是 `learning_items.name`（§M5-D 主题推断，只读展示名）。
+就绪度读 M3 `contribution.today_total`，行为状态读 `snapshot.recovery_state`，
+学习邀请读 `build_next_learning_action(snapshot)` —— 没有第二套推荐引擎、
+没有第二份学习真相（§15）。
+
+### §M4-B 状态机（deterministic，0 LLM）
+
+```text
+runner / curious / resting / expedition / returning / celebrating / recovery（仅 7 个）
+
+固定优先级（纯函数 derive_behavior）：
+  有等待收取的远征 → returning        刚互动过且有实质学习 → celebrating
+  有进行中的远征   → expedition       当日有实质学习       → curious
+  recovery 生效    → recovery         很久没互动          → resting
+                                      其它                → idle
+```
+
+### §M4-E 对白（本地确定性模板，0 Cloud）
+
+九个事件各有 **3 条**变体，由 FNV-1a 稳定哈希（`profile_id + event + context`）选出
+→ 同输入恒同输出、不同档案/不同日子自然换语气，不是不受控随机刷屏。
+`hello / welcome back / micro complete / session complete / expedition return` 全部走模板。
+
+### §M4-G 主动学习邀请
+
+- 每次「来访」最多一条：`last_nudge_at` 起算，间隔 ≥ `NUDGE_VISIT_GAP_MINUTES`(180) 视为新来访；
+- 来源**必须**是 canonical `NextLearningAction`（`nudge.action_type / reason_code / title`
+  与 canonical 逐字段相等，CS-04 断言）；
+- 谢绝（`decline_nudge`）→ 立刻接受 + 结清未决邀请 + **只**写 companion 状态（CS-06）。
+
+### §M4-F 显式自由聊天 —— SHOULD / NON-BLOCKING TONIGHT → 本轮**未实现**（如实记录）
+
+任务书 §M4-F 标注为 SHOULD / NON-BLOCKING；M4 的 MUST 门槛（CS-01..09）不依赖它。
+本轮未接自由聊天（也就**自然满足**「不得因为宠物移动或打招呼而调 Cloud」）。
+V1 现状：无 AI runtime 时的「有界本地模板」行为已由 §M4-E 覆盖。
+
+### M4 PASS GATE 逐项
+
+```text
+CS-01 persistent companion identity        cs01（两次读取同一身份；companion_profiles 恒 1 行）  ✓
+CS-02 behavior state deterministic         cs02 + cs10（迁移表 + 同输入同输出）                  ✓
+CS-03 no app-open learning reward          cs03（10 次读取 + 打招呼/点宠物/鼓励 → contribution 0）  ✓
+CS-04 companion reads canonical NextAction cs04（action_type/reason_code/title 逐字段相等）        ✓
+CS-05 cannot fabricate task/mastery        cs05（tasks 行数不变、mastery_status 不变）             ✓
+CS-06 decline nudge creates no evidence    cs06（学习表 + ai_* 行数均不变；邀请被结清）             ✓
+CS-07 max one proactive nudge per visit    cs07（同来访第二次 → None；跨间隔 → 再次可发）           ✓
+CS-08 routine dialogue = 0 Cloud           cs08（含 micro/session complete 全链路 ai_* 增量 0）     ✓
+CS-09 profile isolation                    cs09（B 看不到 A 的身份/事件/记忆/就绪度）                ✓
+```
+
+### 验收结果
+
+```text
+cargo test --test companion_skill     11 passed / 0 failed   （NEW）
+cargo test --test daily_experience    38 passed / 0 failed   （迁移契约已随 v033 更新）
+cargo test --lib                      68 passed / 0 failed   （含 companion 单元测试 12 条）
+cargo check --lib                     0 error（0 条新增 warning）
+npx tsc --noEmit                      0 error
+npx vitest run                        114 passed / 8 files
+```
+
+**M4 = VERIFIED**。
+
+---
+
+## F6. M5 施工与验收明细（2026-09-16 02:30–02:36）
+
+### §M5-C 就绪度锁定策略（**派生状态，不是钱包**）
+
+```text
+today_total（M3，已封顶 40）→  < 5 NOT_READY / >= 5 READY_SHORT(20m)
+                              / >= 15 READY_MEDIUM(20m,60m)
+                              / >= 30 READY_LONG(20m,60m,3h)
+结算：存在未收口远征（running 或 ready 未收取）→ 就绪度占位为 NOT_READY
+```
+
+**没有任何** energy balance / +N energy / spend N energy / learning coins / fuel wallet
+的列或字段：v033 的 `companion_world_state` 只有 `expedition_readiness`（状态）
+与 `readiness_updated_at`（快照时刻）。内部有界数值（M3 `today_total`）只作为
+派生就绪度的**实现细节**（任务书明确允许）。
+
+**结构上不可能**从以下来源产生就绪度：App 打开时长 / 点宠物 / 空转 / skipped Micro /
+后台常驻 / 无验证计时器 —— 它们都不提升 M3 `today_total`（CW-02 断言）。
+
+### §M5-B 远征（无后台 tick）
+
+```text
+时长白名单：20m / 60m / 3h（其它一律 Err）
+finished_at 在**开始**时一次算定并落库 → now >= finished_at 即完成（纯时间比较）
+用户可完全关掉 Higher；重开时仅凭时间戳结算（CW-04）
+seed = FNV-1a(profile_id, started_at, tier, duration)  ← 确定性结果的全部输入
+theme = 学习项名称关键词推断（English/Math/Programming/Electronics/General）
+```
+
+### §M5-D 主题 / §M5-E 返回
+
+主题只改变**故事与收藏的风味**（每主题 4 件收藏 × 3 段场景记忆，由 seed 选取），
+不改变掌握度、不给学习增益；无法高置信推断 → `General`，**绝不**为此调 Cloud。
+
+### §M5-F 返回 → 可选学习
+
+收取后最多一条学习邀请，来源为 canonical NextLearningAction；
+「今天先这样」= `decline_nudge`，零惩罚（与 §M4-G 同一条实现路径）。
+
+### M5 PASS GATE 逐项
+
+```text
+CW-01 contribution changes readiness      cw01 + cw01b（NOT_READY→READY_SHORT→MEDIUM→LONG）    ✓
+CW-02 app open alone does not change it   cw02（10 次读取 + 点宠物 → 恒 NOT_READY）             ✓
+CW-03 expedition starts                   cw03 + cw03b（时长/就绪度不满足 → 显式 Err）           ✓
+CW-04 closing app irrelevant              cw04（拨动时间戳即可结算；结算幂等）                   ✓
+CW-05 no background tick dependency       cw04（finished_at 开始时算定并落库，无计时器依赖）      ✓
+CW-06 return deterministic by seed        cw06（两次同输入远征 → 同 seed/同收藏/同故事/同对白）   ✓
+CW-07 result is companion-side only       cw07（学习表行数不变；结果只落 companion_memories）     ✓
+CW-08 return nudge from canonical state   cw08（逐字段等于 canonical NextAction）                ✓
+CW-09 absence does not punish             cw09（缺席 9 天后远征结果仍在、可收取、身份不变）        ✓
+CW-10 profile isolation                   cw10（跨档案收取 → 「找不到」；记忆不串）               ✓
+CW-11 Cloud calls = 0                     cw11（世界+远征+返回全链路 ai_* 增量 0）                ✓
+附加：§M5-D 主题推断                      cw12（English 命中 / 无法推断 → General）              ✓
+```
+
+### 验收结果
+
+```text
+cargo test --test companion_world     13 passed / 0 failed   （NEW）
+cargo test --test companion_skill     11 passed / 0 failed
+cargo test --test learning_contribution / learning_friction / daily_experience  14 / 9 / 38 passed
+cargo test --lib                      68 passed / 0 failed
+cargo check --lib                     0 error（0 条新增 warning）
+npx tsc --noEmit · npx vitest run     0 error · 114 passed
+```
+
+**M5 = VERIFIED**（前端世界/远征 UI 归 M6「Home/Today 集成」范畴）。
+
+---
+
 ## C. 阶段状态表
 
 | Phase | 内容 | 状态 | commit | files changed | targeted tests | module tests | known baseline reds | next exact action |
@@ -465,8 +630,8 @@ M3 未触碰 review_state / next_action / date 归日逻辑，与之无因果关
 | M1 | Daily Learning Loop completion（Pack / recompute / Micro→Session / Session End / Cold Start / 30s gate） | **VERIFIED** | 无（BLK-01，见 §B2；快照 `.higher/.overnight_backup/M1/`） | 后端 7 文件：`learning_state/{mod,types,next_action,micro,pack}.rs`、`commands/learning_state.rs`、`app/builder.rs`、`tests/daily_experience.rs`；前端 6 文件：`src/{types.ts,api.ts,query/keys.ts,pages/LearningWorkspace.tsx,styles.css}`、`tests/product-ui/learningEnd.test.tsx` | `cargo test --test daily_experience` **38 passed / 0 failed**（含 LP-01..06 / RC-01..05 / M1-C ×2 / M1-E）；`vitest learningEnd` **9 passed**（含 M1-D ×4） | `cargo check` 0 error；`cargo test --lib` 40/0；`npx tsc --noEmit` 0；`vitest run` 依 M1 收尾重跑（见 §G） | 同 M0 三条基线红（`cl010` / `batch064_ui::{u26,u27}` / `batch064r2_ui::r2_u24`），均未新增 | 已完成，进入 M2 |
 | M2 | Learning Friction V1（LearningFrictionState / support 0-2 / 冷却反锤击 / 0 LLM） | **VERIFIED** | 无（BLK-01 恢复后统一 commit，见 §B2 修复记录） | 后端 7 文件：`learning_state/{friction(new),types,mod,state,micro,next_action}.rs`、`repository/{evaluation,micro_learning_event}.rs`、`tests/learning_friction.rs(new)`；前端 4 文件：`src/{types.ts,components/StartHere.tsx,pages/Today.tsx,styles.css}` | `cargo test --test learning_friction` **9 passed / 0 failed**（MF-01..MF-09）；`cargo test --lib` **45 passed / 0 failed** | `cargo check` 0 error；`cargo test --test daily_experience` 38/0（M2 未回归）；`tsc` / `vitest` 见 §G | 同 M0 三条基线红，未新增 | 已完成，进入 M3 |
 | M3 | Meaningful Learning Contribution V1 | **VERIFIED** | 待提交（见 §F4） | 后端 6 文件：`learning_state/{contribution.rs(new),types,mod,state}`、`repository/{micro_learning_event,evaluation}.rs`、`tests/learning_contribution.rs(new)`；前端 2 文件：`src/types.ts`、`tests/product-ui/todayGuidance.test.tsx` | `cargo test --test learning_contribution` **14 passed / 0 failed**（MLC-01..09 + mlc10..mlc14） | `cargo check` 0 error（0 新增 warning）；`cargo test --lib` **49/0**；`cargo test --test {daily_experience,learning_friction}` 38/0、9/0（未回归）；`tsc` 0；`vitest` 114/8 files | 同 M0 三条基线红（`cl010` / `batch064_ui::{u26,u27}` / `batch064r2_ui::r2_u24`），未新增 | 已完成，进入 M4 |
-| M4 | Companion Skill V1 | PENDING | — | — | — | — | — | — |
-| M5 | Companion World + Expedition + Return | PENDING | — | — | — | — | — | — |
+| M4 | Companion Skill V1 | **VERIFIED** | 见 §F5 | 后端 13 文件：`migrations/{v033_companion_skill.rs(new),mod}.rs`、`companion/{mod,types,deterministic,dialogue,story,readiness,repository,service}.rs(new ×8)`、`commands/companion.rs(new)`、`commands/mod.rs`、`app/builder.rs`、`lib.rs`、`tests/{companion_skill.rs(new),daily_experience.rs}`；前端 2 文件：`src/{types.ts,api.ts}` | `cargo test --test companion_skill` **11 passed / 0 failed**（CS-01..09 + cs10/cs11） | `cargo check` 0 error（0 新增 warning）；`cargo test --lib` **68/0**；`cargo test --test daily_experience` 38/0（DE024/DE025 迁移契约随 v033 更新）；`tsc` 0；`vitest` 114/8 | 同 M0 三条基线红，未新增 | 已完成，进入 M5 |
+| M5 | Companion World + Expedition + Return | **VERIFIED** | 见 §F6 | 复用 M4 的 `companion/*`（readiness/story/service/repository）+ `tests/companion_world.rs(new)` | `cargo test --test companion_world` **13 passed / 0 failed**（CW-01..11 + cw01b/cw03b/cw12） | 同上；`cargo test --test {companion_skill,learning_contribution,learning_friction,daily_experience}` 11/14/9/38 全绿 | 同 M0 三条基线红，未新增 | 已完成，进入 M6 |
 | M6 | Home/Today integration + full E2E | PENDING | — | — | — | — | — | — |
 | M7 | Regression + test-debt stabilization | PENDING | — | — | — | — | — | — |
 | S1 | Resource Governor V1 | PENDING | — | — | — | — | — | — |
