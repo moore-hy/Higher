@@ -317,6 +317,25 @@ impl<'a> StudySessionRepository<'a> {
 
     /// 结束学习（§57 顺序）：flush note 由调用方保证 → ended_at → duration → completed。
     pub fn end(&self, id: i64, note: Option<&str>) -> rusqlite::Result<StudySession> {
+        // PRODUCT-2.0 §8A / §23.5 P0 DATA SAFETY：结束必须幂等。
+        //
+        // 原实现无条件用 `datetime('now')` 重算 ended_at / duration_seconds，
+        // 于是对同一 Session 第二次 end 会**虚增真实学习时长**并覆盖首次 ended_at
+        // （双击「结束学习」、响应丢失后重试、并发重复提交都会触发）。
+        //
+        // 规则：已经落库结束（ended_at 非空或 status='completed'）的 Session
+        // 再次 end → 时间事实原样返回，绝不动 ended_at / duration_seconds / status。
+        // note 属于可补充的附属内容，允许补写；不影响时间事实。
+        let existing = self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        if existing.ended_at.is_some() || existing.status == "completed" {
+            if let Some(n) = note {
+                self.conn.execute(
+                    "UPDATE study_sessions SET note = ?2, updated_at = datetime('now') WHERE id = ?1",
+                    params![id, n],
+                )?;
+            }
+            return self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows);
+        }
         self.conn.execute(
             "UPDATE study_sessions
              SET ended_at = datetime('now'),

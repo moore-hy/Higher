@@ -14,9 +14,18 @@
     "test:ai-runtime": "tsc -p tsconfig.ai-runtime-test.json && node --test .ai-runtime-test-build/tests/ai-runtime/runtimeState.test.js",
     "test:mobile": "tsc -p tsconfig.mobile-test.json && node --test .mobile-test-build/tests/mobile/*.test.js",
     "test:sync": "tsc -p tsconfig.sync-test.json && node --test .sync-test-build/tests/sync/*.test.js",
-    "test:mobile-f2": "node --test --experimental-test-module-mocks --import tsx tests/mobile/f2AiRootTabLayout.test.tsx"
+    "test:mobile-f2": "node --test --experimental-test-module-mocks --import tsx tests/mobile/f2AiRootTabLayout.test.tsx",
+    "test:product-ui": "vitest run tests/product-ui",
+    "test:interaction-contract": "vitest run tests/interaction-contract",
+    "test:product-e2e": "vitest run tests/product-e2e",
+    "test:learning-engine": "vitest run tests/learning-engine",
+    "test:morning-ready": "vitest run tests/product-e2e/morningReady.test.tsx",
+    "verify:frontend": "npx tsc --noEmit && npm run build && npm run check:types && npm run test:product-ui && npm run test:interaction-contract && npm run test:product-e2e && npm run test:learning-engine && npm run test:ai-runtime && npm run test:sync && npm run test:mobile",
+    "verify:rust": "cd src-tauri && cargo fmt --check && cargo check -j 1 && cargo test --no-fail-fast -j 1",
+    "verify:overnight": "npm run verify:frontend && npm run verify:rust && npm run test:morning-ready"
   },
   "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
     "@radix-ui/themes": "^3.3.0",
     "@tanstack/react-query": "^5.102.8",
     "@tauri-apps/api": "^2.11.1",
@@ -27,19 +36,27 @@
     "@tiptap/react": "^3.30.1",
     "@tiptap/starter-kit": "^3.30.1",
     "@xyflow/react": "^12.11.3",
+    "cmdk": "^1.1.1",
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",
+    "lucide-react": "^1.46.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-dropzone": "^20.1.2",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.2",
     "recharts": "^3.10.1",
     "remark-gfm": "^4.0.1",
+    "sonner": "^2.0.8",
     "temporal-polyfill": "^1.0.5"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/jsdom": "^30.0.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.18",
@@ -48,6 +65,7 @@
     "jsdom": "^30.0.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
-    "vite": "^8.2.1"
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
   }
 }

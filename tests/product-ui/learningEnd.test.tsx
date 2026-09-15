@@ -1,0 +1,278 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+
+/**
+ * PRODUCT-2.0 §8A / §23.5 / §46A.3 — Learning Suite：P0 DATA SAFETY 的 UI 侧契约。
+ *
+ * 断言的是**用户可见行为**，不是实现细节：
+ *   1. 笔记保存失败时，学习时长仍然落库（endSession 先于 note flush）
+ *   2. 结束后不出现「必须完成」的阻塞式 Modal
+ *   3. 双击「结束学习」只产生一次 finalization（Pending 防重复提交）
+ *   4. 结束后能看到已保存的真实时长（ReadBack）
+ */
+
+function makeSession(over: Record<string, unknown>) {
+  return {
+    id: 7,
+    profile_id: 1,
+    goal_id: null,
+    task_id: null,
+    learning_item_id: null,
+    title: "快速学习",
+    started_at: "2026-09-15 01:00:00",
+    ended_at: null,
+    duration_seconds: null,
+    status: "active",
+    note: null,
+    note_document_json: null,
+    created_at: "2026-09-15 01:00:00",
+    updated_at: "2026-09-15 01:00:00",
+    time_corrected: 0,
+    activity_kind: "unplanned",
+    duration_review_state: "normal",
+    ...over,
+  };
+}
+
+// 关键：mock 返回的对象/函数必须**引用稳定**。
+// 若每次调用都新建对象，LearningWorkspace 的 `load` useCallback 依赖会每次变化，
+// 触发 useEffect 反复重跑 load()，把 justEnded 一直重置掉（同时造成无限重载）。
+// 因此在工厂闭包内建一次性单例（工厂体只在模块首次被请求时执行一次）。
+vi.mock("../../src/contexts/ActiveProfileContext", () => {
+  const profile = Object.freeze({ id: 1, name: "测试档案" });
+  const gate = Object.freeze({ phase: "active" });
+  const ctx = {
+    activeProfile: profile,
+    gate,
+    enterProfile: () => Promise.resolve(),
+    exitProfile: () => Promise.resolve(),
+    refreshGate: () => Promise.resolve(),
+    retryBoot: () => {},
+  };
+  return {
+    useActiveProfile: () => ctx,
+    ActiveProfileProvider: (props: { children?: unknown }) => props.children,
+    canSwitchProfile: () => true,
+  };
+});
+
+vi.mock("../../src/components/ai/AiPanelContext", () => {
+  const panel = {
+    runAction: () => Promise.resolve(),
+    setPageContext: () => {},
+  };
+  return {
+    useAiPanel: () => panel,
+    AiPanelProvider: (props: { children?: unknown }) => props.children,
+  };
+});
+
+// 重量级 UI 依赖：本套用例只关心「结束」链路，不关心编辑器/附件面板内部实现。
+vi.mock("../../src/components/RichDocEditor", () => ({
+  default: () => null,
+  documentToPlainText: () => "已写下的学习笔记",
+  noteToDocument: () => ({ type: "doc", content: [] }),
+}));
+vi.mock("../../src/components/AttachmentList", () => ({ default: () => null }));
+vi.mock("../../src/components/DailyActivitiesSection", () => ({
+  default: () => null,
+  durationShort: (s: number) => `${s}s`,
+}));
+vi.mock("../../src/components/DailyTasksSection", () => ({
+  default: () => null,
+  minutesShort: (m: number) => `${m}m`,
+}));
+vi.mock("../../src/components/ActiveSessionConflictModal", () => ({
+  default: () => null,
+  useActiveSessionConflict: () => ({ conflict: null, guard: () => false, close: () => {} }),
+}));
+
+vi.mock("../../src/api", () => ({
+  // 读路径
+  getSession: vi.fn(),
+  listLearningItemsByProfile: vi.fn(async () => []),
+  listAttachmentsBySession: vi.fn(async () => []),
+  listGoalsByProfile: vi.fn(async () => []),
+  listAllTasksByProfile: vi.fn(async () => []),
+  listTodayTasksByProfile: vi.fn(async () => []),
+  getLearningItemPath: vi.fn(async () => "自由学习"),
+  getLearningTotals: vi.fn(async () => ({
+    today_seconds: 1500,
+    today_tasks_completed: 1,
+    today_tasks_total: 3,
+  })),
+  // 写路径
+  endSession: vi.fn(),
+  updateSessionDocument: vi.fn(),
+  updateSessionTitle: vi.fn(),
+  organizeSessionIntoKnowledge: vi.fn(),
+  attachSession: vi.fn(),
+  createChildLearningItem: vi.fn(),
+  createRootLearningItem: vi.fn(),
+  startQuickSession: vi.fn(),
+  startTaskSession: vi.fn(),
+  correctSessionTime: vi.fn(),
+  confirmSessionDuration: vi.fn(),
+  deleteSession: vi.fn(),
+  updateLearningItemContent: vi.fn(),
+}));
+
+import * as api from "../../src/api";
+import LearningWorkspace from "../../src/pages/LearningWorkspace";
+
+const endSessionMock = vi.mocked(api.endSession);
+const updateSessionDocumentMock = vi.mocked(api.updateSessionDocument);
+const getSessionMock = vi.mocked(api.getSession);
+
+function renderWorkspace() {
+  return render(
+    <MemoryRouter initialEntries={["/learn/7"]}>
+      <Routes>
+        <Route path="/" element={<div data-testid="today-page">Today</div>} />
+        <Route path="/learn/:sessionId" element={<LearningWorkspace />} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
+
+/** 等待工作区完成首屏加载（结束按钮出现即视为 loaded）。 */
+async function waitLoaded() {
+  await waitFor(() => expect(screen.getByTestId("learning-end")).toBeInTheDocument());
+}
+
+describe("Learning Suite — P0 结束链路", () => {
+  it("DATA-TC003：笔记保存失败，学习时长仍然落库，且给出可重试提示", async () => {
+    const user = userEvent.setup();
+    getSessionMock.mockResolvedValue(makeSession({}) as never);
+    endSessionMock.mockResolvedValue(
+      makeSession({
+        status: "completed",
+        ended_at: "2026-09-15 01:25:00",
+        duration_seconds: 1500,
+      }) as never
+    );
+    // 制造笔记保存失败。
+    updateSessionDocumentMock.mockRejectedValue(new Error("disk full") as never);
+
+    renderWorkspace();
+    await waitLoaded();
+
+    await user.click(screen.getByTestId("learning-end"));
+
+    // 学习事实优先：endSession 必须被调用，且只调用一次。
+    await waitFor(() => expect(endSessionMock).toHaveBeenCalledTimes(1));
+    expect(endSessionMock).toHaveBeenCalledWith(7);
+
+    // 笔记失败被显式暴露给用户，而不是静默吞掉，也不是阻止结束。
+    await waitFor(() =>
+      expect(screen.getByTestId("learning-note-save-failed")).toBeInTheDocument()
+    );
+    // ReadBack：结束后视图展示已保存的时长。
+    expect(screen.getByText(/25 分钟/)).toBeInTheDocument();
+  });
+
+  it("§23.5：结束后不出现阻塞式 Modal，用户可直接离开", async () => {
+    const user = userEvent.setup();
+    getSessionMock.mockResolvedValue(makeSession({}) as never);
+    endSessionMock.mockResolvedValue(
+      makeSession({
+        status: "completed",
+        ended_at: "2026-09-15 01:25:00",
+        duration_seconds: 1500,
+      }) as never
+    );
+    updateSessionDocumentMock.mockResolvedValue(undefined as never);
+
+    const { container } = renderWorkspace();
+    await waitLoaded();
+    await user.click(screen.getByTestId("learning-end"));
+
+    await waitFor(() => expect(endSessionMock).toHaveBeenCalledTimes(1));
+
+    // 没有必须完成的 Modal backdrop。
+    expect(container.querySelector(".modal-overlay")).toBeNull();
+    // 非阻塞收尾动作存在，但都不是强制的。
+    expect(screen.getByTestId("learning-post-session-optional")).toBeInTheDocument();
+    expect(screen.getByText("返回今日")).toBeInTheDocument();
+  });
+
+  it("Pending / Double Click：连续两次点击「结束学习」只产生一次结束", async () => {
+    const user = userEvent.setup();
+    getSessionMock.mockResolvedValue(makeSession({}) as never);
+    let resolveEnd: ((v: unknown) => void) | undefined;
+    endSessionMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveEnd = res;
+        }) as never
+    );
+    updateSessionDocumentMock.mockResolvedValue(undefined as never);
+
+    renderWorkspace();
+    await waitLoaded();
+
+    const btn = screen.getByTestId("learning-end");
+    await user.click(btn);
+    // 第一次结束请求尚未返回时，按钮必须被锁定，第二次点击不得再次提交。
+    await user.click(btn);
+
+    await waitFor(() => expect(endSessionMock).toHaveBeenCalledTimes(1));
+    expect(endSessionMock).toHaveBeenCalledTimes(1);
+
+    resolveEnd?.(
+      makeSession({
+        status: "completed",
+        ended_at: "2026-09-15 01:25:00",
+        duration_seconds: 1500,
+      })
+    );
+    await waitFor(() => expect(screen.getByText(/25 分钟/)).toBeInTheDocument());
+    expect(endSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("结束过程中按钮进入禁用态（禁止重复提交）", async () => {
+    const user = userEvent.setup();
+    getSessionMock.mockResolvedValue(makeSession({}) as never);
+    let resolveEnd: ((v: unknown) => void) | undefined;
+    endSessionMock.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveEnd = res;
+        }) as never
+    );
+    updateSessionDocumentMock.mockResolvedValue(undefined as never);
+
+    renderWorkspace();
+    await waitLoaded();
+    await user.click(screen.getByTestId("learning-end"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("learning-end")).toBeDisabled()
+    );
+
+    resolveEnd?.(
+      makeSession({
+        status: "completed",
+        ended_at: "2026-09-15 01:25:00",
+        duration_seconds: 1500,
+      })
+    );
+    await waitFor(() => expect(screen.getByText(/25 分钟/)).toBeInTheDocument());
+  });
+});
+
+describe("Learning Suite — 基础渲染契约", () => {
+  it("加载后展示当前学习标题与 HH:MM:SS 计时器（elapsed 可见）", async () => {
+    getSessionMock.mockResolvedValue(makeSession({}) as never);
+    const { container } = renderWorkspace();
+    await waitLoaded();
+
+    expect(screen.getByText("快速学习")).toBeInTheDocument();
+    // 不锁定具体时刻（取决于运行时区），只要求真实跳动的计时器格式。
+    const timer = container.querySelector(".lw__timer");
+    expect(timer).not.toBeNull();
+    expect(timer?.textContent ?? "").toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+});

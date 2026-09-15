@@ -11055,3 +11055,128 @@ html.higher-qr-scanning body .qr-scan-frame,
   background: transparent !important;
   background-color: transparent !important;
 }
+
+/* ============ PRODUCT-2.0 §8C.1 Global Error Boundary ============
+   约束（§4 视觉 LOCKED）：不设 background-image，沿用 --h-* 表面变量，
+   让全局壁纸继续透出；不新增一级模块样式。 */
+.error-boundary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: var(--h-space-8) var(--h-space-5);
+}
+
+.error-boundary__card {
+  max-width: 560px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-3);
+  padding: var(--h-space-6) var(--h-space-6);
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-lg);
+}
+
+.error-boundary__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.error-boundary__desc {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--h-text-secondary);
+}
+
+.error-boundary__detail {
+  margin: 0;
+  padding: var(--h-space-3);
+  max-height: 180px;
+  overflow: auto;
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  color: var(--h-danger);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error-boundary__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--h-space-2);
+  margin-top: var(--h-space-1);
+}
+
+/* ============ PRODUCT-2.0 §8C.2 Route Fallback ============ */
+.not-found {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: var(--h-space-8) var(--h-space-5);
+}
+
+.not-found__card {
+  max-width: 480px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-3);
+  padding: var(--h-space-6);
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-lg);
+}
+
+.not-found__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.not-found__desc {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--h-text-secondary);
+  word-break: break-all;
+}
+
+.not-found__desc code {
+  color: var(--h-text);
+  background: var(--h-surface-2);
+  padding: 1px 6px;
+  border-radius: var(--h-radius-sm);
+}
+
+.not-found__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--h-space-2);
+  margin-top: var(--h-space-1);
+}
+
+/* ============ PRODUCT-2.0 §23.5 结束后非阻塞收尾 ============ */
+.lw-ended__note-failed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h-space-3);
+  flex-wrap: wrap;
+}
+
+.lw-ended__optional {
+  display: flex;
+  align-items: center;
+  gap: var(--h-space-2);
+  flex-wrap: wrap;
+}

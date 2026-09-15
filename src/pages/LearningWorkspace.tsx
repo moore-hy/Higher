@@ -78,9 +78,10 @@ function buildAppendText(title: string, plainText: string): string {
  * Learning Workspace 最终版（BATCH-04 / DEV-0043「Study First / Archive Later」）。
  *
  * - 进入即写；debounce 自动保存；学习中不显示任何 Goal/归档/验证/分类打扰（§56）
- * - 结束顺序（§57-58）：flush note → endSession → Session 永久成为历史 → End Sheet
- *   （关闭 Sheet 也不丢记录）
- * - End Sheet（§59-66）：统计 + 「你想如何整理本次学习？」五选项 + 开始下一个
+ * - 结束顺序（PRODUCT-2.0 §8A P0 已修正）：锁按钮 → endSession 先落库 → ReadBack →
+ *   UI = ended → 之后才 flush note；note 失败保留 dirty + 可重试，不阻止结束
+ * - 结束后不再自动弹阻塞式 End Sheet（§23.5）：默认回到非阻塞「结束后视图」，
+ *   可选项 [补充记录] / [整理进知识] 由用户主动触发
  * - 历史 Session 重开（§67-69）：编辑器照常可编辑 + [保存并关闭] + ⋯ 低频菜单
  *   （修正学习时间 / 删除这条学习记录 §70）
  */
@@ -108,6 +109,10 @@ export default function LearningWorkspace() {
   const [endSheetOpen, setEndSheetOpen] = useState(false);
   const [sheetTab, setSheetTab] = useState<SheetTab>("none");
   const [busy, setBusy] = useState(false);
+  /** PRODUCT-2.0 §8A P0：结束进行中 → 锁按钮，防双击产生第二次 finalization */
+  const [ending, setEnding] = useState(false);
+  /** PRODUCT-2.0 §8A P0：学习时间已落库但笔记保存失败 → 保留 dirty 内容 + 提示可重试 */
+  const [noteSaveFailed, setNoteSaveFailed] = useState(false);
 
   /** DEV-0055 §93-99 Completion 反馈：结束后聚合（今天累计 / 今日任务 / 知识归属两级） */
   const [endTotals, setEndTotals] = useState<LearningTotals | null>(null);
@@ -157,6 +162,8 @@ export default function LearningWorkspace() {
     setJustEnded(false);
     setEndSheetOpen(false);
     setSheetTab("none");
+    setEnding(false);
+    setNoteSaveFailed(false);
     try {
       const s = await getSession(Number(sessionId));
       if (!s) {
@@ -289,24 +296,40 @@ export default function LearningWorkspace() {
     }
   }
 
-  /** 结束学习（§57-58）：flush → 成功 → endSession → Session 永久成为历史 → End Sheet */
+  /**
+   * 结束学习 —— PRODUCT-2.0 §8A / §23.5 P0 DATA SAFETY GATE。
+   *
+   * 正确顺序（与旧实现相反）：
+   *   1. 锁按钮 / 幂等守卫（防双击）
+   *   2. endSession(sessionId)  ← 第一核心事务，学习事实优先落库
+   *   3. ReadBack actual end time / actual minutes（setSession(返回的 s)）
+   *   4. Session UI = ended（justEnded）
+   *   5. 之后才处理 note / reflection / attachment flush
+   *   6. note 失败 → 保留 dirty 内容 + 提示可重试，但**不影响已保存的学习时长**
+   *
+   * 绝不能因为 note / attachment 保存失败而阻止结束，也绝不能把 ended 回退成 active。
+   */
   async function requestEnd() {
-    if (!session) return;
+    if (!session || ending) return;
+    setEnding(true);
     setError("");
-    const ok = await flushNote();
-    if (!ok) {
-      setError("笔记尚未保存，暂不结束学习。请重试保存后再结束。");
-      return;
-    }
+    setNoteSaveFailed(false);
     try {
+      // 2 + 3：先结束并读回真实结束时间/时长。这是不可回退的学习事实。
       const s = await endSession(session.id);
       setSession(s);
+      // 4：UI 立即进入 ended；不再自动弹阻塞式 End Sheet（§23.5）
       setJustEnded(true);
-      setEndSheetOpen(true);
+      setEndSheetOpen(false);
+      // 5：结束之后才尽力 flush 笔记（非阻塞、不参与学习事实）
+      const noteOk = await flushNote();
+      if (!noteOk) setNoteSaveFailed(true);
       void loadNextCandidates();
       void loadEndFeedback(s);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setEnding(false);
     }
   }
 
@@ -742,8 +765,13 @@ export default function LearningWorkspace() {
             </>
           ) : (
             !justEnded && (
-              <button className="btn btn--primary" onClick={requestEnd}>
-                结束学习
+              <button
+                className="btn btn--primary"
+                onClick={() => void requestEnd()}
+                disabled={ending}
+                data-testid="learning-end"
+              >
+                {ending ? "结束中…" : "结束学习"}
               </button>
             )
           )}
@@ -763,6 +791,41 @@ export default function LearningWorkspace() {
         /* ===== 结束后视图（§61 默认 Primary 关闭 Sheet 后；§95-99 Completion 第一层）===== */
         <section className="card lw-ended">
           {renderCompletion(false)}
+          {/* §8A P0：学习时间已落库；若笔记保存失败，保留 dirty 内容并允许重试，
+              绝不影响已保存的学习事实，也绝不把 Session 回退成 active。 */}
+          {noteSaveFailed && (
+            <div
+              className="alert alert--error lw-ended__note-failed"
+              data-testid="learning-note-save-failed"
+            >
+              <span>学习时间已保存；笔记保存失败，内容仍保留在本页，可重试。</span>
+              <button className="btn btn--small" onClick={() => void flushNote()}>
+                重试保存笔记
+              </button>
+            </div>
+          )}
+          {/* §23.5：非阻塞收尾——不出现必须完成的 Modal；用户什么都不点也已经完整结束 */}
+          <div className="lw-ended__optional" data-testid="learning-post-session-optional">
+            <span className="muted">可选</span>
+            <button
+              className="btn btn--small"
+              onClick={() => {
+                setEndSheetOpen(true);
+                setSheetTab("none");
+              }}
+            >
+              补充记录
+            </button>
+            <button
+              className="btn btn--small"
+              onClick={() => {
+                setEndSheetOpen(true);
+                setSheetTab("link");
+              }}
+            >
+              整理进知识
+            </button>
+          </div>
           <div className="lw-ended__stats">
             <span>笔记 {noteLen} 字</span>
             <span>

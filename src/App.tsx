@@ -13,6 +13,7 @@ import Evaluations from "./pages/Evaluations";
 import Goals from "./pages/Goals";
 import History from "./pages/History";
 import Planning from "./pages/Planning";
+import NotFound from "./pages/NotFound";
 import ProfileSelector from "./pages/ProfileSelector";
 import ProfileWelcome from "./pages/ProfileWelcome";
 import Settings from "./pages/Settings";
@@ -112,6 +113,9 @@ function ProfileGate() {
               <Route path="/evaluations" element={<Evaluations />} />
               <Route path="/history" element={<History />} />
               <Route path="/items" element={<LegacyItemsRedirect />} />
+              {/* §8C.2 Route Fallback：必须最后，未知路径 → 友好 NotFound（可一击回今日）。
+                  旧 deep link（/items、/review、/progress）已在上方显式 redirect。 */}
+              <Route path="*" element={<NotFound />} />
             </Route>
           </Routes>
         </Suspense>

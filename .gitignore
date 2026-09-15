@@ -64,3 +64,8 @@ src-tauri/.webview-data/
 .env
 .env.*
 !.env.example
+
+# PRODUCT-2.0 §0.3：WorkBuddy 工具内部记忆目录（曾误提交 .workbuddy/memory/2026-09-14.md）
+# 本机文件保留，但绝不入库
+.workbuddy/
+

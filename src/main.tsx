@@ -9,6 +9,8 @@ import { applyPlatformRootClass, PLATFORM } from "./platform/runtimePlatform";
 // Foundation 2.0 §7.2：TanStack Query 接管 Tauri IPC server-state
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./query/client";
+// PRODUCT-2.0 §8C.1：全局 Error Boundary —— render error 不得白屏
+import AppErrorBoundary from "./components/AppErrorBoundary";
 
 // DEV-MOBILE-001 §108：平台 root class（platform-android / platform-desktop），
 // 先于首帧渲染挂载，Android 专属 CSS 以 .platform-android 作用域。
@@ -24,9 +26,12 @@ startupMark("t3_webview_render_start");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
+    {/* §8C.1：最外层兜底。任何渲染期异常 → AppErrorBoundary，不再白屏 */}
+    <AppErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </AppErrorBoundary>
   </React.StrictMode>
 );
 

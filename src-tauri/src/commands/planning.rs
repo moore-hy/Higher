@@ -715,8 +715,12 @@ pub fn end_session(
         .end(id, note.as_deref())
         .map_err(|e| e.to_string())?;
     if s.duration_seconds.unwrap_or(0) > 43200 {
+        // PRODUCT-2.0 §23.5：幂等。只在仍是 'normal' 时升级为 needs_review，
+        // 避免重复 end 把用户已「确认无误」(confirmed) / 已「修正时间」(corrected)
+        // 的可信度状态打回 needs_review。
         conn.execute(
-            "UPDATE study_sessions SET duration_review_state='needs_review' WHERE id=?1",
+            "UPDATE study_sessions SET duration_review_state='needs_review'
+             WHERE id=?1 AND duration_review_state='normal'",
             rusqlite::params![id],
         )
         .map_err(|e| e.to_string())?;
