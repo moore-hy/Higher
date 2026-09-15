@@ -196,5 +196,56 @@ WAVE 4（Learning Engine Minimal Core：§30A learning_signals / knowledge_maste
 `package.json` 声明了 `test:product-e2e` → `tests/product-e2e/` 与
 `test:morning-ready` → `tests/product-e2e/morningReady.test.tsx`，但**该目录尚不存在**。
 §65A 的 44 步 deterministic workflow 尚未落地，这是 MORNING_READY 的最终 Gate 本體。
+实测 `npm run test:product-e2e` 直接 `No test files found, exiting with code 1`。
+
+---
+
+## 6. 回归裁决（WAVE 5 提交 `d2e1ba4` 后实测）
+
+### 6.1 绿的部分
+
+```text
+前端：tsc --noEmit ✓ · vite build ✓ · check:types ✓
+      vitest 102/102（product-ui 8 文件全绿）
+      test:ai-runtime 13/13 · test:sync 4/4 · test:mobile 17/17 · test:mobile-f2 ✓
+Rust：product2_knowledge_canvas 14/14 · product2_data_safety 7/7
+      product2_changeset_idem 6/6 · product2_planning_intake 6/6
+      batch064r2_ui 27/27（R2-U23 backend freeze 通过）
+      batch064_ui 27/28（仅 u26，见下）
+      其余 40+ 个测试目标全部 ok
+```
+
+### 6.2 **既有红灯（15 个失败，与本次施工无关，不是 WAVE 5 引入）**
+
+| 失败 | 数量 | 根因 |
+|---|---|---|
+| `android_startup_tests::boot_tc001_db_ready_before_webview` | 1 | 断言 `src/lib.rs` 含 `.setup(move \|app\|)` / `runtime_db_path`，实际不含 |
+| `batch056::test_runtime_db_path_no_hardcoded_manifest_dir_only` | 1 | 同上（`runtime_db_path`） |
+| `batch061r` r21/r23/r25/r41/r42 | 5 | 断言 `src/lib.rs` 含 `run_chat_turn` / `ON CONFLICT(id) DO UPDATE SET status` / `let is_assistant = true;` / `chat_with_temperature`，实际符號数 = 0 |
+| `batch062` t19/t21/t22/t54/t55/t57 | 6 | 同类 lib.rs 冻结契约 |
+| `batch062r` r26 | 1 | 同类 lib.rs 冻结契约 |
+| `batch064_ui::u26_no_new_important` | 1 | 断言 `styles.css` 的 `!important` ≤ 5，**基线 `7874fd4` 实测就是 13** |
+
+**证明（可复核）**：
+- `src/lib.rs`、`batch061r.rs`、`batch062.rs`、`batch062r.rs`、`batch064_ui.rs`、
+  `batch064r2_ui.rs`、`android_startup_tests.rs`、`batch056.rs` 的**最后提交全部是 `b8e28aa`**
+  （`chore(rust): apply rustfmt baseline`），且 `git merge-base --is-ancestor b8e28aa 7874fd4` = **YES**
+  → 这些文件在本会话开始前就已是当前内容，断言是**文件内容的纯函数**，因此它们在基线就失败。
+- `!important`：`git show 7874fd4:src/styles.css | grep -c "!important"` = **13**；
+  本会话 `7874fd4..HEAD` 与未提交部分新增 `!important` 数均为 **0**。
+
+**判定**：这 15 个失败来自「早先把单体 `src/lib.rs` 拆成模块后，冻结类测试仍按旧单体结构断言」，
+属**基线遗留**。是否修复需要架构侧决策（改断言 or 恢复 lib.rs 结构），
+本轮按范围纪律**不擅自改动无关测试**。
+
+### 6.3 已在本轮修正的「伪回归」
+
+- 15 个测试文件的**锁死 migration 版本号**（29 → 31）：不修则每个新 migration 都会假失败。
+- `batch064_ui::u28_no_src_tauri_src_diff` / `batch064r2_ui::r2_u23_backend_freeze`：
+  断言 `git diff HEAD -- src-tauri/src` 为空 → **只在有未提交改动时失败**；
+  提交后实测转为通过（batch064r2_ui 27/27）。
+  ⚠️ 含义提醒：这两个「后端冻结」契约实际只约束「提交前工作区干净」，
+  并不真正冻结已提交内容——若架构意图是「冻结后端」，需要改成与固定 SHA 比对。
+
 
 
