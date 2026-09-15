@@ -55,11 +55,12 @@ fn test_migration_v009_applied_and_idempotent() {
             .collect()
     };
     // v024（ai_provider_profiles / action continuation）已追加（DEV-0066 Gate 修正：预存断言停在 23）
+    // v032（micro_learning_events，DAILY EXPERIENCE V1 §PHASE 4）已追加
     assert_eq!(
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31
+            25, 26, 27, 28, 29, 30, 31, 32
         ]
     );
 
@@ -95,7 +96,8 @@ fn test_migration_v009_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 31);
+    // DAILY EXPERIENCE V1 §PHASE 4：v032 追加后 32 条
+    assert_eq!(count, 32);
 }
 
 #[test]
@@ -158,7 +160,8 @@ fn test_v008_to_v009_upgrade_preserves_old_data() {
     };
     // DEV-0076 §四：最新 = v027
     // DEV-SYNC-001：最新 = v028
-    assert_eq!(versions.last(), Some(&31));
+    // DAILY EXPERIENCE V1 §PHASE 4：最新 = v032
+    assert_eq!(versions.last(), Some(&32));
 }
 
 #[test]

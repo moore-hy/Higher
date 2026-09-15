@@ -189,7 +189,8 @@ fn t4_latest_schema_v023() {
     // DEV-0070 Phase F v2.0 追加 v026（user_context_storage）
     // DEV-0076 §四追加 v027（memory_confirmation_lifecycle）
     // DEV-SYNC-001 追加 v028（local_sync_foundation）
-    assert_eq!(v, 31, "T4: 最新 Schema = v031");
+    // DAILY EXPERIENCE V1 §PHASE 4 追加 v032（micro_learning_events）
+    assert_eq!(v, 32, "T4: 最新 Schema = v032");
     let name: String = conn
         .query_row(
             "SELECT name FROM schema_migrations WHERE version=23",

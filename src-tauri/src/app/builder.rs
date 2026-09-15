@@ -287,6 +287,8 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             // HIGHER CLOSED LOOP V1 §PHASE 1 / §PHASE 2
             get_learning_state,
             get_next_learning_action,
+            // HIGHER DAILY EXPERIENCE V1 §PHASE 3 / §PHASE 4
+            record_micro_action,
             prepare_current_planning_review,
             prepare_planning_review_ai,
             run_planning_review_ai,

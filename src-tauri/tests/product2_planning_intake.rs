@@ -43,7 +43,8 @@ fn migration_v030_creates_intake_table() {
         )
         .unwrap();
     assert_eq!(n, 1, "v030 应创建 planning_intake_drafts");
-    assert_eq!(app_lib::migrations::latest_version(), 31);
+    // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）已追加
+    assert_eq!(app_lib::migrations::latest_version(), 32);
 }
 
 #[test]

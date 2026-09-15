@@ -640,6 +640,25 @@ fn u28_no_src_tauri_src_diff() {
                 // DEV-0077.4-A.1 F1 追加授权：session_actions.rs（P1-03
                 // CreateSession task_id → start_for_task 快照路由）
                 && !f.ends_with("src/ai/actions/session_actions.rs")
+                // HIGHER DAILY EXPERIENCE V1 PHASE 3/4 追加授权（本轮直接后果，
+                // 非顺手修复）：Micro Action Primitive + Micro Evidence 按任务书 §2
+                // 「模块归属锁定」必须落在**既有** Rust Learning State 系统内，
+                // 禁止新建 daily_engine / micro_recommender 等第二套推荐体系。
+                // - src/learning_state/{state,types,next_action,mod}.rs
+                //   （MicroEvidenceState 统一投影 + micro 候选消费 + 模块导出）
+                // - src/commands/learning_state.rs（record_micro_action 唯一写入口）
+                // - src/app/builder.rs（命令注册）
+                // - src/repository/mod.rs（micro_learning_event 仓储注册）
+                // - src/migrations/mod.rs（v032 注册）
+                // 新文件 untracked 不入 diff：src/learning_state/micro.rs /
+                // src/repository/micro_learning_event.rs / src/migrations/v032_*.rs
+                && !f.ends_with("src/learning_state/state.rs")
+                && !f.ends_with("src/learning_state/types.rs")
+                && !f.ends_with("src/learning_state/next_action.rs")
+                && !f.ends_with("src/learning_state/mod.rs")
+                && !f.ends_with("src/commands/learning_state.rs")
+                && !f.ends_with("src/app/builder.rs")
+                && !f.ends_with("src/repository/mod.rs")
         })
         .map(|f| f.to_string())
         .collect::<Vec<_>>()
@@ -922,11 +941,15 @@ fn u28_no_src_tauri_src_diff() {
     let txt2 = String::from_utf8_lossy(&out2.stdout)
         .trim()
         .lines()
-        .filter(|f| !f.ends_with("src/api.ts"))
+        // HIGHER DAILY EXPERIENCE V1 PHASE 3/4 追加授权：src/types.ts 新增
+        // MicroEvidenceState / MicroActionCandidate / MicroLearningEvent —— 纯
+        // **IPC 载荷类型声明**，不含任何业务决策（推荐逻辑唯一来源仍为 Rust
+        // Learning State / Next Action，前端不得自选/重排/自算）。
+        .filter(|f| !f.ends_with("src/api.ts") && !f.ends_with("src/types.ts"))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
         txt2.is_empty(),
-        "U28: src/types.ts 不得有 diff；src/api.ts 仅限 DEV-0070 §10 授权（发现：{txt2}）"
+        "U28: 仅 src/api.ts / src/types.ts 允许 diff，且限于授权用途（发现：{txt2}）"
     );
 }

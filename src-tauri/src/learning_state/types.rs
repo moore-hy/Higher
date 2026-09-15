@@ -35,6 +35,11 @@ pub struct LearningStateSnapshot {
     pub learning_evidence: LearningEvidenceState,
     /// PHASE 6（最小版）：Recovery 是 Next Action 的一种**状态**，不是新系统。
     pub recovery_state: RecoveryState,
+    /// PHASE 3 / 4：Micro Action Primitive 与 Micro Evidence 的**统一投影**。
+    ///
+    /// 与 `learning_evidence` 并列消费同一份快照：`micro_learning_events` 不是
+    /// 第二套 Evidence 世界，只是被本字段投影进 LearningState（任务书 §4.4）。
+    pub micro: MicroEvidenceState,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -115,6 +120,67 @@ pub struct LearningEvidenceState {
     pub observed_daily_minutes_14d: Option<i64>,
     pub active_study_days_30d: i64,
     pub calibrated_ratio: f64,
+}
+
+// =============== PHASE 3 / PHASE 4：Micro Action Primitive + Micro Evidence ===============
+
+/// Micro 候选上限。§5.1 的 Pack 上限是 3；候选 primitive 允许略多，
+/// 但必须有界（禁止出现「无限 Feed」的候选池）。
+pub const MICRO_CANDIDATE_LIMIT: usize = 5;
+
+/// 一个 Micro 候选 Primitive（**不是**第二套推荐引擎的产物）。
+///
+/// 全部字段均为「真实来源 + 0-LLM 模板」的直接结果；UI 只做展示与执行，
+/// 不得重排、不得自选。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MicroActionCandidate {
+    /// recall | self_explain | retry_recent_error | review_recent_concept
+    pub action_type: String,
+    /// §3.1 允许的来源类型（evaluation | learning_item | task | session | goal | none）
+    pub source_type: String,
+    pub source_id: Option<i64>,
+    /// 0-LLM 模板变体 key（如 `self_explain.one_sentence`）。
+    pub prompt_variant: String,
+    pub title: String,
+    /// §3.2「直接模板」正文（无模型参与）。
+    pub instruction: String,
+    /// 「为什么推荐」：只陈述可验证事实。
+    pub reason: String,
+    pub estimated_seconds: i64,
+}
+
+/// 来源聚合行（§4.3 `recent_touched_sources`）与已完成 Micro 事实在 LearningState
+/// 中的投影：直接复用仓储类型（与 `DailyTaskRow` / `StudySession` 的既有做法一致，
+/// 避免重复定义与两套字段漂移）。
+use crate::repository::micro_learning_event::{MicroLearningEvent, TouchedSource};
+
+/// PHASE 4：Micro Evidence 的统一投影。
+///
+/// §4.2 要求下一次 LearningState **至少知道**：刚完成什么 Micro / 最近接触哪个
+/// Learning Item / 结果如何 / 完成时间 / 是否应立即去重 —— 分别对应
+/// `recent_micro_actions`、`recent_touched_sources`、`dedupe_window_minutes`。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MicroEvidenceState {
+    /// 最近完成的 Micro（completed_at DESC，上限 `RECENT_MICRO_LIMIT`）。
+    pub recent_micro_actions: Vec<MicroLearningEvent>,
+    /// 时间窗内接触过的来源（§4.3）。
+    pub recent_touched_sources: Vec<TouchedSource>,
+    /// 已去重的 Micro 候选 Primitive（顺序 = §3.1 来源优先级，不可重排）。
+    pub candidates: Vec<MicroActionCandidate>,
+    /// §4.3：同一来源 + 同一动作在该分钟内数内刚做过 → 已从 `candidates` 移除。
+    pub dedupe_window_minutes: i64,
+}
+
+impl MicroEvidenceState {
+    /// 空投影（用于 migration 之前的旧库 / 无 Micro 历史的档案）。
+    pub fn empty(dedupe_window_minutes: i64) -> Self {
+        Self {
+            recent_micro_actions: Vec::new(),
+            recent_touched_sources: Vec::new(),
+            candidates: Vec::new(),
+            dedupe_window_minutes,
+        }
+    }
 }
 
 // =============== PHASE 6：Recovery（最小版，deterministic） ===============
@@ -288,6 +354,13 @@ pub struct NextLearningAction {
     pub is_primary: bool,
     /// PHASE 3：30 秒档 → 只允许 micro_action，绝不创建普通 StudySession。
     pub micro_action_only: bool,
+    /// PHASE 3 / 4：`micro_action_only = true` 时的**可执行** Micro primitive。
+    ///
+    /// 携带 `source_type / source_id / action_type / prompt_variant`，UI 完成后
+    /// 原样回传给 `record_micro_action` 落 Evidence（§PHASE 4 闭环）。
+    /// 非 micro 档位恒为 `None`。候选已按 §3.1 排序并完成 §4.3 去重，
+    /// UI **不得**重排或自选。
+    pub micro_action: Option<MicroActionCandidate>,
     /// 备选（最多 `MAX_ALTERNATIVES` 条）；UI 只能突出一个 Primary。
     pub alternates: Vec<NextActionAlternative>,
 }

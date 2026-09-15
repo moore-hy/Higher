@@ -9,6 +9,7 @@
 
 use crate::ai::learning_load::build_learning_load_evidence;
 use crate::learning_state::date;
+use crate::learning_state::micro::build_micro_evidence_state;
 use crate::learning_state::recovery::{classify_recovery, collect_recovery_signals};
 use crate::learning_state::types::{
     GoalState, LearningEvidenceState, LearningStateSnapshot, PlanningState, ProfileState,
@@ -190,6 +191,13 @@ pub fn build_learning_state_at(
         day_goal_id: report.day_goal_id,
     };
 
+    // ---- micro：PHASE 3 / 4 的统一投影（Micro Event Store + 既有事实，只读）----
+    // 必须在 `report.tasks` / `recent_sessions` 被 move 进快照**之前**构建。
+    //
+    // 与 `learning_evidence` 一致：读取失败**显式向上传播**，绝不静默降级成空投影
+    // （§0.1「不得静默」/ §0.2 fail-closed 的同一条原则）。
+    let micro = build_micro_evidence_state(conn, profile_id, &recent_sessions, &report.tasks)?;
+
     Ok(LearningStateSnapshot {
         profile_id,
         generated_at: date::now_utc(),
@@ -209,5 +217,6 @@ pub fn build_learning_state_at(
         review_state,
         learning_evidence,
         recovery_state,
+        micro,
     })
 }

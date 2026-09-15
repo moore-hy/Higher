@@ -18,6 +18,7 @@ pub mod learning_data;
 pub mod learning_item;
 pub mod mastery;
 pub mod memory;
+pub mod micro_learning_event;
 pub mod note;
 pub mod personalization;
 pub mod plan;

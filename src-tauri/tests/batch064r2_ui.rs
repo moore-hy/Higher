@@ -502,18 +502,39 @@ fn r2_u23_backend_freeze() {
                 && !f.ends_with("src/repository/personalization.rs")
                 && !f.ends_with("src/ai/client.rs")
                 && !f.ends_with("src/ai/run.rs")
+                // HIGHER DAILY EXPERIENCE V1 PHASE 3/4 追加授权（本轮直接后果）：
+                // Micro primitive / Micro Evidence 落在既有 Learning State 系统内
+                // （任务书 §2 模块归属锁定），不新建第二套推荐引擎。
+                // - src/learning_state/{state,types,next_action,mod}.rs
+                // - src/commands/learning_state.rs（record_micro_action 唯一写入口）
+                // - src/app/builder.rs / src/repository/mod.rs / src/migrations/mod.rs
+                // 新文件 untracked 不入 diff：src/learning_state/micro.rs /
+                // src/repository/micro_learning_event.rs / src/migrations/v032_*.rs
+                && !f.ends_with("src/learning_state/state.rs")
+                && !f.ends_with("src/learning_state/types.rs")
+                && !f.ends_with("src/learning_state/next_action.rs")
+                && !f.ends_with("src/learning_state/mod.rs")
+                && !f.ends_with("src/commands/learning_state.rs")
+                && !f.ends_with("src/app/builder.rs")
+                && !f.ends_with("src/repository/mod.rs")
         })
         .collect();
     assert!(
         filtered.is_empty(),
         "R2-U23: src-tauri/src 除授权白名单（65.1/DEV-0066 各 Phase 授权）外零 diff（发现：{filtered:?}）"
     );
-    // DEV-0070 §10 授权：api.ts 新增 getUserProfileTemplate（types.ts 仍零 diff）
+    // DEV-0070 §10 授权：api.ts 新增 getUserProfileTemplate
+    // HIGHER DAILY EXPERIENCE V1 PHASE 3/4 追加授权：types.ts 新增 MicroEvidenceState /
+    // MicroActionCandidate / MicroLearningEvent —— 纯 **IPC 载荷类型声明**，
+    // 不含任何业务决策（推荐逻辑唯一来源仍为 Rust Learning State / Next Action）。
     let api = git_diff(&["../src/api.ts", "../src/types.ts"]);
-    let api_filtered: Vec<&str> = api.lines().filter(|f| !f.ends_with("src/api.ts")).collect();
+    let api_filtered: Vec<&str> = api
+        .lines()
+        .filter(|f| !f.ends_with("src/api.ts") && !f.ends_with("src/types.ts"))
+        .collect();
     assert!(
         api_filtered.is_empty(),
-        "R2-U23: types.ts 零 diff；api.ts 仅限 DEV-0070 §10 授权（发现：{api_filtered:?}）"
+        "R2-U23: 仅 api.ts / types.ts 允许 diff，且限于授权用途（发现：{api_filtered:?}）"
     );
 }
 

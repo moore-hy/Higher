@@ -32,6 +32,7 @@ pub mod v028_local_sync_foundation;
 pub mod v029_local_sync_backfill_outbox;
 pub mod v030_planning_intake_drafts;
 pub mod v031_knowledge_canvas;
+pub mod v032_micro_learning_events;
 
 /// 单个 Migration 定义。
 ///
@@ -202,6 +203,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 31,
         name: "knowledge_canvas",
         up: v031_knowledge_canvas::up,
+    },
+    Migration {
+        version: 32,
+        name: "micro_learning_events",
+        up: v032_micro_learning_events::up,
     },
 ];
 

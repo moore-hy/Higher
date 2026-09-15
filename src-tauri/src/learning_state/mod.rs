@@ -21,12 +21,17 @@
 
 pub mod budget;
 pub mod date;
+pub mod micro;
 pub mod next_action;
 pub mod recovery;
 pub mod state;
 pub mod types;
 
 pub use budget::{pick_micro_action, MicroActionKind, TimeBudget};
+pub use micro::{
+    build_micro_evidence_state, record_micro_action, MicroActionType, MICRO_DEDUPE_WINDOW_MINUTES,
+    MICRO_TOUCH_WINDOW_HOURS,
+};
 pub use next_action::{
     build_next_learning_action, parse_planned_minutes, parse_utc_ms, QUICK_STUDY_DEFAULT_MINUTES,
     RECOVERY_DEFAULT_MINUTES,

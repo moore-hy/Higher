@@ -211,6 +211,13 @@ function snapshot(over: Partial<LearningStateSnapshot> = {}): LearningStateSnaps
       },
       should_take_primary: false,
     },
+    // PHASE 4：Micro Evidence 统一投影（默认空，测试按需覆盖）
+    micro: {
+      recent_micro_actions: [],
+      recent_touched_sources: [],
+      candidates: [],
+      dedupe_window_minutes: 30,
+    },
     ...over,
   };
 }
@@ -240,6 +247,7 @@ function action(over: Partial<NextLearningAction> = {}): NextLearningAction {
     reasons: ["今天计划中优先级最高（核心）。", "计划时间 09:00。"],
     is_primary: true,
     micro_action_only: false,
+    micro_action: null,
     alternates: [
       {
         action_type: "planned_task",

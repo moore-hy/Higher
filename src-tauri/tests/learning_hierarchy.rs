@@ -274,11 +274,12 @@ fn test_l_hierarchy_persistence() {
                 .filter_map(|v| v.ok())
                 .collect()
         };
+        // DAILY EXPERIENCE V1 §PHASE 4：已与 ledger 对齐至 v032（此前停在 v029）
         assert_eq!(
             versions,
             vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-                24, 25, 26, 27, 28, 29
+                24, 25, 26, 27, 28, 29, 30, 31, 32
             ],
             "schema 版本应为 v006"
         );

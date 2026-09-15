@@ -12,6 +12,7 @@
 use crate::db;
 use crate::learning_state;
 use crate::learning_state::budget::TimeBudget;
+use crate::repository::micro_learning_event::MicroLearningEvent;
 
 /// PHASE 1：唯一运行时只读投影（Unified Learning State）。
 #[tauri::command]
@@ -37,4 +38,40 @@ pub fn get_next_learning_action(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let snapshot = learning_state::build_learning_state(&conn, profile_id)?;
     learning_state::build_next_learning_action(&snapshot, parsed)
+}
+
+/// PHASE 3 / PHASE 4：完成一次 Micro Action → 落 Micro Evidence。
+///
+/// 这是 Micro 的**唯一写入口**。硬约束：
+/// - `source_*` / `action_type` / `prompt_variant` 必须来自
+///   `get_next_learning_action(...)` 返回的 `micro_action` 候选（UI 不得自选、不得重排）；
+///   `source_type` 由后端再次校验白名单 + 跨档案归属（§PHASE 22）；
+/// - **绝不创建 StudySession**（§4.5）：Micro duration 独立保存在
+///   `micro_learning_events.duration_seconds`；
+/// - 0 LLM：本命令不触碰任何 provider / runtime。
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn record_micro_action(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    source_type: String,
+    source_id: Option<i64>,
+    action_type: String,
+    result: Option<String>,
+    prompt_variant: Option<String>,
+    response_summary: Option<String>,
+    duration_seconds: i64,
+) -> Result<MicroLearningEvent, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    learning_state::record_micro_action(
+        &conn,
+        profile_id,
+        &source_type,
+        source_id,
+        &action_type,
+        result.as_deref().unwrap_or("done"),
+        prompt_variant.as_deref(),
+        response_summary.as_deref(),
+        duration_seconds,
+    )
 }

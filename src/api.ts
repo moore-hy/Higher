@@ -43,6 +43,7 @@ import type {
   LearningItem,
   LearningTotals,
   LearningStateSnapshot,
+  MicroLearningEvent,
   NextLearningAction,
   TimeBudgetKey,
   MemoryRecord,
@@ -1763,6 +1764,36 @@ export const getNextLearningAction = (profileId: number, budget?: TimeBudgetKey 
   invoke<NextLearningAction>("get_next_learning_action", {
     profileId,
     budget: budget ?? null,
+  });
+
+/**
+ * PHASE 3/4：完成一次 Micro Action → 落 Micro Evidence（**绝不创建 StudySession**）。
+ *
+ * `sourceType / sourceId / actionType / promptVariant` 必须**原样**来自
+ * `getNextLearningAction(...)` 返回的 `micro_action`；UI 不得自选、不得重排、
+ * 不得自己决定推荐优先级（业务决策唯一来源 = Rust Learning State / Next Action）。
+ */
+export const recordMicroAction = (
+  profileId: number,
+  payload: {
+    sourceType: string;
+    sourceId: number | null;
+    actionType: string;
+    result?: "done" | "partial" | "skipped";
+    promptVariant?: string | null;
+    responseSummary?: string | null;
+    durationSeconds: number;
+  }
+) =>
+  invoke<MicroLearningEvent>("record_micro_action", {
+    profileId,
+    sourceType: payload.sourceType,
+    sourceId: payload.sourceId,
+    actionType: payload.actionType,
+    result: payload.result ?? "done",
+    promptVariant: payload.promptVariant ?? null,
+    responseSummary: payload.responseSummary ?? null,
+    durationSeconds: payload.durationSeconds,
   });
 
 /** DEV-0059.1 §3：准备复盘 AI——置 running + 构建 evidence snapshot（不调 Provider）；返回快照 JSON */

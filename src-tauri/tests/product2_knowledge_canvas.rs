@@ -64,7 +64,8 @@ fn migration_v031_creates_canvas_tables() {
             .unwrap();
         assert_eq!(n, 1, "v031 应创建 {t}");
     }
-    assert_eq!(app_lib::migrations::latest_version(), 31);
+    // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）已追加
+    assert_eq!(app_lib::migrations::latest_version(), 32);
 }
 
 #[test]

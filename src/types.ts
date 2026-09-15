@@ -1293,6 +1293,56 @@ export interface RecoveryState {
   should_take_primary: boolean;
 }
 
+/** PHASE 3 / PHASE 4：一个 Micro 候选 Primitive（后端已排序并去重，UI 不得重排/自选）。 */
+export interface MicroActionCandidate {
+  /** recall | self_explain | retry_recent_error | review_recent_concept */
+  action_type: string;
+  /** evaluation | learning_item | task | session | goal | none */
+  source_type: string;
+  source_id: number | null;
+  /** 0-LLM 模板变体 key（如 self_explain.one_sentence） */
+  prompt_variant: string;
+  title: string;
+  /** 0-LLM 直接模板正文 */
+  instruction: string;
+  reason: string;
+  estimated_seconds: number;
+}
+
+/** PHASE 4：已完成的一条 Micro 事实。 */
+export interface MicroLearningEvent {
+  id: number;
+  profile_id: number;
+  source_type: string;
+  source_id: number | null;
+  action_type: string;
+  result: string;
+  prompt_variant: string | null;
+  response_summary: string | null;
+  duration_seconds: number;
+  completed_at: string;
+  created_at: string;
+}
+
+/** PHASE 4 §4.3：最近接触过的来源（时间窗内）。 */
+export interface MicroTouchedSource {
+  source_type: string;
+  source_id: number | null;
+  last_action_type: string;
+  last_result: string;
+  last_completed_at: string;
+  event_count: number;
+}
+
+/** PHASE 4：Micro Evidence 的统一投影（与 learning_evidence 并列消费同一份快照）。 */
+export interface MicroEvidenceState {
+  recent_micro_actions: MicroLearningEvent[];
+  recent_touched_sources: MicroTouchedSource[];
+  /** 已按 §3.1 来源优先级排序并完成 §4.3 去重。 */
+  candidates: MicroActionCandidate[];
+  dedupe_window_minutes: number;
+}
+
 /** PHASE 1：唯一运行时只读投影（不是新的数据库真相源）。 */
 export interface LearningStateSnapshot {
   profile_id: number;
@@ -1309,6 +1359,8 @@ export interface LearningStateSnapshot {
   review_state: LearningStateReview;
   learning_evidence: LearningStateEvidence;
   recovery_state: RecoveryState;
+  /** PHASE 3/4：Micro primitive + Micro Evidence 的统一投影。 */
+  micro: MicroEvidenceState;
 }
 
 /** PHASE 2：统一动作类型。 */
@@ -1370,5 +1422,11 @@ export interface NextLearningAction {
   is_primary: boolean;
   /** 30 秒档 → 只能 micro_action，绝不创建普通 StudySession。 */
   micro_action_only: boolean;
+  /**
+   * PHASE 3/4：`micro_action_only = true` 时的可执行 Micro primitive。
+   * UI 完成后必须**原样**把 source_type / source_id / action_type / prompt_variant
+   * 回传给 `recordMicroAction`；不得自选、不得重排。非 micro 档位恒为 null。
+   */
+  micro_action: MicroActionCandidate | null;
   alternates: NextActionAlternative[];
 }

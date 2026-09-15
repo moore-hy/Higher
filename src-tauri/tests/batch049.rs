@@ -287,8 +287,9 @@ fn test_fresh_db_reaches_v014() {
         .unwrap();
     // DEV-0076 §四：v027（memory_confirmation_lifecycle）已追加
     // DEV-SYNC-001：v028（local_sync_foundation）已追加
-    assert_eq!(ver, 31);
-    assert_eq!(app_lib::migrations::latest_version(), 31);
+    // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）已追加
+    assert_eq!(ver, 32);
+    assert_eq!(app_lib::migrations::latest_version(), 32);
 }
 
 /// 富文本 Session 的 note 纯文本投影参与既有 note 链路（摘要/AI 仍读 note）。

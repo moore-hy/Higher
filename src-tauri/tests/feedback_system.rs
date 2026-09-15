@@ -59,11 +59,13 @@ fn test_migration_v007_applied_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
+    // 迁移链版本列表（DAILY EXPERIENCE V1 §PHASE 4：已与 ledger 对齐至 v032；
+    // 此前停在 v029，v030/v031 落地时未同步）
     assert_eq!(
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29
+            25, 26, 27, 28, 29, 30, 31, 32
         ]
     );
 
@@ -99,7 +101,8 @@ fn test_migration_v007_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 31);
+    // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）追加后 32 条
+    assert_eq!(count, 32);
 }
 
 #[test]
@@ -160,11 +163,13 @@ fn test_v006_to_v007_upgrade_preserves_old_data() {
             .filter_map(|v| v.ok())
             .collect()
     };
+    // 迁移链版本列表（DAILY EXPERIENCE V1 §PHASE 4：已与 ledger 对齐至 v032；
+    // 此前停在 v029，v030/v031 落地时未同步）
     assert_eq!(
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29
+            25, 26, 27, 28, 29, 30, 31, 32
         ]
     );
     let goals: i64 = conn

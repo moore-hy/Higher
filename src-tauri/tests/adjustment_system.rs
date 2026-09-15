@@ -66,11 +66,13 @@ fn test_migration_v008_applied_and_idempotent() {
     // v026（personalization_profiles.user_context_json，DEV-0070 Phase F v2.0）已追加
     // v027（memory_confirmation_lifecycle，DEV-0076 §四）已追加
     // v028（local_sync_foundation，DEV-SYNC-001）已追加
+    // v029-v031（sync backfill / planning intake / knowledge canvas）已追加
+    // v032（micro_learning_events，DAILY EXPERIENCE V1 §PHASE 4）已追加
     assert_eq!(
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31
+            25, 26, 27, 28, 29, 30, 31, 32
         ]
     );
 
@@ -111,7 +113,8 @@ fn test_migration_v008_applied_and_idempotent() {
         .unwrap();
     // DEV-0076 §四：v027 追加后 27 条
     // DEV-SYNC-001：v028 追加后 28 条
-    assert_eq!(count, 31);
+    // DAILY EXPERIENCE V1 §PHASE 4：v032 追加后 32 条
+    assert_eq!(count, 32);
 }
 
 #[test]

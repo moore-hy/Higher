@@ -20,10 +20,11 @@
 
 use crate::learning_state::budget::{pick_micro_action, TimeBudget};
 use crate::learning_state::types::{
-    ActionSource, ExecutionPayload, LearningStateSnapshot, NextActionAlternative, NextActionType,
-    NextLearningAction, CONTINUE_LAST_WINDOW_DAYS, MAX_ALTERNATIVES, REASON_ACTIVE_SESSION,
-    REASON_CONTINUE_LAST, REASON_MICRO_ACTION, REASON_PLANNED_TASK, REASON_PLANNED_TASK_CORE,
-    REASON_PLANNED_TASK_SLICE, REASON_QUICK_STUDY, REASON_RECOVERY, REASON_REVIEW_DUE,
+    ActionSource, ExecutionPayload, LearningStateSnapshot, MicroActionCandidate,
+    NextActionAlternative, NextActionType, NextLearningAction, CONTINUE_LAST_WINDOW_DAYS,
+    MAX_ALTERNATIVES, REASON_ACTIVE_SESSION, REASON_CONTINUE_LAST, REASON_MICRO_ACTION,
+    REASON_PLANNED_TASK, REASON_PLANNED_TASK_CORE, REASON_PLANNED_TASK_SLICE, REASON_QUICK_STUDY,
+    REASON_RECOVERY, REASON_REVIEW_DUE,
 };
 use crate::repository::daily_report::DailyTaskRow;
 use std::cmp::Ordering;
@@ -479,6 +480,23 @@ fn planned_task_candidates(
         }
     }
 
+    // PHASE 4 §4.3「next action filtering」：Micro Evidence 参与候选排序与理由。
+    // learning_item_id → (最近接触 ms, 最近结果)。只消费 LearningState 已投影的
+    // `recent_touched_sources`（同一份 primitive 来源），不另算一套统计。
+    let mut micro_touch: std::collections::HashMap<i64, (i64, String)> =
+        std::collections::HashMap::new();
+    for touch in &snapshot.micro.recent_touched_sources {
+        if touch.source_type != "learning_item" {
+            continue;
+        }
+        let Some(item_id) = touch.source_id else { continue };
+        let ms = parse_utc_ms(Some(touch.last_completed_at.as_str()));
+        let entry = micro_touch.entry(item_id).or_insert((ms, String::new()));
+        if ms >= entry.0 {
+            *entry = (ms, touch.last_result.clone());
+        }
+    }
+
     snapshot
         .today_tasks
         .iter()
@@ -499,6 +517,26 @@ fn planned_task_candidates(
                 Some(e) => format!("预计 {} 分钟。", e),
                 None => "未设置预计时长，可自由安排。".to_string(),
             });
+            // §4.3：刚发生过 Micro 的来源必须让「下一次推荐」可观察到变化。
+            let touched = t
+                .learning_item_id
+                .and_then(|iid| micro_touch.get(&iid).cloned())
+                .filter(|(ms, _)| *ms > 0);
+            if let Some((_, ref result)) = touched {
+                reasons.push(format!(
+                    "你最近在这里做过一次 Micro 动作（{}）。",
+                    match result.as_str() {
+                        "partial" => "部分完成",
+                        "skipped" => "跳过",
+                        _ => "已完成",
+                    }
+                ));
+            }
+            let recency = task_recency
+                .get(&t.id)
+                .copied()
+                .unwrap_or(0)
+                .max(touched.map(|(ms, _)| ms).unwrap_or(0));
             Candidate {
                 action_type: NextActionType::PlannedTask,
                 reason_code: if core {
@@ -521,7 +559,7 @@ fn planned_task_candidates(
                 deadline_minutes: parse_planned_minutes(t.planned_time.as_deref()),
                 priority_rank: priority_rank_of(t),
                 minutes_fit: minutes_fit_of(est, available),
-                recency: task_recency.get(&t.id).copied().unwrap_or(0),
+                recency,
                 stable_id: t.id,
             }
         })
@@ -692,7 +730,51 @@ fn finish(
     micro: bool,
 ) -> NextLearningAction {
     if micro {
-        // 30 秒档：只返回 micro_action，绝不落到 start_* 载荷
+        // PHASE 3：只返回 micro_action，绝不落到 start_* 载荷。
+        //
+        // 优先使用**真实来源绑定**的 Micro primitive（`micro.candidates`，已按 §3.1 阶梯
+        // 排序并完成 §4.3 去重）。来源不足时才降级到 deterministic 启发式 ——
+        // §3.2 明确「数据不够 → 降级，绝不调用 Cloud 只为了凑 Micro」。
+        if let Some(cand) = snapshot.micro.candidates.first() {
+            return NextLearningAction {
+                profile_id: snapshot.profile_id,
+                local_date: snapshot.local_date.clone(),
+                action_type: primary.action_type,
+                reason_code: REASON_MICRO_ACTION.to_string(),
+                source_entity: micro_source_entity(cand),
+                estimated_minutes: Some(0),
+                source_task_estimate_minutes: primary.task_id.and(primary.base_estimate),
+                available_minutes: budget.map(|b| b.minutes()),
+                execution_payload: ExecutionPayload {
+                    kind: "micro_action".to_string(),
+                    // 30 秒档刻意不携带任何「可开始 Session」的目标：
+                    // 来源只通过 source_entity 与 micro_action 表达，UI 无从误开 StudySession。
+                    task_id: None,
+                    learning_item_id: None,
+                    session_id: None,
+                    review_id: None,
+                    entry_slice: false,
+                    suggested_minutes: 0,
+                },
+                title: cand.title.clone(),
+                subtitle: Some(format!(
+                    "micro action · {} · {}",
+                    cand.action_type, cand.prompt_variant
+                )),
+                reasons: vec![
+                    cand.reason.clone(),
+                    format!(
+                        "只做这一小步（约 {} 秒），不会创建学习记录。",
+                        cand.estimated_seconds
+                    ),
+                ],
+                is_primary: true,
+                micro_action_only: true,
+                micro_action: Some(cand.clone()),
+                alternates,
+            };
+        }
+
         let has_risk_signal = snapshot.recovery_state.active
             || matches!(
                 snapshot.review_state.risk_state.as_str(),
@@ -730,6 +812,7 @@ fn finish(
             reasons,
             is_primary: true,
             micro_action_only: true,
+            micro_action: None,
             alternates,
         };
     }
@@ -756,7 +839,24 @@ fn finish(
         reasons: primary.reasons.clone(),
         is_primary: true,
         micro_action_only: false,
+        micro_action: None,
         alternates,
+    }
+}
+
+/// Micro 候选来源 → 既有的强类型 `ActionSource`。
+///
+/// `task` / `session` / `learning_item` 能映射到既有枚举；`evaluation` / `goal` / `none`
+/// 在 `ActionSource` 中没有对应变体 —— 完整来源始终由 `micro_action.source_type /
+/// source_id` 表达（弱引用），因此这里返回 `None` 而不是硬塞一个错误语义。
+fn micro_source_entity(cand: &MicroActionCandidate) -> ActionSource {
+    match (cand.source_type.as_str(), cand.source_id) {
+        ("task", Some(id)) => ActionSource::Task { task_id: id },
+        ("session", Some(id)) => ActionSource::Session { session_id: id },
+        ("learning_item", Some(id)) => ActionSource::LearningItem {
+            learning_item_id: id,
+        },
+        _ => ActionSource::None,
     }
 }
 
