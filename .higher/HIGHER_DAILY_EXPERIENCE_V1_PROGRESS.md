@@ -1,7 +1,8 @@
 # HIGHER DAILY EXPERIENCE V1 — PROGRESS LEDGER
 
 Closed Loop 基线：moore-hy/Higher @ `4ec4d23ee400b2435b0de81b2a887c4c49d8c50f`（CLOSED LOOP V1 baseline）
-当前基线（main，working tree clean）：`bf5aa59cbe456118a99ce5b06ef5b7a9a151310f`
+PHASE 0/1 施工基线：`bf5aa59cbe456118a99ce5b06ef5b7a9a151310f`（main，working tree clean）
+PHASE 1 落地 commit：`a7c723f`（feat(daily): PHASE 1 Today = Learning Start Surface）
 纪律：任何一项回答含糊 → 不得 PASS。状态只允许 EXISTING / WIRED / NEW / VERIFIED / DEFERRED。
 
 ---
@@ -116,3 +117,22 @@ src-tauri 未改动（本轮 0 Rust diff → 无需重跑 cargo）
 ```
 
 _Last updated: 2026-09-15_
+
+---
+
+## 下一区块侦察结论（PHASE 3 + PHASE 4，尚未施工）
+
+只做**定向 grep 与读取**，未做全仓分析；结论均为可执行座标：
+
+| 项 | 实测结论 |
+|---|---|
+| migration 最高版本 | `v031_knowledge_canvas`（`src-tauri/src/migrations/mod.rs` 最后一个 entry，`latest_version()`）→ **本轮只允许新增 v032** |
+| 版本断言 sweep 面 | 新增 v032 后须把 `tests/*.rs` 中硬钉 `2x` 的断言全部 +1（`adjustment_system / attachments / batch03 / batch049 / batch058 / batch0601 / batch062 / evaluation_system / feedback_system / knowledge_workspace / learning_loop / migration_v025_upgrade / profile_system / product2_planning_intake`） |
+| micro 现状 | 只有 `learning_state/budget.rs`：`MicroActionKind{ShortRecall,ReexplainConcept,ReviewKeyError}` + `pick_micro_action(risk, has_material)` —— 是**两布尔**的 deterministic 选择，**无 source 绑定**、无 Knowledge Item 文案模板 |
+| PHASE 3 缺口 | §3.1 要求 Micro 只来自「最近错误 Evaluation / 最近学习内容 / 最近 Session / 当前 Knowledge Item / 当前 Goal·Planning·Today」→ 需新增 `learning_state/micro.rs`：真实 source 选择 + **0 LLM** 模板（如 `Knowledge Item: 优先编码器` → 「不看笔记，用一句话解释什么是优先编码器。」），数据不足时降级 Quick Study，**不得为凑 Micro 调 Cloud** |
+| PHASE 4 缺口 | `LearningStateSnapshot` 目前**没有** `recent_micro_actions` / `recent_touched_sources`（`types.rs` 无 micro 事件投影）；`next_action.rs` 的候选去重也未消费 micro 历史 |
+| PHASE 4 落库选项 | 优先复用现有正式 Evidence；无正确语义时才新增 `micro_learning_events`（`v032`）。一旦落库，**同一阶段**必须完成 Migration + Repository + Evidence write + LearningState read + candidate filtering + integration test（§5.2），否则不得提交为完成 |
+| 统计边界 | Micro **永不**写 StudySession（`next_action::finish()` 已保证 30s 档载荷里 `task_id/learning_item_id/session_id` 全为 null，UI 无从误开 Session）→ 与 §4.5 / §8.2 一致 |
+| Cloud calls | PHASE 12 要求全链路 0 Cloud LLM；`learning_state/*` 现无任何 provider/runtime 引用，Micro 实现必须保持该约束 |
+
+> 这一区块（PHASE 3 + 4）未在本次提交范围内：需同阶段完成 migration v032 + repository + 投影 + candidate dedupe + Rust 集成测试（DE006..DE009 / DE023..DE025），并按技能记录在全量 `cargo test -j 1` 前先做版本断言 sweep。下一轮以此表为起点施工。
