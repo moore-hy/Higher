@@ -21,11 +21,18 @@ pub fn apply_change_set_with_side_effects(
     source: &str,
 ) -> Result<(), String> {
     // ① 事务 Apply（ChangeSetRepository 内部保证全包 rollback，不允许半成功）
-    crate::repository::changeset::ChangeSetRepository::new(conn).apply(
+    // PRODUCT-2.0 §26.4：apply 已幂等——`false` = 此前已应用（already_applied，
+    // 未产生任何新写入）。此时必须**跳过全部副作用**（grounding recent / workflow
+    // 收口 / vault 审计 / 自动快照），否则重复审计与重复快照会污染 vault，
+    // 并让「丢响应后重试」表现为再次应用。
+    let applied_now = crate::repository::changeset::ChangeSetRepository::new(conn).apply(
         change_set_id,
         profile_id,
         only_selected,
     )?;
+    if !applied_now {
+        return Ok(());
+    }
     // ② grounding Recent Context（(profile, conversation) 隔离；Proposal 不算，Apply 才算）
     let conv_id: Option<i64> = conn
         .query_row(

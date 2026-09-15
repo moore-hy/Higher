@@ -43,6 +43,7 @@ import type {
   LearningItem,
   LearningTotals,
   MemoryRecord,
+  PlanningIntakeDraft,
   NextAction,
   PersonalizationProfile,
   PersonalizationSource,
@@ -2234,3 +2235,36 @@ export const syncClientStatus = () => invoke<SyncClientStatus>("sync_client_stat
 /** §十三：冲突批量处理（"local"=保留本机版 / "remote"=保留对端版） */
 export const syncConflictsResolve = (resolution: "local" | "remote") =>
   invoke<number>("sync_conflicts_resolve", { resolution });
+
+// =============== PRODUCT-2.0 §24 Planning Intake（Draft only） ===============
+//
+// §0A.4：这些接口只写 planning_intake_drafts，**绝不**写 goals / tasks /
+// planning_blueprints。正式写入只能由用户在 ChangeSet 预览上确认后执行（§26）。
+
+export const getPlanningIntakeDraft = (profileId: number) =>
+  invoke<PlanningIntakeDraft | null>("get_planning_intake_draft", { profileId });
+
+export const savePlanningIntakeDraft = (args: {
+  profileId: number;
+  sourceKind: "chat" | "taskbook" | "description" | "import";
+  rawText?: string | null;
+  structuredJson?: string | null;
+  completenessJson?: string | null;
+  status?: "draft" | "ready" | "consumed" | null;
+}) =>
+  invoke<PlanningIntakeDraft>("save_planning_intake_draft", {
+    profileId: args.profileId,
+    sourceKind: args.sourceKind,
+    rawText: args.rawText ?? null,
+    structuredJson: args.structuredJson ?? null,
+    completenessJson: args.completenessJson ?? null,
+    status: args.status ?? null,
+  });
+
+export const setPlanningIntakeStatus = (
+  profileId: number,
+  status: "draft" | "ready" | "consumed"
+) => invoke<void>("set_planning_intake_status", { profileId, status });
+
+export const discardPlanningIntakeDraft = (profileId: number) =>
+  invoke<void>("discard_planning_intake_draft", { profileId });

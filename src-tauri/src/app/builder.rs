@@ -228,6 +228,11 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             import_personalization_files,
             list_personalization_sources,
             get_user_profile_template,
+            // PRODUCT-2.0 §24 Planning Intake（Draft only，不写正式表）
+            crate::commands::intake::get_planning_intake_draft,
+            crate::commands::intake::save_planning_intake_draft,
+            crate::commands::intake::set_planning_intake_status,
+            crate::commands::intake::discard_planning_intake_draft,
             list_ai_memories,
             confirm_ai_memory,
             reject_ai_memory,

@@ -1145,3 +1145,20 @@ export interface KnowledgeTimeSlice {
   item_id: number;
   child_count: number;
 }
+
+// =============== PRODUCT-2.0 §24.3 Planning Intake Draft ===============
+
+/** 规划入口草稿（**Draft，不是 Formal Truth**，§0A.4）。 */
+export interface PlanningIntakeDraft {
+  id: number;
+  profile_id: number;
+  /** chat | taskbook | description | import（§24.1 三个入口 + 导入） */
+  source_kind: "chat" | "taskbook" | "description" | "import";
+  raw_text: string | null;
+  structured_json: string | null;
+  completeness_json: string | null;
+  /** draft | ready | consumed */
+  status: "draft" | "ready" | "consumed";
+  created_at: string;
+  updated_at: string;
+}

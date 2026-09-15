@@ -179,10 +179,22 @@ impl<'a> ChangeSetRepository<'a> {
     /// §134-135：单事务逐项重验证；任一失败 → 全回滚。
     /// DEV-0053 §103：按 operation_order 执行；create 成功记 ref→real_id；
     /// 后续操作先 resolveRefs（解析失败同样整体回滚 §105）。
-    pub fn apply(&self, id: i64, profile_id: i64, only_selected: bool) -> Result<(), String> {
+    pub fn apply(&self, id: i64, profile_id: i64, only_selected: bool) -> Result<bool, String> {
         let cs = self
             .get(id, profile_id)?
             .ok_or("ChangeSet 不存在或不属于当前档案")?;
+        // PRODUCT-2.0 §26.4 ChangeSet Apply Idempotency — P0。
+        //
+        // 前端防双击只是第一层；后端必须 authoritative。已有 `applied` 的
+        // ChangeSet 再次 apply（双击 / 响应丢失后重试 / 并发重复提交）必须是
+        // **幂等空操作**：返回 Ok(false) 表示「已应用，未产生新写入」，
+        // 绝不重复 Task / Blueprint / recurring rule / delete，
+        // 也绝不因为「已应用」而报错（否则丢响应重试会误报失败）。
+        //
+        // 返回值语义：Ok(true) = 本次真正落库；Ok(false) = already_applied。
+        if cs.status == "applied" {
+            return Ok(false);
+        }
         if cs.status != "waiting_approval" && cs.status != "draft" {
             return Err(format!("该 ChangeSet 当前状态为 {}，不能应用", cs.status));
         }
@@ -254,7 +266,8 @@ impl<'a> ChangeSetRepository<'a> {
             params![profile_id, id],
         );
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(())
+        // true = 本次真正落库（§26.4：调用方据此决定是否做 apply 后副作用）
+        Ok(true)
     }
 
     /// §137-138：逆序 reverse；验证当前实体仍等于原 AFTER，否则拒绝。

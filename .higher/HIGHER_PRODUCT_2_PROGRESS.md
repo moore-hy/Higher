@@ -11,13 +11,21 @@
 
 ```text
 NEXT_MIGRATION_AT_START = v029 (已有最高)
-预留槽位（唯一，不允许两模块共用）：
+```
 
-v030  Secrets          — Foundation D（Native SecretStore）
-v031  Recurrence       — Foundation H（RFC5545 / rrule）
-v032  SearchV2         — Foundation J（FTS5 + jieba）
-v033  KnowledgeCanvas  — §35（knowledge_canvases + knowledge_canvas_embeds）
-v034  PlanningIntake   — §24.3（planning_intake_drafts）
+### 0.1 首次实际占用 + 顺延（WAVE 3 执行时登记）
+
+taskbook §0C.3 给出的 `v030/v031/...` 只是「预期槽位名称」，且明确要求
+「实际执行必须以 Ledger 为准，不允许两个模块占用同一个 migration number」。
+本仓库 migration 必须与已有最高版本**连续**（`MIGRATIONS` 按 version 升序、`latest_version()` 取末项），
+因此 WAVE 3 实际执行 Planning Intake 时占用 **v030**，其余预留槽位整体顺延：
+
+```text
+v030  PlanningIntake   — §24.3（planning_intake_drafts）      【WAVE 3 已占用 ✓】
+v031  Secrets          — Foundation D（Native SecretStore）
+v032  Recurrence       — Foundation H（RFC5545 / rrule）
+v033  SearchV2         — Foundation J（FTS5 + jieba）
+v034  KnowledgeCanvas  — §35（knowledge_canvases + knowledge_canvas_embeds）
 v035  LearningSignals  — §30A.1（learning_signals）
 v036  KnowledgeMastery — §30A.2（knowledge_mastery）
 v037+ 顺延，实际新增前必须回写本 Ledger
@@ -110,7 +118,31 @@ category 1（我有 X 分钟）/ 2（Recovery）/ 4（due review）依赖 Learne
 
 ---
 
-## 4. 下一步（Next exact action）
+## 4. WAVE 3 — Planning Intake / Agent Critical Path（§24 / §26）· 进行中
 
-见本文件末尾滚动更新。
+| 项 | 状态 |
+|---|---|
+| §26.4 ChangeSet Apply Idempotency（后端 authoritative，第二次 = already_applied） | **DONE** |
+| `src-tauri/tests/product2_changeset_idem.rs`（CHANGESET-IDEM-TC001..004） | **DONE — 6/6 PASS** |
+| §24.3 migration v030 `planning_intake_drafts` | **DONE** |
+| §24.3 `repository/planning_intake.rs` + `commands/intake.rs`（4 条命令） | **DONE** |
+| §24.2 `src/planning/intakeTemplate.ts` 模板 + 确定性解析 + 完成度 | **DONE** |
+| §24.1 `src/components/PlanningIntake.tsx` 三个入口（AI 一起填写 / 导入任务书 / 直接说目标） | **DONE** |
+| §24.4 导入复用现有 source ingestion（`import_personalization_files`） | **DONE** |
+| §26.1/§26.2/§26.3 ONE ChangeSet + Preview + Approval Safety | **已存在**（PHASE O-Q：`ChangeSetReview.tsx` / `apply_ai_change_set` / `Undo`），本轮补幂等 |
+| §25 Agent Higher Context / §27 propose_* 工具 / §26 PlanningProposalV2 | **未开始**（后续 Wave） |
+
+测试：`cargo test` product2_changeset_idem 6/6 + product2_planning_intake 6/6；
+前端 `tests/learning-engine/intakeTemplate.test.ts` 12 + `tests/product-ui/planningIntake.test.tsx` 9。
+**关键断言**：Intake 只写 Draft —— `draft_never_leaks_into_formal_tables` 证明
+草稿反复写入（含"看起来像正式结构"的 JSON）后 goals/tasks/blueprints/learning_items 纹丝不动（§0A.4）。
+
+---
+
+## 5. 下一步（Next exact action）
+
+WAVE 4/5（Learning Engine Minimal Core / Knowledge Canvas）与 WAVE 3 的
+§25 Agent Context、§27 propose_* 工具、§26 PlanningProposalV2 均未完成。
+详见最终 `OVERNIGHT REPORT`（会话结束时追加）。
+
 

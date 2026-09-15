@@ -11305,3 +11305,117 @@ html.higher-qr-scanning body .qr-scan-frame,
   font-weight: 600;
   color: var(--h-success);
 }
+
+/* ============ PRODUCT-2.0 §24 Planning Intake（Draft 入口） ============
+   约束（§4 视觉 LOCKED）：不设 background-image，沿用 --h-* 表面变量。 */
+.intake {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-3);
+  padding: var(--h-space-5);
+}
+
+.intake__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.intake__desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--h-text-secondary);
+}
+
+.intake__info {
+  font-size: 13px;
+  color: var(--h-success);
+}
+
+.intake__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--h-space-2);
+}
+
+.intake__import {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-2);
+  padding: var(--h-space-3);
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+}
+
+.intake__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: inherit;
+  color: var(--h-text);
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  resize: vertical;
+}
+
+.intake__textarea:focus {
+  outline: none;
+  border-color: var(--h-accent-border);
+}
+
+.intake__import-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--h-space-2);
+}
+
+.intake__hint {
+  font-size: 12px;
+}
+
+.intake__draft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h-space-2);
+  padding: var(--h-space-3);
+  background: var(--h-surface-2);
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+}
+
+.intake__draft-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--h-space-2);
+  flex-wrap: wrap;
+}
+
+.intake__draft-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.intake__draft-meta {
+  font-size: 12px;
+  color: var(--h-text-secondary);
+}
+
+.intake__missing {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.intake__draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--h-space-2);
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  getActivePlanningBlueprint,
   getActiveSession,
   getDailyLearningReport,
   getGoalTree,
@@ -20,6 +21,7 @@ import ActiveSessionConflictModal, {
 } from "../components/ActiveSessionConflictModal";
 import FinalGoalCard from "../components/FinalGoalCard";
 import PlanningTruthSummary from "../components/PlanningTruthSummary";
+import PlanningIntake from "../components/PlanningIntake";
 import GoalTreePanel, { goalPathResolver } from "../components/GoalTreePanel";
 import NextStep from "../components/NextStep";
 import PlanningCalendar from "../components/PlanningCalendar";
@@ -94,6 +96,8 @@ function Planning() {
   const [futureTasks, setFutureTasks] = useState<Task[]>([]);
   const [todayDayGoal, setTodayDayGoal] = useState<Goal | null>(null);
   const [legacy, setLegacy] = useState<{ stages: number; plans: number } | null>(null);
+  /** PRODUCT-2.0 §24.1：是否存在 Active Blueprint（决定是否显示规划入口） */
+  const [hasBlueprint, setHasBlueprint] = useState(false);
 
   // ===== Calendar 日报（§61-64：点击日期在 Calendar 正下方展开） =====
   const [selectedDate, setSelectedDate] = useState<string | null>(
@@ -151,13 +155,15 @@ function Planning() {
       const t0 = todayDate();
       const tomorrow = addDaysISO(t0, 1);
       const rangeEnd = addDaysISO(t0, 7);
-      const [profileItems, tree, as, tt, ft, legacyCounts] = await Promise.all([
+      const [profileItems, tree, as, tt, ft, legacyCounts, blueprints] = await Promise.all([
         listLearningItemsByProfile(activeProfile.id).catch(() => [] as LearningItem[]),
         getGoalTree(activeProfile.id),
         getActiveSession().catch(() => null),
         listTodayTasksByProfile(activeProfile.id).catch(() => [] as Task[]),
         listTasksByRangeByProfile(activeProfile.id, tomorrow, rangeEnd).catch(() => [] as Task[]),
         getLegacyPlanningCounts(activeProfile.id).catch(() => [0, 0] as [number, number]),
+        // PRODUCT-2.0 §24.1：没有 Active Blueprint 时才显示「准备开始你的规划」
+        getActivePlanningBlueprint(activeProfile.id).catch(() => null),
       ]);
       setAllItems(profileItems);
       setActiveSession(as);
@@ -169,6 +175,7 @@ function Planning() {
         flat.find((g) => g.goal_level === "day" && g.period_start === t0) ?? null
       );
       setLegacy({ stages: legacyCounts[0] ?? 0, plans: legacyCounts[1] ?? 0 });
+      setHasBlueprint(blueprints != null);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -474,6 +481,12 @@ function Planning() {
 
       {/* ===== DEV-0059 §27-28：正式目标与规划（顶部） ===== */}
       {truthSummaryNode}
+
+      {/* ===== PRODUCT-2.0 §24.1：没有 Active Blueprint → 「准备开始你的规划」 =====
+          只产生 Draft；正式计划仍需 ChangeSet 预览 + 用户确认（§26） */}
+      {activeProfile && !hasBlueprint && (
+        <PlanningIntake profileId={activeProfile.id} onChanged={refresh} />
+      )}
 
       {/* ===== 第一屏：Final Goal Card（§139-141）+ 左目标树 + 右下一步 ===== */}
       {finalGoalNode}

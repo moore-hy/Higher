@@ -21,6 +21,7 @@ pub mod note;
 pub mod personalization;
 pub mod plan;
 pub mod planning;
+pub mod planning_intake;
 pub mod planning_review;
 pub mod planning_source;
 pub mod recurring_rule;
