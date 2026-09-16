@@ -112,7 +112,9 @@ export default function ProfileSelector() {
   }
 
   return (
-    <div className="profile-gate">
+    // PROFILE SELECTOR SCROLL HOTFIX V2：仅普通选择页加 --selector 修饰类，
+    // 令其自身成为纵向滚动容器；loading / 创建表单仍用通用 .profile-gate。
+    <div className="profile-gate profile-gate--selector">
       <div className="profile-gate__header">
         <h1 className="profile-gate__title">Higher</h1>
         <p className="profile-gate__subtitle">选择学习档案</p>

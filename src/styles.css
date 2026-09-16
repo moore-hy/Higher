@@ -1612,6 +1612,26 @@ html[data-h-wallpaper="on"] #root {
 
 /* ============ Profile Selector ============ */
 
+/* PROFILE SELECTOR SCROLL HOTFIX V2：选择页自身成为唯一的纵向滚动容器。
+   .app-shell__content 以 overflow:hidden 裁掉溢出，通用 .profile-gate 又靠
+   justify-content:center 居中；档案多于一屏时首尾内容均不可达。本修饰类只作用于
+   普通选择页（loading / 创建表单仍使用通用 .profile-gate）。 */
+.profile-gate--selector {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  justify-content: flex-start;
+  padding-bottom: var(--h-space-10);
+}
+
+/* 视口高度不足时，头部 / 错误 / 列表 / CTA 不因 flex 收缩而被压扁 */
+.profile-gate--selector > .profile-gate__header,
+.profile-gate--selector > .profile-gate__error,
+.profile-gate--selector > .profile-selector__list,
+.profile-gate--selector > .profile-gate__btn {
+  flex-shrink: 0;
+}
+
 .profile-selector__list {
   display: flex;
   flex-direction: column;
