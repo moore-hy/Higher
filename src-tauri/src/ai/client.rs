@@ -4,8 +4,10 @@
 //! - Authorization: Bearer（Key 来自 Connection 配置，绝不硬编码 / 打日志）
 //! - 人话错误映射：401 / 429 / 网络 / 超时 / 模型错误 / JSON 异常
 
-use super::provider::AiRuntimeConfig;
+use super::provider::{AiRuntimeConfig, AuthMode};
+use super::resource_governor::{production_governor, AiConcurrencyGovernor};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -121,19 +123,34 @@ pub struct Completion {
 }
 
 /// 客户端（无状态，可复用；持有本次请求的 immutable Runtime Config）。
+/// POST-M7 §S1：全部真实 AI HTTP 请求必须经进程级唯一 AiConcurrencyGovernor
+/// 获取 permit（含 Compatibility Probe / 流式 / 工具循环——它们都走本客户端）。
 pub struct AiClient {
     config: AiRuntimeConfig,
     http: reqwest::Client,
+    governor: Arc<AiConcurrencyGovernor>,
 }
 
 impl AiClient {
     pub fn new(config: AiRuntimeConfig) -> Self {
+        // §S1-B Single Governor：生产路径恒用进程级唯一 governor；
+        // 禁止每个 AiClient 各持一个信号量（否则有效并发上界相乘）。
+        Self::with_governor(config, production_governor())
+    }
+
+    /// 测试专用：注入隔离 governor，避免与生产信号量交叉干扰。
+    /// 生产代码永远使用 [`AiClient::new`]（内部为进程级唯一 governor）。
+    pub fn with_governor(config: AiRuntimeConfig, governor: Arc<AiConcurrencyGovernor>) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
             .expect("reqwest client");
-        Self { config, http }
+        Self {
+            config,
+            http,
+            governor,
+        }
     }
 
     pub fn config(&self) -> &AiRuntimeConfig {
@@ -169,9 +186,13 @@ impl AiClient {
         max_tokens: Option<i64>,
         temp: f64,
     ) -> Result<Completion, String> {
-        if self.config.api_key.trim().is_empty() {
+        // §S2-C：仅 bearer + 空 Key fail-closed；none 允许空 Key（不附 Authorization）。
+        if self.config.auth_mode == AuthMode::Bearer && self.config.api_key.trim().is_empty() {
             return Err("尚未配置 API Key。请先在「设置 → AI」中填写。".to_string());
         }
+        // §S1-D Permit lifetime：HTTP send 前取 permit；响应完成 / 失败 / 超时后
+        // Drop 自动释放（任何错误路径不得泄漏）。
+        let _permit = self.governor.acquire().await;
         let url = self.config.endpoint();
 
         // §14/§15/§25：model transform / json strategy / thinking 全部经 Adapter（provider.rs）
@@ -190,14 +211,11 @@ impl AiClient {
             stream: false,
         };
 
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.config.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(human_network_error)?;
+        let mut req = self.http.post(&url).json(&body);
+        if self.config.auth_mode == AuthMode::Bearer {
+            req = req.bearer_auth(&self.config.api_key);
+        }
+        let resp = req.send().await.map_err(human_network_error)?;
 
         let status = resp.status();
         let text = resp
@@ -240,9 +258,12 @@ impl AiClient {
     where
         F: FnMut(&str),
     {
-        if self.config.api_key.trim().is_empty() {
+        // §S2-C：仅 bearer + 空 Key fail-closed；none 允许空 Key（不附 Authorization）。
+        if self.config.auth_mode == AuthMode::Bearer && self.config.api_key.trim().is_empty() {
             return Err("尚未配置 API Key。请先在「设置 → AI」中填写。".to_string());
         }
+        // §S1-E：等待 permit 期间允许既有取消机制终止（取消 → Err，不占用槽位）。
+        let _permit = self.governor.acquire_cancellable(&token).await?;
         let url = self.config.endpoint();
         let model = self.config.effective_model();
         let body = serde_json::json!({
@@ -253,14 +274,11 @@ impl AiClient {
             "stream": true,
             "stream_options": { "include_usage": true },
         });
-        let mut resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.config.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(human_network_error)?;
+        let mut req = self.http.post(&url).json(&body);
+        if self.config.auth_mode == AuthMode::Bearer {
+            req = req.bearer_auth(&self.config.api_key);
+        }
+        let mut resp = req.send().await.map_err(human_network_error)?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -348,9 +366,12 @@ impl AiClient {
     where
         F: FnMut(&str),
     {
-        if self.config.api_key.trim().is_empty() {
+        // §S2-C：仅 bearer + 空 Key fail-closed；none 允许空 Key（不附 Authorization）。
+        if self.config.auth_mode == AuthMode::Bearer && self.config.api_key.trim().is_empty() {
             return Err("尚未配置 API Key。请先在「设置 → AI」中填写。".to_string());
         }
+        // §S1-E：等待 permit 期间允许既有取消机制终止（取消 → Err，不占用槽位）。
+        let _permit = self.governor.acquire_cancellable(&token).await?;
         let url = self.config.endpoint();
         let model = self.config.effective_model();
         let mut body = serde_json::json!({
@@ -364,14 +385,11 @@ impl AiClient {
         if let Some(t) = &tools {
             body["tools"] = t.clone();
         }
-        let mut resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.config.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(human_network_error)?;
+        let mut req = self.http.post(&url).json(&body);
+        if self.config.auth_mode == AuthMode::Bearer {
+            req = req.bearer_auth(&self.config.api_key);
+        }
+        let mut resp = req.send().await.map_err(human_network_error)?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();

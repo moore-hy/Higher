@@ -157,6 +157,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "thiserror 1.0.69",
+ "tokio",
  "tokio-util",
  "ts-rs",
  "usearch",

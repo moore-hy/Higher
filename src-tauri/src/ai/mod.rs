@@ -30,6 +30,9 @@ pub mod semantic_contract;
 
 pub mod provider;
 
+// POST-M7 AI FOUNDATION §S1：AI Concurrency Governor V1（进程级唯一并发上界 = 2）
+pub mod resource_governor;
+
 pub mod compatibility;
 
 pub mod action_continuation;
@@ -118,7 +121,9 @@ pub fn load_ai_settings(conn: &rusqlite::Connection) -> Result<AiSettings, Strin
     Ok(AiSettings {
         provider: AiProvider::Deepseek, // legacy shape（前端不再消费该字段做厂商判断）
         base_url: p.base_url,
-        api_key: p.api_key,
+        // §S3-H：前端 DTO 边界——plaintext/secret 永不越过 Rust → JS。
+        // legacy 面板无 has_api_key 字段，恒返回空串。
+        api_key: String::new(),
         model: p.model,
         thinking_enabled: p.thinking_mode == provider::ThinkingMode::DeepseekModelSuffix,
     })
@@ -141,13 +146,19 @@ pub fn save_ai_settings(conn: &rusqlite::Connection, s: &AiSettings) -> Result<(
         &provider::AdapterKind::from_str(&old.adapter_kind)
             .unwrap_or(provider::AdapterKind::Deepseek),
         &s.base_url,
-        &s.api_key,
+        // §S3-H 编辑语义：空 Key 输入 = 保持旧 credential（不清空、不覆盖）
+        if s.api_key.trim().is_empty() {
+            old.api_key.as_str()
+        } else {
+            s.api_key.as_str()
+        },
         &s.model,
         &if s.thinking_enabled {
             provider::ThinkingMode::DeepseekModelSuffix
         } else {
             provider::ThinkingMode::Off
         },
+        &old.auth_mode, // legacy 面板不感知认证模式 → 原样保留
         old.enabled,
     )?;
     Ok(())

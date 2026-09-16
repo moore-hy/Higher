@@ -44,6 +44,7 @@ tauri-plugin-notification = "2.3.3"
 # DEV-SYNC-003 · QR Pairing：Android 相机扫码（官方插件；desktop 侧生成在前端 qrcode npm）
 tauri-plugin-barcode-scanner = "2"
 # DEV-0052 Personal Intelligence
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
