@@ -3,7 +3,9 @@
 //! 全部使用 `MemorySecretStore`（不依赖真实 Windows Credential Manager）。
 //! SS-05/06/07 的迁移失败分支另有 `ai::secret_migration` 单元测试双重覆盖。
 
-use app_lib::ai::provider::{resolve_active_ai_profiles, AiRuntimeConfig, AuthMode};
+use app_lib::ai::provider::{
+    resolve_active_ai_profiles, AdapterKind, AiRuntimeConfig, AuthMode, ThinkingMode,
+};
 use app_lib::ai::secret_migration::{
     collect_pending, commit_migrated, run_best_effort, store_pending,
 };
@@ -12,7 +14,8 @@ use app_lib::db::DbState;
 use app_lib::migrations::run_migrations;
 use app_lib::repository::ai_provider_profile::AiProviderProfileRepository;
 use rusqlite::params;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 fn fresh_db() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
@@ -182,7 +185,7 @@ fn ss05_migration_success_moves_secret_and_clears_plaintext() {
     assert_eq!(pending.len(), 1);
     let (migrated, failed) = store_pending(&store, pending);
     assert!(failed.is_empty());
-    assert_eq!(commit_migrated(&conn, &store, migrated).unwrap(), 1);
+    assert_eq!(commit_migrated(&conn, migrated).unwrap().0, 1);
     assert_eq!(db_key_of(&conn, id), "");
     assert_eq!(
         store.get(&ref_of(&conn, id).unwrap()).unwrap(),
@@ -314,7 +317,7 @@ fn ss10_profile_isolation_of_secrets() {
 #[test]
 fn ss11_error_strings_never_contain_api_key() {
     let conn = fresh_db();
-    let store = MemorySecretStore::new();
+    let _store = MemorySecretStore::new();
     let secret = "sk-log-leak-check-9x8y7z";
     let id = insert_bearer(&conn, "L", secret);
     // 迁移失败原因（sanitized）
@@ -351,14 +354,92 @@ fn fresh_dbstate(tag: &str) -> app_lib::db::DbState {
     app_lib::db::DbState::open(&db_path).expect("db")
 }
 
-// ---- SS-12：SecretStore 操作不持有应用 SQLite 锁 ----
+// =============== 受控 SecretStore（锁探测 + 可复现 cleanup 路径） ===============
+
+/// 受控 SecretStore：在每个 set/get/delete 回调时探测应用 DB 锁是否空闲
+/// （`db.0.try_lock()`）。若探测到锁被持有（含本线程已持锁导致的 WouldBlock），
+/// 记录一次违例（`violation`）。用于证明生产编排在**释放 DB 锁之后**才访问
+/// SecretStore（S3-D1 调用方契约），并可确定性地触发 migration cleanup 路径。
+struct LockProbeStore {
+    inner: MemorySecretStore,
+    db: Arc<DbState>,
+    violation: AtomicBool,
+    delete_count: AtomicUsize,
+    deleted: Mutex<Vec<String>>,
+    flip_on_set: bool,
+}
+
+impl LockProbeStore {
+    fn new(db: Arc<DbState>) -> Self {
+        Self {
+            inner: MemorySecretStore::new(),
+            db,
+            violation: AtomicBool::new(false),
+            delete_count: AtomicUsize::new(0),
+            deleted: Mutex::new(Vec::new()),
+            flip_on_set: false,
+        }
+    }
+    fn with_flip(db: Arc<DbState>) -> Self {
+        let mut s = Self::new(db);
+        s.flip_on_set = true;
+        s
+    }
+    fn probe(&self) {
+        // 锁被（任何线程，含本线程）持有 → try_lock 失败 → 记违例
+        if self.db.0.try_lock().is_err() {
+            self.violation.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+impl SecretStore for LockProbeStore {
+    fn get(&self, r: &str) -> Result<Option<String>, String> {
+        self.probe();
+        self.inner.get(r)
+    }
+    fn set(&self, r: &str, s: &str) -> Result<(), String> {
+        self.probe();
+        if self.flip_on_set {
+            // 在【锁外】把待迁移行改 auth_mode='none'，使随后 commit_migrated 的
+            // WHERE (auth_mode='bearer' AND secret_ref IS NULL) 不命中 → 0 行 →
+            // 返回 cleanup ref（确定性触发 SS-16 的锁外清理路径）。
+            if let Ok(conn) = self.db.0.lock() {
+                let _ = conn.execute(
+                    "UPDATE ai_provider_profiles SET auth_mode='none' \
+                     WHERE auth_mode='bearer' AND api_key!='' AND secret_ref IS NULL",
+                    [],
+                );
+            }
+        }
+        self.inner.set(r, s)
+    }
+    fn delete(&self, r: &str) -> Result<(), String> {
+        self.probe();
+        self.delete_count.fetch_add(1, Ordering::SeqCst);
+        self.deleted.lock().unwrap().push(r.to_string());
+        self.inner.delete(r)
+    }
+}
+
+fn auth_of(conn: &rusqlite::Connection, id: i64) -> Option<String> {
+    conn.query_row(
+        "SELECT auth_mode FROM ai_provider_profiles WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+// ---- SS-12：生产编排在释放 DB 锁后才访问 SecretStore（调用方契约证明）----
 #[test]
 fn ss12_secretstore_ops_run_without_db_lock() {
-    let db = fresh_dbstate("ss12");
-    // 主线程持有 DB 锁不放；另一线程的 SecretStore 操作必须照样完成
+    let db = Arc::new(fresh_dbstate("ss12"));
+    let store = LockProbeStore::new(db.clone());
+    // 主线程持有 DB 锁不放；另一线程的 SecretStore 操作必须照样完成（SecretStore
+    // 本身不依赖 DB 锁）
     let guard = db.0.lock().unwrap();
-    let store = MemorySecretStore::new();
-    let h = std::thread::spawn(move || {
+    let h = std::thread::spawn(|| {
         let s = MemorySecretStore::new();
         s.set("r", "v").unwrap();
         s.get("r").unwrap();
@@ -367,13 +448,18 @@ fn ss12_secretstore_ops_run_without_db_lock() {
     });
     assert!(h.join().unwrap(), "SecretStore I/O 不依赖 DB 锁");
     drop(guard);
-    // run_best_effort 三段式：锁按段获取/释放（结构保证），此处以功能正确性收口
-    let conn_guard = db.0.lock().unwrap();
-    insert_bearer(&conn_guard, "L", "sk-1");
-    drop(conn_guard);
-    let store2 = MemorySecretStore::new();
-    let (migrated, failed) = run_best_effort(&db, &store2);
+    // 生产编排 run_best_effort：collect → store_pending(锁外) → commit(锁外 cleanup)。
+    // 全过程不得触发「持锁访问 SecretStore」违例。
+    {
+        let conn = db.0.lock().unwrap();
+        insert_bearer(&conn, "L", "sk-1");
+    }
+    let (migrated, failed) = run_best_effort(&*db, &store);
     assert_eq!((migrated, failed), (1, 0));
+    assert!(
+        !store.violation.load(Ordering::SeqCst),
+        "run_best_effort 不得在任何 SecretStore 操作时持有 DB 锁（S3-D1 调用方契约）"
+    );
 }
 
 // ---- SS-13：迁移失败 → 存储初始化仍可恢复、plaintext 原样、sanitized 警告 ----
@@ -467,6 +553,335 @@ fn resolved_active_profile_uses_secret_ref_not_plaintext() {
     );
     resolved.primary.resolve_secret(&store).unwrap();
     assert_eq!(resolved.primary.api_key, "sk-active");
+}
+
+// =============== POST-M7 hotfix P0-2 / P0-3 回归：DB-atomic create / update ===============
+
+// 复刻 create_ai_provider_profile 的生产协议：SecretStore.set + read-back verify（锁外）
+// → 单事务 INSERT（含 secret_ref）→ 失败 best-effort 删新 secret。
+// 注意：r 由调用方注入（= 生产命令内部 generate_secret_ref 的等价物），便于断言可观察。
+fn create_bearer_atomic(
+    db: &DbState,
+    store: &dyn SecretStore,
+    name: &str,
+    key: &str,
+    r: &str,
+) -> Result<i64, String> {
+    store
+        .set(r, key)
+        .map_err(|e| e.to_string())?;
+    store
+        .get(r)
+        .map_err(|e| e.to_string())?
+        .filter(|v| v == key)
+        .ok_or_else(|| "凭据写入校验失败".to_string())?;
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let id = AiProviderProfileRepository::new(&conn).create_with_secret_ref(
+        name,
+        &AdapterKind::OpenaiCompatible,
+        "http://x",
+        "",
+        "m",
+        &ThinkingMode::Off,
+        "bearer",
+        Some(r),
+    );
+    match id {
+        Ok(id) => Ok(id),
+        Err(_) => {
+            let _ = store.delete(r);
+            Err("DB 写入失败".to_string())
+        }
+    }
+}
+
+// 复刻 update_ai_provider_profile 的「新 Key 替换」生产协议（锁外 SecretStore I/O）。
+// 注意：r 由调用方注入（= 生产命令内部 generate_secret_ref 的等价物），便于断言可观察。
+fn replace_bearer_key_atomic(
+    db: &DbState,
+    store: &dyn SecretStore,
+    id: i64,
+    new_key: &str,
+    r: &str,
+) -> Result<(), String> {
+    store.set(r, new_key).map_err(|e| e.to_string())?;
+    store
+        .get(&r)
+        .map_err(|e| e.to_string())?
+        .filter(|v| v == new_key)
+        .ok_or_else(|| "凭据写入校验失败".to_string())?;
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    AiProviderProfileRepository::new(&conn).update_with_secret_ref(
+        id,
+        "P",
+        &AdapterKind::OpenaiCompatible,
+        "http://x",
+        "",
+        "m",
+        &ThinkingMode::Off,
+        "bearer",
+        true,
+        Some(r),
+        false,
+    )
+}
+
+// ---- SS-16：migration commit 失败 → SecretStore cleanup 在 DB 锁释放后执行 ----
+#[test]
+fn ss16_migration_commit_failure_cleanup_outside_db_lock() {
+    let db = Arc::new(fresh_dbstate("ss16"));
+    let store = LockProbeStore::with_flip(db.clone());
+    {
+        let conn = db.0.lock().unwrap();
+        insert_bearer(&conn, "L", "sk-orphan");
+    }
+    // run_best_effort：collect 抓到 legacy 行 → store_pending 的 set 在【锁外】把该行
+    //   auth_mode 改为 none → commit_migrated 的 WHERE 不命中 → 0 行 → 返回 cleanup ref
+    //   → run_best_effort 在【锁释放后】对 orphan 执行 store.delete（S3-D1）。
+    let (migrated, _failed) = run_best_effort(&*db, &store);
+    assert_eq!(migrated, 0, "commit 全部 0 行（cleanup 路径）");
+    assert!(
+        !store.violation.load(Ordering::SeqCst),
+        "migration cleanup 不得在持锁时执行 SecretStore I/O"
+    );
+    assert!(
+        store.delete_count.load(Ordering::SeqCst) >= 1,
+        "commit 失败必须 best-effort 清理 orphan secret"
+    );
+    assert!(!store.deleted.lock().unwrap().is_empty());
+}
+
+// ---- SS-17：Bearer create DB 失败 → 无部分行，新建 secret best-effort 清理 ----
+#[test]
+fn ss17_bearer_create_db_failure_cleans_secret_no_partial_row() {
+    let db = Arc::new(fresh_dbstate("ss17"));
+    let store = MemorySecretStore::new();
+    // 生产协议：SecretStore.set + verify（锁外）
+    let r = generate_secret_ref();
+    store.set(&r, "sk-new").unwrap();
+    assert_eq!(store.get(&r).unwrap(), Some("sk-new".to_string()));
+    // 预置同名 provider 制造 UNIQUE 冲突 → 随后的 INSERT 失败
+    {
+        let conn = db.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ai_provider_profiles (display_name, adapter_kind, base_url, api_key, model, thinking_mode, auth_mode)
+             VALUES ('Dup', 'openai_compatible', 'http://x', '', 'm', 'off', 'bearer')",
+            [],
+        )
+        .unwrap();
+    }
+    let res = create_bearer_atomic(&db, &store, "Dup", "sk-new", &r);
+    assert!(res.is_err(), "重复 display_name 必须使 INSERT 失败");
+    assert!(
+        !store.contains(&r),
+        "DB 失败后新建 secret 必须 best-effort 清理"
+    );
+    // 不得产生部分 provider 行：只有预置的那一条，且 secret_ref 为空
+    let row = {
+        let conn = db.0.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*), (SELECT secret_ref FROM ai_provider_profiles WHERE display_name='Dup')",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(row.0, 1, "不得插入部分 provider 行");
+    assert!(row.1.is_none(), "部分行不得携带 secret_ref");
+}
+
+// ---- SS-18：Bearer create 成功 → 单行已含 secret_ref，api_key 列空 ----
+#[test]
+fn ss18_bearer_create_success_row_already_has_secret_ref() {
+    let db = Arc::new(fresh_dbstate("ss18"));
+    let store = MemorySecretStore::new();
+    let r = generate_secret_ref();
+    store.set(&r, "sk-create-ok").unwrap();
+    assert_eq!(store.get(&r).unwrap(), Some("sk-create-ok".to_string()));
+    let id = match create_bearer_atomic(&db, &store, "New", "sk-create-ok", &r) {
+        Ok(id) => id,
+        Err(e) => panic!("create 不应失败: {e}"),
+    };
+    let (api_key, secret_ref) = {
+        let conn = db.0.lock().unwrap();
+        (db_key_of(&conn, id), ref_of(&conn, id))
+    };
+    assert_eq!(api_key, "", "api_key 列不得写 plaintext");
+    assert_eq!(
+        secret_ref,
+        Some(r.clone()),
+        "单行已含 secret_ref，无需二次提交"
+    );
+    assert_eq!(store.get(&r).unwrap(), Some("sk-create-ok".to_string()));
+}
+
+// ---- SS-19：Bearer Key 替换 DB 失败 → 旧 DB/auth/secret 不变，旧 secret 可用，新 secret 清理 ----
+#[test]
+fn ss19_bearer_key_replacement_db_failure_keeps_old() {
+    let db = Arc::new(fresh_dbstate("ss19"));
+    let store = MemorySecretStore::new();
+    let old_ref = generate_secret_ref();
+    store.set(&old_ref, "sk-old").unwrap();
+    // 预置冲突源 "Other"，随后 update 改 display_name='Other' 触发 UNIQUE 失败
+    let id = {
+        let conn = db.0.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ai_provider_profiles (display_name, adapter_kind, base_url, api_key, model, thinking_mode, auth_mode)
+             VALUES ('Other', 'openai_compatible', 'http://o', '', 'm', 'off', 'bearer')",
+            [],
+        )
+        .unwrap();
+        AiProviderProfileRepository::new(&conn)
+            .create_with_secret_ref(
+                "P",
+                &AdapterKind::OpenaiCompatible,
+                "http://x",
+                "",
+                "m",
+                &ThinkingMode::Off,
+                "bearer",
+                Some(&old_ref),
+            )
+            .unwrap()
+    };
+    // 生产协议：新 Key SecretStore.set + verify（锁外）
+    let new_ref = generate_secret_ref();
+    store.set(&new_ref, "sk-new").unwrap();
+    assert_eq!(store.get(&new_ref).unwrap(), Some("sk-new".to_string()));
+    // 单事务 UPDATE 指向 new_ref，但 display_name 冲突 → 失败
+    let res = {
+        let conn = db.0.lock().unwrap();
+        AiProviderProfileRepository::new(&conn).update_with_secret_ref(
+            id,
+            "Other",
+            &AdapterKind::OpenaiCompatible,
+            "http://x",
+            "",
+            "m",
+            &ThinkingMode::Off,
+            "bearer",
+            true,
+            Some(&new_ref),
+            true,
+        )
+    };
+    // DB 失败：best-effort 清理新 secret
+    let _ = store.delete(&new_ref);
+    assert!(res.is_err(), "display_name 冲突必须使 UPDATE 失败");
+    assert!(
+        !store.contains(&new_ref),
+        "DB 失败后新 secret 必须 best-effort 清理"
+    );
+    // 旧 DB 状态完全不变
+    let (auth, sref, key) = {
+        let conn = db.0.lock().unwrap();
+        (auth_of(&conn, id), ref_of(&conn, id), db_key_of(&conn, id))
+    };
+    assert_eq!(auth.unwrap(), "bearer");
+    assert_eq!(sref, Some(old_ref.clone()), "old secret_ref 不变");
+    assert_eq!(key, "", "api_key 仍为空串");
+    // 旧 secret 仍可用
+    assert_eq!(store.get(&old_ref).unwrap(), Some("sk-old".to_string()));
+}
+
+// ---- SS-20：Bearer Key 替换成功 → DB 原子指向 new ref，plaintext 空，旧 secret 提交后清理 ----
+#[test]
+fn ss20_bearer_key_replacement_success_atomic() {
+    let db = Arc::new(fresh_dbstate("ss20"));
+    let store = MemorySecretStore::new();
+    let old_ref = generate_secret_ref();
+    store.set(&old_ref, "sk-old").unwrap();
+    let id = {
+        let conn = db.0.lock().unwrap();
+        AiProviderProfileRepository::new(&conn)
+            .create_with_secret_ref(
+                "P",
+                &AdapterKind::OpenaiCompatible,
+                "http://x",
+                "",
+                "m",
+                &ThinkingMode::Off,
+                "bearer",
+                Some(&old_ref),
+            )
+            .unwrap()
+    };
+    let new_ref = generate_secret_ref();
+    store.set(&new_ref, "sk-new").unwrap();
+    assert_eq!(store.get(&new_ref).unwrap(), Some("sk-new".to_string()));
+    // 单事务 UPDATE 原子指向 new_ref
+    if let Err(e) = replace_bearer_key_atomic(&db, &store, id, "sk-new", &new_ref) {
+        panic!("replace 不应失败: {e}");
+    }
+    // COMMIT 后 best-effort 删旧 secret
+    let _ = store.delete(&old_ref);
+    let (sref, key) = {
+        let conn = db.0.lock().unwrap();
+        (ref_of(&conn, id), db_key_of(&conn, id))
+    };
+    assert_eq!(sref, Some(new_ref.clone()), "DB 原子指向 new_ref");
+    assert_eq!(key, "", "plaintext 空串");
+    assert!(
+        !store.contains(&old_ref),
+        "旧 secret 已在 commit 后 best-effort 删除"
+    );
+    assert_eq!(store.get(&new_ref).unwrap(), Some("sk-new".to_string()), "新 secret 可用");
+}
+
+// ---- SS-21：Bearer → None → auth_mode/secret_ref/api_key 原子变化，旧 secret 提交后清理 ----
+#[test]
+fn ss21_bearer_to_none_atomic_and_cleans_secret() {
+    let db = Arc::new(fresh_dbstate("ss21"));
+    let store = MemorySecretStore::new();
+    let old_ref = generate_secret_ref();
+    store.set(&old_ref, "sk-old").unwrap();
+    let id = {
+        let conn = db.0.lock().unwrap();
+        AiProviderProfileRepository::new(&conn)
+            .create_with_secret_ref(
+                "P",
+                &AdapterKind::OpenaiCompatible,
+                "http://x",
+                "",
+                "m",
+                &ThinkingMode::Off,
+                "bearer",
+                Some(&old_ref),
+            )
+            .unwrap()
+    };
+    // 单事务 UPDATE：auth_mode='none', secret_ref=NULL, api_key=''
+    {
+        let conn = db.0.lock().unwrap();
+        AiProviderProfileRepository::new(&conn)
+            .update_with_secret_ref(
+                id,
+                "P",
+                &AdapterKind::OpenaiCompatible,
+                "http://x",
+                "",
+                "m",
+                &ThinkingMode::Off,
+                "none",
+                true,
+                None,
+                true,
+            )
+            .unwrap();
+    }
+    // COMMIT 后 best-effort 删旧 secret
+    let _ = store.delete(&old_ref);
+    let (auth, sref, key) = {
+        let conn = db.0.lock().unwrap();
+        (auth_of(&conn, id), ref_of(&conn, id), db_key_of(&conn, id))
+    };
+    assert_eq!(auth.unwrap(), "none", "auth_mode 原子切到 none");
+    assert_eq!(sref, None, "secret_ref 原子置 NULL");
+    assert_eq!(key, "", "api_key 原子清空");
+    assert!(
+        !store.contains(&old_ref),
+        "旧 secret 已在 commit 后 best-effort 删除"
+    );
 }
 
 // 防未使用告警（Mutex 导入用于 SS-12 文档意图）

@@ -179,15 +179,13 @@ pub fn create_ai_provider_profile(
     let adapter = parse_adapter(&adapter_kind)?;
     let thinking = parse_thinking(&thinking_mode)?;
 
-    // POST-M7 §E Create Bearer 锁死顺序：
-    //   generate secret_ref → SecretStore.set → read-back verify → DB insert
-    // （DB insert 失败 → best-effort delete new secret）
+    // ★ 无 DB 锁：SecretStore I/O（S3-D1：OS 凭据 I/O 永不与 SQLite 锁重叠）
+    //   generate secret_ref → SecretStore.set → read-back verify
     let mut secret_ref: Option<String> = None;
     if auth == ai::provider::AuthMode::Bearer {
         if api_key.trim().is_empty() {
             return Err("Bearer 认证必须填写 API Key；如无需认证请选择「无认证」。".to_string());
         }
-        // ★ 无 DB 锁上下文：SecretStore I/O（S3-D1）
         let store = ai::secret_store::production_secret_store();
         let r = ai::secret_store::generate_secret_ref();
         store.set(&r, api_key.trim())?;
@@ -199,37 +197,30 @@ pub fn create_ai_provider_profile(
         secret_ref = Some(r);
     }
 
-    // ★ DB insert（api_key 列恒空串：正常新路径不写 plaintext）
+    // ★ DB 锁：单事务 INSERT（api_key 恒空串 + secret_ref 一并写入），COMMIT 一次完成。
+    //   不再拆成 create() + set_secret_ref() 两次提交（P0-2：杜绝
+    //   auth_mode=bearer, api_key='', secret_ref=NULL 的部分状态）。
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
-    let id = repo
-        .create(
-            &display_name,
-            &adapter,
-            &base_url,
-            "", // §S3：新 Provider 不存 plaintext
-            &model,
-            &thinking,
-            auth.as_str(),
-        )
-        .map_err(|e| e.to_string());
-    let id = match id {
-        Ok(v) => v,
+    let id = match repo.create_with_secret_ref(
+        &display_name,
+        &adapter,
+        &base_url,
+        "", // §S3：新 Provider 不存 plaintext，Key 仅存于 OS SecretStore
+        &model,
+        &thinking,
+        auth.as_str(),
+        secret_ref.as_deref(),
+    ) {
+        Ok(id) => id,
         Err(e) => {
-            // best-effort 回滚刚写入的 secret
+            // best-effort 回滚刚写入的 secret（此时 DB 锁已无相关行）
             if let Some(r) = &secret_ref {
                 let _ = ai::secret_store::production_secret_store().delete(r);
             }
-            return Err(e);
+            return Err(e.to_string());
         }
     };
-    if let Some(r) = &secret_ref {
-        if repo.set_secret_ref(id, Some(r)).is_err() {
-            let _ = ai::secret_store::production_secret_store().delete(r);
-            let _ = repo.delete(id);
-            return Err("凭据引用保存失败，请重试。".to_string());
-        }
-    }
     Ok(id)
 }
 
@@ -250,22 +241,18 @@ pub fn update_ai_provider_profile(
     let adapter = parse_adapter(&adapter_kind)?;
     let thinking = parse_thinking(&thinking_mode)?;
 
-    // ---- 短 DB 读：旧 profile（含旧 secret_ref / plaintext 状态）----
-    let (old_auth, old_secret_ref, old_key_present, old_key_plain) = {
+    // ---- 短 DB 读：旧 profile 快照（含旧 secret_ref / plaintext / 各 editable 字段）----
+    let snap = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
-        let old = repo
-            .get(profile_id)
+        repo.get(profile_id)
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
-        (
-            ai::provider::AuthMode::from_str(&old.auth_mode)
-                .unwrap_or(ai::provider::AuthMode::Bearer),
-            old.secret_ref.clone(),
-            !old.api_key.trim().is_empty() || old.secret_ref.is_some(),
-            !old.api_key.trim().is_empty(),
-        )
-    }; // ★ 锁已释放
+            .ok_or_else(|| "该 AI 连接不存在。".to_string())?
+    }; // ★ 锁释放
+    let old_auth = ai::provider::AuthMode::from_str(&snap.auth_mode)
+        .unwrap_or(ai::provider::AuthMode::Bearer);
+    let old_secret_ref = snap.secret_ref.clone();
+    let old_key_present = !snap.api_key.trim().is_empty() || snap.secret_ref.is_some();
 
     // 空 Key 输入 = 保持旧 credential（编辑语义）
     let new_key_supplied = !api_key.trim().is_empty();
@@ -280,6 +267,14 @@ pub fn update_ai_provider_profile(
     {
         return Err("切换为 Bearer 认证必须填写 API Key。".to_string());
     }
+
+    // ---- 内存比较 capability_changed（不二次拿锁读 DB）----
+    let capability_changed = snap.adapter_kind != adapter.as_str()
+        || snap.base_url.trim() != base_url.trim()
+        || snap.api_key.trim() != api_key.trim()
+        || snap.model.trim() != model.trim()
+        || snap.thinking_mode != thinking.as_str()
+        || snap.auth_mode != auth.as_str();
 
     // ---- SecretStore I/O（★ 无 DB 锁）----
     let store = ai::secret_store::production_secret_store();
@@ -298,24 +293,28 @@ pub fn update_ai_provider_profile(
         new_secret = Some((r, api_key.trim().to_string()));
     }
 
-    // ---- 重新拿锁：短 DB 事务 ----
-    // 最终 DB api_key 值：新 Key → ""（secret 已入 store）；保持旧 → old.api_key 原值
-    // （repo.update 的 capability_changed 比较因此保持原语义）
-    let db_key = if new_secret.is_some() {
+    // ---- 决定 DB 写入值 ----
+    // 新 Key → api_key 列恒空（secret 已入 store）；Bearer→None → 空；
+    // 保持旧 credential → 沿用旧 api_key（legacy 明文兼容 / 已迁移则为空）。
+    let db_key = if new_secret.is_some() || auth == ai::provider::AuthMode::None {
         String::new()
     } else {
-        // 保持旧值：读一次旧明文（migration 兼容期内可能非空；保持不动）
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
-        repo.get(profile_id)
-            .map_err(|e| e.to_string())?
-            .map(|p| p.api_key)
-            .unwrap_or_default()
+        snap.api_key.clone()
     };
+    // secret_ref 指向：新 Key → 新 ref；Bearer→None → NULL；保持旧 → 旧 ref。
+    let new_ref: Option<String> = match (&new_secret, auth) {
+        (Some((r, _)), _) => Some(r.clone()),
+        (None, ai::provider::AuthMode::None) => None,
+        (None, _) => snap.secret_ref.clone(),
+    };
+
+    // ---- 重新拿锁：单事务 UPDATE（含 secret_ref + 兼容重置），COMMIT 一次（P0-3）----
+    //   不再拆成 update() + set_secret_ref() 两次提交（杜绝「新 auth_mode + 旧 secret_ref」、
+    //   「配置已改但 secret_ref 缺失」等部分状态）。SecretStore I/O 已在锁外完成。
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
-        repo.update(
+        repo.update_with_secret_ref(
             profile_id,
             &display_name,
             &adapter,
@@ -325,34 +324,18 @@ pub fn update_ai_provider_profile(
             &thinking,
             auth.as_str(),
             enabled,
+            new_ref.as_deref(),
+            capability_changed,
         )?;
-        // secret_ref 指向：
-        match (&new_secret, auth) {
-            (Some((r, _)), _) => repo
-                .set_secret_ref(profile_id, Some(r))
-                .map_err(|e| e.to_string())?,
-            (None, ai::provider::AuthMode::None) => repo
-                .set_secret_ref(profile_id, None)
-                .map_err(|e| e.to_string())?,
-            (None, _) => { /* 保持旧 ref 不变 */ }
-        }
-    } // COMMIT（每个 stmt 独立 autocommit；见下方 §D 顺序说明）
+    } // ★ 锁释放（事务已 COMMIT）
 
-    // ---- COMMIT 之后的 best-effort 清理（§E / §D1）----
+    // ---- COMMIT 之后 best-effort 清理旧 secret（§E / §D1：绝不在持锁时）----
     if let Some((r, _)) = &new_secret {
         // 新 ref 已生效 → best-effort 删旧 secret
         if let Some(old_r) = &old_secret_ref {
             if old_r != r {
                 let _ = store.delete(old_r);
             }
-        }
-        // 旧 plaintext（未迁移的 legacy）也不得继续留在 DB：清空（此时新凭据已可用）
-        if old_key_plain {
-            let conn = state.0.lock().map_err(|e| e.to_string())?;
-            let _ = conn.execute(
-                "UPDATE ai_provider_profiles SET api_key='' WHERE id=?1",
-                rusqlite::params![profile_id],
-            );
         }
     }
     if auth == ai::provider::AuthMode::None {

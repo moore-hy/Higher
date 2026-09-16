@@ -11,7 +11,10 @@
 //! ```text
 //! 1. collect_pending(conn)   -- 短 DB 读：snapshot 待迁移 (profile_id, plaintext)
 //! 2. store_pending(store, ..) -- 【无 DB 锁】SecretStore.set + read-back verify
-//! 3. commit_migrated(conn, ..) -- 重新拿锁：短事务写 secret_ref + 清空 plaintext
+//! 3. commit_migrated(conn, ..) -- 重新拿锁：短事务写 secret_ref + 清空 plaintext，
+//!                                  **绝不**在持锁时调用 SecretStore；commit 失败的
+//!                                  orphan secret_ref 由本函数以返回值交还调用方，
+//!                                  由调用方在【锁释放后】best-effort delete。
 //! ```
 //!
 //! 失败契约（§C4）：
@@ -102,14 +105,16 @@ pub fn store_pending(
 }
 
 /// Step 3（重新拿锁，短事务）：写 secret_ref + 清空 legacy plaintext。
-/// 单行单事务；某行 commit 失败 → best-effort delete 对应 secret（允许暂时
-/// orphan，但 DB 原数据可恢复）。返回成功条数。
+/// 单行单事务；某行 commit 失败 → 该 secret_ref 已无 DB 引用，作为 orphan 交还
+/// 调用方（返回值的第 2 元组分量）。**本函数绝不调用 SecretStore**——清理职责
+/// 完全上移到 `run_best_effort`（在 DB 锁释放之后执行，满足 S3-D1）。
+/// 返回 `(成功条数, 需 best-effort 清理的 orphan secret_ref 列表)`。
 pub fn commit_migrated(
     conn: &Connection,
-    store: &dyn SecretStore,
     migrated: Vec<StoredSecret>,
-) -> Result<usize, String> {
+) -> Result<(usize, Vec<String>), String> {
     let mut committed = 0usize;
+    let mut cleanup: Vec<String> = Vec::new();
     for m in migrated {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let res = tx
@@ -127,23 +132,23 @@ pub fn commit_migrated(
                     committed += 1;
                     continue;
                 }
-                // COMMIT 失败：DB 仍引用 legacy；best-effort 清理新 secret
-                let _ = store.delete(&m.secret_ref);
+                // COMMIT 失败：DB 仍引用 legacy；收集为 orphan，交还调用方锁外清理
+                cleanup.push(m.secret_ref);
             }
             // WHERE 未命中（0 行：行已被并发改 auth_mode / 已迁移 / 已删除）
             // → 视为 commit 失败：DB 不再能以 legacy plaintext 之外的路径引用
-            //   该 secret，保留只会产生 orphan → best-effort 删除（§C4）。
+            //   该 secret；收集为 orphan，交还调用方锁外清理（§C4）。
             Ok(_) => {
                 let _ = tx.rollback();
-                let _ = store.delete(&m.secret_ref);
+                cleanup.push(m.secret_ref);
             }
             Err(_) => {
                 let _ = tx.rollback();
-                let _ = store.delete(&m.secret_ref);
+                cleanup.push(m.secret_ref);
             }
         }
     }
-    Ok(committed)
+    Ok((committed, cleanup))
 }
 
 /// 便捷编排（§C3 / SAFETY §3）：三段式跑完——**每段各自短暂拿/放应用 DB 锁**，
@@ -167,13 +172,17 @@ pub fn run_best_effort(db: &crate::db::DbState, store: &dyn SecretStore) -> (usi
     let total = pending.len();
     // Step 2：★ 无锁 —— SecretStore set + read-back verify
     let (migrated, failed) = store_pending(store, pending);
-    // Step 3：短锁提交
-    let committed = {
+    // Step 3：短锁提交（commit_migrated 不再触碰 SecretStore）
+    let (committed, cleanup_refs) = {
         let Ok(conn) = db.0.lock() else {
             return (0, total);
         };
-        commit_migrated(&conn, store, migrated).unwrap_or(0)
+        commit_migrated(&conn, migrated).unwrap_or((0, Vec::new()))
     }; // ★ 锁释放
+      // Step 3b：★ 无锁 —— orphan secret 的 best-effort 清理（S3-D1：绝不持锁访问 SecretStore）
+    for r in cleanup_refs {
+        let _ = store.delete(&r);
+    }
     (committed, failed.len() + (total - failed.len() - committed))
 }
 
@@ -231,7 +240,7 @@ mod tests {
         assert!(failed.is_empty());
         assert_eq!(migrated.len(), 1);
 
-        let n = commit_migrated(&conn, &store, migrated).unwrap();
+        let n = commit_migrated(&conn, migrated).unwrap().0;
         assert_eq!(n, 1);
         assert_eq!(plaintext_of(&conn, id), "", "迁移成功后 plaintext 必须清空");
         assert!(secret_ref_of(&conn, id).is_some());
@@ -306,9 +315,9 @@ mod tests {
         let pending = collect_pending(&conn).unwrap();
         assert_eq!(pending.len(), 2);
         let a_only: Vec<_> = pending.into_iter().filter(|p| p.profile_id == a).collect();
-        let (migrated, failed) = store_pending(&store, a_only);
+        let (migrated, _failed) = store_pending(&store, a_only);
         assert_eq!(migrated.len(), 1);
-        assert_eq!(commit_migrated(&conn, &store, migrated).unwrap(), 1);
+        assert_eq!(commit_migrated(&conn, migrated).unwrap().0, 1);
         assert!(secret_ref_of(&conn, a).is_some());
         assert!(secret_ref_of(&conn, b).is_none());
 
@@ -318,7 +327,7 @@ mod tests {
         assert_eq!(pending[0].profile_id, b);
         let (migrated, failed) = store_pending(&store, pending);
         assert!(failed.is_empty());
-        assert_eq!(commit_migrated(&conn, &store, migrated).unwrap(), 1);
+        assert_eq!(commit_migrated(&conn, migrated).unwrap().0, 1);
         assert_eq!(plaintext_of(&conn, b), "");
         assert_eq!(
             store.get(&secret_ref_of(&conn, b).unwrap()).unwrap(),
@@ -326,12 +335,13 @@ mod tests {
         );
     }
 
-    // ---- §C4：commit 失败 → best-effort delete，不丢 DB 数据 ----
+    // ---- §C4：commit 失败 → orphan 交还调用方，由调用方在【锁释放后】清理 ----
     #[test]
     fn commit_failure_cleans_up_secret_best_effort() {
         let conn = setup_db();
         let store = MemorySecretStore::new();
-        // 用一个会被 WHERE 条件排除的行模拟 commit 失败：先迁移，再把行改成 none
+        // 先迁移使行 secret_ref 非空；随后人为使 commit_migrated 的
+        // WHERE (auth_mode='bearer' AND secret_ref IS NULL) 不命中 → 0 行 → cleanup
         let id = insert_bearer(&conn, "X", "sk-x");
         let pending = collect_pending(&conn).unwrap();
         let (migrated, failed) = store_pending(&store, pending);
@@ -339,19 +349,36 @@ mod tests {
         assert_eq!(migrated.len(), 1);
         let orphan_ref = migrated[0].secret_ref.clone();
         assert!(store.contains(&orphan_ref));
-        // 模拟并发变更：auth_mode 改为 none → UPDATE WHERE 不命中 → commit 失败路径
+        let (committed, _first) = commit_migrated(&conn, migrated).unwrap();
+        assert_eq!(committed, 1); // 首次迁移成功
+        assert!(store.contains(&orphan_ref));
+        // 人为使后续 commit 命中 0 行
         conn.execute(
             "UPDATE ai_provider_profiles SET auth_mode='none' WHERE id=?1",
             params![id],
         )
         .unwrap();
-        let n = commit_migrated(&conn, &store, migrated).unwrap();
-        assert_eq!(n, 0);
-        // best-effort cleanup：SecretStore 中不残留（数据可恢复 > 零 orphan 的例外：
-        // DB 行已无法再引用该 secret → 删除是安全的）
+        let (_committed2, cleanup) = commit_migrated(
+            &conn,
+            vec![StoredSecret {
+                profile_id: id,
+                secret_ref: orphan_ref.clone(),
+            }],
+        )
+        .unwrap();
         assert!(
-            !store.contains(&orphan_ref),
-            "commit 失败必须 best-effort 清理"
+            cleanup.contains(&orphan_ref),
+            "commit 失败必须把 orphan secret_ref 交还调用方"
         );
+        // 关键：commit_migrated 自身【不】删除 secret（清理上移到锁外调用方，满足 S3-D1）
+        assert!(
+            store.contains(&orphan_ref),
+            "commit_migrated 不得在持锁时清理 secret"
+        );
+        // 调用方在【锁释放后】best-effort 删除
+        for r in cleanup {
+            let _ = store.delete(&r);
+        }
+        assert!(!store.contains(&orphan_ref), "锁外清理后 orphan 不残留");
     }
 }

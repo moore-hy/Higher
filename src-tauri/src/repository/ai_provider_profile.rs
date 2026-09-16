@@ -116,6 +116,41 @@ impl<'a> AiProviderProfileRepository<'a> {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// POST-M7 hotfix P0-2：Bearer 新建 DB-atomic——**单语句 INSERT** 同时写入
+    /// `api_key`（恒空串，正常新路径不存 plaintext）、`auth_mode`、`secret_ref`，
+    /// 一次 COMMIT 完成。调用方负责在此之前完成 SecretStore.set + read-back verify，
+    /// 并在 DB 失败时对新建 secret 做 best-effort 清理。禁止再拆成
+    /// `create()` + `set_secret_ref()` 两次提交（防止 `auth_mode=bearer, api_key='',
+    /// secret_ref=NULL` 的部分状态）。
+    pub fn create_with_secret_ref(
+        &self,
+        display_name: &str,
+        adapter_kind: &AdapterKind,
+        base_url: &str,
+        api_key: &str,
+        model: &str,
+        thinking_mode: &ThinkingMode,
+        auth_mode: &str,
+        secret_ref: Option<&str>,
+    ) -> rusqlite::Result<i64> {
+        self.conn.execute(
+            "INSERT INTO ai_provider_profiles
+             (display_name, adapter_kind, base_url, api_key, model, thinking_mode, auth_mode, secret_ref)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                display_name.trim(),
+                adapter_kind.as_str(),
+                base_url.trim(),
+                api_key.trim(),
+                model.trim(),
+                thinking_mode.as_str(),
+                auth_mode,
+                secret_ref
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
     /// 编辑 Connection。能力相关字段变化 → compatibility → untested / capabilities → {} /
     /// last_tested_at → NULL（§21）；只改 display_name 不清除兼容结果。
     /// DEV-0062R §18 Disable Guard：Active Primary / Explicit Control 禁止直接停用；
@@ -188,6 +223,83 @@ impl<'a> AiProviderProfileRepository<'a> {
                     enabled as i64,
                     capability_changed as i64,
                     auth_mode
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// POST-M7 hotfix P0-3：编辑 DB-atomic——**单语句 UPDATE** 一次性原子写入 editable
+    /// 字段 + `auth_mode` + `api_key` + `secret_ref` + 兼容重置（compatibility_changed
+    /// 由调用方在锁外内存比较得出，见 `create_ai_provider_profile`/
+    /// `update_ai_provider_profile`）。一次 COMMIT 完成，禁止再拆成
+    /// `update()` + `set_secret_ref()` 两次提交（防止「新 auth_mode + 旧 secret_ref」、
+    /// 「配置已改但 secret_ref 缺失」等部分状态）。SecretStore I/O 由调用方在锁外完成。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_with_secret_ref(
+        &self,
+        id: i64,
+        display_name: &str,
+        adapter_kind: &AdapterKind,
+        base_url: &str,
+        api_key: &str,
+        model: &str,
+        thinking_mode: &ThinkingMode,
+        auth_mode: &str,
+        enabled: bool,
+        secret_ref: Option<&str>,
+        capability_changed: bool,
+    ) -> Result<(), String> {
+        let old = self
+            .get(id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
+        if old.enabled && !enabled {
+            if self.active_primary_id() == Some(id) {
+                return Err("该连接是当前主要 AI，请先切换主要 AI 后再停用。".to_string());
+            }
+            if self.active_control_id() == Some(id) {
+                return Err(
+                    "该连接是当前动作理解 AI，请先改为跟随主要 AI或切换 Control 后再停用。"
+                        .to_string(),
+                );
+            }
+            let remaining_enabled: i64 = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM ai_provider_profiles WHERE enabled = 1 AND id != ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if remaining_enabled == 0 {
+                return Err("至少保留一个可用的 AI 连接。".to_string());
+            }
+        }
+        self.conn
+            .execute(
+                "UPDATE ai_provider_profiles
+                 SET display_name=?2, adapter_kind=?3, base_url=?4, api_key=?5, model=?6,
+                     thinking_mode=?7, enabled=?8,
+                     compatibility_status=CASE WHEN ?9 THEN 'untested' ELSE compatibility_status END,
+                     capabilities_json=CASE WHEN ?9 THEN '{}' ELSE capabilities_json END,
+                     last_tested_at=CASE WHEN ?9 THEN NULL ELSE last_tested_at END,
+                     last_test_message=CASE WHEN ?9 THEN '' ELSE last_test_message END,
+                     auth_mode=?10, secret_ref=?11,
+                     updated_at=datetime('now')
+                 WHERE id=?1",
+                params![
+                    id,
+                    display_name.trim(),
+                    adapter_kind.as_str(),
+                    base_url.trim(),
+                    api_key.trim(),
+                    model.trim(),
+                    thinking_mode.as_str(),
+                    enabled as i64,
+                    capability_changed as i64,
+                    auth_mode,
+                    secret_ref
                 ],
             )
             .map_err(|e| e.to_string())?;

@@ -577,19 +577,51 @@ fn human_network_error(e: reqwest::Error) -> String {
     }
 }
 
-fn human_http_error(code: u16, body: &str) -> String {
-    // 不回显完整 body（可能包含内部信息）；只取首段做诊断提示
-    let brief: String = body.chars().take(200).collect();
+/// POST-M7 hotfix P1-1：用户可见错误**绝不**嵌入远程 Provider 的原始响应体
+/// （远端不可信，body 可能回显敏感请求数据 / Key）。仅保留安全诊断信息：
+/// HTTP 状态码、已知原因类别、Base URL / 模型配置提示。
+pub(crate) fn human_http_error(code: u16, _body: &str) -> String {
     match code {
         401 => "API Key 无效或未授权，请检查设置中的 API Key。".to_string(),
         402 => "账户余额或额度不足，请前往服务商充值。".to_string(),
-        404 => format!("接口或模型不存在（404）。请检查 Base URL 与模型名。{brief}"),
+        404 => "接口或模型不存在（404），请检查 Base URL 与模型名。".to_string(),
         429 => "请求过于频繁或额度受限（429），请稍后重试。".to_string(),
         400 | 422 => format!(
-            "请求被拒绝（{}）：可能是模型名或 thinking 参数不支持。{}",
-            code, brief
+            "请求被拒绝（{}）：可能是模型名或 thinking 参数不支持。请检查 Base URL 与模型名。",
+            code
         ),
         500..=599 => format!("AI 服务暂时不可用（{}），请稍后重试。", code),
-        _ => format!("请求失败（HTTP {}）：{}", code, brief),
+        _ => format!("请求失败（HTTP {}），请稍后重试。", code),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::human_http_error;
+
+    // SS-22（POST-M7 hotfix P1-1）：远程 Provider 的 4xx 响应体可能回显敏感请求
+    // 数据；用户可见错误字符串**绝不**包含该 body 任意片段。
+    #[test]
+    fn ss22_http_4xx_body_never_leaks_to_user_error() {
+        let sensitive = "sk-VERY-SENSITIVE-VALUE";
+        let body = format!("{{\"error\":\"invalid request with {}\"}}", sensitive);
+        for code in [400u16, 401, 404, 422, 429] {
+            let msg = human_http_error(code, &body);
+            assert!(
+                !msg.contains(sensitive),
+                "HTTP {} 错误不得泄漏响应体中的敏感值: {}",
+                code,
+                msg
+            );
+            assert!(
+                !msg.contains(&body),
+                "HTTP {} 错误不得嵌入任意原始响应体",
+                code
+            );
+        }
+        // 通用分支同样不泄漏
+        let msg = human_http_error(418, &body);
+        assert!(!msg.contains(sensitive));
+        assert!(!msg.contains(&body));
     }
 }
