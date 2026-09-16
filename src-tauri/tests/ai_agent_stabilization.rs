@@ -730,6 +730,8 @@ fn s10_provider_error_closes_run_as_failed() {
         api_key: "k".into(),
         model: "m".into(),
         thinking_mode: ThinkingMode::Off,
+        auth_mode: app_lib::ai::provider::AuthMode::Bearer,
+        secret_ref: None,
         capabilities: AiCapabilities {
             basic_chat: Some(true),
             structured_json: Some(true),

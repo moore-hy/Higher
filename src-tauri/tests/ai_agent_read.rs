@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 use app_lib::ai::agent::{agent_turn_core, AgentTurnArgs, ModelResponder};
 use app_lib::ai::client::{Completion, Usage};
 use app_lib::ai::provider::{
-    AdapterKind, AiCapabilities, AiRuntimeConfig, JsonStrategy, ThinkingMode,
+    AdapterKind, AiCapabilities, AiRuntimeConfig, AuthMode, JsonStrategy, ThinkingMode,
 };
 use app_lib::ai::tools::execute_read_tool;
 use app_lib::ai::vault::VaultState;
@@ -575,6 +575,8 @@ fn b06_agent_answers_from_overview_end_to_end() {
         api_key: "k".into(),
         model: "m".into(),
         thinking_mode: ThinkingMode::Off,
+        auth_mode: AuthMode::Bearer,
+        secret_ref: None,
         capabilities: AiCapabilities {
             basic_chat: Some(true),
             structured_json: Some(true),

@@ -135,8 +135,9 @@ fn t01_latest_schema_v024() {
     // DEV-0076 §四：v027（memory_confirmation_lifecycle）已追加
     // DEV-SYNC-001：v028（local_sync_foundation）已追加
     // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）+ v033（companion_skill）已追加
-    assert_eq!(v, 33, "T01: schema = v033");
-    assert_eq!(app_lib::migrations::latest_version(), 33);
+    // POST-M7 AI FOUNDATION：v035（ai_provider_auth_mode）已追加
+    assert_eq!(v, 35, "T01: schema = v035");
+    assert_eq!(app_lib::migrations::latest_version(), 36);
     // 新表存在
     assert_eq!(
         count(&conn, "ai_provider_profiles"),
@@ -295,6 +296,7 @@ fn t05_profile_crud() {
             "sk-glm",
             "glm-5-air",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     let p = repo.get(id).unwrap().unwrap();
@@ -315,6 +317,7 @@ fn t05_profile_crud() {
         "sk-glm",
         "glm-5-air",
         &ThinkingMode::Off,
+        "bearer",
         true,
     )
     .unwrap();
@@ -330,6 +333,7 @@ fn t05_profile_crud() {
         "sk-glm",
         "glm-5-air",
         &ThinkingMode::Off,
+        "bearer",
         false,
     )
     .unwrap();
@@ -354,6 +358,7 @@ fn t06_active_primary_rules() {
             "k",
             "m1",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -374,6 +379,7 @@ fn t06_active_primary_rules() {
             "k",
             "m2",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -391,6 +397,7 @@ fn t06_active_primary_rules() {
             "k",
             "m3",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     assert!(
@@ -406,6 +413,7 @@ fn t06_active_primary_rules() {
             "k",
             "m4",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -429,6 +437,7 @@ fn t07_active_control_rules() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -453,6 +462,7 @@ fn t07_active_control_rules() {
             "k",
             "dsm",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -490,6 +500,7 @@ fn t08_delete_guards() {
             "k",
             "dsm",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -523,6 +534,7 @@ fn t08_delete_guards() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -547,6 +559,8 @@ fn cfg(adapter: AdapterKind, model: &str, thinking: ThinkingMode) -> AiRuntimeCo
         api_key: "k".into(),
         model: model.into(),
         thinking_mode: thinking,
+        auth_mode: app_lib::ai::provider::AuthMode::Bearer,
+        secret_ref: None,
         capabilities: Default::default(),
         compatibility_status: "untested".into(),
         json_mode_override: None,
@@ -667,6 +681,7 @@ fn t14_capability_fields_changed_reset() {
             "k1",
             "m1",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -684,6 +699,7 @@ fn t14_capability_fields_changed_reset() {
         "k1",
         "m2",
         &ThinkingMode::Off,
+        "bearer",
         true,
     )
     .unwrap();
@@ -712,6 +728,7 @@ fn t14_capability_fields_changed_reset() {
         "k2",
         "m2",
         &ThinkingMode::Off,
+        "bearer",
         true,
     )
     .unwrap();
@@ -880,6 +897,7 @@ fn t23_api_key_never_leaks() {
             "sk-SECRET-XYZ",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     let caps = app_lib::ai::provider::AiCapabilities {
@@ -974,6 +992,7 @@ fn t25_old_runs_do_not_drift() {
             "k",
             "glm-5",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(

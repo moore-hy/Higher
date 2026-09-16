@@ -35,6 +35,8 @@ pub mod v031_knowledge_canvas;
 pub mod v032_micro_learning_events;
 pub mod v033_companion_skill;
 pub mod v034_readiness_consumption;
+pub mod v035_ai_provider_auth_mode;
+pub mod v036_ai_provider_secret_ref;
 
 /// 单个 Migration 定义。
 ///
@@ -220,6 +222,16 @@ const MIGRATIONS: &[Migration] = &[
         version: 34,
         name: "readiness_consumption",
         up: v034_readiness_consumption::up,
+    },
+    Migration {
+        version: 35,
+        name: "ai_provider_auth_mode",
+        up: v035_ai_provider_auth_mode::up,
+    },
+    Migration {
+        version: 36,
+        name: "ai_provider_secret_ref",
+        up: v036_ai_provider_secret_ref::up,
     },
 ];
 

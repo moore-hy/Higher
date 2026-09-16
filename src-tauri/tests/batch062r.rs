@@ -167,6 +167,8 @@ fn fake_cfg(base_url: &str) -> AiRuntimeConfig {
         api_key: "sk-local-fake-not-real".into(),
         model: "fake-model".into(),
         thinking_mode: ThinkingMode::Off,
+        auth_mode: app_lib::ai::provider::AuthMode::Bearer,
+        secret_ref: None,
         capabilities: Default::default(),
         compatibility_status: "untested".into(),
         json_mode_override: None,
@@ -455,6 +457,7 @@ fn r13_probe_zero_formal_writes() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     let before: Vec<(&str, i64)> = [
@@ -757,6 +760,7 @@ fn r28_primary_missing_error_no_first_enabled() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     let _ = other;
@@ -800,6 +804,7 @@ fn r31_control_disabled_error_no_follow_primary() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -866,6 +871,7 @@ fn full_profile(conn: &Connection, name: &str) -> i64 {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -893,6 +899,7 @@ fn r34_atomic_switch_no_partial_state() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap(); // untested → Control 校验失败
     let before_primary = repo.active_primary_id();
@@ -957,6 +964,7 @@ fn r37_untested_other_id_rejected() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     assert!(
@@ -982,6 +990,7 @@ fn r38_disable_active_primary_rejected() {
             "k",
             "deepseek-v4-flash",
             &ThinkingMode::Off,
+            "bearer",
             false,
         )
         .unwrap_err();
@@ -1007,6 +1016,7 @@ fn r39_disable_explicit_control_rejected() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
             false,
         )
         .unwrap_err();
@@ -1031,6 +1041,7 @@ fn r40_disable_non_active_ok() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
             false
         )
         .is_ok(),
@@ -1056,6 +1067,7 @@ fn r41_disable_last_enabled_rejected() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
             false,
         )
         .unwrap_err();
@@ -1098,6 +1110,7 @@ fn r42_probe_report_no_key_no_authorization() {
             &cfg.api_key,
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     repo.save_probe_result(id, &out.capabilities, out.status, &out.message)
@@ -1152,6 +1165,7 @@ fn r44_no_raw_response_persisted() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     repo.save_probe_result(id, &out.capabilities, out.status, &out.message)

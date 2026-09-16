@@ -20,6 +20,10 @@ pub struct AiProviderProfile {
     pub api_key: String,
     pub model: String,
     pub thinking_mode: String,
+    /// POST-M7 §S2-A：显式认证模式（"bearer" | "none"；v035 存量默认 bearer）。
+    pub auth_mode: String,
+    /// POST-M7 §S3：稳定凭据引用（真实 Key 存 OS SecretStore；NULL = 尚未迁移/无凭据）。
+    pub secret_ref: Option<String>,
     pub enabled: bool,
     pub capabilities: AiCapabilities,
     pub compatibility_status: String,
@@ -37,6 +41,8 @@ fn parse_row(row: &rusqlite::Row) -> rusqlite::Result<AiProviderProfile> {
         api_key: row.get(4)?,
         model: row.get(5)?,
         thinking_mode: row.get(6)?,
+        auth_mode: row.get(12)?,
+        secret_ref: row.get(13)?,
         enabled: row.get::<_, i64>(7)? == 1,
         capabilities: serde_json::from_str(&caps_json).unwrap_or_default(),
         compatibility_status: row.get(8)?,
@@ -46,7 +52,7 @@ fn parse_row(row: &rusqlite::Row) -> rusqlite::Result<AiProviderProfile> {
 }
 
 const COLS: &str = "id, display_name, adapter_kind, base_url, api_key, model, thinking_mode, \
-                    enabled, compatibility_status, capabilities_json, last_test_message, last_tested_at";
+                    enabled, compatibility_status, capabilities_json, last_test_message, last_tested_at, auth_mode, secret_ref";
 
 pub struct AiProviderProfileRepository<'a> {
     conn: &'a Connection,
@@ -82,6 +88,7 @@ impl<'a> AiProviderProfileRepository<'a> {
     }
 
     /// 新建 Connection（compatibility 从 untested 开始；§36 Key 明文本地保存）。
+    /// POST-M7 §S2：auth_mode 显式传入（"bearer" | "none"），不按 base_url 推断。
     pub fn create(
         &self,
         display_name: &str,
@@ -90,18 +97,20 @@ impl<'a> AiProviderProfileRepository<'a> {
         api_key: &str,
         model: &str,
         thinking_mode: &ThinkingMode,
+        auth_mode: &str,
     ) -> rusqlite::Result<i64> {
         self.conn.execute(
             "INSERT INTO ai_provider_profiles
-             (display_name, adapter_kind, base_url, api_key, model, thinking_mode)
-             VALUES (?1,?2,?3,?4,?5,?6)",
+             (display_name, adapter_kind, base_url, api_key, model, thinking_mode, auth_mode)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![
                 display_name.trim(),
                 adapter_kind.as_str(),
                 base_url.trim(),
                 api_key.trim(),
                 model.trim(),
-                thinking_mode.as_str()
+                thinking_mode.as_str(),
+                auth_mode
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -121,6 +130,7 @@ impl<'a> AiProviderProfileRepository<'a> {
         api_key: &str,
         model: &str,
         thinking_mode: &ThinkingMode,
+        auth_mode: &str,
         enabled: bool,
     ) -> Result<(), String> {
         let old = self
@@ -153,7 +163,8 @@ impl<'a> AiProviderProfileRepository<'a> {
             || old.base_url.trim() != base_url.trim()
             || old.api_key.trim() != api_key.trim()
             || old.model.trim() != model.trim()
-            || old.thinking_mode != thinking_mode.as_str();
+            || old.thinking_mode != thinking_mode.as_str()
+            || old.auth_mode != auth_mode;
         self.conn
             .execute(
                 "UPDATE ai_provider_profiles
@@ -163,6 +174,7 @@ impl<'a> AiProviderProfileRepository<'a> {
                      capabilities_json=CASE WHEN ?9 THEN '{}' ELSE capabilities_json END,
                      last_tested_at=CASE WHEN ?9 THEN NULL ELSE last_tested_at END,
                      last_test_message=CASE WHEN ?9 THEN '' ELSE last_test_message END,
+                     auth_mode=?10,
                      updated_at=datetime('now')
                  WHERE id=?1",
                 params![
@@ -174,7 +186,8 @@ impl<'a> AiProviderProfileRepository<'a> {
                     model.trim(),
                     thinking_mode.as_str(),
                     enabled as i64,
-                    capability_changed as i64
+                    capability_changed as i64,
+                    auth_mode
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -184,6 +197,15 @@ impl<'a> AiProviderProfileRepository<'a> {
     pub fn delete(&self, id: i64) -> rusqlite::Result<()> {
         self.conn
             .execute("DELETE FROM ai_provider_profiles WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    /// POST-M7 §S3：设置/清除凭据引用（正常新路径永不再写 api_key 列）。
+    pub fn set_secret_ref(&self, id: i64, secret_ref: Option<&str>) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE ai_provider_profiles SET secret_ref=?2, updated_at=datetime('now') WHERE id=?1",
+            params![id, secret_ref],
+        )?;
         Ok(())
     }
 

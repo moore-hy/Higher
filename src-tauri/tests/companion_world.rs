@@ -18,6 +18,7 @@
 //! CW-11 Cloud calls = 0
 //! ```
 
+use app_lib::companion::readiness::unconsumed_contribution;
 use app_lib::companion::{
     build_companion_state, build_companion_state_at, collect_companion_return,
     collect_companion_return_at, list_companion_memories, settle_companion_expeditions,
@@ -25,11 +26,10 @@ use app_lib::companion::{
     CompanionRepository, ExpeditionReadiness, ExpeditionStatus, EXPEDITION_LONG_SECONDS,
     EXPEDITION_MEDIUM_SECONDS, EXPEDITION_SHORT_SECONDS, THEMES,
 };
-use app_lib::companion::readiness::unconsumed_contribution;
-use app_lib::migrations::{latest_version, run_migrations};
 use app_lib::learning_state::date::today_local;
 use app_lib::learning_state::micro::record_micro_action;
 use app_lib::learning_state::{build_learning_state, build_next_learning_action};
+use app_lib::migrations::{latest_version, run_migrations};
 use app_lib::repository::evaluation::EvaluationRepository;
 use app_lib::repository::goal::GoalRepository;
 use app_lib::repository::learning_item::LearningItemRepository;
@@ -886,7 +886,7 @@ fn rw09_watermark_above_today_clamps_to_zero() {
 #[test]
 fn mig01_v034_is_registered_and_applied() {
     let conn = setup(); // setup 已 run_migrations（含 v034）
-    assert_eq!(latest_version(), 34, "最新迁移版本应为 34");
+    assert_eq!(latest_version(), 36, "最新迁移版本应为 36");
     let applied: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 34",
@@ -909,7 +909,10 @@ fn mig02_v034_adds_watermark_columns() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(n, 2, "v034 应新增 consumed_local_date 与 consumed_contribution_total 两列");
+    assert_eq!(
+        n, 2,
+        "v034 应新增 consumed_local_date 与 consumed_contribution_total 两列"
+    );
 }
 
 /// MIG-03：迁移幂等（重复 run_migrations 不报错、不重复登记）。
@@ -999,7 +1002,8 @@ fn tx01_failed_start_leaves_no_partial_rows() {
     let p = mk_profile(&conn, "TX-01");
     let _i = mk_item(&conn, p, "单词本");
     // 没有任何学习贡献 → 就绪度为 NotReady → 出发应被拒绝。
-    let res = start_companion_expedition_at(&conn, p, EXPEDITION_SHORT_SECONDS, "2026-09-16 02:00:00");
+    let res =
+        start_companion_expedition_at(&conn, p, EXPEDITION_SHORT_SECONDS, "2026-09-16 02:00:00");
     assert!(res.is_err(), "未就绪出发必须被拒绝");
     assert_eq!(
         exp_count_by_status(&conn, p, "running"),

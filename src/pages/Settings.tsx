@@ -928,11 +928,15 @@ function ConnectionModal({
   const [name, setName] = useState(initial?.display_name ?? "");
   const [adapter, setAdapter] = useState(initial?.adapter_kind ?? "deepseek");
   const [baseUrl, setBaseUrl] = useState(initial?.base_url ?? "https://api.deepseek.com");
-  const [apiKey, setApiKey] = useState(initial?.api_key ?? "");
+  // POST-M7 §S3-H：前端永不接收旧 secret——编辑时 Key 输入框恒为空；
+  // 留空 = 保持现有凭据；输入新 Key = 安全替换流程。
+  const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState(initial?.model ?? "deepseek-v4-flash");
   const [thinking, setThinking] = useState(
     initial?.thinking_mode === "deepseek_model_suffix",
   );
+  // POST-M7 §S2-F：显式认证模式；禁止按 base_url 自动切换
+  const [authMode, setAuthMode] = useState<string>(initial?.auth_mode ?? "bearer");
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -940,6 +944,21 @@ function ConnectionModal({
   async function save() {
     setSaving(true);
     setError("");
+    if (authMode === "bearer" && !initial && !apiKey.trim()) {
+      setError("Bearer 认证必须填写 API Key；如无需认证请选择「无认证」。");
+      setSaving(false);
+      return;
+    }
+    if (
+      authMode === "bearer" &&
+      initial &&
+      !apiKey.trim() &&
+      !initial.has_api_key
+    ) {
+      setError("Bearer 认证必须填写 API Key；如无需认证请选择「无认证」。");
+      setSaving(false);
+      return;
+    }
     try {
       const args = {
         displayName: name.trim(),
@@ -948,6 +967,7 @@ function ConnectionModal({
         apiKey: apiKey.trim(),
         model: model.trim(),
         thinkingMode: adapter === "deepseek" && thinking ? "deepseek_model_suffix" : "off",
+        authMode,
       };
       if (initial) {
         await updateAiProviderProfile({ profileId: initial.id, ...args, enabled });
@@ -1002,13 +1022,41 @@ function ConnectionModal({
         </label>
 
         <label className="modal__field">
-          API Key（明文显示与保存，仅保存在本机数据库）
+          Authentication（认证模式）
+          <span style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="radio"
+                name="auth-mode"
+                checked={authMode === "bearer"}
+                onChange={() => setAuthMode("bearer")}
+              />
+              API Key / Bearer
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="radio"
+                name="auth-mode"
+                checked={authMode === "none"}
+                onChange={() => setAuthMode("none")}
+              />
+              No authentication（本地 / 局域网 OpenAI 兼容服务）
+            </label>
+          </span>
+        </label>
+
+        <label className="modal__field">
+          {authMode === "none"
+            ? "API Key（无认证模式不需要填写）"
+            : initial?.has_api_key
+              ? "API Key（留空保持现有 Key；输入新值则安全替换）"
+              : "API Key（明文输入，保存后移入系统凭据管理器，仅本机可读）"}
           <input
             className="modal__input"
             type="text"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder="sk-..."
+            placeholder={authMode === "none" ? "不需要" : initial?.has_api_key ? "••••••••（保持现有 Key）" : "sk-..."}
             autoComplete="off"
           />
         </label>

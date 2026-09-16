@@ -41,10 +41,8 @@ pub fn save_ai_settings(
 /// envelope——**不代表** Higher 能力；文案明确指向「检测 Higher 兼容性」。
 #[tauri::command]
 pub async fn test_ai_connection(state: tauri::State<'_, db::DbState>) -> Result<String, String> {
-    let config = {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        ai::provider::resolve_active_ai_profiles(&conn)?.primary
-    };
+    // §S3-D1：短锁解析 + 锁外凭据解析
+    let config = resolve_primary_with_secret(&state)?;
     ai::compatibility::connectivity_check(&config).await
 }
 
@@ -53,8 +51,8 @@ pub async fn test_ai_connection(state: tauri::State<'_, db::DbState>) -> Result<
 pub fn primary_client(
     state: &tauri::State<'_, db::DbState>,
 ) -> Result<ai::client::AiClient, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let cfg = ai::provider::resolve_active_ai_profiles(&conn)?.primary;
+    // §S3-D1：短锁解析 + 锁外凭据解析
+    let cfg = resolve_primary_with_secret(state)?;
     if cfg.capabilities.basic_chat == Some(false) {
         return Err(ai::provider::primary_basic_error(&cfg.display_name));
     }
@@ -73,26 +71,91 @@ pub fn parse_thinking(mode: &str) -> Result<ai::provider::ThinkingMode, String> 
         .ok_or_else(|| format!("不支持的 Thinking 模式：{mode}"))
 }
 
+/// POST-M7 §S2-A：认证模式显式配置（bearer | none）；禁止按 base_url 推断。
+pub fn parse_auth(mode: &str) -> Result<ai::provider::AuthMode, String> {
+    ai::provider::AuthMode::from_str(mode)
+        .ok_or_else(|| format!("不支持的认证模式：{mode}（仅 bearer / none）"))
+}
+
+/// POST-M7 §S3-D1 合规统一入口：短锁 DB 解析 → **释放锁** → 锁外 SecretStore
+/// 凭据解析。返回的 `AiRuntimeConfig.api_key` 已可用（或明确凭据不可用错误）。
+pub fn resolve_primary_with_secret(
+    state: &tauri::State<'_, db::DbState>,
+) -> Result<ai::provider::AiRuntimeConfig, String> {
+    let mut cfg = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        ai::provider::resolve_active_ai_profiles(&conn)?.primary
+    };
+    cfg.resolve_secret(&*ai::secret_store::production_secret_store())?;
+    Ok(cfg)
+}
+
+// =============== POST-M7 §S3-H：Secret-Safe Frontend DTO Boundary ===============
+/// Tauri command 暴露给 JS 的 sanitized public view。
+/// **永久禁止** serialize：api_key / resolved secret / legacy plaintext / secret_ref。
+/// `has_api_key` 只表示存在可用 credential；前端永远无法读取旧 secret。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AiProviderProfileView {
+    pub id: i64,
+    pub display_name: String,
+    pub adapter_kind: String,
+    pub base_url: String,
+    pub model: String,
+    pub thinking_mode: String,
+    pub auth_mode: String,
+    pub has_api_key: bool,
+    pub enabled: bool,
+    pub capabilities: crate::ai::provider::AiCapabilities,
+    pub compatibility_status: String,
+    pub last_test_message: String,
+    pub last_tested_at: Option<String>,
+}
+
+impl From<repository::ai_provider_profile::AiProviderProfile> for AiProviderProfileView {
+    fn from(p: repository::ai_provider_profile::AiProviderProfile) -> Self {
+        AiProviderProfileView {
+            id: p.id,
+            display_name: p.display_name,
+            adapter_kind: p.adapter_kind,
+            base_url: p.base_url,
+            model: p.model,
+            thinking_mode: p.thinking_mode,
+            auth_mode: p.auth_mode,
+            has_api_key: !p.api_key.trim().is_empty() || p.secret_ref.is_some(),
+            enabled: p.enabled,
+            capabilities: p.capabilities,
+            compatibility_status: p.compatibility_status,
+            last_test_message: p.last_test_message,
+            last_tested_at: p.last_tested_at,
+        }
+    }
+}
+
 #[tauri::command]
 pub fn list_ai_provider_profiles(
     state: tauri::State<'_, db::DbState>,
-) -> Result<Vec<repository::ai_provider_profile::AiProviderProfile>, String> {
+) -> Result<Vec<AiProviderProfileView>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
-        .list()
-        .map_err(|e| e.to_string())
+    let views: Vec<AiProviderProfileView> =
+        repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+            .list()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(AiProviderProfileView::from)
+            .collect();
+    Ok(views)
 }
-
 #[tauri::command]
 pub fn get_ai_provider_profile(
     state: tauri::State<'_, db::DbState>,
     profile_id: i64,
-) -> Result<repository::ai_provider_profile::AiProviderProfile, String> {
+) -> Result<AiProviderProfileView, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
         .get(profile_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "该 AI 连接不存在。".to_string())
+        .map(AiProviderProfileView::from)
 }
 
 #[tauri::command]
@@ -104,6 +167,7 @@ pub fn create_ai_provider_profile(
     api_key: String,
     model: String,
     thinking_mode: String,
+    auth_mode: String,
 ) -> Result<i64, String> {
     if display_name.trim().is_empty() {
         return Err("请填写连接名称。".to_string());
@@ -111,17 +175,62 @@ pub fn create_ai_provider_profile(
     if base_url.trim().is_empty() || model.trim().is_empty() {
         return Err("请填写 Base URL 与模型名。".to_string());
     }
+    let auth = parse_auth(&auth_mode)?;
+    let adapter = parse_adapter(&adapter_kind)?;
+    let thinking = parse_thinking(&thinking_mode)?;
+
+    // POST-M7 §E Create Bearer 锁死顺序：
+    //   generate secret_ref → SecretStore.set → read-back verify → DB insert
+    // （DB insert 失败 → best-effort delete new secret）
+    let mut secret_ref: Option<String> = None;
+    if auth == ai::provider::AuthMode::Bearer {
+        if api_key.trim().is_empty() {
+            return Err("Bearer 认证必须填写 API Key；如无需认证请选择「无认证」。".to_string());
+        }
+        // ★ 无 DB 锁上下文：SecretStore I/O（S3-D1）
+        let store = ai::secret_store::production_secret_store();
+        let r = ai::secret_store::generate_secret_ref();
+        store.set(&r, api_key.trim())?;
+        store
+            .get(&r)
+            .map_err(|e| e.to_string())?
+            .filter(|v| v == api_key.trim())
+            .ok_or_else(|| "凭据写入校验失败，请重试。".to_string())?;
+        secret_ref = Some(r);
+    }
+
+    // ★ DB insert（api_key 列恒空串：正常新路径不写 plaintext）
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
+    let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+    let id = repo
         .create(
             &display_name,
-            &parse_adapter(&adapter_kind)?,
+            &adapter,
             &base_url,
-            &api_key,
+            "", // §S3：新 Provider 不存 plaintext
             &model,
-            &parse_thinking(&thinking_mode)?,
+            &thinking,
+            auth.as_str(),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    let id = match id {
+        Ok(v) => v,
+        Err(e) => {
+            // best-effort 回滚刚写入的 secret
+            if let Some(r) = &secret_ref {
+                let _ = ai::secret_store::production_secret_store().delete(r);
+            }
+            return Err(e);
+        }
+    };
+    if let Some(r) = &secret_ref {
+        if repo.set_secret_ref(id, Some(r)).is_err() {
+            let _ = ai::secret_store::production_secret_store().delete(r);
+            let _ = repo.delete(id);
+            return Err("凭据引用保存失败，请重试。".to_string());
+        }
+    }
+    Ok(id)
 }
 
 #[tauri::command]
@@ -134,21 +243,125 @@ pub fn update_ai_provider_profile(
     api_key: String,
     model: String,
     thinking_mode: String,
+    auth_mode: String,
     enabled: bool,
 ) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
-        .update(
+    let auth = parse_auth(&auth_mode)?;
+    let adapter = parse_adapter(&adapter_kind)?;
+    let thinking = parse_thinking(&thinking_mode)?;
+
+    // ---- 短 DB 读：旧 profile（含旧 secret_ref / plaintext 状态）----
+    let (old_auth, old_secret_ref, old_key_present, old_key_plain) = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+        let old = repo
+            .get(profile_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "该 AI 连接不存在。".to_string())?;
+        (
+            ai::provider::AuthMode::from_str(&old.auth_mode)
+                .unwrap_or(ai::provider::AuthMode::Bearer),
+            old.secret_ref.clone(),
+            !old.api_key.trim().is_empty() || old.secret_ref.is_some(),
+            !old.api_key.trim().is_empty(),
+        )
+    }; // ★ 锁已释放
+
+    // 空 Key 输入 = 保持旧 credential（编辑语义）
+    let new_key_supplied = !api_key.trim().is_empty();
+    // §S2-C fail-closed：bearer 且（无新 Key 输入 且 原本也没有可用 Key）→ 拒绝
+    if auth == ai::provider::AuthMode::Bearer && !new_key_supplied && !old_key_present {
+        return Err("Bearer 认证必须填写 API Key；如无需认证请选择「无认证」。".to_string());
+    }
+    // §E None → Bearer：必须提供新 Key（不能产生 bearer + no credential）
+    if auth == ai::provider::AuthMode::Bearer
+        && old_auth == ai::provider::AuthMode::None
+        && !new_key_supplied
+    {
+        return Err("切换为 Bearer 认证必须填写 API Key。".to_string());
+    }
+
+    // ---- SecretStore I/O（★ 无 DB 锁）----
+    let store = ai::secret_store::production_secret_store();
+    let mut new_secret: Option<(String, String)> = None; // (ref, key)
+    if auth == ai::provider::AuthMode::Bearer && new_key_supplied {
+        // §E Update Bearer Key 锁死顺序：old_ref remains valid → write new →
+        // read-back verify → DB points to new_ref → COMMIT → best-effort delete old。
+        // 禁止：delete old → write new。
+        let r = ai::secret_store::generate_secret_ref();
+        store.set(&r, api_key.trim())?;
+        store
+            .get(&r)
+            .map_err(|e| e.to_string())?
+            .filter(|v| v == api_key.trim())
+            .ok_or_else(|| "凭据写入校验失败，旧 Key 保持有效。".to_string())?;
+        new_secret = Some((r, api_key.trim().to_string()));
+    }
+
+    // ---- 重新拿锁：短 DB 事务 ----
+    // 最终 DB api_key 值：新 Key → ""（secret 已入 store）；保持旧 → old.api_key 原值
+    // （repo.update 的 capability_changed 比较因此保持原语义）
+    let db_key = if new_secret.is_some() {
+        String::new()
+    } else {
+        // 保持旧值：读一次旧明文（migration 兼容期内可能非空；保持不动）
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+        repo.get(profile_id)
+            .map_err(|e| e.to_string())?
+            .map(|p| p.api_key)
+            .unwrap_or_default()
+    };
+    {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+        repo.update(
             profile_id,
             &display_name,
-            &parse_adapter(&adapter_kind)?,
+            &adapter,
             &base_url,
-            &api_key,
+            &db_key,
             &model,
-            &parse_thinking(&thinking_mode)?,
+            &thinking,
+            auth.as_str(),
             enabled,
-        )
-        .map_err(|e| e.to_string())
+        )?;
+        // secret_ref 指向：
+        match (&new_secret, auth) {
+            (Some((r, _)), _) => repo
+                .set_secret_ref(profile_id, Some(r))
+                .map_err(|e| e.to_string())?,
+            (None, ai::provider::AuthMode::None) => repo
+                .set_secret_ref(profile_id, None)
+                .map_err(|e| e.to_string())?,
+            (None, _) => { /* 保持旧 ref 不变 */ }
+        }
+    } // COMMIT（每个 stmt 独立 autocommit；见下方 §D 顺序说明）
+
+    // ---- COMMIT 之后的 best-effort 清理（§E / §D1）----
+    if let Some((r, _)) = &new_secret {
+        // 新 ref 已生效 → best-effort 删旧 secret
+        if let Some(old_r) = &old_secret_ref {
+            if old_r != r {
+                let _ = store.delete(old_r);
+            }
+        }
+        // 旧 plaintext（未迁移的 legacy）也不得继续留在 DB：清空（此时新凭据已可用）
+        if old_key_plain {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            let _ = conn.execute(
+                "UPDATE ai_provider_profiles SET api_key='' WHERE id=?1",
+                rusqlite::params![profile_id],
+            );
+        }
+    }
+    if auth == ai::provider::AuthMode::None {
+        // Bearer → None：DB 已切换（secret_ref=NULL）→ best-effort 删旧 secret
+        if let Some(old_r) = &old_secret_ref {
+            let _ = store.delete(old_r);
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -156,9 +369,35 @@ pub fn delete_ai_provider_profile(
     state: tauri::State<'_, db::DbState>,
     profile_id: i64,
 ) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
-        .delete_guarded(profile_id)
+    // POST-M7 §D 删除顺序锁死：
+    // 1. validate guards → 2. load metadata → 3. capture secret_ref →
+    // 4. DB delete COMMIT → 5. best-effort SecretStore.delete → 6. SUCCESS。
+    // 永久禁止 secret-first 删除（§D2）。
+    let secret_ref = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let repo = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+        // 2/3. capture secret_ref（在 delete 之前）
+        let secret_ref = repo
+            .get(profile_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "该 AI 连接不存在。".to_string())?
+            .secret_ref;
+        // 4. guards + DB delete（delete_guarded 内部校验 active 引用 + last-enabled）
+        repo.delete_guarded(profile_id)?;
+        secret_ref
+    }; // ★ DB 锁已释放、DB 删除已 COMMIT
+       // 5. best-effort secret 清理：失败不影响删除结果（§D1：记录 orphan 警告即可，
+       //    不可再引用的 orphan secret 比数据库引用已删 secret 更安全）
+    if let Some(r) = secret_ref {
+        if ai::secret_store::production_secret_store()
+            .delete(&r)
+            .is_err()
+        {
+            eprintln!("[secret-migration] orphan secret cleanup warning: ai-provider:{r}");
+        }
+    }
+    // 6. SUCCESS
+    Ok(())
 }
 
 #[tauri::command]
@@ -204,7 +443,7 @@ pub async fn test_ai_provider_connection(
     state: tauri::State<'_, db::DbState>,
     profile_id: i64,
 ) -> Result<String, String> {
-    let config = {
+    let mut config = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let p = repository::ai_provider_profile::AiProviderProfileRepository::new(&conn)
             .get(profile_id)
@@ -218,11 +457,15 @@ pub async fn test_ai_provider_connection(
             api_key: p.api_key,
             model: p.model,
             thinking_mode: parse_thinking(&p.thinking_mode)?,
+            auth_mode: parse_auth(&p.auth_mode)?,
+            secret_ref: p.secret_ref,
             capabilities: p.capabilities,
             compatibility_status: p.compatibility_status,
             json_mode_override: None,
         }
     };
+    // §S3-D1：锁外 SecretStore 凭据解析
+    config.resolve_secret(&*ai::secret_store::production_secret_store())?;
     ai::compatibility::connectivity_check(&config).await
 }
 
@@ -251,12 +494,17 @@ pub async fn test_ai_provider_compatibility(
             api_key: p.api_key.clone(),
             model: p.model.clone(),
             thinking_mode: parse_thinking(&p.thinking_mode)?,
+            auth_mode: parse_auth(&p.auth_mode)?,
+            secret_ref: p.secret_ref.clone(),
             capabilities: p.capabilities,
             compatibility_status: p.compatibility_status.clone(),
             json_mode_override: None, // Probe 内部显式 ForceNative / ForcePromptOnly（§5.1）
         };
         (config, p)
     };
+    // §S3-D1：锁外 SecretStore 凭据解析（Probe 请求需要真实 Key）
+    let mut config = config;
+    config.resolve_secret(&*ai::secret_store::production_secret_store())?;
     let outcome = ai::compatibility::run_probe(&config).await;
     {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -696,10 +944,12 @@ pub async fn import_personalization_files(
     };
     let outcome = match (analyze_capable, corpus) {
         (true, Ok(corpus)) => {
-            let cfg = {
+            let mut cfg = {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
                 ai::provider::resolve_active_ai_profiles(&conn)?.primary
             };
+            // §S3-D1：锁外凭据解析
+            cfg.resolve_secret(&*ai::secret_store::production_secret_store())?;
             let responder = ai::agent::ModelResponder::Live(ai::client::AiClient::new(cfg));
             // Step4/5：单次正式分析 + Validator（锁外 await）
             let res = ai::intelligence::user_context::analyze_strict(&responder, &corpus).await;
@@ -1244,7 +1494,7 @@ pub async fn ai_analyze(
     let act =
         ai::AiAction::from_str(&action).ok_or_else(|| format!("未知的 AI 功能：{}", action))?;
 
-    let (context, page_labels, primary_cfg) = {
+    let (context, page_labels, mut primary_cfg) = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let cfg = ai::provider::resolve_active_ai_profiles(&conn)?.primary;
         let ctx = ai::context::build_context(
@@ -1270,6 +1520,8 @@ pub async fn ai_analyze(
         }
         (ctx, extra, cfg)
     };
+    // §S3-D1：锁外 SecretStore 凭据解析
+    primary_cfg.resolve_secret(&*ai::secret_store::production_secret_store())?;
 
     let client = ai::client::AiClient::new(primary_cfg);
     let mut messages = vec![ai::client::ChatMessage::system(ai::prompts::SYSTEM_PROMPT)];

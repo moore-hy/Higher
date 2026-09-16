@@ -109,7 +109,7 @@ fn test_migration_v004_schema_version_and_idempotent() {
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36
         ]
     );
 
@@ -130,7 +130,7 @@ fn test_migration_v004_schema_version_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 33);
+    assert_eq!(count, 36);
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn test_migration_v003_to_v004_preserves_old_data() {
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36
         ]
     );
 

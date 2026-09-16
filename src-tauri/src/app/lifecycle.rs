@@ -54,6 +54,23 @@ pub fn setup(
     }
 
     app.manage(db_state);
+    // POST-M7 §S3 / FINAL IMPLEMENTATION SAFETY PATCH §3：
+    // SecretMigrationService best-effort 预迁移——后台线程执行，**不阻塞启动**；
+    // SecretStore 失败 → 不清空 legacy plaintext、不伪造 secret_ref、仅 sanitized
+    // 警告；可在未来启动或进入 AI Settings 时安全重试（幂等 / 可恢复）。
+    {
+        let handle = app.handle().clone();
+        std::thread::spawn(move || {
+            let state = handle.state::<db::DbState>();
+            let store = ai::secret_store::production_secret_store();
+            let (migrated, failed) = ai::secret_migration::run_best_effort(&state, &*store);
+            if migrated > 0 || failed > 0 {
+                println!(
+                    "[secret-migration] migrated={migrated} pending_failed={failed} (failed rows keep legacy plaintext; will retry)"
+                );
+            }
+        });
+    }
     #[cfg(mobile)]
     println!("[ANDROID-BOOT] STATE_MANAGED");
 

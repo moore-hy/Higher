@@ -999,6 +999,7 @@ export const createAiProviderProfile = (args: {
   apiKey: string;
   model: string;
   thinkingMode: string;
+  authMode: string;
 }) =>
   invoke<number>("create_ai_provider_profile", {
     displayName: args.displayName,
@@ -1007,6 +1008,7 @@ export const createAiProviderProfile = (args: {
     apiKey: args.apiKey,
     model: args.model,
     thinkingMode: args.thinkingMode,
+    authMode: args.authMode,
   });
 
 export const updateAiProviderProfile = (args: {
@@ -1017,6 +1019,7 @@ export const updateAiProviderProfile = (args: {
   apiKey: string;
   model: string;
   thinkingMode: string;
+  authMode: string;
   enabled: boolean;
 }) =>
   invoke<void>("update_ai_provider_profile", {
@@ -1027,6 +1030,7 @@ export const updateAiProviderProfile = (args: {
     apiKey: args.apiKey,
     model: args.model,
     thinkingMode: args.thinkingMode,
+    authMode: args.authMode,
     enabled: args.enabled,
   });
 

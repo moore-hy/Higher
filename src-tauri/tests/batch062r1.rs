@@ -203,6 +203,8 @@ fn fake_cfg(base_url: &str) -> AiRuntimeConfig {
         api_key: "sk-local-fake-not-real".into(),
         model: "fake-model".into(),
         thinking_mode: ThinkingMode::Off,
+        auth_mode: app_lib::ai::provider::AuthMode::Bearer,
+        secret_ref: None,
         capabilities: Default::default(),
         compatibility_status: "untested".into(),
         json_mode_override: None,
@@ -814,6 +816,7 @@ fn r33_snapshot_model_changed_discard() {
             "k",
             "m1",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -855,6 +858,7 @@ fn r34_snapshot_key_changed_discard_in_memory_only() {
             "sk-A",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     let before = repo.get(id).unwrap().unwrap();
@@ -894,6 +898,7 @@ fn r35_internal_error_keeps_old_truth() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     conn.execute(
@@ -942,6 +947,7 @@ fn r36_normal_probe_persists_once() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     let fp = FakeProvider::start(
@@ -1007,6 +1013,7 @@ fn r37_reasoning_never_leaks() {
             "k",
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     repo.save_probe_result(
@@ -1049,6 +1056,7 @@ fn r38_api_key_never_leaks() {
             key,
             "m",
             &ThinkingMode::Off,
+            "bearer",
         )
         .unwrap();
     repo.save_probe_result(id, &out.capabilities, out.status, &out.message)

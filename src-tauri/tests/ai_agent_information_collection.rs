@@ -60,6 +60,8 @@ fn runtime_cfg(profile_id: i64) -> AiRuntimeConfig {
         api_key: "test-key".into(),
         model: "test-model".into(),
         thinking_mode: ThinkingMode::Off,
+        auth_mode: app_lib::ai::provider::AuthMode::Bearer,
+        secret_ref: None,
         capabilities: AiCapabilities {
             basic_chat: Some(true),
             structured_json: Some(true),

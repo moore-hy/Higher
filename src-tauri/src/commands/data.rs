@@ -1336,6 +1336,11 @@ pub async fn ai_start_run(
             .unwrap_or_default();
         (resolved, m, we, bk)
     };
+    // POST-M7 §S3-D1：锁外 SecretStore 凭据解析（Primary + Control）
+    let mut profiles = profiles;
+    let store = ai::secret_store::production_secret_store();
+    profiles.primary.resolve_secret(&*store)?;
+    profiles.control.resolve_secret(&*store)?;
     // DEV-0061R §34：Unified Higher AI——mode 仅 legacy 读取（不再参与 run_chat_turn 判定）
     let _legacy_mode = mode;
 

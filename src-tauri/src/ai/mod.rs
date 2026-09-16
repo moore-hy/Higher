@@ -32,6 +32,9 @@ pub mod provider;
 
 // POST-M7 AI FOUNDATION §S1：AI Concurrency Governor V1（进程级唯一并发上界 = 2）
 pub mod resource_governor;
+// POST-M7 AI FOUNDATION §S3：OS SecretStore 抽象 + SecretMigrationService
+pub mod secret_migration;
+pub mod secret_store;
 
 pub mod compatibility;
 

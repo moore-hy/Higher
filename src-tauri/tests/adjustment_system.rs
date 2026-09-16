@@ -72,7 +72,7 @@ fn test_migration_v008_applied_and_idempotent() {
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36
         ]
     );
 
@@ -114,7 +114,7 @@ fn test_migration_v008_applied_and_idempotent() {
     // DEV-0076 §四：v027 追加后 27 条
     // DEV-SYNC-001：v028 追加后 28 条
     // DAILY EXPERIENCE V1 §PHASE 4：v033（companion_skill）追加后 33 条
-    assert_eq!(count, 33);
+    assert_eq!(count, 36);
 }
 
 #[test]

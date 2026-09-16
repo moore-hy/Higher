@@ -191,8 +191,8 @@ fn t4_latest_schema_v023() {
     // DEV-SYNC-001 追加 v028（local_sync_foundation）
     // DAILY EXPERIENCE V1 §PHASE 4 追加 v032（micro_learning_events）
     // M4 追加 v033（companion_skill）
-    // M7 / P0-01 追加 v034（readiness_consumption）—— 消费水位线，绝不修改 v033
-    assert_eq!(v, 34, "T4: 最新 Schema = v034");
+    // M7 / P0-01 追加 v034（readiness_consumption）；POST-M7 追加 v035/v036（auth_mode / secret_ref）
+    assert_eq!(v, 36, "T4: 最新 Schema = v036");
     let name: String = conn
         .query_row(
             "SELECT name FROM schema_migrations WHERE version=23",

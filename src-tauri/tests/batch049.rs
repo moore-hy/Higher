@@ -288,8 +288,8 @@ fn test_fresh_db_reaches_v014() {
     // DEV-0076 §四：v027（memory_confirmation_lifecycle）已追加
     // DEV-SYNC-001：v028（local_sync_foundation）已追加
     // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）+ v033（companion_skill）已追加
-    assert_eq!(ver, 33);
-    assert_eq!(app_lib::migrations::latest_version(), 33);
+    assert_eq!(ver, 36);
+    assert_eq!(app_lib::migrations::latest_version(), 36);
 }
 
 /// 富文本 Session 的 note 纯文本投影参与既有 note 链路（摘要/AI 仍读 note）。

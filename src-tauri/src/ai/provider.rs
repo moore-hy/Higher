@@ -58,6 +58,36 @@ impl ThinkingMode {
     }
 }
 
+// =============== AuthMode（POST-M7 §S2-A：显式认证契约） ===============
+
+/// 显式认证模式。**禁止**按 localhost / 127.0.0.1 自动推断无认证——
+/// 认证只来自用户显式配置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthMode {
+    /// Authorization: Bearer <key>（存量 Cloud Provider 唯一默认；api_key 必填）。
+    #[default]
+    Bearer,
+    /// 无认证：不附加 Authorization 头；api_key 可为空（本地 OpenAI-compatible server）。
+    None,
+}
+
+impl AuthMode {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "bearer" => Some(AuthMode::Bearer),
+            "none" => Some(AuthMode::None),
+            _ => None,
+        }
+    }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AuthMode::Bearer => "bearer",
+            AuthMode::None => "none",
+        }
+    }
+}
+
 // =============== AiCapabilities（§16：三态 + json_strategy） ===============
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -119,6 +149,12 @@ pub struct AiRuntimeConfig {
     pub api_key: String,
     pub model: String,
     pub thinking_mode: ThinkingMode,
+    /// POST-M7 §S2-D：显式认证模式——Runtime 禁止读取 UI 状态猜测认证；
+    /// immutable request snapshot 的一部分。
+    pub auth_mode: AuthMode,
+    /// POST-M7 §S3：稳定凭据引用（bearer 且 plaintext 未迁移时非空）。
+    /// resolve_secret() 在**未持有 DB 锁**的上下文中据此从 SecretStore 取真值。
+    pub secret_ref: Option<String>,
     pub capabilities: AiCapabilities,
     pub compatibility_status: String,
     /// DEV-0062R §5.1：Probe 专用 JSON 策略覆盖（ForceNative / ForcePromptOnly）。
@@ -128,6 +164,33 @@ pub struct AiRuntimeConfig {
 }
 
 impl AiRuntimeConfig {
+    /// POST-M7 §S3-J：bearer 凭据最终解析——**必须在未持有 DB 锁的上下文中调用**
+    /// （S3-D1：OS 凭据 I/O 永不与 SQLite 锁/事务重叠）。
+    /// ```text
+    /// auth_mode = none                       → Ok（无凭据）
+    /// api_key 非空（legacy fallback / 已解析）→ Ok（不覆盖）
+    /// secret_ref 存在                        → SecretStore.get 填入 api_key
+    /// secret_ref 缺失且无 legacy plaintext   → Err（明确凭据不可用；禁止换 Provider）
+    /// ```
+    pub fn resolve_secret(
+        &mut self,
+        store: &dyn crate::ai::secret_store::SecretStore,
+    ) -> Result<(), String> {
+        if self.auth_mode == AuthMode::None {
+            return Ok(());
+        }
+        if !self.api_key.trim().is_empty() {
+            return Ok(());
+        }
+        let secret_ref = self
+            .secret_ref
+            .as_deref()
+            .ok_or_else(credential_unavailable)?;
+        let key = store.get(secret_ref)?.ok_or_else(credential_unavailable)?;
+        self.api_key = key;
+        Ok(())
+    }
+
     /// 请求 endpoint：base_url 去尾斜杠 + 单个 /chat/completions（T11）。
     pub fn endpoint(&self) -> String {
         format!(
@@ -173,15 +236,26 @@ pub fn with_forced_json(config: &AiRuntimeConfig, strategy: JsonStrategy) -> AiR
     c
 }
 
+/// §S3-K：bearer 凭据不可用（secret 缺失且无 legacy 回退）时的明确用户文案。
+/// 禁止 fallback 到别的 Provider、禁止空 Key 请求。
+pub fn credential_unavailable() -> String {
+    "该 AI 连接的凭据不可用，请重新填写 API Key。".to_string()
+}
+
 fn to_config(p: &crate::repository::ai_provider_profile::AiProviderProfile) -> AiRuntimeConfig {
     AiRuntimeConfig {
         profile_id: p.id,
         display_name: p.display_name.clone(),
         adapter_kind: AdapterKind::from_str(&p.adapter_kind).unwrap_or(AdapterKind::Deepseek),
         base_url: p.base_url.clone(),
+        // §S3-J：bearer 的 plaintext 仅作为 SecretMigration 兼容期内的受控回退读取；
+        // secret_ref 存在且 plaintext 已清空 → api_key 留空，由 resolve_secret()
+        // 在锁外从 SecretStore 解析。
         api_key: p.api_key.clone(),
         model: p.model.clone(),
         thinking_mode: ThinkingMode::from_str(&p.thinking_mode).unwrap_or(ThinkingMode::Off),
+        auth_mode: AuthMode::from_str(&p.auth_mode).unwrap_or(AuthMode::Bearer),
+        secret_ref: p.secret_ref.clone(),
         capabilities: p.capabilities,
         compatibility_status: p.compatibility_status.clone(),
         json_mode_override: None,

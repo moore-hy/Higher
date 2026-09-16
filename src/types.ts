@@ -216,9 +216,12 @@ export interface AiProviderProfile {
   display_name: string;
   adapter_kind: "deepseek" | "openai_compatible" | string;
   base_url: string;
-  api_key: string;
+  /** POST-M7 §S3-H：前端永不接收 plaintext/secret —— 只知「是否存在可用凭据」 */
+  has_api_key: boolean;
   model: string;
   thinking_mode: "off" | "deepseek_model_suffix" | string;
+  /** POST-M7 §S2：显式认证模式（"bearer" | "none"）；不按 base_url 自动推断 */
+  auth_mode: "bearer" | "none" | string;
   enabled: boolean;
   capabilities: AiCapabilities;
   compatibility_status: "untested" | "full" | "limited" | "incompatible" | string;

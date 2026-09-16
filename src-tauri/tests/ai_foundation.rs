@@ -63,12 +63,18 @@ fn test_ai_settings_save_read_plaintext_key() {
     ai::save_ai_settings(&conn, &s).unwrap();
 
     let loaded = ai::load_ai_settings(&conn).unwrap();
-    assert_eq!(
-        loaded.api_key, "sk-test-plaintext-123",
-        "API Key 明文保持（个人本地软件）"
-    );
+    // POST-M7 §S3（SS-14）：Rust→JS DTO 脱敏 —— load 永不回传明文 Key
+    assert_eq!(loaded.api_key, "", "legacy settings DTO 不得携带明文 Key");
     assert_eq!(loaded.model, "deepseek-v4-pro");
     assert!(loaded.thinking_enabled);
+    // 但凭据本身被持久化（migration 兼容期落在 profile 行，启动时 cutover 到 SecretStore）
+    let repo = app_lib::repository::ai_provider_profile::AiProviderProfileRepository::new(&conn);
+    let pid = repo.active_primary_id().unwrap();
+    let persisted = repo.get(pid).unwrap().unwrap();
+    assert_eq!(
+        persisted.api_key, "sk-test-plaintext-123",
+        "凭据持久化（非 DTO 路径）"
+    );
 }
 
 // ---------- B. Context Profile 隔离 ----------

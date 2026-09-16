@@ -141,6 +141,7 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
     // DEV-0076 §四：迁移链已到 v027（连跑 v025→v026→v027）
     // DEV-SYNC-001：迁移链已到 v028（local_sync_foundation）
     // DAILY EXPERIENCE V1 §PHASE 4：迁移链已到 v033（companion_skill）
+    // POST-M7 AI FOUNDATION：迁移链已到 v035（ai_provider_auth_mode）
     conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
     app_lib::migrations::run_migrations(&conn).unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
@@ -150,8 +151,8 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
         })
         .unwrap();
     assert_eq!(
-        ver, 33,
-        "升级后 schema = v033（v025→v033 连跑，v025 语义仍被完整验证）"
+        ver, 35,
+        "升级后 schema = v035（v025→v035 连跑，v025 语义仍被完整验证）"
     );
 
     // ---- ① 数据完整：全字段值逐一比对（run-old-1）----
@@ -329,5 +330,5 @@ fn er105_v024_to_v025_upgrade_preserves_everything() {
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(n, 33, "幂等：不重复应用");
+    assert_eq!(n, 35, "幂等：不重复应用");
 }
