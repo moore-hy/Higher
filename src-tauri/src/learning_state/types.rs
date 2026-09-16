@@ -180,7 +180,9 @@ pub struct MicroActionCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FormalSessionAnchor {
-    Task { task_id: i64 },
+    Task {
+        task_id: i64,
+    },
     LearningItem {
         learning_item_id: i64,
         /// 已知的关联任务（仅作为既有 `startSession` 的附加上下文）。
@@ -253,6 +255,7 @@ pub fn source_entity_key(src: &ActionSource) -> String {
             Some(id) => format!("review#{}", id),
             None => "review".to_string(),
         },
+        ActionSource::Evaluation { evaluation_id } => format!("evaluation#{}", evaluation_id),
     }
 }
 
@@ -435,7 +438,10 @@ pub struct LearningFrictionState {
 /// `YYYY-MM-DDTHH:MM:SSZ`（chrono）与 `YYYY-MM-DD HH:MM:SS`（SQLite）→ 统一为
 /// `YYYY-MM-DD HH:MM:SS`。两者都是 UTC，所以可直接按字典序比较。
 pub(crate) fn normalize_utc(raw: &str) -> String {
-    raw.trim().trim_end_matches('Z').trim_end_matches('z').replace('T', " ")
+    raw.trim()
+        .trim_end_matches('Z')
+        .trim_end_matches('z')
+        .replace('T', " ")
 }
 
 impl LearningFrictionState {
@@ -476,14 +482,16 @@ impl LearningFrictionState {
     }
 
     /// §M2-F 反锤击：该学习项是否正处于冷却中（只对 High 主体生效）。
-    pub fn is_subject_in_cooldown(&self, subject_learning_item_id: Option<i64>, now_utc: &str) -> bool {
+    pub fn is_subject_in_cooldown(
+        &self,
+        subject_learning_item_id: Option<i64>,
+        now_utc: &str,
+    ) -> bool {
         let is_subject = matches!(
             (subject_learning_item_id, self.subject_learning_item_id),
             (Some(a), Some(b)) if a == b
         );
-        is_subject
-            && self.level == FrictionLevel::High
-            && self.is_cooldown_active(now_utc)
+        is_subject && self.level == FrictionLevel::High && self.is_cooldown_active(now_utc)
     }
 }
 
@@ -687,6 +695,8 @@ pub enum ActionSource {
     Session { session_id: i64 },
     LearningItem { learning_item_id: i64 },
     Review { review_id: Option<i64> },
+    /// 验证触发（§M0-B：Evaluation 触发的 Micro 必须溯源到 evaluation，绝不改写为 LearningItem）。
+    Evaluation { evaluation_id: i64 },
 }
 
 /// reason_code 常量（稳定字符串；UI 只做展示映射，不参与判断）。

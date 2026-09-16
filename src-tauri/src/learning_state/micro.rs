@@ -125,10 +125,15 @@ impl MicroActionType {
     pub fn instruction(self, subject: &str) -> String {
         match self {
             Self::Recall => {
-                format!("不看笔记，回忆「{}」的关键结论，用一句话说出你还记得的部分。", subject)
+                format!(
+                    "不看笔记，回忆「{}」的关键结论，用一句话说出你还记得的部分。",
+                    subject
+                )
             }
             Self::SelfExplain => format!("不看笔记，用一句话解释什么是{}。", subject),
-            Self::RetryRecentError => format!("重做「{}」里上次出错的那一步，只做这一步。", subject),
+            Self::RetryRecentError => {
+                format!("重做「{}」里上次出错的那一步，只做这一步。", subject)
+            }
             Self::ReviewRecentConcept => {
                 format!("回看「{}」，用自己的话复述最近改动的那一个点。", subject)
             }
@@ -430,9 +435,7 @@ fn latest_error_evaluation(
         .map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()
-        .find(|e| {
-            matches!(e.outcome.as_str(), "failed" | "partial") && e.trust_state == "trusted"
-        }))
+        .find(|e| matches!(e.outcome.as_str(), "failed" | "partial") && e.trust_state == "trusted"))
 }
 
 /// 解析 LearningItem 名称；不存在或跨档案 → None（fail-safe 跳过，绝不伪造）。
@@ -577,12 +580,14 @@ mod unit_tests {
             .create("M0-A-COLD", None, None, None, None, None)
             .unwrap()
             .id;
-        let state =
-            build_micro_evidence_state(&conn, profile_id, &[], &[], &LearningFrictionState::unknown())
-                .unwrap();
-        assert!(
-            state.candidates.is_empty(),
-            "冷档案不得凭空产出 Micro 候选"
-        );
+        let state = build_micro_evidence_state(
+            &conn,
+            profile_id,
+            &[],
+            &[],
+            &LearningFrictionState::unknown(),
+        )
+        .unwrap();
+        assert!(state.candidates.is_empty(), "冷档案不得凭空产出 Micro 候选");
     }
 }

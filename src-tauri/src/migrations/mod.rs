@@ -34,6 +34,7 @@ pub mod v030_planning_intake_drafts;
 pub mod v031_knowledge_canvas;
 pub mod v032_micro_learning_events;
 pub mod v033_companion_skill;
+pub mod v034_readiness_consumption;
 
 /// 单个 Migration 定义。
 ///
@@ -214,6 +215,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 33,
         name: "companion_skill",
         up: v033_companion_skill::up,
+    },
+    Migration {
+        version: 34,
+        name: "readiness_consumption",
+        up: v034_readiness_consumption::up,
     },
 ];
 

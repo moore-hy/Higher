@@ -1025,6 +1025,14 @@ fn ranking_completed_tasks_never_appear_again() {
 ///
 /// 直接用 SQL 建立业务前置状态（与仓库既有集成测试同一手法）：本用例要验证的是
 /// 「复盘 → Proposal → ONE ChangeSet → 确认 → Planning 改变」这条链，不是蓝图创建命令。
+///
+/// M7-B 夹具修正（不改生产行为）：`review_interval_days` 从 1 提到 7。
+/// 确认复盘时生产侧会重排 `next_review_at = datetime('now', '+N days')`（UTC 文本），
+/// 而 `is_review_due` 用 `date(next_review_at) <= date(today_local())`（UTC+8 学习日）比较。
+/// 当本地时间处于 00:00–08:00 时 UTC 日期 = 本地日期 − 1，N=1 会让重排结果正好落在**当天**，
+/// 于是复盘「确认后又立刻到期」→ cl010 的 `after.action_type == PlannedTask` 在跨本地午夜时失败。
+/// N=7 让重排结果在任何本地时刻都严格晚于学习日，夹具对这种边界确定、且不削弱任何业务断言
+/// （cadence 间隔与本用例断言的动作类型切换无关）。
 fn mk_active_blueprint_due(conn: &Connection, profile_id: i64) -> i64 {
     conn.execute(
         "INSERT INTO planning_blueprints
@@ -1032,7 +1040,7 @@ fn mk_active_blueprint_due(conn: &Connection, profile_id: i64) -> i64 {
             source_snapshot_json, provenance_json, review_enabled, review_interval_days,
             last_review_at, next_review_at, activated_at)
          VALUES (?1,'postgraduate',1,'active','冲刺 14 天','# 计划\n数学基础 + 英语阅读','{}',
-                 '{}','{}',1,1, date('now','-15 day'), date('now','-1 day'), datetime('now'))",
+                 '{}','{}',1,7, date('now','-15 day'), date('now','-1 day'), datetime('now'))",
         params![profile_id],
     )
     .unwrap();

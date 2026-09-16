@@ -64,13 +64,13 @@ fn test_migration_v006_schema_version_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    // 迁移链版本列表（DAILY EXPERIENCE V1 §PHASE 4：已与 ledger 对齐至 v032；
+    // 迁移链版本列表（DAILY EXPERIENCE V1 §PHASE 4：已与 ledger 对齐至 v033；
     // 此前停在 v029，v030/v031 落地时未同步）
     assert_eq!(
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32
+            25, 26, 27, 28, 29, 30, 31, 32, 33
         ]
     );
 
@@ -89,8 +89,8 @@ fn test_migration_v006_schema_version_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）追加后 32 条
-    assert_eq!(count, 32);
+    // DAILY EXPERIENCE V1 §PHASE 4：v033（companion_skill）追加后 33 条
+    assert_eq!(count, 33);
 }
 
 #[test]
@@ -150,13 +150,13 @@ fn test_migration_v005_to_v006_preserves_old_items_with_empty_content() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    // 迁移链版本列表（DAILY EXPERIENCE V1 §PHASE 4：已与 ledger 对齐至 v032；
+    // 迁移链版本列表（DAILY EXPERIENCE V1 §PHASE 4：已与 ledger 对齐至 v033；
     // 此前停在 v029，v030/v031 落地时未同步）
     assert_eq!(
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32
+            25, 26, 27, 28, 29, 30, 31, 32, 33
         ]
     );
 

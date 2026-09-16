@@ -60,7 +60,7 @@ fn test_migration_v009_applied_and_idempotent() {
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32
+            25, 26, 27, 28, 29, 30, 31, 32, 33
         ]
     );
 
@@ -96,8 +96,8 @@ fn test_migration_v009_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    // DAILY EXPERIENCE V1 §PHASE 4：v032 追加后 32 条
-    assert_eq!(count, 32);
+    // DAILY EXPERIENCE V1 §PHASE 4：v033（companion_skill）追加后 33 条
+    assert_eq!(count, 33);
 }
 
 #[test]
@@ -160,8 +160,8 @@ fn test_v008_to_v009_upgrade_preserves_old_data() {
     };
     // DEV-0076 §四：最新 = v027
     // DEV-SYNC-001：最新 = v028
-    // DAILY EXPERIENCE V1 §PHASE 4：最新 = v032
-    assert_eq!(versions.last(), Some(&32));
+    // DAILY EXPERIENCE V1 §PHASE 4：最新 = v033
+    assert_eq!(versions.last(), Some(&33));
 }
 
 #[test]

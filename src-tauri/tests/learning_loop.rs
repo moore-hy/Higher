@@ -82,13 +82,13 @@ fn test_a_migration_v002_applied_and_idempotent() {
             .filter_map(|v| v.ok())
             .collect()
     };
-    // 迁移链版本列表（DAILY EXPERIENCE V1 §PHASE 4：v032 micro_learning_events 已追加；
+    // 迁移链版本列表（DAILY EXPERIENCE V1 §PHASE 4：v033 companion_skill 已追加；
     // 本断言此前停在 v029，v030/v031 落地时未同步 —— 现已与 ledger 对齐，仍为精确列表）
     assert_eq!(
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32
+            25, 26, 27, 28, 29, 30, 31, 32, 33
         ],
         "全部 migrations 都应已执行"
     );
@@ -117,9 +117,9 @@ fn test_a_migration_v002_applied_and_idempotent() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    // HIGHER DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）已追加 → 32 条。
+    // HIGHER DAILY EXPERIENCE V1 §PHASE 4：v033（companion_skill）已追加 → 33 条。
     // 语义不变：断言「全部 migration 已被应用且重复执行不新增记录」。
-    assert_eq!(count, 32, "幂等性失败：重复执行后不应有新记录");
+    assert_eq!(count, 33, "幂等性失败：重复执行后不应有新记录");
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn test_persistence_full_loop() {
             versions,
             vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-                24, 25, 26, 27, 28, 29, 30, 31, 32
+                24, 25, 26, 27, 28, 29, 30, 31, 32, 33
             ]
         );
     }

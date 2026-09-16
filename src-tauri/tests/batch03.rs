@@ -70,12 +70,12 @@ fn seed(conn: &Connection) -> Seed {
 #[test]
 fn test_v010_schema_and_old_data_preserved() {
     let conn = setup();
-    // v010 表 + 列存在；版本记录 32 条
-    // （DEV-0076 §四：v027 / DEV-SYNC-001：v028 / DAILY EXPERIENCE V1 §PHASE 4：v032）
+    // v010 表 + 列存在；版本记录 33 条
+    // （DEV-0076 §四：v027 / DEV-SYNC-001：v028 / DAILY EXPERIENCE V1 §PHASE 4：v032 / M4：v033）
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(count, 32);
+    assert_eq!(count, 33);
     let cols: Vec<String> = {
         let mut stmt = conn.prepare("PRAGMA table_info(tasks)").unwrap();
         stmt.query_map([], |r| r.get::<_, String>(1))

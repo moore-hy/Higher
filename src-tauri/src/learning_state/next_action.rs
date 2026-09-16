@@ -784,7 +784,9 @@ pub fn build_next_learning_action(
     // 并把它替换成最小真实学时档。不允许静默改变用户看到的时间语义。
     if matches!(budget, Some(b) if b.is_micro()) && micro_candidate.is_none() {
         action.reason_code = REASON_MICRO_UNAVAILABLE.to_string();
-        action.reasons.insert(0, MICRO_UNAVAILABLE_REASON.to_string());
+        action
+            .reasons
+            .insert(0, MICRO_UNAVAILABLE_REASON.to_string());
     }
 
     Ok(action)
@@ -909,6 +911,7 @@ fn micro_source_entity(cand: &MicroActionCandidate) -> ActionSource {
         ("learning_item", Some(id)) => ActionSource::LearningItem {
             learning_item_id: id,
         },
+        ("evaluation", Some(id)) => ActionSource::Evaluation { evaluation_id: id },
         _ => ActionSource::None,
     }
 }

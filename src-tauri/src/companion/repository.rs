@@ -86,8 +86,8 @@ impl<'a> CompanionRepository<'a> {
             return Ok(p);
         }
         let key = format!("profile:{}", profile_id);
-        let archetype = ARCHETYPES
-            [stable_hash(&[key.as_str(), "archetype"]) as usize % ARCHETYPES.len()];
+        let archetype =
+            ARCHETYPES[stable_hash(&[key.as_str(), "archetype"]) as usize % ARCHETYPES.len()];
         let personality_seed = stable_hash(&[key.as_str(), "personality"]);
         self.conn.execute(
             "INSERT OR IGNORE INTO companion_profiles
@@ -148,7 +148,8 @@ impl<'a> CompanionRepository<'a> {
     ) -> rusqlite::Result<Option<CompanionWorldState>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, profile_id, expedition_readiness, readiness_updated_at, current_scene,
-                    current_behavior, last_interaction_at, last_nudge_at, updated_at
+                    current_behavior, last_interaction_at, last_nudge_at, updated_at,
+                    consumed_local_date, consumed_contribution_total
                FROM companion_world_state WHERE profile_id = ?1",
         )?;
         let mut rows = stmt.query_map(params![profile_id], |r| {
@@ -161,9 +162,12 @@ impl<'a> CompanionRepository<'a> {
                     .unwrap_or(ExpeditionReadiness::NotReady),
                 readiness_updated_at: r.get(3)?,
                 current_scene: r.get(4)?,
-                current_behavior: BehaviorState::parse(&behavior_raw).unwrap_or(BehaviorState::Idle),
+                current_behavior: BehaviorState::parse(&behavior_raw)
+                    .unwrap_or(BehaviorState::Idle),
                 last_interaction_at: r.get(6)?,
                 last_nudge_at: r.get(7)?,
+                consumed_local_date: r.get(9)?,
+                consumed_contribution_total: r.get(10)?,
                 updated_at: r.get(8)?,
             })
         })?;
@@ -188,6 +192,28 @@ impl<'a> CompanionRepository<'a> {
                     updated_at = datetime('now')
               WHERE profile_id = ?1",
             params![profile_id, readiness.as_str(), at, scene, behavior.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// §M7 / P0-01：记录「就绪度消费水位线」。
+    ///
+    /// 仅用于表达「哪些已有贡献已被当前这次出发远征兑现」，**绝不构成钱包/余额**。
+    /// `local_date` = 本次出发所消耗的本地学习日；`consumed_total` = 出发时 `today_total` 的快照。
+    /// 跨学习日时水位线失效（见 `companion::service::unconsumed_contribution`），不会拿今天和昨天的旧值相减。
+    pub fn record_readiness_consumption(
+        &self,
+        profile_id: i64,
+        local_date: &str,
+        consumed_total: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE companion_world_state
+                SET consumed_local_date = ?2,
+                    consumed_contribution_total = ?3,
+                    updated_at = datetime('now')
+              WHERE profile_id = ?1",
+            params![profile_id, local_date, consumed_total],
         )?;
         Ok(())
     }
@@ -284,7 +310,10 @@ impl<'a> CompanionRepository<'a> {
                                     finished_at, readiness_tier_at_start, seed, theme, collected_at";
 
     /// 进行中的远征（未到 `finished_at`）。
-    pub fn open_expedition(&self, profile_id: i64) -> rusqlite::Result<Option<CompanionExpedition>> {
+    pub fn open_expedition(
+        &self,
+        profile_id: i64,
+    ) -> rusqlite::Result<Option<CompanionExpedition>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {} FROM companion_expeditions
               WHERE profile_id = ?1 AND status = 'running'
@@ -552,7 +581,15 @@ mod unit_tests {
         let now = repo.now().unwrap();
         let fin = repo.plus_seconds(&now, 1200).unwrap();
         let e = repo
-            .insert_expedition(p, &now, 1200, &fin, ExpeditionReadiness::ReadyShort, 7, THEME_GENERAL)
+            .insert_expedition(
+                p,
+                &now,
+                1200,
+                &fin,
+                ExpeditionReadiness::ReadyShort,
+                7,
+                THEME_GENERAL,
+            )
             .unwrap();
         assert_eq!(e.status, ExpeditionStatus::Running);
         assert!(e.finished_at.is_some());

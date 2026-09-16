@@ -142,7 +142,10 @@ impl<'a> MicroLearningEventRepository<'a> {
             }
             ("none", None) => {}
             (_, None) => {
-                return Err(format!("source_type = {} 时必须提供 source_id", source_type));
+                return Err(format!(
+                    "source_type = {} 时必须提供 source_id",
+                    source_type
+                ));
             }
             (kind, Some(id)) => {
                 self.assert_source_belongs_to_profile(kind, id, profile_id)?;
@@ -257,16 +260,19 @@ impl<'a> MicroLearningEventRepository<'a> {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![profile_id, format!("-{} hours", window_hours)], |row| {
-                Ok(TouchedSource {
-                    source_type: row.get(0)?,
-                    source_id: row.get(1)?,
-                    last_action_type: row.get(2)?,
-                    last_result: row.get(3)?,
-                    last_completed_at: row.get(4)?,
-                    event_count: row.get(5)?,
-                })
-            })
+            .query_map(
+                params![profile_id, format!("-{} hours", window_hours)],
+                |row| {
+                    Ok(TouchedSource {
+                        source_type: row.get(0)?,
+                        source_id: row.get(1)?,
+                        last_action_type: row.get(2)?,
+                        last_result: row.get(3)?,
+                        last_completed_at: row.get(4)?,
+                        event_count: row.get(5)?,
+                    })
+                },
+            )
             .map_err(|e| e.to_string())?;
 
         // 同一来源可能出现多行（每个事件一行）→ 只保留每个来源的**第一行**（最新），

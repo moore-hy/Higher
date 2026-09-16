@@ -62,8 +62,10 @@ fn mk_item(conn: &Connection, profile_id: i64, name: &str) -> i64 {
 ///
 /// 与全仓一致地使用 SQLite 的 UTC 口径，避免在 Rust 侧再造一套时间算术。
 fn utc_ago(conn: &Connection, modifiers: &str) -> String {
-    conn.query_row("SELECT datetime('now', ?1)", params![modifiers], |r| r.get(0))
-        .unwrap()
+    conn.query_row("SELECT datetime('now', ?1)", params![modifiers], |r| {
+        r.get(0)
+    })
+    .unwrap()
 }
 
 /// 造一条真实 Evaluation；`occurred_at` / `trust_state` 可显式指定。
@@ -158,7 +160,15 @@ fn mf01_repeated_trusted_failure_raises_friction_deterministically() {
     assert!(f0.cooldown_until.is_none());
 
     // ② 1 次可信失败 → Medium / support 1（一次线索）
-    mk_eval(&conn, p, a, "优先编码器回忆", "failed", Some(&utc_ago(&conn, "-5 hours")), None);
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "优先编码器回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-5 hours")),
+        None,
+    );
     let f1 = build_friction_state(&conn, p).unwrap();
     assert_eq!(f1.level, FrictionLevel::Medium);
     assert_eq!(f1.subject_learning_item_id, Some(a));
@@ -174,7 +184,15 @@ fn mf01_repeated_trusted_failure_raises_friction_deterministically() {
         .any(|s| s.code == SIGNAL_TRUSTED_FAILED && s.authoritative));
 
     // ③ 第 2 次连续可信失败 → High / support 2 + 冷却生效
-    mk_eval(&conn, p, a, "优先编码器回忆", "failed", Some(&utc_ago(&conn, "-50 minutes")), None);
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "优先编码器回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-50 minutes")),
+        None,
+    );
     let f2 = build_friction_state(&conn, p).unwrap();
     assert_eq!(f2.level, FrictionLevel::High);
     assert_eq!(f2.recommended_support_level, SUPPORT_GUIDED);
@@ -185,7 +203,9 @@ fn mf01_repeated_trusted_failure_raises_friction_deterministically() {
         "刚刚又失败了一次 → 冷却应当仍然生效"
     );
     assert!(
-        f2.signals.iter().any(|s| s.code == SIGNAL_CONSECUTIVE_FAILURES),
+        f2.signals
+            .iter()
+            .any(|s| s.code == SIGNAL_CONSECUTIVE_FAILURES),
         "连续两次失败 → 必须留下可验证的「连续失败」信号"
     );
 
@@ -235,14 +255,40 @@ fn mf03_passed_breaks_consecutive_failure_run() {
     let a = mk_item(&conn, p, "优先编码器");
 
     // 时间序（旧 → 新）：failed → passed → failed
-    mk_eval(&conn, p, a, "回忆", "failed", Some(&utc_ago(&conn, "-3 hours")), None);
-    mk_eval(&conn, p, a, "回忆", "passed", Some(&utc_ago(&conn, "-2 hours")), None);
-    mk_eval(&conn, p, a, "回忆", "failed", Some(&utc_ago(&conn, "-1 hours")), None);
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-3 hours")),
+        None,
+    );
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "回忆",
+        "passed",
+        Some(&utc_ago(&conn, "-2 hours")),
+        None,
+    );
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-1 hours")),
+        None,
+    );
 
     let f = build_friction_state(&conn, p).unwrap();
     assert_eq!(f.level, FrictionLevel::High, "窗口内 2 次真实失败 → High");
     assert!(
-        f.signals.iter().all(|s| s.code != SIGNAL_CONSECUTIVE_FAILURES),
+        f.signals
+            .iter()
+            .all(|s| s.code != SIGNAL_CONSECUTIVE_FAILURES),
         "最近一次是 passed → 不得声称「连续失败」"
     );
 }
@@ -257,10 +303,34 @@ fn mf04_support_variant_applies_only_to_friction_subject() {
     let b = mk_item(&conn, p, "注意力机制");
 
     // A：反复失败 → High
-    mk_eval(&conn, p, a, "优先编码器回忆", "failed", Some(&utc_ago(&conn, "-2 hours")), None);
-    mk_eval(&conn, p, a, "优先编码器回忆", "failed", Some(&utc_ago(&conn, "-1 hours")), None);
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "优先编码器回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-2 hours")),
+        None,
+    );
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "优先编码器回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-1 hours")),
+        None,
+    );
     // B：无关项，只有一次通过
-    mk_eval(&conn, p, b, "注意力机制回忆", "passed", Some(&utc_ago(&conn, "-30 minutes")), None);
+    mk_eval(
+        &conn,
+        p,
+        b,
+        "注意力机制回忆",
+        "passed",
+        Some(&utc_ago(&conn, "-30 minutes")),
+        None,
+    );
     // 让 B 也能产出一个候选（candidate ② 依赖最近 Session）
     seed_session(&conn, b, 20);
 
@@ -277,8 +347,7 @@ fn mf04_support_variant_applies_only_to_friction_subject() {
         .expect("A 上有可信失败 → 必须有 retry_recent_error 候选");
     assert_eq!(retry.subject_learning_item_id, Some(a));
     assert_eq!(
-        retry.prompt_variant,
-        "retry_recent_error.last_step+support2",
+        retry.prompt_variant, "retry_recent_error.last_step+support2",
         "§M2-E：高摩擦必须换成 support 2 的提示变体"
     );
     assert_eq!(
@@ -318,8 +387,24 @@ fn mf05_cooldown_defers_immediate_repetition() {
     let a = mk_item(&conn, p, "优先编码器");
 
     // 两次失败，最近一次在 50 分钟前 → High，且冷却截止 = -50min + 60min = +10min（仍然生效）
-    mk_eval(&conn, p, a, "回忆", "failed", Some(&utc_ago(&conn, "-90 minutes")), None);
-    let latest = mk_eval(&conn, p, a, "回忆", "failed", Some(&utc_ago(&conn, "-50 minutes")), None);
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-90 minutes")),
+        None,
+    );
+    let latest = mk_eval(
+        &conn,
+        p,
+        a,
+        "回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-50 minutes")),
+        None,
+    );
 
     // 用户在 45 分钟前刚刚重做过「那一步」（done）
     conn.execute(
@@ -399,8 +484,24 @@ fn mf06_friction_path_makes_zero_cloud_calls() {
     let conn = setup();
     let p = mk_profile(&conn, "MF-06");
     let a = mk_item(&conn, p, "优先编码器");
-    mk_eval(&conn, p, a, "回忆", "failed", Some(&utc_ago(&conn, "-2 hours")), None);
-    mk_eval(&conn, p, a, "回忆", "failed", Some(&utc_ago(&conn, "-1 hours")), None);
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-2 hours")),
+        None,
+    );
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-1 hours")),
+        None,
+    );
     seed_session(&conn, a, 20);
 
     let before = ai_row_count(&conn);
@@ -440,10 +541,34 @@ fn mf07_friction_is_profile_scoped() {
     let ib = mk_item(&conn, pb, "B 的编码器");
 
     // A：两次失败 → High
-    mk_eval(&conn, pa, ia, "A 回忆", "failed", Some(&utc_ago(&conn, "-2 hours")), None);
-    mk_eval(&conn, pa, ia, "A 回忆", "failed", Some(&utc_ago(&conn, "-1 hours")), None);
+    mk_eval(
+        &conn,
+        pa,
+        ia,
+        "A 回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-2 hours")),
+        None,
+    );
+    mk_eval(
+        &conn,
+        pa,
+        ia,
+        "A 回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-1 hours")),
+        None,
+    );
     // B：只有一次失败 → Medium（不得被 A 的 High 污染）
-    mk_eval(&conn, pb, ib, "B 回忆", "failed", Some(&utc_ago(&conn, "-1 hours")), None);
+    mk_eval(
+        &conn,
+        pb,
+        ib,
+        "B 回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-1 hours")),
+        None,
+    );
 
     let fa = build_friction_state(&conn, pa).unwrap();
     let fb = build_friction_state(&conn, pb).unwrap();
@@ -508,9 +633,21 @@ fn mf08_micro_alone_never_raises_friction() {
     assert!(f0.signals.is_empty());
 
     // ② 有一条可信失败（Medium）后，Micro 只作为非权威上下文出现，且等级不变
-    mk_eval(&conn, p, a, "回忆", "failed", Some(&utc_ago(&conn, "-3 hours")), None);
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-3 hours")),
+        None,
+    );
     let f1 = build_friction_state(&conn, p).unwrap();
-    assert_eq!(f1.level, FrictionLevel::Medium, "Micro 不得把 Medium 推到 High");
+    assert_eq!(
+        f1.level,
+        FrictionLevel::Medium,
+        "Micro 不得把 Medium 推到 High"
+    );
     let micro_signal = f1
         .signals
         .iter()
@@ -532,8 +669,24 @@ fn mf09_pack_never_contains_friction_subject_twice() {
     let a = mk_item(&conn, p, "优先编码器");
     let b = mk_item(&conn, p, "注意力机制");
 
-    mk_eval(&conn, p, a, "优先编码器回忆", "failed", Some(&utc_ago(&conn, "-2 hours")), None);
-    mk_eval(&conn, p, a, "优先编码器回忆", "failed", Some(&utc_ago(&conn, "-1 hours")), None);
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "优先编码器回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-2 hours")),
+        None,
+    );
+    mk_eval(
+        &conn,
+        p,
+        a,
+        "优先编码器回忆",
+        "failed",
+        Some(&utc_ago(&conn, "-1 hours")),
+        None,
+    );
     seed_session(&conn, a, 20);
     seed_session(&conn, b, 25);
 

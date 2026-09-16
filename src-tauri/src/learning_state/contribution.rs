@@ -168,6 +168,7 @@ pub fn build_meaningful_contribution_at(
             m.id,
             base,
             prior,
+            m.learning_item_id,
         ));
     }
 
@@ -189,6 +190,7 @@ pub fn build_meaningful_contribution_at(
             idx as i64,
             base,
             prior && !passed,
+            e.learning_item_id,
         ));
         // §M3-B「修正了此前的错误」：只有「真的通过了一个此前失败过的点」才成立。
         if passed && prior {
@@ -198,6 +200,7 @@ pub fn build_meaningful_contribution_at(
                 idx as i64,
                 CONTRIB_CORRECTION_BONUS,
                 false,
+                e.learning_item_id,
             ));
         }
     }
@@ -223,6 +226,7 @@ pub fn build_meaningful_contribution_at(
             s.id,
             CONTRIB_SESSION,
             prior,
+            s.learning_item_id,
         ));
     }
 
@@ -240,6 +244,7 @@ pub fn build_meaningful_contribution_at(
             ContributionSource::Task,
             t.id,
             CONTRIB_TASK,
+            t.learning_item_id,
         ));
     }
 
@@ -248,38 +253,73 @@ pub fn build_meaningful_contribution_at(
     // 排序键：(无时间戳排最后, 时间, 来源固定序, 稳定 id)。
     // 递减是**按来源**独立的，因此跨来源顺序不影响任何数值；此排序只为可复算的确定性。
     events.sort_by(|a, b| {
-        (a.at.is_none(), a.at.as_deref().unwrap_or(""), a.source.order(), a.seq).cmp(&(
-            b.at.is_none(),
-            b.at.as_deref().unwrap_or(""),
-            b.source.order(),
-            b.seq,
-        ))
+        (
+            a.at.is_none(),
+            a.at.as_deref().unwrap_or(""),
+            a.source.order(),
+            a.seq,
+        )
+            .cmp(&(
+                b.at.is_none(),
+                b.at.as_deref().unwrap_or(""),
+                b.source.order(),
+                b.seq,
+            ))
     });
 
     let mut breakdown = ContributionBreakdown::default();
-    let mut next_seq: std::collections::BTreeMap<i32, i64> = std::collections::BTreeMap::new();
+    let mut next_seq: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
     let mut full_weight: i64 = 0;
     let mut after_diminishing: i64 = 0;
 
+    // §M3-C 反 grind：把「坚持奖励」展开为与普通事件同构的 RawEvent，
+    // 这样它同样按「来源 + 学习项」独立递减，且主循环逻辑统一（数值与以前逐字节一致）。
+    let mut persistence_events: Vec<RawEvent> = Vec::new();
     for ev in &events {
-        let n = next_seq.entry(ev.source.order()).or_insert(0);
+        if ev.prior_failure {
+            let pe = match &ev.at {
+                Some(at) => RawEvent::at(
+                    at,
+                    ContributionSource::Persistence,
+                    ev.seq,
+                    CONTRIB_PERSISTENCE_BONUS,
+                    false,
+                    ev.item_id,
+                ),
+                None => RawEvent::no_time(
+                    ContributionSource::Persistence,
+                    ev.seq,
+                    CONTRIB_PERSISTENCE_BONUS,
+                    ev.item_id,
+                ),
+            };
+            persistence_events.push(pe);
+        }
+    }
+    events.extend(persistence_events);
+    // 重新落定确定性顺序（来源阶梯 + 时间 + id），保证同键计数稳定。
+    events.sort_by(|a, b| {
+        (
+            a.at.is_none(),
+            a.at.as_deref().unwrap_or(""),
+            a.source.order(),
+            a.seq,
+        )
+            .cmp(&(
+                b.at.is_none(),
+                b.at.as_deref().unwrap_or(""),
+                b.source.order(),
+                b.seq,
+            ))
+    });
+
+    for ev in &events {
+        // P1-03：递减计数器按「来源 + 学习项身份」键控，而非粗粒度的来源类别，
+        // 因此「不同学习项各做一次」不会互相挤占递减，只有「同一项反复做」才递减。
+        let n = next_seq.entry(ev.diminishing_key()).or_insert(0);
         *n += 1;
         let value = scale(ev.base, diminish_permille(*n));
         breakdown.add(ev.source, value);
-        // §M3-B「坚持 / 修正」奖励：同为独立来源，同样受递减约束。
-        if ev.prior_failure {
-            let n2 = next_seq
-                .entry(ContributionSource::Persistence.order())
-                .or_insert(0);
-            *n2 += 1;
-            let bonus = scale(
-                CONTRIB_PERSISTENCE_BONUS,
-                diminish_permille(*n2),
-            );
-            breakdown.add(ContributionSource::Persistence, bonus);
-            full_weight += CONTRIB_PERSISTENCE_BONUS;
-            after_diminishing += bonus;
-        }
         full_weight += ev.base;
         after_diminishing += value;
     }
@@ -311,27 +351,47 @@ struct RawEvent {
     base: i64,
     /// 该事件主体此前存在可信失败（且本事件未构成「修正」）→ 计入坚持奖励。
     prior_failure: bool,
+    /// 抗刷递减的**有根身份**：真实学习项 id（§M3-C 反 grind）。
+    ///
+    /// 不同学习项即使同一来源也**不**共享同一条递减计数器。
+    item_id: Option<i64>,
 }
 
 impl RawEvent {
-    fn at(at: &str, source: ContributionSource, seq: i64, base: i64, prior_failure: bool) -> Self {
+    fn at(
+        at: &str,
+        source: ContributionSource,
+        seq: i64,
+        base: i64,
+        prior_failure: bool,
+        item_id: Option<i64>,
+    ) -> Self {
         Self {
             at: Some(at.to_string()),
             source,
             seq,
             base,
             prior_failure,
+            item_id,
         }
     }
 
-    fn no_time(source: ContributionSource, seq: i64, base: i64) -> Self {
+    fn no_time(source: ContributionSource, seq: i64, base: i64, item_id: Option<i64>) -> Self {
         Self {
             at: None,
             source,
             seq,
             base,
             prior_failure: false,
+            item_id,
         }
+    }
+
+    /// 抗刷递减键：来源 + 学习项身份（跨来源天然不同；同来源不同项也不同）。
+    ///
+    /// 这样「同一知识点反复做」会递减，而「不同知识点各自做一遍」**不会**互相挤占递减计数。
+    fn diminishing_key(&self) -> String {
+        format!("{}#{}", self.source.as_str(), self.item_id.unwrap_or(-1))
     }
 }
 

@@ -54,8 +54,7 @@ fn hotfix_03_learning_load_evidence_build_failure_propagates_to_build_snapshot_e
     // 强制真实构建失败：删除 build_learning_load_evidence 依赖的一张表。
     conn.execute_batch("DROP TABLE learning_items").unwrap();
 
-    let res =
-        PlanningReviewRepository::build_snapshot(&conn, profile, None, PERIOD, PERIOD);
+    let res = PlanningReviewRepository::build_snapshot(&conn, profile, None, PERIOD, PERIOD);
 
     assert!(res.is_err(), "build_snapshot 在证据构建失败时必须返回 Err");
     let msg = res.err().unwrap();
@@ -85,7 +84,11 @@ fn hotfix_04_evidence_failure_stops_ai_review_from_starting() {
     );
 
     let running: i64 = conn
-        .query_row("SELECT COUNT(*) FROM planning_reviews WHERE status='running'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM planning_reviews WHERE status='running'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     let waiting: i64 = conn
         .query_row(
@@ -117,5 +120,8 @@ fn hotfix_05_evidence_failure_produces_no_change_set() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(with_cs, 0, "Evidence 失败 → 不得生成任何 ChangeSet（正式 Planning 不变）");
+    assert_eq!(
+        with_cs, 0,
+        "Evidence 失败 → 不得生成任何 ChangeSet（正式 Planning 不变）"
+    );
 }

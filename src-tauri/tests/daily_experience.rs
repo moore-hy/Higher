@@ -36,8 +36,8 @@ use app_lib::learning_state::types::{
     NextActionType, REASON_MICRO_ACTION, REASON_MICRO_UNAVAILABLE,
 };
 use app_lib::learning_state::{
-    build_learning_pack, build_learning_state, build_learning_state_at,
-    build_next_learning_action, MICRO_UNAVAILABLE_REASON, PACK_MAX_ITEMS,
+    build_learning_pack, build_learning_state, build_learning_state_at, build_next_learning_action,
+    MICRO_UNAVAILABLE_REASON, PACK_MAX_ITEMS,
 };
 use app_lib::repository::evaluation::EvaluationRepository;
 use app_lib::repository::goal::GoalRepository;
@@ -114,7 +114,9 @@ fn seed_completed_session(
     minutes: i64,
 ) -> i64 {
     let s = match item_id {
-        Some(i) => StudySessionRepository::new(conn).start_for_item(i, None).unwrap(),
+        Some(i) => StudySessionRepository::new(conn)
+            .start_for_item(i, None)
+            .unwrap(),
         None => StudySessionRepository::new(conn)
             .start_quick(profile_id, None)
             .unwrap(),
@@ -201,7 +203,9 @@ fn ai_row_breakdown(conn: &Connection) -> Vec<(String, i64)> {
 }
 
 /// 「来源 + 动作」标识（DE009 比较用）。
-fn src_act(c: &app_lib::learning_state::types::MicroActionCandidate) -> (String, Option<i64>, String) {
+fn src_act(
+    c: &app_lib::learning_state::types::MicroActionCandidate,
+) -> (String, Option<i64>, String) {
     (c.source_type.clone(), c.source_id, c.action_type.clone())
 }
 
@@ -212,7 +216,16 @@ fn de001_today_task_yields_exactly_one_primary() {
     let conn = setup();
     let p = mk_profile(&conn, "DE001");
     let today = today_local();
-    let t = mk_task(&conn, p, None, "线性代数 · 特征值", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        None,
+        "线性代数 · 特征值",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     let snap = build_learning_state(&conn, p).unwrap();
     let action = build_next_learning_action(&snap, None).unwrap();
@@ -225,7 +238,10 @@ fn de001_today_task_yields_exactly_one_primary() {
 
     // 备选里不得再出现第二个「可执行同一任务」的主推荐语义
     assert!(
-        action.alternates.iter().all(|a| a.execution_payload.task_id != Some(t)),
+        action
+            .alternates
+            .iter()
+            .all(|a| a.execution_payload.task_id != Some(t)),
         "DE001：同一 Task 不得同时作为 Primary 与备选"
     );
     // 非 micro 档位不得携带 micro primitive
@@ -240,7 +256,16 @@ fn de002_three_minutes_never_returns_over_budget_action() {
     let conn = setup();
     let p = mk_profile(&conn, "DE002");
     let today = today_local();
-    mk_task(&conn, p, None, "写一篇 300 词作文", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        None,
+        "写一篇 300 词作文",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     let snap = build_learning_state(&conn, p).unwrap();
     let a = build_next_learning_action(&snap, Some(TimeBudget::Min3)).unwrap();
@@ -248,7 +273,10 @@ fn de002_three_minutes_never_returns_over_budget_action() {
     assert_eq!(a.available_minutes, Some(3));
     assert!(a.estimated_minutes.unwrap() <= 3);
     assert_eq!(a.execution_payload.suggested_minutes, 3);
-    assert!(a.execution_payload.entry_slice, "DE002：超长任务只能给入口切片");
+    assert!(
+        a.execution_payload.entry_slice,
+        "DE002：超长任务只能给入口切片"
+    );
     assert!(!a.micro_action_only, "DE002：3 分钟档不是 micro 档");
     assert_eq!(a.action_type, NextActionType::PlannedTask);
     for alt in &a.alternates {
@@ -265,7 +293,16 @@ fn de003_budget_changes_recommendation_sensibly() {
     let conn = setup();
     let p = mk_profile(&conn, "DE003");
     let today = today_local();
-    mk_task(&conn, p, None, "整理第 3 章笔记", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        None,
+        "整理第 3 章笔记",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     let snap = build_learning_state(&conn, p).unwrap();
 
@@ -314,7 +351,10 @@ fn de004_no_task_but_recent_learning_still_yields_action() {
 
     let snap = build_learning_state(&conn, p).unwrap();
     assert!(snap.today_tasks.is_empty());
-    assert!(!snap.recovery_state.active, "DE004：1 天前学过不算 Recovery");
+    assert!(
+        !snap.recovery_state.active,
+        "DE004：1 天前学过不算 Recovery"
+    );
 
     let a = build_next_learning_action(&snap, None).unwrap();
     assert_eq!(a.action_type, NextActionType::ContinueLast);
@@ -342,7 +382,10 @@ fn de005_cold_start_can_begin_quick_study() {
     assert_eq!(a.action_type, NextActionType::QuickStudy);
     assert_eq!(a.execution_payload.kind, "start_quick");
     assert!(a.execution_payload.task_id.is_none());
-    assert!(a.estimated_minutes.unwrap() > 0, "DE005：冷启动必须能立刻开始");
+    assert!(
+        a.estimated_minutes.unwrap() > 0,
+        "DE005：冷启动必须能立刻开始"
+    );
 }
 
 // =============== DE006 ===============
@@ -376,7 +419,10 @@ fn de006_micro_completion_writes_evidence() {
         ev.prompt_variant.as_deref(),
         Some("self_explain.one_sentence")
     );
-    assert_eq!(ev.duration_seconds, 42, "DE006：Micro duration 必须独立保存");
+    assert_eq!(
+        ev.duration_seconds, 42,
+        "DE006：Micro duration 必须独立保存"
+    );
     assert!(!ev.completed_at.is_empty());
     assert_eq!(micro_count(&conn, p), 1);
 }
@@ -392,8 +438,18 @@ fn de007_micro_never_creates_study_session() {
     assert_eq!(before, 0);
 
     // 三种典型 Micro（含 30 秒 Recall / 1 分钟 Self Explain / Micro Retry）
-    record_micro_action(&conn, p, "learning_item", Some(item), "recall", "done", None, None, 30)
-        .unwrap();
+    record_micro_action(
+        &conn,
+        p,
+        "learning_item",
+        Some(item),
+        "recall",
+        "done",
+        None,
+        None,
+        30,
+    )
+    .unwrap();
     record_micro_action(
         &conn,
         p,
@@ -431,7 +487,16 @@ fn de008_next_learning_state_reads_micro_evidence() {
     let p = mk_profile(&conn, "DE008");
     let item = mk_item(&conn, p, "红黑树");
     let today = today_local();
-    mk_task(&conn, p, Some(item), "复习红黑树", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习红黑树",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     // 完成前：无 Micro 证据
     let before = build_learning_state(&conn, p).unwrap();
@@ -479,11 +544,12 @@ fn de008_next_learning_state_reads_micro_evidence() {
 
     // §4.3：同一个 (来源, 动作) 已完成 → 候选去重
     assert!(
-        after
-            .micro
-            .candidates
-            .iter()
-            .all(|c| src_act(c) != ("learning_item".to_string(), Some(item), "self_explain".to_string())),
+        after.micro.candidates.iter().all(|c| src_act(c)
+            != (
+                "learning_item".to_string(),
+                Some(item),
+                "self_explain".to_string()
+            )),
         "DE008/§4.3：刚完成的 Micro 必须从候选中移除"
     );
 
@@ -516,7 +582,16 @@ fn de009_completed_micro_is_not_mechanically_repeated() {
     let p = mk_profile(&conn, "DE009");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    mk_task(&conn, p, Some(item), "复习编码器", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     seed_completed_session(&conn, p, Some(item), 1, 20);
     let ev = mk_evaluation(&conn, p, item, "编码器回忆测试", "failed");
 
@@ -594,7 +669,16 @@ fn de021_micro_evidence_is_profile_scoped() {
     let b = mk_profile(&conn, "DE021-B");
     let item_a = mk_item(&conn, a, "只有 A 的知识");
     let today = today_local();
-    mk_task(&conn, a, Some(item_a), "A 的任务", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        a,
+        Some(item_a),
+        "A 的任务",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     record_micro_action(
         &conn,
@@ -671,7 +755,9 @@ fn de021_micro_evidence_is_profile_scoped() {
         30
     )
     .is_err());
-    assert!(record_micro_action(&conn, a, "internet", None, "recall", "done", None, None, 30).is_err());
+    assert!(
+        record_micro_action(&conn, a, "internet", None, "recall", "done", None, None, 30).is_err()
+    );
     assert!(record_micro_action(
         &conn,
         a,
@@ -685,8 +771,18 @@ fn de021_micro_evidence_is_profile_scoped() {
     )
     .is_err());
     // source_type=none 但带 source_id → 拒绝
-    assert!(record_micro_action(&conn, a, "none", Some(item_a), "recall", "done", None, None, 30)
-        .is_err());
+    assert!(record_micro_action(
+        &conn,
+        a,
+        "none",
+        Some(item_a),
+        "recall",
+        "done",
+        None,
+        None,
+        30
+    )
+    .is_err());
 }
 
 // =============== DE022 ===============
@@ -697,7 +793,16 @@ fn de022_daily_and_micro_flow_calls_zero_llm() {
     let p = mk_profile(&conn, "DE022");
     let item = mk_item(&conn, p, "组合逻辑");
     let today = today_local();
-    mk_task(&conn, p, Some(item), "组合逻辑练习", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "组合逻辑练习",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     seed_completed_session(&conn, p, Some(item), 1, 15);
     let ev = mk_evaluation(&conn, p, item, "组合逻辑回忆", "failed");
 
@@ -774,7 +879,11 @@ fn de022_daily_and_micro_flow_calls_zero_llm() {
         }
         checked += 1;
     }
-    assert!(checked >= 7, "DE022：learning_state 文件数异常：{}", checked);
+    assert!(
+        checked >= 7,
+        "DE022：learning_state 文件数异常：{}",
+        checked
+    );
 
     // 新增的 micro 模块必须真的在扫描范围内
     assert!(
@@ -791,7 +900,16 @@ fn de_p3_micro_source_ladder_and_zero_llm_templates() {
     let p = mk_profile(&conn, "DE-P3");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     seed_completed_session(&conn, p, Some(item), 1, 20);
     let ev = mk_evaluation(&conn, p, item, "优先编码器回忆", "failed");
 
@@ -840,7 +958,10 @@ fn de_p3_micro_source_ladder_and_zero_llm_templates() {
 
     // 30 秒档下的 Primary 必须是候选第一条（UI 不得重排）
     let a = build_next_learning_action(&snap, Some(TimeBudget::Seconds30)).unwrap();
-    assert_eq!(a.micro_action.as_ref().map(src_act), Some(src_act(&cands[0])));
+    assert_eq!(
+        a.micro_action.as_ref().map(src_act),
+        Some(src_act(&cands[0]))
+    );
 
     // 非 micro 档位不得携带 micro primitive
     for b in [None, Some(TimeBudget::Min3), Some(TimeBudget::Min25)] {
@@ -1016,21 +1137,34 @@ fn de024_forward_migration_from_old_schema_preserves_data() {
     let p = mk_profile(&conn, "DE024");
     let item = mk_item(&conn, p, "旧数据知识");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "旧数据任务", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "旧数据任务",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     let s = seed_completed_session(&conn, p, Some(item), 1, 20);
     let e = mk_evaluation(&conn, p, item, "旧数据验证", "passed");
 
     // 模拟一个「已升到 v031 的库」：移除 v032 与 v033 的表与 ledger 行
     rollback_to_v031(&conn);
     let ver_before: u32 = conn
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(ver_before, 31, "DE024：前置状态必须是 v031");
 
     // 前向迁移
     app_lib::migrations::run_migrations(&conn).unwrap();
     let ver_after: u32 = conn
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(
         ver_after,
@@ -1050,15 +1184,22 @@ fn de024_forward_migration_from_old_schema_preserves_data() {
         assert_eq!(n, expect, "DE024：前向迁移后 {} 数据丢失", label);
     }
     assert!(TaskRepository::new(&conn).get(t).unwrap().is_some());
-    assert!(StudySessionRepository::new(&conn)
-        .get(s)
-        .unwrap()
-        .is_some());
+    assert!(StudySessionRepository::new(&conn).get(s).unwrap().is_some());
     assert!(EvaluationRepository::new(&conn).get(e).unwrap().is_some());
 
     // 迁移后 Micro 闭环立刻可用（§5.2：Migration 与 Reader 同阶段完成）
-    record_micro_action(&conn, p, "learning_item", Some(item), "recall", "done", None, None, 30)
-        .unwrap();
+    record_micro_action(
+        &conn,
+        p,
+        "learning_item",
+        Some(item),
+        "recall",
+        "done",
+        None,
+        None,
+        30,
+    )
+    .unwrap();
     let snap = build_learning_state_at(&conn, p, &today).unwrap();
     assert_eq!(snap.micro.recent_micro_actions.len(), 1);
 
@@ -1122,7 +1263,10 @@ fn de025_micro_migration_only_adds_one_table() {
         added.contains(&"micro_learning_events".to_string()),
         "DE025：v032 必须且只能新增 micro_learning_events 这一张表（除后续迁移外）"
     );
-    assert_eq!(tables_final, tables_with_micro, "DE025：表集合必须收敛回同一状态");
+    assert_eq!(
+        tables_final, tables_with_micro,
+        "DE025：表集合必须收敛回同一状态"
+    );
 
     // 历史表结构未被改动（尤其：Micro duration 没有被塞进 evaluations）
     assert_eq!(
@@ -1148,7 +1292,10 @@ fn de025_micro_migration_only_adds_one_table() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(name31, "knowledge_canvas", "DE025：历史 ledger 名称必须原样保留");
+    assert_eq!(
+        name31, "knowledge_canvas",
+        "DE025：历史 ledger 名称必须原样保留"
+    );
     let name32: String = conn
         .query_row(
             "SELECT name FROM schema_migrations WHERE version = 32",
@@ -1225,7 +1372,10 @@ fn ar01_cold_profile_yields_no_fake_micro() {
 
     // 普通动作仍然可用（绝不因为 Micro 不可用就把用户卡住）
     assert_eq!(a.execution_payload.kind, "start_quick");
-    assert!(a.estimated_minutes.unwrap() >= 1, "AR-01：普通动作必须可执行");
+    assert!(
+        a.estimated_minutes.unwrap() >= 1,
+        "AR-01：普通动作必须可执行"
+    );
     assert_eq!(a.available_minutes, Some(3));
 }
 
@@ -1237,7 +1387,16 @@ fn ar02_no_grounded_candidate_means_micro_absent() {
     let p = mk_profile(&conn, "AR-02");
     let today = today_local();
     // 任务不绑 LearningItem；快速学习 Session 也不绑 LearningItem
-    mk_task(&conn, p, None, "写一篇 300 词作文", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        None,
+        "写一篇 300 词作文",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     seed_completed_session(&conn, p, None, 1, 20);
 
     let snap = build_learning_state(&conn, p).unwrap();
@@ -1273,7 +1432,16 @@ fn ar03_micro_unavailable_path_makes_zero_cloud_calls() {
     let conn = setup();
     let p = mk_profile(&conn, "AR-03");
     let today = today_local();
-    mk_task(&conn, p, None, "无来源任务", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        None,
+        "无来源任务",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     let before: Vec<(String, i64)> = ai_row_breakdown(&conn);
     // 全档位各打一次：Micro 不可用时的降级必须同样 0 Cloud
@@ -1293,13 +1461,14 @@ fn ar03_micro_unavailable_path_makes_zero_cloud_calls() {
         "AR-03：Micro unavailable 降级路径产生了 ai_* 写入（可疑 Cloud 调用）"
     );
     // 迁移会种 1 行 ai_provider_profiles（默认 provider），因此只判定**增量**为 0
-    let delta: i64 = after.iter().map(|(_, c)| *c).sum::<i64>()
-        - before.iter().map(|(_, c)| *c).sum::<i64>();
+    let delta: i64 =
+        after.iter().map(|(_, c)| *c).sum::<i64>() - before.iter().map(|(_, c)| *c).sum::<i64>();
     assert_eq!(delta, 0, "AR-03：Cloud calls 增量必须为 0");
 
     // 静态：learning_state 全模块不得出现 provider / runtime / agent 符号
     let mut checked = 0;
-    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src/learning_state")).unwrap()
+    for entry in
+        std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src/learning_state")).unwrap()
     {
         let path = entry.unwrap().path();
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
@@ -1312,7 +1481,13 @@ fn ar03_micro_unavailable_path_makes_zero_cloud_calls() {
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        for forbidden in ["provider", "ai_runtime", "AiRuntime", "agent_turn", "complete_chat"] {
+        for forbidden in [
+            "provider",
+            "ai_runtime",
+            "AiRuntime",
+            "agent_turn",
+            "complete_chat",
+        ] {
             assert!(
                 !code.contains(forbidden),
                 "AR-03：{:?} 不得引用 LLM 符号 {}",
@@ -1332,7 +1507,16 @@ fn ar04_task_micro_keeps_task_source() {
     let p = mk_profile(&conn, "AR-04");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     let snap = build_learning_state(&conn, p).unwrap();
     let c = snap
@@ -1386,7 +1570,10 @@ fn ar05_session_micro_keeps_session_source() {
         .find(|c| c.action_type == "review_recent_concept")
         .expect("AR-05：最近 Session 绑定 Knowledge Item → 必须产出 review_recent_concept 候选");
 
-    assert_eq!(c.source_type, "session", "M0-B：Session 触发必须保留 session source");
+    assert_eq!(
+        c.source_type, "session",
+        "M0-B：Session 触发必须保留 session source"
+    );
     assert_eq!(c.source_id, Some(sid), "M0-B：source_id 必须是 session_id");
     assert_eq!(c.subject_learning_item_id, Some(item));
     assert_eq!(c.subject_label.as_deref(), Some("红黑树旋转"));
@@ -1425,7 +1612,11 @@ fn ar06_evaluation_micro_keeps_evaluation_source() {
         .expect("AR-06：最近错误 Evaluation → 必须产出 retry_recent_error 候选");
 
     assert_eq!(c.source_type, "evaluation");
-    assert_eq!(c.source_id, Some(ev), "M0-B：source_id 必须是 evaluation_id");
+    assert_eq!(
+        c.source_id,
+        Some(ev),
+        "M0-B：source_id 必须是 evaluation_id"
+    );
     assert_eq!(c.subject_learning_item_id, Some(item));
 
     let rec = record_micro_action(
@@ -1454,13 +1645,26 @@ fn ar07_optional_subject_never_overwrites_trigger_source() {
     let p = mk_profile(&conn, "AR-07");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     let sid = seed_completed_session(&conn, p, Some(item), 1, 20);
     let ev = mk_evaluation(&conn, p, item, "优先编码器回忆", "failed");
 
     let snap = build_learning_state(&conn, p).unwrap();
     let cands = &snap.micro.candidates;
-    assert!(cands.len() >= 3, "AR-07：三种触发都应产出候选，实际 {}", cands.len());
+    assert!(
+        cands.len() >= 3,
+        "AR-07：三种触发都应产出候选，实际 {}",
+        cands.len()
+    );
 
     for c in cands {
         // 硬不变量：learning_item source 只能来自「直接 item 触发」的 recall
@@ -1491,8 +1695,14 @@ fn ar07_optional_subject_never_overwrites_trigger_source() {
             .unwrap_or_else(|| panic!("AR-07：缺少 {} 候选", a));
         (c.source_type.clone(), c.source_id)
     };
-    assert_eq!(by_action("retry_recent_error"), ("evaluation".to_string(), Some(ev)));
-    assert_eq!(by_action("review_recent_concept"), ("session".to_string(), Some(sid)));
+    assert_eq!(
+        by_action("retry_recent_error"),
+        ("evaluation".to_string(), Some(ev))
+    );
+    assert_eq!(
+        by_action("review_recent_concept"),
+        ("session".to_string(), Some(sid))
+    );
     assert_eq!(by_action("self_explain"), ("task".to_string(), Some(t)));
 
     // 每条候选都能经真实写路径落库（多态来源归属校验全部通过）
@@ -1521,8 +1731,14 @@ fn ar07_optional_subject_never_overwrites_trigger_source() {
             .iter()
             .find(|c| c.action_type == e.action_type)
             .expect("AR-07：落库行必须能对应回候选");
-        assert_eq!(e.source_type, matched.source_type, "M0-B：落库后 source_type 被改写");
-        assert_eq!(e.source_id, matched.source_id, "M0-B：落库后 source_id 被改写");
+        assert_eq!(
+            e.source_type, matched.source_type,
+            "M0-B：落库后 source_type 被改写"
+        );
+        assert_eq!(
+            e.source_id, matched.source_id,
+            "M0-B：落库后 source_id 被改写"
+        );
     }
 }
 
@@ -1534,7 +1750,16 @@ fn ar08_ar09_skipped_stays_in_history_but_never_touches() {
     let p = mk_profile(&conn, "AR-08");
     let item = mk_item(&conn, p, "进程调度");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "复习进程调度", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习进程调度",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     // 前置条件：task 触发的候选真实存在
     let before = build_learning_state(&conn, p).unwrap();
@@ -1560,7 +1785,11 @@ fn ar08_ar09_skipped_stays_in_history_but_never_touches() {
 
     let snap = build_learning_state(&conn, p).unwrap();
     // AR-08：历史必须保留（skipped 是真实发生过的用户行为）
-    assert_eq!(snap.micro.recent_micro_actions.len(), 1, "AR-08：skipped 必须留在历史");
+    assert_eq!(
+        snap.micro.recent_micro_actions.len(),
+        1,
+        "AR-08：skipped 必须留在历史"
+    );
     assert_eq!(snap.micro.recent_micro_actions[0].result, "skipped");
     assert_eq!(snap.micro.recent_micro_actions[0].source_type, "task");
     assert_eq!(snap.micro.recent_micro_actions[0].source_id, Some(t));
@@ -1580,7 +1809,11 @@ fn ar08_ar09_skipped_stays_in_history_but_never_touches() {
     assert!(
         snap.micro.candidates.iter().any(|c| src_act(c) == key),
         "AR-11：skipped 不得把候选去重掉，实际候选：{:?}",
-        snap.micro.candidates.iter().map(src_act).collect::<Vec<_>>()
+        snap.micro
+            .candidates
+            .iter()
+            .map(src_act)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -1591,7 +1824,16 @@ fn ar10_skipped_does_not_raise_next_action_recency() {
     let p = mk_profile(&conn, "AR-10");
     let item = mk_item(&conn, p, "进程调度");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "复习进程调度", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习进程调度",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     // 记录一条 skipped（用户跳过了这条 task 触发的 Micro）
     record_micro_action(
@@ -1647,7 +1889,11 @@ fn ar12_done_and_partial_still_touch_and_dedupe() {
     let sid = seed_completed_session(&conn, p, Some(item), 1, 20);
 
     let before = build_learning_state(&conn, p).unwrap();
-    let key = ("session".to_string(), Some(sid), "review_recent_concept".to_string());
+    let key = (
+        "session".to_string(),
+        Some(sid),
+        "review_recent_concept".to_string(),
+    );
     assert!(
         before.micro.candidates.iter().any(|c| src_act(c) == key),
         "AR-12：前置条件 —— 候选必须存在"
@@ -1668,7 +1914,11 @@ fn ar12_done_and_partial_still_touch_and_dedupe() {
     .unwrap();
 
     let after = build_learning_state(&conn, p).unwrap();
-    assert_eq!(after.micro.recent_touched_sources.len(), 1, "AR-12：partial 必须 touch");
+    assert_eq!(
+        after.micro.recent_touched_sources.len(),
+        1,
+        "AR-12：partial 必须 touch"
+    );
     let touch = &after.micro.recent_touched_sources[0];
     assert_eq!(touch.source_type, "session");
     assert_eq!(touch.source_id, Some(sid));
@@ -1700,7 +1950,10 @@ fn ar12_done_and_partial_still_touch_and_dedupe() {
         .iter()
         .find(|t| t.source_type == "session" && t.source_id == Some(sid))
         .expect("AR-12：done 必须 touch");
-    assert_eq!(touch2.event_count, 2, "AR-12：同一来源的 done/partial 必须聚合计数");
+    assert_eq!(
+        touch2.event_count, 2,
+        "AR-12：同一来源的 done/partial 必须聚合计数"
+    );
     assert!(
         after2.micro.candidates.iter().all(|c| src_act(c) != key2),
         "AR-12：done 必须去重"
@@ -1808,7 +2061,16 @@ fn ar_m0b_source_truth_survives_round_trip() {
     let p = mk_profile(&conn, "M0-B-ROUND");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     // 先做一条 task 触发的 done Micro
     record_micro_action(
@@ -1942,6 +2204,16 @@ fn assert_item_grounded(
                 assert_eq!(n, 1, "{label}：Review 来源必须存在且属于本档案");
             }
         }
+        ActionSource::Evaluation { evaluation_id } => {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM evaluations WHERE id = ?1 AND profile_id = ?2",
+                    params![evaluation_id, profile_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{label}：Evaluation 来源必须存在且属于本档案");
+        }
     }
 }
 
@@ -1952,8 +2224,26 @@ fn lp01_lp02_pack_is_finite_and_grounded() {
     let p = mk_profile(&conn, "LP-01");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
-    mk_task(&conn, p, None, "写一篇 300 词作文", &today, Some("10:00"), Some(20), "normal");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
+    mk_task(
+        &conn,
+        p,
+        None,
+        "写一篇 300 词作文",
+        &today,
+        Some("10:00"),
+        Some(20),
+        "normal",
+    );
     seed_completed_session(&conn, p, Some(item), 1, 20);
     mk_evaluation(&conn, p, item, "优先编码器回忆", "failed");
 
@@ -1981,11 +2271,13 @@ fn lp01_lp02_pack_is_finite_and_grounded() {
         assert!(pack.profile_id == p);
         assert_eq!(pack.local_date, snap.local_date);
         for (i, it) in pack.items.iter().enumerate() {
-            assert_item_grounded(&conn, p, it, &format!("LP-02 budget={:?} idx={}", budget, i));
-            assert!(
-                !it.title.trim().is_empty(),
-                "LP-02：条目必须有可展示标题"
+            assert_item_grounded(
+                &conn,
+                p,
+                it,
+                &format!("LP-02 budget={:?} idx={}", budget, i),
             );
+            assert!(!it.title.trim().is_empty(), "LP-02：条目必须有可展示标题");
         }
     }
 }
@@ -1997,7 +2289,16 @@ fn lp03_lp05_pack_is_deterministic_and_zero_cloud() {
     let p = mk_profile(&conn, "LP-03");
     let item = mk_item(&conn, p, "红黑树");
     let today = today_local();
-    mk_task(&conn, p, Some(item), "复习红黑树", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习红黑树",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     seed_completed_session(&conn, p, Some(item), 1, 20);
     mk_evaluation(&conn, p, item, "红黑树回忆", "partial");
 
@@ -2020,8 +2321,16 @@ fn lp03_lp05_pack_is_deterministic_and_zero_cloud() {
     let a = build_learning_pack(&snap_a, Some(TimeBudget::Min10)).unwrap();
     let snap_b = build_learning_state(&conn, p).unwrap();
     let b = build_learning_pack(&snap_b, Some(TimeBudget::Min10)).unwrap();
-    assert_eq!(key(&a), key(&b), "LP-03：同一状态必须得到同一 Pack（含顺序）");
-    assert_eq!(ai_row_breakdown(&conn), before, "LP-05：Pack 不得产生任何 ai_* 写入");
+    assert_eq!(
+        key(&a),
+        key(&b),
+        "LP-03：同一状态必须得到同一 Pack（含顺序）"
+    );
+    assert_eq!(
+        ai_row_breakdown(&conn),
+        before,
+        "LP-05：Pack 不得产生任何 ai_* 写入"
+    );
 }
 
 /// LP-04：同一 (来源, 动作) 与同一语义主体都不得在 Pack 内重复。
@@ -2033,7 +2342,16 @@ fn lp04_pack_has_no_duplicate_source_action_or_subject() {
     let today = today_local();
     // 同一 Knowledge Item 同时被 Task / Session / Evaluation 三种来源引用 →
     // 三个候选在「来源」上不同，但属于**同一语义主体**，Pack 内最多只能出现一次。
-    mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     seed_completed_session(&conn, p, Some(item), 1, 20);
     mk_evaluation(&conn, p, item, "优先编码器回忆", "failed");
 
@@ -2103,7 +2421,11 @@ fn lp06_pack_is_not_a_second_recommendation_engine() {
     assert!(canonical.contains("pub(crate) fn build_ranked_candidates"));
     // 0 LLM
     for forbidden in ["provider", "ai_runtime", "complete_chat"] {
-        assert!(!code.contains(forbidden), "LP-06/§14：Pack 不得引用 {}", forbidden);
+        assert!(
+            !code.contains(forbidden),
+            "LP-06/§14：Pack 不得引用 {}",
+            forbidden
+        );
     }
 }
 
@@ -2114,7 +2436,16 @@ fn rc01_done_action_disappears_during_dedupe_window() {
     let p = mk_profile(&conn, "RC-01");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     let snap = build_learning_state(&conn, p).unwrap();
     let pack = build_learning_pack(&snap, Some(TimeBudget::Seconds30)).unwrap();
@@ -2142,11 +2473,15 @@ fn rc01_done_action_disappears_during_dedupe_window() {
     let snap2 = build_learning_state(&conn, p).unwrap();
     let pack2 = build_learning_pack(&snap2, Some(TimeBudget::Seconds30)).unwrap();
     assert!(
-        pack2.items.iter().all(|i| i
-            .micro_action
-            .as_ref()
-            .map(|x| (x.source_type.clone(), x.source_id, x.action_type.clone()))
-            != Some((m.source_type.clone(), m.source_id, m.action_type.clone()))),
+        pack2.items.iter().all(|i| i.micro_action.as_ref().map(|x| (
+            x.source_type.clone(),
+            x.source_id,
+            x.action_type.clone()
+        )) != Some((
+            m.source_type.clone(),
+            m.source_id,
+            m.action_type.clone()
+        ))),
         "RC-01：刚完成的 Micro 必须已从新 Pack 中消失"
     );
 }
@@ -2159,7 +2494,16 @@ fn rc02_rc03_rc04_partial_counts_skipped_does_not_evidence_visible() {
     let p = mk_profile(&conn, "RC-02");
     let item = mk_item(&conn, p, "进程调度");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "复习进程调度", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习进程调度",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     // 起点：无 Micro 证据
     let base = build_learning_state(&conn, p).unwrap();
@@ -2167,8 +2511,15 @@ fn rc02_rc03_rc04_partial_counts_skipped_does_not_evidence_visible() {
 
     // --- RC-03：skipped 不得改变学习事实 ---
     record_micro_action(
-        &conn, p, "task", Some(t), "self_explain", "skipped",
-        Some("self_explain.one_sentence"), None, 0,
+        &conn,
+        p,
+        "task",
+        Some(t),
+        "self_explain",
+        "skipped",
+        Some("self_explain.one_sentence"),
+        None,
+        0,
     )
     .unwrap();
     let after_skip = build_learning_state(&conn, p).unwrap();
@@ -2177,7 +2528,10 @@ fn rc02_rc03_rc04_partial_counts_skipped_does_not_evidence_visible() {
         0,
         "RC-03：skipped 不得产生「最近接触」"
     );
-    assert_eq!(after_skip.today.actual_minutes, 0, "RC-03：不得污染今日学习分钟");
+    assert_eq!(
+        after_skip.today.actual_minutes, 0,
+        "RC-03：不得污染今日学习分钟"
+    );
     let act_skip = build_next_learning_action(&after_skip, Some(TimeBudget::Min25)).unwrap();
     assert!(
         !act_skip.reasons.join(" | ").contains("Micro 动作"),
@@ -2186,8 +2540,15 @@ fn rc02_rc03_rc04_partial_counts_skipped_does_not_evidence_visible() {
 
     // --- RC-02 / RC-04：partial 必须 touch 且在新快照中可见 ---
     record_micro_action(
-        &conn, p, "task", Some(t), "self_explain", "partial",
-        Some("self_explain.one_sentence"), Some("只说了一半"), 20,
+        &conn,
+        p,
+        "task",
+        Some(t),
+        "self_explain",
+        "partial",
+        Some("self_explain.one_sentence"),
+        Some("只说了一半"),
+        20,
     )
     .unwrap();
     let after_partial = build_learning_state(&conn, p).unwrap();
@@ -2201,7 +2562,10 @@ fn rc02_rc03_rc04_partial_counts_skipped_does_not_evidence_visible() {
         1,
         "RC-02：partial 必须算一次真实接触"
     );
-    assert_eq!(after_partial.micro.recent_touched_sources[0].last_result, "partial");
+    assert_eq!(
+        after_partial.micro.recent_touched_sources[0].last_result,
+        "partial"
+    );
     let act_partial = build_next_learning_action(&after_partial, Some(TimeBudget::Min25)).unwrap();
     assert!(
         act_partial.reasons.join(" | ").contains("部分完成"),
@@ -2225,7 +2589,16 @@ fn rc05_recompute_reads_fresh_backend_state() {
     let p = mk_profile(&conn, "RC-05");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
+    mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     mk_evaluation(&conn, p, item, "优先编码器回忆测试", "failed");
 
     let snap1 = build_learning_state(&conn, p).unwrap();
@@ -2235,8 +2608,15 @@ fn rc05_recompute_reads_fresh_backend_state() {
     // 完成它 → 落 Evidence
     let m = first.micro_action.clone().unwrap();
     record_micro_action(
-        &conn, p, &m.source_type, m.source_id, &m.action_type, "done",
-        Some(&m.prompt_variant), None, 30,
+        &conn,
+        p,
+        &m.source_type,
+        m.source_id,
+        &m.action_type,
+        "done",
+        Some(&m.prompt_variant),
+        None,
+        30,
     )
     .unwrap();
 
@@ -2257,8 +2637,16 @@ fn rc05_recompute_reads_fresh_backend_state() {
     let pack1 = build_learning_pack(&snap1, Some(TimeBudget::Seconds30)).unwrap();
     let pack2 = build_learning_pack(&snap2, Some(TimeBudget::Seconds30)).unwrap();
     assert_ne!(
-        pack1.items.iter().map(|i| i.source_action_key()).collect::<Vec<_>>(),
-        pack2.items.iter().map(|i| i.source_action_key()).collect::<Vec<_>>(),
+        pack1
+            .items
+            .iter()
+            .map(|i| i.source_action_key())
+            .collect::<Vec<_>>(),
+        pack2
+            .items
+            .iter()
+            .map(|i| i.source_action_key())
+            .collect::<Vec<_>>(),
         "RC-05：Pack 必须随新 Evidence 改变"
     );
 }
@@ -2272,7 +2660,16 @@ fn m1c_micro_formal_session_anchor_priority() {
     let p = mk_profile(&conn, "M1C");
     let item = mk_item(&conn, p, "优先编码器");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "复习优先编码器", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习优先编码器",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
     let sid = seed_completed_session(&conn, p, Some(item), 1, 20);
     let ev = mk_evaluation(&conn, p, item, "优先编码器回忆", "failed");
 
@@ -2315,11 +2712,25 @@ fn m1c_micro_formal_session_anchor_priority() {
     // 冷档案：无任何锚点 → Quick（绝不伪造一个 Task/Item）
     let cold = mk_profile(&conn, "M1C-COLD");
     let snap_cold = build_learning_state(&conn, cold).unwrap();
-    assert!(snap_cold.micro.candidates.is_empty(), "M1-C：冷档案无 Micro 候选");
+    assert!(
+        snap_cold.micro.candidates.is_empty(),
+        "M1-C：冷档案无 Micro 候选"
+    );
 
     // Session 绑定 Task 时 → Task 优先于 LearningItem
-    let t2 = mk_task(&conn, p, Some(item), "第二次练习", &today, Some("11:00"), Some(15), "normal");
-    let s2 = StudySessionRepository::new(&conn).start_for_task(p, t2).unwrap();
+    let t2 = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "第二次练习",
+        &today,
+        Some("11:00"),
+        Some(15),
+        "normal",
+    );
+    let s2 = StudySessionRepository::new(&conn)
+        .start_for_task(p, t2)
+        .unwrap();
     conn.execute(
         "UPDATE study_sessions SET status='completed', ended_at=datetime('now','-1 hours'),
             duration_seconds=900 WHERE id = ?1",
@@ -2339,7 +2750,11 @@ fn m1c_micro_formal_session_anchor_priority() {
         FormalSessionAnchor::Task { task_id: t2 },
         "M1-C：Session 绑定任务时，Task 锚点优先于 LearningItem"
     );
-    assert_eq!(session_cand.source_id, Some(s2.id), "M1-C：trigger source 仍是 session");
+    assert_eq!(
+        session_cand.source_id,
+        Some(s2.id),
+        "M1-C：trigger source 仍是 session"
+    );
     let _ = ev;
 }
 
@@ -2350,14 +2765,27 @@ fn m1c_micro_duration_never_merges_into_formal_session() {
     let p = mk_profile(&conn, "M1C-DUR");
     let item = mk_item(&conn, p, "红黑树");
     let today = today_local();
-    let t = mk_task(&conn, p, Some(item), "复习红黑树", &today, Some("09:00"), Some(25), "core");
+    let t = mk_task(
+        &conn,
+        p,
+        Some(item),
+        "复习红黑树",
+        &today,
+        Some("09:00"),
+        Some(25),
+        "core",
+    );
 
     let before = session_count(&conn, p);
     // 连续做 3 次 Micro（合计 90 秒）
     for (action, dur) in [("recall", 30), ("recall", 30), ("recall", 30)] {
         record_micro_action(&conn, p, "task", Some(t), action, "done", None, None, dur).unwrap();
     }
-    assert_eq!(session_count(&conn, p), before, "§4.5：Micro 绝不创建 StudySession");
+    assert_eq!(
+        session_count(&conn, p),
+        before,
+        "§4.5：Micro 绝不创建 StudySession"
+    );
 
     let snap = build_learning_state(&conn, p).unwrap();
     assert_eq!(
@@ -2366,7 +2794,9 @@ fn m1c_micro_duration_never_merges_into_formal_session() {
     );
 
     // 真正从 Micro 进入正式学习：走既有生产入口（start_for_task）后才有正式分钟
-    let s = StudySessionRepository::new(&conn).start_for_task(p, t).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start_for_task(p, t)
+        .unwrap();
     conn.execute(
         "UPDATE study_sessions SET status='completed', duration_seconds=600 WHERE id = ?1",
         params![s.id],
@@ -2392,10 +2822,17 @@ fn m1e_cold_start_three_minute_quick_study_always_available() {
 
     for minutes in [TimeBudget::Min3, TimeBudget::Min10, TimeBudget::Min25] {
         let a = build_next_learning_action(&snap, Some(minutes)).unwrap();
-        assert_eq!(a.action_type, NextActionType::QuickStudy, "M1-E：冷启动只能快速学习");
+        assert_eq!(
+            a.action_type,
+            NextActionType::QuickStudy,
+            "M1-E：冷启动只能快速学习"
+        );
         assert_eq!(a.execution_payload.kind, "start_quick");
         assert_eq!(a.estimated_minutes, Some(minutes.minutes()));
-        assert!(a.estimated_minutes.unwrap() >= 3, "M1-E：必须能立刻开始 ≥3 分钟");
+        assert!(
+            a.estimated_minutes.unwrap() >= 3,
+            "M1-E：必须能立刻开始 ≥3 分钟"
+        );
         assert!(!a.micro_action_only);
         assert!(a.micro_action.is_none(), "M1-E：冷启动不得伪造 Micro");
     }
@@ -2406,7 +2843,9 @@ fn m1e_cold_start_three_minute_quick_study_always_available() {
     assert!(a.estimated_minutes.unwrap() > 0);
 
     // 3 分钟档下必须真的能开出一条真实 Session（走既有生产入口）
-    let s = StudySessionRepository::new(&conn).start_quick(p, None).unwrap();
+    let s = StudySessionRepository::new(&conn)
+        .start_quick(p, None)
+        .unwrap();
     assert_eq!(s.status, "active");
     assert_eq!(s.profile_id, p);
 }

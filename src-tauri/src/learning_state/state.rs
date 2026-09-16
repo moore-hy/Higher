@@ -204,8 +204,7 @@ pub fn build_learning_state_at(
     // 只读 + deterministic + 0 LLM；复用本函数已取得的 `report.tasks` 作为「今日 Task」
     // 真相（不另立一套口径），故**必须先于** `report.tasks` 被 move 进快照。
     // 读取失败同样显式向上传播（§0.1「不得静默」）。
-    let contribution =
-        build_meaningful_contribution(conn, profile_id, today, &report.tasks)?;
+    let contribution = build_meaningful_contribution(conn, profile_id, today, &report.tasks)?;
 
     // ---- micro：PHASE 3 / 4 的统一投影（Micro Event Store + 既有事实，只读）----
     // 必须在 `report.tasks` / `recent_sessions` 被 move 进快照**之前**构建。

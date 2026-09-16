@@ -500,12 +500,9 @@ impl<'a> PlanningReviewRepository<'a> {
         // 重要边界：`build_learning_load_evidence` 在**数据为空**时仍返回 `Ok(...)`（空聚合），
         // 只有**真实错误**才返回 `Err`。"Evidence 缺失 ≠ 用户没有学习"——本分支只拦截真实失败，
         // 不拦截空数据。
-        let learning_load_evidence = crate::ai::learning_load::build_learning_load_evidence(
-            conn,
-            profile_id,
-            period_end,
-        )
-        .map_err(|e| format!("学习证据读取失败，请重试。({e})"))?;
+        let learning_load_evidence =
+            crate::ai::learning_load::build_learning_load_evidence(conn, profile_id, period_end)
+                .map_err(|e| format!("学习证据读取失败，请重试。({e})"))?;
         let learning_load_evidence = serde_json::to_value(learning_load_evidence)
             .map_err(|e| format!("学习证据读取失败，请重试。({e})"))?;
         let snapshot = serde_json::json!({

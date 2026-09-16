@@ -21,8 +21,7 @@ use app_lib::companion::{
     build_companion_state, build_companion_state_at, derive_behavior, get_companion_learning_nudge,
     get_companion_learning_nudge_at, interact_companion, interact_companion_at,
     list_companion_memories, BehaviorState, CompanionRepository, InteractionKind,
-    NUDGE_VISIT_GAP_MINUTES, READINESS_MEDIUM_MIN, RECENT_INTERACTION_MINUTES,
-    RESTING_GAP_MINUTES,
+    NUDGE_VISIT_GAP_MINUTES, READINESS_MEDIUM_MIN, RECENT_INTERACTION_MINUTES, RESTING_GAP_MINUTES,
 };
 use app_lib::learning_state::date::today_local;
 use app_lib::learning_state::micro::record_micro_action;
@@ -61,23 +60,30 @@ fn mk_item(conn: &Connection, profile_id: i64, name: &str) -> i64 {
 }
 
 fn utc_ago(conn: &Connection, modifiers: &str) -> String {
-    conn.query_row("SELECT datetime('now', ?1)", params![modifiers], |r| r.get(0))
-        .unwrap()
+    conn.query_row("SELECT datetime('now', ?1)", params![modifiers], |r| {
+        r.get(0)
+    })
+    .unwrap()
 }
 
 /// 本档案在**学习表**上的总行数（CS-03 / CS-05 / CS-06 的取证口径）。
 fn learning_row_count(conn: &Connection, profile_id: i64) -> i64 {
-    ["tasks", "study_sessions", "evaluations", "micro_learning_events"]
-        .iter()
-        .map(|t| {
-            conn.query_row(
-                &format!("SELECT COUNT(*) FROM {} WHERE profile_id = ?1", t),
-                params![profile_id],
-                |r| r.get::<_, i64>(0),
-            )
-            .unwrap()
-        })
-        .sum()
+    [
+        "tasks",
+        "study_sessions",
+        "evaluations",
+        "micro_learning_events",
+    ]
+    .iter()
+    .map(|t| {
+        conn.query_row(
+            &format!("SELECT COUNT(*) FROM {} WHERE profile_id = ?1", t),
+            params![profile_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+    })
+    .sum()
 }
 
 fn ai_row_count(conn: &Connection) -> i64 {
@@ -239,7 +245,10 @@ fn cs03_app_open_alone_gives_no_learning_reward() {
 
     // 就绪度仍必须是 NOT_READY（远征不可用）
     let st = build_companion_state(&conn, p).unwrap();
-    assert_eq!(st.readiness, app_lib::companion::ExpeditionReadiness::NotReady);
+    assert_eq!(
+        st.readiness,
+        app_lib::companion::ExpeditionReadiness::NotReady
+    );
     assert!(st.available_durations.is_empty());
 
     assert_eq!(
@@ -260,7 +269,15 @@ fn cs04_nudge_comes_from_canonical_next_action() {
 
     // 今日有一个带学习关系的核心任务 → canonical Primary 指向它
     let t = TaskRepository::new(&conn)
-        .create_for_profile(p, None, "今天的主线任务", Some(today.as_str()), None, Some(i), None)
+        .create_for_profile(
+            p,
+            None,
+            "今天的主线任务",
+            Some(today.as_str()),
+            None,
+            Some(i),
+            None,
+        )
         .unwrap();
 
     let snap = build_learning_state(&conn, p).unwrap();
@@ -513,7 +530,13 @@ fn cs10_state_machine_priority_is_locked() {
     );
     // 互动太久之前 → 不算「刚刚互动」
     assert_eq!(
-        derive_behavior(false, false, false, 40, Some(RECENT_INTERACTION_MINUTES * 60 + 1)),
+        derive_behavior(
+            false,
+            false,
+            false,
+            40,
+            Some(RECENT_INTERACTION_MINUTES * 60 + 1)
+        ),
         BehaviorState::Curious
     );
 }

@@ -72,10 +72,11 @@ pub const SUPPORT_GUIDED: u8 = 2;
 
 /// §M2-E：support 0（与自由回忆同一件事，故不额外附加文案）。
 pub const SUPPORT_0_TEXT: &str = "不看笔记，先回忆关键结论。";
-/// §M2-E：support 1。
-pub const SUPPORT_1_TEXT: &str = "先看一个关键词提示，再回忆关键结论。";
-/// §M2-E：support 2。
-pub const SUPPORT_2_TEXT: &str = "先给出两个候选或一句上下文，先选或补全，之后再尝试自由回忆。";
+/// §M2-E：support 1 —— 诚实可执行回退：缩小范围（**不**承诺并不存在的关键词提示）。
+pub const SUPPORT_1_TEXT: &str = "先把范围缩小到要点，再尝试自由回忆。";
+/// §M2-E：support 2 —— 诚实可执行回退：先识别关键结论 + 冷却，
+/// **不**承诺并不存在的「候选 / 上下文」。
+pub const SUPPORT_2_TEXT: &str = "先识别关键结论再自由回忆，中间可稍微冷却、不要连续硬磕。";
 
 /// §M2-G：允许对用户说的话（只陈述事实 + 下一步，不做羞辱式播报）。
 pub const FRICTION_NOTICE_TITLE: &str = "这个点最近反复卡住了。";
@@ -134,22 +135,7 @@ pub fn build_friction_state(
 
     // 确定性选取「当前摩擦主体」：
     // 等级 → 失败数 → 连续失败 → 部分失败 → 最近时间 → id 升序
-    let mut subjects: Vec<i64> = acc.keys().copied().collect();
-    subjects.sort_by(|x, y| {
-        let ax = &acc[x];
-        let ay = &acc[y];
-        level_of(ax)
-            .rank()
-            .cmp(&level_of(ay).rank())
-            .then(ay.failed.cmp(&ax.failed))
-            .then(ay.consecutive_failed.cmp(&ax.consecutive_failed))
-            .then(ay.partial.cmp(&ax.partial))
-            .then(ay.latest_at.cmp(&ax.latest_at))
-            .then(x.cmp(y))
-            .reverse()
-    });
-
-    let subject_id = subjects[0];
+    let subject_id = select_friction_subject(&acc).expect("acc 非空：前面已 early-return");
     let a = &acc[&subject_id];
     let level = level_of(a);
 
@@ -243,6 +229,30 @@ fn level_of(a: &SubjectAccum) -> FrictionLevel {
     }
 }
 
+/// §M2-D：确定性选取「当前摩擦主体」的**单一显式比较器**。
+///
+/// 方向全部就地写明，**不使用** final `.reverse()` —— 后者会把已经反向的 tie-break
+/// 连同主排序一起翻转，导致「更少失败 / 更旧证据 / 更大 id」被优先，违背锁定意图。
+///
+/// 顺序（从高到低）：等级 DESC → 失败数 DESC → 连续失败 DESC → 部分失败 DESC
+/// → 最近时间 DESC → id ASC。
+fn select_friction_subject(acc: &BTreeMap<i64, SubjectAccum>) -> Option<i64> {
+    let mut subjects: Vec<i64> = acc.keys().copied().collect();
+    subjects.sort_by(|x, y| {
+        let ax = &acc[x];
+        let ay = &acc[y];
+        level_of(ay)
+            .rank()
+            .cmp(&level_of(ax).rank())
+            .then_with(|| ay.failed.cmp(&ax.failed))
+            .then_with(|| ay.consecutive_failed.cmp(&ax.consecutive_failed))
+            .then_with(|| ay.partial.cmp(&ax.partial))
+            .then_with(|| ay.latest_at.cmp(&ax.latest_at))
+            .then_with(|| x.cmp(&y))
+    });
+    subjects.into_iter().next()
+}
+
 /// §M2-D / §M2-E：把 support level 叠加到既有 0-LLM `prompt_variant` 上。
 ///
 /// support 0 **原样返回** base —— 这样「无摩擦」路径与既有行为逐字节一致，
@@ -260,14 +270,21 @@ pub fn support_prompt_variant(base: &str, support: u8) -> String {
 pub fn support_instruction(support: u8, subject: &str) -> Option<String> {
     match support {
         SUPPORT_FREE_RECALL => None,
-        SUPPORT_ONE_CUE => Some(format!(
-            "先看一个关键词提示，再回忆「{}」的关键结论。",
-            subject
-        )),
-        _ => Some(format!(
-            "先给出「{}」的两个候选或一句上下文，先选或补全，之后再尝试自由回忆。",
-            subject
-        )),
+        // §M2-E：诚实回退 —— 缩小范围，绝不承诺并不存在的关键词提示 / 候选 / 上下文。
+        SUPPORT_ONE_CUE => Some(if subject.is_empty() {
+            SUPPORT_1_TEXT.to_string()
+        } else {
+            format!("先把范围缩小到「{}」的要点，再尝试自由回忆。", subject)
+        }),
+        // §M2-E：诚实回退 —— 先识别关键结论再自由回忆，并给出冷却提示（反锤击）。
+        _ => Some(if subject.is_empty() {
+            SUPPORT_2_TEXT.to_string()
+        } else {
+            format!(
+                "关于「{}」，先识别关键结论再自由回忆，中间可稍微冷却、不要连续硬磕。",
+                subject
+            )
+        }),
     }
 }
 
@@ -351,5 +368,149 @@ mod unit_tests {
         // 直接字符串比较会因 `'T' > ' '` 得出相反结论，故这条是防回归的关键断言。
         assert!(st.is_cooldown_active("2026-09-16T01:59:59Z"));
         assert!(!st.is_cooldown_active("2026-09-16T02:00:01Z"));
+    }
+
+    // ---- P1-01：摩擦主体选取的每一级 tie-break 都必须方向正确（无 final .reverse()）----
+    #[test]
+    fn friction_subject_selection_tie_breaks() {
+        use std::collections::BTreeMap;
+
+        // 等级优先：High（更多失败）压过 Low
+        let mut a = BTreeMap::new();
+        a.insert(1, SubjectAccum { failed: 9, ..Default::default() }); // Low
+        a.insert(
+            2,
+            SubjectAccum {
+                failed: 2,
+                consecutive_failed: 2,
+                ..Default::default()
+            },
+        ); // High
+        assert_eq!(select_friction_subject(&a), Some(2), "higher level wins");
+
+        // 同等级（Medium）→ 失败数多者优先
+        let mut b = BTreeMap::new();
+        b.insert(1, SubjectAccum { failed: 1, ..Default::default() });
+        b.insert(2, SubjectAccum { failed: 3, ..Default::default() });
+        assert_eq!(select_friction_subject(&b), Some(2), "more failures wins");
+
+        // 同等级同失败 → 连续失败多者优先
+        let mut c = BTreeMap::new();
+        c.insert(
+            1,
+            SubjectAccum {
+                failed: 2,
+                consecutive_failed: 1,
+                ..Default::default()
+            },
+        );
+        c.insert(
+            2,
+            SubjectAccum {
+                failed: 2,
+                consecutive_failed: 2,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            select_friction_subject(&c),
+            Some(2),
+            "more consecutive failures wins"
+        );
+
+        // 同等级同失败同连续 → 部分失败多者优先
+        let mut d = BTreeMap::new();
+        d.insert(
+            1,
+            SubjectAccum {
+                failed: 2,
+                consecutive_failed: 1,
+                partial: 1,
+                ..Default::default()
+            },
+        );
+        d.insert(
+            2,
+            SubjectAccum {
+                failed: 2,
+                consecutive_failed: 1,
+                partial: 3,
+                ..Default::default()
+            },
+        );
+        assert_eq!(select_friction_subject(&d), Some(2), "more partial wins");
+
+        // 同等级同失败同连续同部分 → 最近时间（latest_at DESC）优先
+        let mut e = BTreeMap::new();
+        e.insert(
+            1,
+            SubjectAccum {
+                failed: 2,
+                consecutive_failed: 1,
+                partial: 1,
+                latest_at: Some("2026-01-01 00:00:00".to_string()),
+                ..Default::default()
+            },
+        );
+        e.insert(
+            2,
+            SubjectAccum {
+                failed: 2,
+                consecutive_failed: 1,
+                partial: 1,
+                latest_at: Some("2026-01-02 00:00:00".to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(select_friction_subject(&e), Some(2), "newer latest_at wins");
+
+        // 全部相同 → 最小 id 优先（id ASC）
+        let mut f = BTreeMap::new();
+        f.insert(5, SubjectAccum { failed: 1, ..Default::default() });
+        f.insert(3, SubjectAccum { failed: 1, ..Default::default() });
+        assert_eq!(select_friction_subject(&f), Some(3), "smaller id wins on full tie");
+    }
+
+    // ---- P1-02：support 文案必须诚实，不得承诺不存在的线索/候选/上下文 ----
+    #[test]
+    fn support0_keeps_instruction_unchanged() {
+        // FR-S01：support 0 不改写 instruction
+        assert_eq!(support_instruction(0, "优先编码器"), None);
+    }
+
+    #[test]
+    fn support1_is_honest_fallback_without_missing_cue() {
+        // FR-S02 / FR-S04：support1 提供诚实回退，且不承诺缺失的「提示/候选/上下文」
+        let s = support_instruction(1, "优先编码器").expect("support1 yields text");
+        assert!(!s.contains("提示"), "must not claim a missing keyword hint: {}", s);
+        assert!(!s.contains("候选"), "must not claim missing candidates: {}", s);
+        assert!(!s.contains("上下文"), "must not claim missing context: {}", s);
+        assert!(
+            s.contains("优先编码器"),
+            "should reference the grounded subject: {}",
+            s
+        );
+    }
+
+    #[test]
+    fn support2_is_honest_fallback_without_missing_cue() {
+        // FR-S03 / FR-S04：support2 提供诚实回退，且不承诺缺失的「候选/上下文」
+        let s = support_instruction(2, "优先编码器").expect("support2 yields text");
+        assert!(!s.contains("候选"), "must not claim missing candidates: {}", s);
+        assert!(!s.contains("上下文"), "must not claim missing context: {}", s);
+        assert!(
+            s.contains("优先编码器"),
+            "should reference the grounded subject: {}",
+            s
+        );
+    }
+
+    #[test]
+    fn support_with_empty_subject_falls_back_to_const_text() {
+        // 无 grounded 主体时退回诚实常量文案（仍不承诺缺失线索）
+        let s1 = support_instruction(1, "").expect("support1 yields text");
+        assert_eq!(s1, SUPPORT_1_TEXT);
+        let s2 = support_instruction(2, "").expect("support2 yields text");
+        assert_eq!(s2, SUPPORT_2_TEXT);
     }
 }

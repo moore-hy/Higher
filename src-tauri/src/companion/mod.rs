@@ -56,10 +56,9 @@ pub use repository::CompanionRepository;
 pub use service::{
     build_companion_state, build_companion_state_at, collect_companion_return,
     collect_companion_return_at, derive_behavior, get_companion_learning_nudge,
-    get_companion_learning_nudge_at, interact_companion, interact_companion_at,
-    latest_expedition, list_companion_memories, settle_companion_expeditions,
-    settle_companion_expeditions_at, start_companion_expedition,
-    start_companion_expedition_at, MEMORY_LIST_LIMIT, RECENT_INTERACTION_MINUTES,
-    RESTING_GAP_MINUTES, RETURN_AFTER_BREAK_HOURS,
+    get_companion_learning_nudge_at, interact_companion, interact_companion_at, latest_expedition,
+    list_companion_memories, settle_companion_expeditions, settle_companion_expeditions_at,
+    start_companion_expedition, start_companion_expedition_at, MEMORY_LIST_LIMIT,
+    RECENT_INTERACTION_MINUTES, RESTING_GAP_MINUTES, RETURN_AFTER_BREAK_HOURS,
 };
 pub use types::*;

@@ -37,7 +37,7 @@ use app_lib::ai::trace::Trace;
 use app_lib::repository::changeset::{ChangeSetRepository, ProposedOp};
 use app_lib::repository::goal_target::GoalTargetRepository;
 use app_lib::repository::recurring_rule::{
-    materialize_recurring_tasks, weekday_of, RecurringRuleRepository, RuleSemantics,
+    materialize_recurring_tasks, shift_date, weekday_of, RecurringRuleRepository, RuleSemantics,
 };
 use app_lib::repository::study_profile::StudyProfileRepository;
 use app_lib::repository::task::TaskRepository;
@@ -190,7 +190,9 @@ fn t4_latest_schema_v023() {
     // DEV-0076 §四追加 v027（memory_confirmation_lifecycle）
     // DEV-SYNC-001 追加 v028（local_sync_foundation）
     // DAILY EXPERIENCE V1 §PHASE 4 追加 v032（micro_learning_events）
-    assert_eq!(v, 32, "T4: 最新 Schema = v032");
+    // M4 追加 v033（companion_skill）
+    // M7 / P0-01 追加 v034（readiness_consumption）—— 消费水位线，绝不修改 v033
+    assert_eq!(v, 34, "T4: 最新 Schema = v034");
     let name: String = conn
         .query_row(
             "SELECT name FROM schema_migrations WHERE version=23",
@@ -458,6 +460,9 @@ fn t18_t19_apply_semantics() {
     let conn = setup();
     let p = mk_profile(&conn);
     let e = env();
+    // M7-B 夹具修正：首项任务的 planned_date 锚定生产同源的 UTC+8 今天，而非固定日历日
+    // （避免真实日期跨过硬钉日之后永久变红）。
+    let runtime_local_date = app_lib::repository::planning::today_utc8();
     let compiled = compile_action(&conn, p, &e, &daily_action()).unwrap();
     let cs = ChangeSetRepository::new(&conn)
         .create(
@@ -486,8 +491,8 @@ fn t18_t19_apply_semantics() {
         .unwrap();
     let (task_rule_id, date, minutes): (Option<i64>, String, Option<i64>) = conn
         .query_row(
-            "SELECT recurring_rule_id, planned_date, estimated_minutes FROM tasks WHERE planned_date='2026-08-21'",
-            [],
+            "SELECT recurring_rule_id, planned_date, estimated_minutes FROM tasks WHERE planned_date=?1",
+            params![runtime_local_date],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap();
@@ -496,17 +501,26 @@ fn t18_t19_apply_semantics() {
         Some(rule_id),
         "T19: task.recurring_rule_id = new rule id"
     );
-    assert_eq!(date, "2026-08-21");
+    assert_eq!(date, runtime_local_date);
     assert_eq!(minutes, Some(30), "T19: initial task 继承规则语义");
-    // 未来某天（rolling horizon 内）也有 occurrence
+    // 未来某天（rolling horizon 内）也有 occurrence。
+    // M7-B 夹具修正（不改生产行为）：Apply 时的滚动窗口以**生产同源的 UTC+8 今天**为锚
+    // （changeset apply 内部调用 `planning::today_utc8()`），与固定 Runtime 的 2026-08-21 无关。
+    // 因此这里必须用相对日期推导；继续硬钉某个日历日（原为 '2026-09-15'）会在真实日期
+    // 跨过该日之后永久变红。`today + 7` 稳在 30 天窗口内。
+    let anchor_today = app_lib::repository::planning::today_utc8();
+    let horizon_day = shift_date(&anchor_today, 7).expect("today + 7 天运算");
     let future: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE recurring_rule_id=?1 AND planned_date='2026-09-15'",
-            params![rule_id],
+            "SELECT COUNT(*) FROM tasks WHERE recurring_rule_id=?1 AND planned_date=?2",
+            params![rule_id, horizon_day],
             |r| r.get(0),
         )
         .unwrap();
-    assert!(future >= 1, "0061R: 30 天滚动窗口内未来出现已物化");
+    assert!(
+        future >= 1,
+        "0061R: 30 天滚动窗口内未来出现已物化（today+7 = {horizon_day}）"
+    );
 }
 
 #[test]

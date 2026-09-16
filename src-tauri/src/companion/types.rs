@@ -193,6 +193,14 @@ pub struct CompanionWorldState {
     pub current_behavior: BehaviorState,
     pub last_interaction_at: Option<String>,
     pub last_nudge_at: Option<String>,
+    /// §M7 / P0-01：就绪度消费水位线（与学习日绑定，绝不构成钱包/余额）。
+    ///
+    /// `consumed_local_date` = 上一次「出发远征」所消耗的本地学习日；
+    /// `consumed_contribution_total` = 该次出发时 `today_total` 的快照值。
+    /// 二者共同表示「哪些已有贡献已被当前远征机会兑现」：
+    /// 只有**同一学习日**、且数值更大的新贡献，才能在收取之后重新生成就绪度。
+    pub consumed_local_date: Option<String>,
+    pub consumed_contribution_total: i64,
     pub updated_at: String,
 }
 

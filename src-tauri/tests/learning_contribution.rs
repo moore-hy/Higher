@@ -26,15 +26,16 @@
 //! 全链路 0 Cloud 调用
 //! ```
 
+use app_lib::learning_state::build_learning_state_at;
 use app_lib::learning_state::contribution::{
     build_meaningful_contribution_at, CONTRIB_CORRECTION_BONUS, CONTRIB_EVALUATION_ATTEMPT,
-    CONTRIB_EVALUATION_PASSED, CONTRIB_MICRO_DONE, CONTRIB_MICRO_PARTIAL, CONTRIB_PERSISTENCE_BONUS,
-    CONTRIB_SESSION, CONTRIB_TASK, CONTRIB_TODAY_CAP, SESSION_MIN_CONTRIB_SECONDS,
+    CONTRIB_EVALUATION_PASSED, CONTRIB_MICRO_DONE, CONTRIB_MICRO_PARTIAL,
+    CONTRIB_PERSISTENCE_BONUS, CONTRIB_SESSION, CONTRIB_TASK, CONTRIB_TODAY_CAP,
+    SESSION_MIN_CONTRIB_SECONDS,
 };
 use app_lib::learning_state::date::today_local;
 use app_lib::learning_state::micro::record_micro_action;
 use app_lib::learning_state::types::MeaningfulLearningContribution;
-use app_lib::learning_state::build_learning_state_at;
 use app_lib::repository::evaluation::EvaluationRepository;
 use app_lib::repository::goal::GoalRepository;
 use app_lib::repository::learning_item::LearningItemRepository;
@@ -74,8 +75,10 @@ fn mk_item(conn: &Connection, profile_id: i64, name: &str) -> i64 {
 /// 与全仓一致地使用 SQLite 的 UTC 口径，避免在 Rust 侧再造一套时间算术。
 /// `-1 day` 必然落在**上一个** UTC+8 学习日，因此是「此前」的可靠构造。
 fn utc_ago(conn: &Connection, modifiers: &str) -> String {
-    conn.query_row("SELECT datetime('now', ?1)", params![modifiers], |r| r.get(0))
-        .unwrap()
+    conn.query_row("SELECT datetime('now', ?1)", params![modifiers], |r| {
+        r.get(0)
+    })
+    .unwrap()
 }
 
 /// 造一条真实 Evaluation；`occurred_at` / `trust_state` 可显式指定。
@@ -254,10 +257,7 @@ fn mlc04_partial_grounded_attempt_is_positive_but_bounded() {
         "§M3-B：努力但不完整的 grounded 尝试**不得塌成 0**"
     );
     assert!(c.today_total > 0);
-    assert!(
-        c.today_total <= CONTRIB_TODAY_CAP,
-        "任何单日贡献都必须有界"
-    );
+    assert!(c.today_total <= CONTRIB_TODAY_CAP, "任何单日贡献都必须有界");
 }
 
 // =============== MLC-05：真实完成 Session 有贡献 ===============
@@ -358,7 +358,15 @@ fn mlc08_profile_isolation() {
         mk_micro(&conn, a_profile, a_item, "done");
     }
     mk_completed_session(&conn, a_item, 25 * 60);
-    mk_eval(&conn, a_profile, Some(a_item), "A 验证", "passed", None, None);
+    mk_eval(
+        &conn,
+        a_profile,
+        Some(a_item),
+        "A 验证",
+        "passed",
+        None,
+        None,
+    );
     // B 只有一笔真实学习，绝不应「继承」A 的贡献。
     mk_micro(&conn, b_profile, b_item, "done");
 
@@ -476,7 +484,8 @@ fn mlc11_failure_never_outweighs_success_but_effort_still_counts() {
         "回到一个曾失败过的点 → 有界的一点点坚持奖励"
     );
     assert!(
-        CONTRIB_MICRO_PARTIAL + CONTRIB_PERSISTENCE_BONUS < CONTRIB_EVALUATION_PASSED + CONTRIB_CORRECTION_BONUS,
+        CONTRIB_MICRO_PARTIAL + CONTRIB_PERSISTENCE_BONUS
+            < CONTRIB_EVALUATION_PASSED + CONTRIB_CORRECTION_BONUS,
         "坚持的回报必须**小于**真正取回成功的回报（不给失败奖励）"
     );
     assert_eq!(
@@ -496,7 +505,15 @@ fn mlc12_task_contributes_only_with_real_learning_relation() {
 
     // ① 有真实学习关系的 Task（完成）
     let t_grounded = TaskRepository::new(&conn)
-        .create_for_profile(p, None, "有关系的任务", Some(today.as_str()), None, Some(a), None)
+        .create_for_profile(
+            p,
+            None,
+            "有关系的任务",
+            Some(today.as_str()),
+            None,
+            Some(a),
+            None,
+        )
         .unwrap();
     TaskRepository::new(&conn).complete(t_grounded.id).unwrap();
 
@@ -508,7 +525,15 @@ fn mlc12_task_contributes_only_with_real_learning_relation() {
 
     // ③ 有学习关系但**未完成** → 不构成贡献
     TaskRepository::new(&conn)
-        .create_for_profile(p, None, "还没做的任务", Some(today.as_str()), None, Some(a), None)
+        .create_for_profile(
+            p,
+            None,
+            "还没做的任务",
+            Some(today.as_str()),
+            None,
+            Some(a),
+            None,
+        )
         .unwrap();
 
     let c = contrib_via_state(&conn, p);

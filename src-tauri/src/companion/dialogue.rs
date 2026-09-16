@@ -145,9 +145,6 @@ mod unit_tests {
         let picked: std::collections::BTreeSet<i64> = (1..60)
             .map(|p| dialogue(p, DialogueEvent::FirstVisitToday, &["2026-09-16"]).variant)
             .collect();
-        assert!(
-            picked.len() >= 2,
-            "变体必须真的会变化（不是恒选第 0 条）"
-        );
+        assert!(picked.len() >= 2, "变体必须真的会变化（不是恒选第 0 条）");
     }
 }

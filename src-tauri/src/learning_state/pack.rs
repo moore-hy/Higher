@@ -34,15 +34,15 @@
 //! - deterministic：同一 DB 状态 → 同一 Pack（含同序）；
 //! - 不得出现「无限下一个」：上限恒为 [`PACK_MAX_ITEMS`]。
 
+use crate::learning_state::budget::TimeBudget;
+use crate::learning_state::micro::MICRO_DEFAULT_SECONDS;
 use crate::learning_state::next_action::{
     build_ranked_candidates, candidate_view, MICRO_UNAVAILABLE_REASON,
 };
 use crate::learning_state::types::{
-    LearningPack, LearningPackItem, LearningStateSnapshot, MicroActionCandidate,
-    PACK_MAX_ITEMS, REASON_MICRO_ACTION, REASON_MICRO_UNAVAILABLE,
+    LearningPack, LearningPackItem, LearningStateSnapshot, MicroActionCandidate, PACK_MAX_ITEMS,
+    REASON_MICRO_ACTION, REASON_MICRO_UNAVAILABLE,
 };
-use crate::learning_state::budget::TimeBudget;
-use crate::learning_state::micro::MICRO_DEFAULT_SECONDS;
 use std::collections::HashSet;
 
 /// 生产入口：由同一份 LearningState 快照构建**有限** Pack。
@@ -228,6 +228,7 @@ fn micro_source_entity(cand: &MicroActionCandidate) -> crate::learning_state::ty
         ("learning_item", Some(id)) => ActionSource::LearningItem {
             learning_item_id: id,
         },
+        ("evaluation", Some(id)) => ActionSource::Evaluation { evaluation_id: id },
         _ => ActionSource::None,
     }
 }
@@ -239,7 +240,10 @@ mod unit_tests {
 
     #[test]
     fn pack_limit_is_three() {
-        assert_eq!(PACK_MAX_ITEMS, 3, "§M1-A：Pack 上限恒为 3（禁止无限下一个）");
+        assert_eq!(
+            PACK_MAX_ITEMS, 3,
+            "§M1-A：Pack 上限恒为 3（禁止无限下一个）"
+        );
     }
 
     #[test]
@@ -263,5 +267,53 @@ mod unit_tests {
             mk(false).source_action_key(),
             "Micro 与普通动作即使来源相同也必须是两条不同的执行语义"
         );
+    }
+
+    // ---- P2-01：评估触发的 Micro 必须可溯源到 evaluation，绝不回退为 None / 伪造 learning_item ----
+    #[test]
+    fn pack_eval_micro_traces_to_evaluation_not_none() {
+        let cand = MicroActionCandidate {
+            action_type: "retry_recent_error".to_string(),
+            source_type: "evaluation".to_string(),
+            source_id: Some(42),
+            prompt_variant: "retry_recent_error.one".to_string(),
+            subject_learning_item_id: Some(7),
+            subject_label: Some("优先编码器".to_string()),
+            title: "x".to_string(),
+            instruction: "y".to_string(),
+            reason: "z".to_string(),
+            estimated_seconds: 30,
+            formal_session_anchor: crate::learning_state::types::FormalSessionAnchor::Quick,
+        };
+        let src = micro_source_entity(&cand);
+        assert!(
+            matches!(src, ActionSource::Evaluation { evaluation_id: 42 }),
+            "eval-triggered Micro 必须溯源到 evaluation，实际得到 {:?}",
+            src
+        );
+        // 绝不伪造 learning_item 来源
+        assert!(!matches!(src, ActionSource::LearningItem { .. }));
+        assert!(!matches!(src, ActionSource::None));
+    }
+
+    #[test]
+    fn pack_task_and_session_micro_still_typed() {
+        let task = MicroActionCandidate {
+            action_type: "self_explain".to_string(),
+            source_type: "task".to_string(),
+            source_id: Some(11),
+            prompt_variant: "self_explain.one".to_string(),
+            subject_learning_item_id: Some(7),
+            subject_label: Some("x".to_string()),
+            title: "x".to_string(),
+            instruction: "y".to_string(),
+            reason: "z".to_string(),
+            estimated_seconds: 30,
+            formal_session_anchor: crate::learning_state::types::FormalSessionAnchor::Quick,
+        };
+        assert!(matches!(
+            micro_source_entity(&task),
+            ActionSource::Task { task_id: 11 }
+        ));
     }
 }

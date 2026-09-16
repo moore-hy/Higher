@@ -43,12 +43,12 @@ pub use next_action::{
 };
 // M1-A：有限 Learning Pack（同一份 canonical primitive，只截断 + 去重）
 pub use pack::build_learning_pack;
-pub use types::{
-    FormalSessionAnchor, LearningPack, LearningPackItem, MicroActionCandidate, PACK_MAX_ITEMS,
-};
 pub use recovery::{classify_recovery, collect_recovery_signals};
 pub use state::{build_learning_state, build_learning_state_at, RECENT_SESSION_LIMIT};
 pub use types::*;
+pub use types::{
+    FormalSessionAnchor, LearningPack, LearningPackItem, MicroActionCandidate, PACK_MAX_ITEMS,
+};
 
 // M2 — LEARNING FRICTION V1（只读投影 + 0-LLM 支持模板）
 pub use friction::{
@@ -58,6 +58,6 @@ pub use friction::{
 
 // M3 — MEANINGFUL LEARNING CONTRIBUTION V1（学习真相 → 陪伴世界 的桥；有界、只读、0 LLM）
 pub use contribution::{
-    build_meaningful_contribution, build_meaningful_contribution_at,
-    SESSION_MIN_CONTRIB_SECONDS, CONTRIB_TODAY_CAP,
+    build_meaningful_contribution, build_meaningful_contribution_at, CONTRIB_TODAY_CAP,
+    SESSION_MIN_CONTRIB_SECONDS,
 };

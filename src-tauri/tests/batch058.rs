@@ -46,14 +46,15 @@ fn test_migration_latest_is_v021_and_idempotent() {
     // DEV-0070 Phase F v2.0：新增 v026（user_context_storage）后最新版本为 26
     // DEV-0076 §四：新增 v027（memory_confirmation_lifecycle）后最新版本为 27
     // DAILY EXPERIENCE V1 §PHASE 4：新增 v032（micro_learning_events）后最新版本为 32
-    assert_eq!(latest_version(), 32);
+    // M4：新增 v033（companion_skill）后最新版本为 33
+    assert_eq!(latest_version(), 33);
     // 幂等：重复执行不报错、不重复应用
     app_lib::migrations::run_migrations(&conn).unwrap();
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    // DAILY EXPERIENCE V1 §PHASE 4：v032 追加后 32 条
-    assert_eq!(n, 32);
+    // DAILY EXPERIENCE V1 §PHASE 4：v033（companion_skill）追加后 33 条
+    assert_eq!(n, 33);
 }
 
 #[test]
