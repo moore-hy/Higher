@@ -236,6 +236,7 @@ fn micro_source_entity(cand: &MicroActionCandidate) -> crate::learning_state::ty
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use crate::learning_state::types::ActionSource;
     use crate::learning_state::types::PACK_MAX_ITEMS;
 
     #[test]

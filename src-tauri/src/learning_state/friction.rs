@@ -375,9 +375,18 @@ mod unit_tests {
     fn friction_subject_selection_tie_breaks() {
         use std::collections::BTreeMap;
 
-        // 等级优先：High（更多失败）压过 Low
+        // 等级优先：High 压过 Low。
+        // Low 的正确构造 = failed=0 且 partial<PARTIAL_FOR_MEDIUM；
+        // 注意 failed>=FAILED_FOR_HIGH(2) 即 High —— 夹具曾误用 failed=9 当 Low。
         let mut a = BTreeMap::new();
-        a.insert(1, SubjectAccum { failed: 9, ..Default::default() }); // Low
+        a.insert(
+            1,
+            SubjectAccum {
+                failed: 0,
+                partial: 1,
+                ..Default::default()
+            },
+        ); // Low
         a.insert(
             2,
             SubjectAccum {
@@ -388,10 +397,25 @@ mod unit_tests {
         ); // High
         assert_eq!(select_friction_subject(&a), Some(2), "higher level wins");
 
-        // 同等级（Medium）→ 失败数多者优先
+        // 同等级（Medium）→ 失败数多者优先。
+        // Medium 内 failed 只能取 0（需 partial>=PARTIAL_FOR_MEDIUM）或 1：
+        // failed>=2 即升 High，无法用 failed=1 vs 3 构造同等级（旧夹具错误）。
         let mut b = BTreeMap::new();
-        b.insert(1, SubjectAccum { failed: 1, ..Default::default() });
-        b.insert(2, SubjectAccum { failed: 3, ..Default::default() });
+        b.insert(
+            1,
+            SubjectAccum {
+                failed: 0,
+                partial: 2,
+                ..Default::default()
+            },
+        ); // Medium（failed=0，partial 达 Medium 阈）
+        b.insert(
+            2,
+            SubjectAccum {
+                failed: 1,
+                ..Default::default()
+            },
+        ); // Medium
         assert_eq!(select_friction_subject(&b), Some(2), "more failures wins");
 
         // 同等级同失败 → 连续失败多者优先
@@ -466,9 +490,25 @@ mod unit_tests {
 
         // 全部相同 → 最小 id 优先（id ASC）
         let mut f = BTreeMap::new();
-        f.insert(5, SubjectAccum { failed: 1, ..Default::default() });
-        f.insert(3, SubjectAccum { failed: 1, ..Default::default() });
-        assert_eq!(select_friction_subject(&f), Some(3), "smaller id wins on full tie");
+        f.insert(
+            5,
+            SubjectAccum {
+                failed: 1,
+                ..Default::default()
+            },
+        );
+        f.insert(
+            3,
+            SubjectAccum {
+                failed: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            select_friction_subject(&f),
+            Some(3),
+            "smaller id wins on full tie"
+        );
     }
 
     // ---- P1-02：support 文案必须诚实，不得承诺不存在的线索/候选/上下文 ----
@@ -482,9 +522,21 @@ mod unit_tests {
     fn support1_is_honest_fallback_without_missing_cue() {
         // FR-S02 / FR-S04：support1 提供诚实回退，且不承诺缺失的「提示/候选/上下文」
         let s = support_instruction(1, "优先编码器").expect("support1 yields text");
-        assert!(!s.contains("提示"), "must not claim a missing keyword hint: {}", s);
-        assert!(!s.contains("候选"), "must not claim missing candidates: {}", s);
-        assert!(!s.contains("上下文"), "must not claim missing context: {}", s);
+        assert!(
+            !s.contains("提示"),
+            "must not claim a missing keyword hint: {}",
+            s
+        );
+        assert!(
+            !s.contains("候选"),
+            "must not claim missing candidates: {}",
+            s
+        );
+        assert!(
+            !s.contains("上下文"),
+            "must not claim missing context: {}",
+            s
+        );
         assert!(
             s.contains("优先编码器"),
             "should reference the grounded subject: {}",
@@ -496,8 +548,16 @@ mod unit_tests {
     fn support2_is_honest_fallback_without_missing_cue() {
         // FR-S03 / FR-S04：support2 提供诚实回退，且不承诺缺失的「候选/上下文」
         let s = support_instruction(2, "优先编码器").expect("support2 yields text");
-        assert!(!s.contains("候选"), "must not claim missing candidates: {}", s);
-        assert!(!s.contains("上下文"), "must not claim missing context: {}", s);
+        assert!(
+            !s.contains("候选"),
+            "must not claim missing candidates: {}",
+            s
+        );
+        assert!(
+            !s.contains("上下文"),
+            "must not claim missing context: {}",
+            s
+        );
         assert!(
             s.contains("优先编码器"),
             "should reference the grounded subject: {}",

@@ -691,12 +691,22 @@ impl NextActionType {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionSource {
     None,
-    Task { task_id: i64 },
-    Session { session_id: i64 },
-    LearningItem { learning_item_id: i64 },
-    Review { review_id: Option<i64> },
+    Task {
+        task_id: i64,
+    },
+    Session {
+        session_id: i64,
+    },
+    LearningItem {
+        learning_item_id: i64,
+    },
+    Review {
+        review_id: Option<i64>,
+    },
     /// 验证触发（§M0-B：Evaluation 触发的 Micro 必须溯源到 evaluation，绝不改写为 LearningItem）。
-    Evaluation { evaluation_id: i64 },
+    Evaluation {
+        evaluation_id: i64,
+    },
 }
 
 /// reason_code 常量（稳定字符串；UI 只做展示映射，不参与判断）。
