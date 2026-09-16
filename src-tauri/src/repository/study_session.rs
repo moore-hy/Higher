@@ -509,6 +509,18 @@ impl<'a> StudySessionRepository<'a> {
         Ok(count > 0)
     }
 
+    /// 指定档案内进行中 Session 的数量（档案作用域，永久删除档案的守卫用）。
+    ///
+    /// 谓词与 start-guard 完全一致（`profile_id = ? AND status = 'active'`），
+    /// 不引入第二套"进行中"定义：不从 ended_at / duration_seconds / 任务状态推断。
+    pub fn count_active_by_profile(&self, profile_id: i64) -> rusqlite::Result<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM study_sessions WHERE profile_id = ?1 AND status = 'active'",
+            params![profile_id],
+            |row| row.get(0),
+        )
+    }
+
     /// 某档案某天的全部 Session。
     pub fn list_by_date_by_profile(
         &self,

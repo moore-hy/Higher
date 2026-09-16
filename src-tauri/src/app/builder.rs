@@ -47,6 +47,7 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             set_active_study_profile,
             get_active_study_profile,
             clear_active_study_profile,
+            delete_study_profile,
             get_profile_calendar,
             // V2 查询（复盘 / 进度）
             get_profile_day_sessions,

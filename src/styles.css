@@ -1656,6 +1656,18 @@ html[data-h-wallpaper="on"] #root {
   margin-top: 8px;
 }
 
+/* PROFILE DELETE HOTFIX V1 §3：卡片内「进入 / 删除」并排一行。
+   仅补齐行容器与取消单按钮上边距，不引入新的按钮体系。 */
+.profile-card__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.profile-card__actions .btn {
+  margin-top: 0;
+}
+
 /* ============ Profile Create Form ============ */
 
 .profile-create__form {

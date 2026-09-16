@@ -6,6 +6,8 @@ use crate::repository::learning_item::LearningItemRepository;
 use crate::repository::study_profile::{ProfileCalendarDay, StudyProfile, StudyProfileRepository};
 use crate::repository::study_session::{StudySession, StudySessionRepository};
 use crate::repository::CountPair;
+use crate::sandbox;
+use crate::AttachmentDir;
 
 // =============== StudyProfile ===============
 
@@ -114,6 +116,32 @@ pub fn clear_active_study_profile(state: tauri::State<'_, db::DbState>) -> Resul
     StudyProfileRepository::new(&conn)
         .clear_active()
         .map_err(|e| e.to_string())
+}
+
+/// 永久删除一个学习档案及其档案内全部数据（不可撤销）。
+///
+/// 全部存在性校验、active StudySession 守卫、active_profile_id 清理与
+/// 逐表删除都在仓库层同一连接同一写事务内完成（见
+/// `StudyProfileRepository::delete_permanently`）。命令层只负责：
+/// - 事务提交成功**之后**，按既有 sandbox Path Guard 清理被删附件的物理文件
+///   （物理文件绝不先于 DB 提交删除；单个删除失败仅跳过，不影响 DB 结果）。
+#[tauri::command]
+pub fn delete_study_profile(
+    state: tauri::State<'_, db::DbState>,
+    adir: tauri::State<'_, AttachmentDir>,
+    profile_id: i64,
+) -> Result<(), String> {
+    let outcome = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        StudyProfileRepository::new(&conn).delete_permanently(profile_id)?
+    };
+    // commit 之后再删文件（与 execute_profile_cleanup 同一既有清理通道）
+    for rel in outcome.attachment_paths {
+        if let Ok(path) = sandbox::resolve_in_sandbox(&adir.0, &rel) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(())
 }
 
 /// 档案日历：获取某档案指定年月的学习活动统计。

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useActiveProfile, canSwitchProfile } from "../contexts/ActiveProfileContext";
-import { listStudyProfiles } from "../api";
+import { deleteStudyProfile, listStudyProfiles } from "../api";
 import type { StudyProfile } from "../types";
 import { PROFILE_TYPE_LABELS } from "../types";
 import type { ProfileType } from "../types";
@@ -14,17 +14,26 @@ import {
 /**
  * 档案选择页面。
  *
- * 显示所有学习档案列表，用户可以进入任意档案或创建新档案。
+ * 显示所有学习档案列表，用户可以进入任意档案、创建新档案，或永久删除档案。
  * 切换前检查是否有进行中的 Session。
  * DEV-SYNC-002 §九（SYNC2-UI-TC02）：profiles_changed > 0 时重读档案列表，
  * 同步新导入的档案无需退出页面即可出现。
+ *
+ * PROFILE DELETE HOTFIX V1 §3：删除是两步动作（首次点击不删除），
+ * 后端单事务保证原子性；后端拒绝时保留卡片并显示错误，前端不做乐观更新。
  */
 export default function ProfileSelector() {
-  const { enterProfile } = useActiveProfile();
+  const { enterProfile, refreshGate } = useActiveProfile();
   const [profiles, setProfiles] = useState<StudyProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  /** 待确认删除的档案（非 null = 确认弹窗打开；首次点击不删除） */
+  const [confirmTarget, setConfirmTarget] = useState<StudyProfile | null>(null);
+  /** 每个目标的独立进行中状态：删除在途时禁用该目标的删除与重复提交 */
+  const [deletingProfileId, setDeletingProfileId] = useState<number | null>(null);
+  /** 删除失败错误（在确认弹窗内可见，卡片保持不动） */
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     loadProfiles();
@@ -56,6 +65,38 @@ export default function ProfileSelector() {
     }
     setError(null);
     await enterProfile(profileId);
+  }
+
+  function requestDelete(p: StudyProfile) {
+    setError(null);
+    setDeleteError(null);
+    setConfirmTarget(p);
+  }
+
+  function cancelDelete() {
+    setConfirmTarget(null);
+    setDeleteError(null);
+  }
+
+  async function confirmDelete() {
+    const target = confirmTarget;
+    if (!target) return;
+    // 防重复提交：同一目标在途时不再发第二次请求
+    if (deletingProfileId !== null) return;
+    setDeletingProfileId(target.id);
+    setDeleteError(null);
+    try {
+      await deleteStudyProfile(target.id);
+      // 成功：关闭确认、重载列表、失效 active 缓存（被删档案若是 active 则一并清空）
+      setConfirmTarget(null);
+      await loadProfiles();
+      await refreshGate();
+    } catch (e) {
+      // 失败：不乐观更新，卡片保留，错误可见
+      setDeleteError(String(e));
+    } finally {
+      setDeletingProfileId(null);
+    }
   }
 
   if (loading) {
@@ -92,12 +133,21 @@ export default function ProfileSelector() {
             {p.target_description && (
               <div className="profile-card__desc">{p.target_description}</div>
             )}
-            <button
-              className="btn btn--primary btn--small"
-              onClick={() => handleEnter(p.id)}
-            >
-              进入
-            </button>
+            <div className="profile-card__actions">
+              <button
+                className="btn btn--primary btn--small"
+                onClick={() => handleEnter(p.id)}
+              >
+                进入
+              </button>
+              <button
+                className="btn btn--small btn--danger"
+                disabled={deletingProfileId === p.id}
+                onClick={() => requestDelete(p)}
+              >
+                {deletingProfileId === p.id ? "删除中…" : "删除"}
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -107,6 +157,59 @@ export default function ProfileSelector() {
       >
         + 创建新档案
       </button>
+      {confirmTarget && (
+        <ProfileDeleteConfirm
+          profileName={confirmTarget.name}
+          busy={deletingProfileId !== null}
+          error={deleteError}
+          onCancel={cancelDelete}
+          onConfirm={confirmDelete}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 永久删除确认弹窗（§3）。复用既有 `.modal-overlay` / `.modal` / `.danger-zone`
+ * / `.modal__actions` 结构与类名，不新增交互组件体系。
+ */
+function ProfileDeleteConfirm({
+  profileName,
+  busy,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  profileName: string;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  return (
+    <div className="modal-overlay" onClick={() => !busy && onCancel()}>
+      <div className="modal modal--quick" onClick={(e) => e.stopPropagation()}>
+        <div className="modal__title">确定永久删除学习档案「{profileName}」吗？</div>
+        <div className="danger-zone">
+          <p className="danger-zone__note">
+            该档案中的学习记录、任务、知识、规划、评估及相关数据将被永久删除，此操作无法撤销。
+          </p>
+        </div>
+        {error && <div className="modal__error">{error}</div>}
+        <div className="modal__actions">
+          <button className="btn btn--ghost" disabled={busy} onClick={onCancel}>
+            取消
+          </button>
+          <button
+            className="btn btn--danger"
+            disabled={busy}
+            onClick={() => void onConfirm()}
+          >
+            {busy ? "删除中…" : "永久删除"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

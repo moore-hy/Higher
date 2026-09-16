@@ -142,6 +142,15 @@ export const getActiveStudyProfile = () =>
 export const clearActiveStudyProfile = () =>
   invoke<void>("clear_active_study_profile");
 
+/**
+ * 永久删除一个学习档案及其档案内全部数据（不可撤销）。
+ *
+ * 原子性、active StudySession 守卫、active_profile_id 清理与逐表级联
+ * 全部在后端同一写事务内完成；前端不得自行枚举/删除任何子记录。
+ */
+export const deleteStudyProfile = (profileId: number) =>
+  invoke<void>("delete_study_profile", { profileId });
+
 /** 档案日历：获取某档案指定年月的学习活动统计 */
 export const getProfileCalendar = (profileId: number, year: number, month: number) =>
   invoke<ProfileCalendarDay[]>("get_profile_calendar", {

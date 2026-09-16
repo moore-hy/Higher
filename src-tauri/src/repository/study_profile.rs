@@ -1,5 +1,7 @@
 use rusqlite::{params, Connection};
 
+use crate::repository::study_session::StudySessionRepository;
+
 /// 学习档案（StudyProfile）：Higher 最顶层本地学习容器。
 ///
 /// 一个档案 = 一个独立的"学习世界"（如 2027 考研 / Linux 内核学习）。
@@ -32,6 +34,17 @@ pub struct ProfileCalendarDay {
     pub task_count: i64,           // 当天计划 Task 数量
     pub completed_task_count: i64, // 当天完成 Task 数量
     pub evaluation_count: i64,     // 当天 Evaluation 数量
+}
+
+/// 永久删除档案的结果（命令层据此做 commit 后的物理文件清理）。
+#[derive(Debug, Default)]
+pub struct ProfileDeleteOutcome {
+    /// 显式删除的 target Goal 数（§10：防止 goals.profile_id ON DELETE SET NULL 产生孤儿）。
+    pub deleted_goals: i64,
+    /// 是否清除了 settings.active_profile_id（仅当它原本指向被删档案时为 true）。
+    pub cleared_active_profile: bool,
+    /// 事务内收集到的 target 附件 relative_path（commit 成功后由命令层删物理文件）。
+    pub attachment_paths: Vec<String>,
 }
 
 pub struct StudyProfileRepository<'a> {
@@ -199,6 +212,167 @@ impl<'a> StudyProfileRepository<'a> {
     pub fn count(&self) -> rusqlite::Result<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM study_profiles", [], |row| row.get(0))
+    }
+
+    /// 永久删除一个学习档案及其档案内全部数据（原子、不可撤销）。
+    ///
+    /// 事务不变量（全部在同一连接、同一写事务内完成）：
+    /// 1. 校验 target 存在（不存在 → 显式错误，零改动）
+    /// 2. 校验 target 无 `status='active'` 的 StudySession（有 → 阻断，零改动）
+    /// 3. 读取 settings.active_profile_id，**仅当它 == target** 时清除
+    /// 4. 按真实 FK 图自叶子向根逐表显式删除 target 所属行
+    /// 5. 显式删除 target Goals（否则 goals.profile_id 的 ON DELETE SET NULL 会留下孤儿）
+    /// 6. `DELETE FROM study_profiles WHERE id = target`，断言受影响行数 == 1
+    /// 任意一步失败 → 事务回滚，不留部分删除。
+    ///
+    /// 所有删除一律以 target profile_id（或 target Goal 子查询）限定，
+    /// 不做任何全局 `profile_id IS NULL` 清理，不触碰其它档案与历史孤儿行。
+    ///
+    /// 不使用 `PRAGMA foreign_keys = OFF`；不修改任何 FK 语义；
+    /// 不新增 migration。附件行内的 relative_path 在此收集，
+    /// 由命令层在 commit 成功后按既有 sandbox Path Guard 删除物理文件。
+    pub fn delete_permanently(&self, profile_id: i64) -> Result<ProfileDeleteOutcome, String> {
+        // 复用仓库既有事务抽象（与 cleanup/changeset/planning 等一致）。
+        // 仓库未启用 rusqlite `TransactionBehavior`，故不引入另一种事务写法。
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let conn: &Connection = &tx;
+
+        // ---- ① 校验 target 存在（不存在 → 显式错误，回滚零改动）----
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM study_profiles WHERE id = ?1",
+                params![profile_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if exists == 0 {
+            return Err(format!(
+                "学习档案不存在（id={}），未做任何修改。",
+                profile_id
+            ));
+        }
+
+        // ---- ② 档案内 active StudySession 守卫（与 start-guard 同一谓词）----
+        let active = StudySessionRepository::new(conn)
+            .count_active_by_profile(profile_id)
+            .map_err(|e| e.to_string())?;
+        if active > 0 {
+            return Err("该档案仍有正在进行的学习，请先结束学习后再删除。".to_string());
+        }
+
+        // ---- ③ active_profile_id：仅当指向 target 时清除 ----
+        let mut cleared_active_profile = false;
+        let current_active: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![ACTIVE_PROFILE_KEY],
+                |row| row.get(0),
+            )
+            .ok();
+        if let Some(v) = current_active {
+            if v.parse::<i64>().ok() == Some(profile_id) {
+                conn.execute(
+                    "DELETE FROM settings WHERE key = ?1",
+                    params![ACTIVE_PROFILE_KEY],
+                )
+                .map_err(|e| e.to_string())?;
+                cleared_active_profile = true;
+            }
+        }
+
+        // ---- ④ 事务内收集将删除附件的 relative_path（commit 后再删文件）----
+        let mut attachment_paths: Vec<String> = Vec::new();
+        {
+            let mut stmt = conn
+                .prepare("SELECT relative_path FROM learning_attachments WHERE profile_id = ?1")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![profile_id], |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            for r in rows {
+                attachment_paths.push(r.map_err(|e| e.to_string())?);
+            }
+        }
+
+        // ---- ⑤ 显式删除 target 所属行（叶子 → 根；只按 target profile_id 限定）----
+        // evaluations.learning_item_id 是 ON DELETE RESTRICT → evaluations 必须先于
+        // learning_items 删除，否则 FK 立即拒绝。
+        const GOALS_OF_PROFILE: &str = "SELECT id FROM goals WHERE profile_id = ?1";
+        for sql in [
+            // 活动 / 验证层（feedback → adjustment 在本档案 Goal 范围内）
+            &format!(
+                "DELETE FROM adjustments WHERE goal_id IN ({})",
+                GOALS_OF_PROFILE
+            ),
+            &format!(
+                "DELETE FROM feedbacks WHERE goal_id IN ({})",
+                GOALS_OF_PROFILE
+            ),
+            "DELETE FROM mastery_assessments WHERE profile_id = ?1",
+            "DELETE FROM micro_learning_events WHERE profile_id = ?1",
+            // RESTRICT 约束要求：先 evaluations，后 learning_items
+            "DELETE FROM evaluations WHERE profile_id = ?1",
+            "DELETE FROM learning_attachments WHERE profile_id = ?1",
+            "DELETE FROM study_sessions WHERE profile_id = ?1",
+            "DELETE FROM tasks WHERE profile_id = ?1",
+            "DELETE FROM recurring_task_rules WHERE profile_id = ?1",
+            // Goal 下级结构（显式删除，不依赖 goals 的 CASCADE）
+            &format!("DELETE FROM plans WHERE goal_id IN ({})", GOALS_OF_PROFILE),
+            &format!(
+                "DELETE FROM study_stages WHERE goal_id IN ({})",
+                GOALS_OF_PROFILE
+            ),
+            "DELETE FROM learning_items WHERE profile_id = ?1",
+        ] {
+            conn.execute(sql, params![profile_id])
+                .map_err(|e| e.to_string())?;
+        }
+
+        // ---- §10 显式删除 target Goals（先于 StudyProfile，避免被 SET NULL 变孤儿）----
+        let deleted_goals = conn
+            .execute(
+                "DELETE FROM goals WHERE profile_id = ?1",
+                params![profile_id],
+            )
+            .map_err(|e| e.to_string())? as i64;
+
+        // ---- 无 FK 但持有 profile_id 的档案级派生 / AI 运行数据（CASCADE 覆盖不到）----
+        for sql in [
+            // search_index：无 FK；AFTER DELETE 触发器同步维护 FTS5 索引
+            "DELETE FROM search_index WHERE profile_id = ?1",
+            "DELETE FROM ai_messages WHERE profile_id = ?1",
+            "DELETE FROM ai_pending_actions WHERE profile_id = ?1",
+            "DELETE FROM ai_sources WHERE profile_id = ?1",
+            "DELETE FROM ai_runs WHERE profile_id = ?1",
+        ] {
+            conn.execute(sql, params![profile_id])
+                .map_err(|e| e.to_string())?;
+        }
+
+        // ---- ⑥ 最后删除 StudyProfile 本体，并断言受影响行数恰好为 1 ----
+        let affected = conn
+            .execute(
+                "DELETE FROM study_profiles WHERE id = ?1",
+                params![profile_id],
+            )
+            .map_err(|e| e.to_string())?;
+        if affected != 1 {
+            return Err(format!(
+                "学习档案删除受影响行数为 {}（应为 1），事务已回滚。",
+                affected
+            ));
+        }
+
+        tx.commit().map_err(|e| e.to_string())?;
+
+        Ok(ProfileDeleteOutcome {
+            deleted_goals,
+            cleared_active_profile,
+            attachment_paths,
+        })
     }
 
     /// 档案日历：获取某档案指定年月的学习活动统计（按天聚合）。
