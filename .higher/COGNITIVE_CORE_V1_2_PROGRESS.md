@@ -80,7 +80,7 @@ v039+ 不允许在本次创建（§7 明确）
 | W9 Desktop shell + nav + AI command bar | **IMPLEMENTED** | §21 IA + §22 抽屉化 + §23 tokens；`cognitiveShell` 26/26 绿 |
 | W10 Today UI | **IMPLEMENTED** | §24 认知首屏 + legacy 折叠；`cognitiveToday` 22/22 绿 |
 | W11 Memory / Progress / Journey routes | **IMPLEMENTED** | §25 `get_memory_dashboard` + Memory 页；§26 `get_cognitive_progress` 四轴 + Progress 页；§27 Journey 双路由；`memoryPage` 15/15 + `cognitiveProgress` 17/17 绿；`memory_engine_v1` 11/11 绿（新增 ME-11） |
-| W12 Resource Governor + model router | PENDING | |
+| W12 Resource Governor + model router | **IMPLEMENTED** | |
 | W13 Runtime / document contracts | PENDING | |
 | W14 Final validation + report | PENDING | |
 
@@ -431,6 +431,43 @@ v039+ 不允许在本次创建（§7 明确）
      但 Memory 视图读的是**同一张** `memory_units` / `memory_reviews`，
      不失效会让 Memory 页停在旧到期队列 —— 属同一规则的自然外延。
 - **next wave**: W12
+
+---
+
+## W12 — Resource Governor V2 + Model Role Router
+
+- **status**: IMPLEMENTED
+- **commit SHA**: a1076cc2fc3d0560759e334b9e507a3f35758378
+- **files changed**:
+  - `src-tauri/src/resource/mod.rs`（新增 `ResourceGovernor`：滞回状态机 + 只读快照）
+  - `src-tauri/src/resource/policy.rs`（新增 `severity_of` + `ResourcePolicy` 滞回状态机）
+  - `src-tauri/src/resource/monitor.rs`（新增 sysinfo 0.38.4 探针 + 安全降级）
+  - `src-tauri/src/model_router/mod.rs`（新增模块）
+  - `src-tauri/src/model_router/types.rs`（新增 `ModelRole` 11 种 + `RuntimeKind` 5 种；`RuntimeKind` 被 W13 复用）
+  - `src-tauri/src/model_router/router.rs`（新增 `resolve` 单一解析边界）
+  - `src-tauri/src/lib.rs`（新增 `pub mod model_router;`）
+  - `src-tauri/tests/resource_governor_v2.rs`（新增，RG2-01…RG2-10）
+  - `src-tauri/tests/model_role_router.rs`（新增，MR-01…MR-12）
+- **contracts implemented**:
+  - §29 `ResourceState` 四档；8 秒采样；滞回（连续 2 更差降级 / 连续 3 更好恢复）；锁定阈值
+    （CRITICAL RAM/committed ≥ 89% 或 CPU ≥ 90%；HIGH_PRESSURE ≥ 84% / ≥ 82%；CONSTRAINED ≥ 78% / ≥ 75%，最严重优先）
+  - 仅采 RAM/CPU/空闲磁盘/进程内存；**不探** GPU/VRAM/NPU/温度/电池；探针失败安全降级为 `Normal`，绝不伪造 CRITICAL
+  - §30 `ModelRole` 11 种；`RuntimeKind` 5 种；资格矩阵（仅 `Intent`/`Extractor` 允许 deterministic）；
+    规范解析顺序；`UNSAMPLED != HEALTHY`（P0：未采样快照禁止授权新 BUILTIN_LOCAL 启动/加载）；
+    cloud-disabled 永不返回 CLOUD；provider 失败不静默切换；纯函数（相同输入 → 相同路由）
+  - `RuntimeKind` 单一真相源：W13 `runtime/RuntimeDescriptor.runtime_kind` 复用 `model_router::RuntimeKind`
+- **validation run + result**:
+  - `cargo check -j 1` → **0 error**（仅既有基线 warnings）
+  - `cargo test --test resource_governor_v2 -- --test-threads=1` → **10 passed / 0 failed**（RG2-01…RG2-10）
+  - `cargo test --test model_role_router -- --test-threads=1` → **12 passed / 0 failed**（MR-01…MR-12）
+  - `cargo fmt --check` → 仅 3 个**基线**债务文件（`secret_migration.rs` / `agent.rs` / `secret_store_cutover.rs`）残留；本 wave 文件**全部 format-clean**
+- **resource state**: NORMAL
+- **known risk**: 无
+- **deviation**:
+  1. `RuntimeKind` 定义置于 `model_router/types.rs`（W12），W13 `runtime/types.rs` **复用之**，避免跨子系统重复定义（§30 单一边界纪律）。
+  2. `committed_percent` 在 Windows 以 `(used_memory + used_swap) / (total_memory + total_swap)` 作内部压力代理；拿不到则保守填 0（0 → NORMAL，不误报压力）。
+  3. CRITICAL 下本路由器只阻断「新的重本地路由」（MR-03）；云端路由是否可用由 `cloud_allowed` 单独守门（§30 cloud privacy contract），未在 CRITICAL 额外阻断云端——任务书无对应测试要求，且云契约独立于设备压力。
+- **next wave**: W13
 
 ---
 
