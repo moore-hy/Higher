@@ -22,6 +22,17 @@ fn unsampled() -> ResourceSnapshot {
     ResourceSnapshot::unsampled("")
 }
 
+fn sampled_critical() -> ResourceSnapshot {
+    ResourceSnapshot {
+        state: ResourceState::Critical,
+        ram_percent: 95.0,
+        cpu_percent: 95.0,
+        free_disk_bytes: 1_000_000,
+        process_memory_bytes: 2_000_000,
+        sampled_at: "2026-10-01T00:00:00Z".to_string(),
+    }
+}
+
 fn base(role: ModelRole) -> RouterInput {
     RouterInput {
         role,
@@ -156,4 +167,42 @@ fn mr_12_unsampled_may_use_running_external_local() {
     i.resource = unsampled();
     i.external_local_healthy = true;
     assert_eq!(resolve(&i), RuntimeKind::ExternalLocal);
+}
+
+// FIX 1 — CRITICAL 下，即使 BUILTIN_LOCAL 已运行，新任务路由也不得派发（不杀进程）。
+#[test]
+fn mr_13_critical_with_running_builtin_local_is_unavailable() {
+    let mut i = base(ModelRole::Tutor);
+    i.resource = sampled_critical();
+    i.builtin_local_available = true;
+    i.builtin_local_already_running = true; // 已运行，但 CRITICAL 仍禁止新任务推理
+    assert_eq!(resolve(&i), RuntimeKind::Unavailable);
+}
+
+// FIX 1 — CRITICAL 下，即使 EXTERNAL_LOCAL 健康运行，新任务路由也不得派发。
+#[test]
+fn mr_14_critical_with_healthy_external_local_is_unavailable() {
+    let mut i = base(ModelRole::Tutor);
+    i.resource = sampled_critical();
+    i.external_local_healthy = true;
+    assert_eq!(resolve(&i), RuntimeKind::Unavailable);
+}
+
+// FIX 1 — CRITICAL 下，即使云端许可且可用，新任务路由也不得派发。
+#[test]
+fn mr_15_critical_with_usable_cloud_is_unavailable() {
+    let mut i = base(ModelRole::Tutor);
+    i.resource = sampled_critical();
+    i.cloud_allowed = true;
+    i.cloud_configured_and_usable = true;
+    assert_eq!(resolve(&i), RuntimeKind::Unavailable);
+}
+
+// FIX 1 — CRITICAL 下，有效的确定性核心（Intent）仍可被选择（在 CRITICAL 拦截之前优先放行）。
+#[test]
+fn mr_16_critical_with_valid_deterministic_intent_is_deterministic() {
+    let mut i = base(ModelRole::Intent);
+    i.resource = sampled_critical();
+    i.deterministic_available = true;
+    assert_eq!(resolve(&i), RuntimeKind::Deterministic);
 }

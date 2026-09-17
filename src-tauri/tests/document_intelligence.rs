@@ -856,3 +856,164 @@ fn di_23_absent_parent_stays_none() {
     // 额外确认：未提供任何 parent_context 输入时，候选仍可达且未 panic。
     assert!(!pack.candidates.is_empty());
 }
+
+// FIX 2 — 合并候选必须在截断到 30 之前按确定性相关度排序；
+// 同一逻辑候选集以多种插入顺序进入，存活的 chunk 身份必须一致，且必须为相关度最高的 30。
+#[test]
+fn di_24_merged_candidates_sort_before_truncation() {
+    // 40 个唯一候选（20 lexical + 20 semantic，chunk id 互不重复），
+    // 相关度 = 序号（c39 最高）。正确的最高相关度 30 应为 c10..c39。
+    fn build(order: &[usize]) -> Vec<String> {
+        let mut input = CompileInput {
+            request: req(1, vec!["s1"]),
+            ..Default::default()
+        };
+        // 0..20 = lexical(c0..c19)，20..40 = semantic(c20..c39)
+        let mut all: Vec<(usize, bool)> = (0..20).map(|i| (i, true)).collect();
+        all.extend((20..40).map(|i| (i, false)));
+        for &idx in order {
+            let (i, is_lex) = all[idx];
+            if is_lex {
+                input.lexical.push(chunk(
+                    &format!("c{i}"),
+                    "s1",
+                    "r1",
+                    None,
+                    i as i64,
+                    "t",
+                    Some(i as f64),
+                    None,
+                ));
+            } else {
+                input.semantic.push(chunk(
+                    &format!("c{i}"),
+                    "s1",
+                    "r1",
+                    None,
+                    i as i64,
+                    "t",
+                    None,
+                    Some(i as f64),
+                ));
+            }
+        }
+        let pack = compile(&input);
+        pack.candidates.iter().map(|c| c.chunk_id.clone()).collect()
+    }
+
+    let asc: Vec<usize> = (0..40).collect(); // 升序插入
+    let desc: Vec<usize> = (0..40).rev().collect(); // 降序插入
+    let mut perm: Vec<usize> = (0..40).collect();
+    perm.rotate_left(13); // 另一种排列插入
+
+    let r1 = build(&asc);
+    let r2 = build(&desc);
+    let r3 = build(&perm);
+
+    // 三种插入顺序必须产生相同的存活集合（确定性，不依赖 HashMap 迭代序）。
+    assert_eq!(r1, r2, "升序与降序插入产生的候选集合不一致");
+    assert_eq!(r1, r3, "升序与排列插入产生的候选集合不一致");
+
+    // 存活集合必须是相关度最高的 8（最终 ≤12，无邻接扩展）：c39..c32。
+    let expected: Vec<String> = (0..8).map(|k| format!("c{}", 39 - k)).collect();
+    assert_eq!(r1, expected, "存活候选应是最相关度的 8 个");
+    // 最低相关度的 c0 必须被 30 上限剔除，不在产物中。
+    assert!(
+        !r1.contains(&"c0".to_string()),
+        "最低相关度候选不应幸存 30 上限"
+    );
+}
+
+// FIX 3 — semantic_enabled=false 时，present 的 semantic 候选必须被完全忽略。
+#[test]
+fn di_25_semantic_disabled_ignores_semantic_input() {
+    // 仅提供 semantic 候选（无任何 lexical）→ 空产物。
+    let mut input = CompileInput {
+        request: ContextRequest {
+            semantic_enabled: false,
+            ..req(1, vec!["s1"])
+        },
+        ..Default::default()
+    };
+    for i in 0..5 {
+        input.semantic.push(chunk(
+            &format!("sm{i}"),
+            "s1",
+            "r1",
+            Some("sec1"),
+            i,
+            "s",
+            None,
+            Some(0.9 - i as f64 * 0.1),
+        ));
+    }
+    let pack = compile(&input);
+    assert!(pack.candidates.is_empty());
+
+    // 混合情况：semantic 候选存在但被禁用 → 不得出现在产物中；lexical 照常发出。
+    let mut input2 = CompileInput {
+        request: ContextRequest {
+            semantic_enabled: false,
+            ..req(1, vec!["s1"])
+        },
+        ..Default::default()
+    };
+    input2
+        .lexical
+        .push(chunk("lx0", "s1", "r1", Some("sec1"), 0, "l", Some(0.9), None));
+    input2
+        .semantic
+        .push(chunk("sm0", "s1", "r1", Some("sec1"), 0, "s", None, Some(0.9)));
+    let pack2 = compile(&input2);
+    assert!(pack2.candidates.iter().any(|c| c.chunk_id == "lx0"));
+    assert!(!pack2.candidates.iter().any(|c| c.chunk_id == "sm0"));
+}
+
+// FIX 3 — rerank_enabled=false 时，即使 rerank 可用且有冲突分数，也必须用回退相关度排序。
+#[test]
+fn di_26_rerank_disabled_uses_fallback_relevance_order() {
+    let mut input = CompileInput {
+        request: ContextRequest {
+            rerank_enabled: false,
+            ..req(1, vec!["s1"])
+        },
+        ..Default::default()
+    };
+    input
+        .lexical
+        .push(chunk("c_low", "s1", "r1", Some("sec1"), 0, "low", Some(0.1), None));
+    input
+        .lexical
+        .push(chunk("c_high", "s1", "r1", Some("sec1"), 1, "high", Some(0.9), None));
+    // rerank 可用且分数与真实相关度冲突：给 c_low 极高 rerank 分。
+    input.rerank_available = true;
+    input.rerank_scores.insert("c_low".to_string(), 0.99);
+    input.rerank_scores.insert("c_high".to_string(), 0.01);
+    let pack = compile(&input);
+    // 回退排序按真实相关度：c_high 必须排第一，而非被禁用的 rerank 顺序。
+    assert_eq!(pack.candidates[0].chunk_id, "c_high");
+}
+
+// FIX 3 — rerank_enabled=true 且可用时，rerank 分数可控制排序。
+#[test]
+fn di_27_rerank_enabled_controls_ordering() {
+    let mut input = CompileInput {
+        request: ContextRequest {
+            rerank_enabled: true,
+            ..req(1, vec!["s1"])
+        },
+        ..Default::default()
+    };
+    input
+        .lexical
+        .push(chunk("c_low", "s1", "r1", Some("sec1"), 0, "low", Some(0.1), None));
+    input
+        .lexical
+        .push(chunk("c_high", "s1", "r1", Some("sec1"), 1, "high", Some(0.9), None));
+    input.rerank_available = true;
+    input.rerank_scores.insert("c_low".to_string(), 0.99);
+    input.rerank_scores.insert("c_high".to_string(), 0.01);
+    let pack = compile(&input);
+    // rerank 启用：c_low（rerank 0.99）应排第一，覆盖真实相关度。
+    assert_eq!(pack.candidates[0].chunk_id, "c_low");
+}

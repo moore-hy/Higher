@@ -10,7 +10,7 @@
 //!   provider 之间静默切换（MR-09）。
 
 use crate::model_router::types::{ModelRole, RuntimeKind};
-use crate::resource::types::ResourceSnapshot;
+use crate::resource::types::{ResourceSnapshot, ResourceState};
 
 /// 解析输入：角色 + 资源视图 + 云/隐私许可 + 各类运行时可用性。
 ///
@@ -47,6 +47,13 @@ pub fn resolve(input: &RouterInput) -> RuntimeKind {
     // 1. 确定性路径（仅矩阵允许的角色）。
     if role_allows_deterministic(input.role) && input.deterministic_available {
         return RuntimeKind::Deterministic;
+    }
+
+    // 1b. 已采样且设备处于 CRITICAL：禁止为 NEW 任务路由任何模型推理。
+    //     不杀任何已运行进程；仅阻止 Higher 把「新任务所属」的推理派发到
+    //     BuiltinLocal / ExternalLocal / Cloud。确定性核心已在上方优先放行（MR-16）。
+    if input.resource.is_sampled() && input.resource.state == ResourceState::Critical {
+        return RuntimeKind::Unavailable;
     }
 
     // 2. BUILTIN_LOCAL。

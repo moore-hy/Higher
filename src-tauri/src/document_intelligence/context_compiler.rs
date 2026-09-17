@@ -147,7 +147,13 @@ pub fn compile(input: &CompileInput) -> ContextPack {
 
     // 1. profile/corpus 隔离。
     let lexical = filter_scope(&input.lexical, req);
-    let semantic = filter_scope(&input.semantic, req);
+    // FIX 3：semantic_enabled == false 时，完全忽略 semantic 输入
+    // （等价于在进入 semantic top-k / 合并之前将 semantic 列表置空）。
+    let semantic: Vec<RetrievedChunk> = if req.semantic_enabled {
+        filter_scope(&input.semantic, req)
+    } else {
+        Vec::new()
+    };
     let lexical_over = lexical.len() > LEXICAL_TOP_K;
     let semantic_over = semantic.len() > SEMANTIC_TOP_K;
 
@@ -158,14 +164,25 @@ pub fn compile(input: &CompileInput) -> ContextPack {
     // 3. 合并去重。
     let mut merged = merge_dedupe(lexical_top, semantic_top);
 
-    // 4. 合并上限 30（同时是重排输入上限）。
+    // 3b. FIX 2：确定性排序（相关度降序 + 稳定键升序）必须在截断到 30 之前完成，
+    //     否则 HashMap 迭代序会决定哪些候选幸存 30 上限（DI-24）。
+    merged.sort_by(|a, b| {
+        relevance(b)
+            .partial_cmp(&relevance(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| stable_key(a).cmp(&stable_key(b)))
+    });
+
+    // 4. 合并上限 30（同时是重排输入上限）。此刻 merged 已按确定序排列。
     let merged_over = merged.len() > MAX_MERGED_CANDIDATES;
     if merged.len() > MAX_RERANK_INPUT {
         merged.truncate(MAX_RERANK_INPUT);
     }
 
     // 5/6. 重排（可用且有分）或确定性回退排序。
-    if input.rerank_available && !input.rerank_scores.is_empty() {
+    // FIX 3：rerank_enabled == false 时，即使 rerank 可用且有分，
+    // 也不得应用 rerank 分数，必须使用确定性回退相关度排序。
+    if req.rerank_enabled && input.rerank_available && !input.rerank_scores.is_empty() {
         merged.sort_by(|a, b| {
             let sa = input
                 .rerank_scores
