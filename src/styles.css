@@ -49,6 +49,20 @@
   --h-radius-md: 12px;
   --h-radius-lg: 16px;
   --h-radius-xl: 20px;
+  /* ============ COGNITIVE CORE V1.2 §23：Higher Cognitive Shell tokens ============
+     深色玻璃、壁纸感知（同一张壁纸从壳层自然透出，绝不内嵌截图当背景）。
+     仅供新的桌面 Shell / Today / Memory / Progress 使用；旧页面继续用 --h-*。 */
+  --hc-panel: rgba(8, 20, 31, 0.72);
+  --hc-panel-strong: rgba(7, 17, 28, 0.84);
+  --hc-border: rgba(151, 214, 255, 0.18);
+  --hc-border-strong: rgba(151, 230, 255, 0.34);
+  --hc-text: #f3f8fb;
+  --hc-muted: #9eb1bf;
+  --hc-cyan: #78e3ff;
+  --hc-aqua: #81efd2;
+  --hc-warning: #ffb08f;
+  --hc-radius: 18px;
+  --hc-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
   /* Spacing（§11） */
   --h-space-1: 4px;
   --h-space-2: 8px;
@@ -1074,6 +1088,1278 @@ html[data-h-wallpaper="on"] #root {
   flex: 1;
   overflow-y: auto;
   padding: var(--h-space-8);
+}
+
+/* ============================================================================
+   COGNITIVE CORE V1.2 §22 / §23 — Higher Cognitive Shell（桌面专属）
+   只在 .layout--cognitive 下生效；Android 走 MobileLayout，完全不被影响。
+   ============================================================================ */
+
+/* §22：侧栏收窄到 164–176px；深色玻璃保持壁纸透出（不内嵌截图） */
+.layout--cognitive .layout__sidebar {
+  width: 172px;
+  padding: 18px 12px;
+  gap: 16px;
+  border-right: 1px solid var(--hc-border);
+}
+
+.layout--cognitive .layout__brand {
+  padding: 0 6px;
+}
+
+.layout--cognitive .layout__brand-name {
+  font-size: 16px;
+  letter-spacing: 0.3px;
+}
+
+/* §22：MainStage = 内容 + 底部命令栏（纵向布局，不再有常驻 AI 右栏） */
+.layout--cognitive .layout__body {
+  flex-direction: column;
+}
+
+.hc-mainstage {
+  position: relative;
+}
+
+.layout--cognitive .layout__main {
+  padding: 26px 32px 8px;
+}
+
+.layout--cognitive .layout__sidebar-footer {
+  flex: 0 0 auto;
+  padding: 10px 0 0;
+  border-top: 0;
+}
+
+/* ---- 主导航 Today / Journey / Memory / Progress ---- */
+.hc-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hc-nav__item {
+  gap: 9px;
+  min-height: 38px;
+  padding: 0 10px;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.hc-nav__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  color: inherit;
+}
+
+/* §21 / §35：Today 选中态用青色边光（不是旧主题蓝） */
+.hc-nav__item--active {
+  background: rgba(120, 227, 255, 0.1);
+  border-color: var(--hc-border-strong);
+  color: var(--hc-cyan);
+  box-shadow: inset 2px 0 0 var(--hc-cyan);
+}
+
+.hc-nav__item--active:hover {
+  background: rgba(120, 227, 255, 0.14);
+  color: var(--hc-cyan);
+}
+
+/* §21 preserved power-user routes：能力保留，视觉弱化并推到底部 */
+.hc-nav--advanced {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--hc-border);
+}
+
+.hc-nav__caption {
+  padding: 0 10px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--hc-muted);
+  opacity: 0.7;
+}
+
+.hc-nav__item--advanced {
+  min-height: 32px;
+  font-size: 12.5px;
+  color: var(--h-text-muted);
+}
+
+.hc-nav__item--advanced:hover {
+  color: var(--hc-text);
+}
+
+/* ---- §22 Higher Command Bar（MainStage 底部唯一自由文本入口） ---- */
+.hc-cmd {
+  flex: 0 0 auto;
+  align-self: center;
+  width: min(680px, calc(100% - 48px));
+  margin: 10px 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 9px 9px 15px;
+  border-radius: 999px;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel-strong);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  box-shadow: var(--hc-shadow);
+  z-index: 30;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.hc-cmd:focus-within {
+  border-color: var(--hc-border-strong);
+  box-shadow: var(--hc-shadow), 0 0 0 3px rgba(120, 227, 255, 0.09);
+}
+
+.hc-cmd__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--hc-cyan);
+  opacity: 0.9;
+  flex-shrink: 0;
+}
+
+.hc-cmd__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--hc-text);
+  font-size: 14px;
+  line-height: 20px;
+  padding: 6px 2px;
+}
+
+.hc-cmd__input::placeholder {
+  color: var(--hc-muted);
+}
+
+.hc-cmd__icon-btn,
+.hc-cmd__submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--hc-muted);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, opacity 140ms ease;
+}
+
+.hc-cmd__icon-btn:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.hc-cmd__submit {
+  background: rgba(120, 227, 255, 0.12);
+  border-color: var(--hc-border);
+  color: var(--hc-cyan);
+}
+
+.hc-cmd__submit:hover:not(:disabled) {
+  background: rgba(120, 227, 255, 0.2);
+  border-color: var(--hc-border-strong);
+}
+
+.hc-cmd__submit:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+/* ---- §22 桌面 AI 抽屉：420px 右侧覆盖，玻璃质感 ---- */
+.hc-ai-drawer {
+  position: fixed;
+  top: var(--h-titlebar-height);
+  right: 0;
+  bottom: 0;
+  width: 420px;
+  max-width: min(420px, 92vw);
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  z-index: 400;
+  animation: hc-drawer-in 160ms ease-out;
+}
+
+.hc-ai-drawer .aipanel--drawer {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  border-left: 1px solid var(--hc-border-strong);
+  background: var(--hc-panel-strong);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.34);
+}
+
+@keyframes hc-drawer-in {
+  from {
+    transform: translateX(18px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* 视觉隐藏但对读屏可见（Dialog.Title 用；避免与 .aipanel__header 里的
+   可见标题重复出现） */
+.hc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* §37 回归保护：桌面标题栏的窗口控制（最小化/最大化/关闭）是生产能力。
+   Radix Themes Dialog 的 modal 语义会把 body 置为 pointer-events:none，
+   会把标题栏变成死区。这里只把标题栏放回可交互集合——不涉及 focus trap /
+   Escape / aria / portal，因此不与 §22「不自研无障碍层」冲突。 */
+.titlebar {
+  pointer-events: auto;
+}
+
+/* ============================================================================
+   COGNITIVE CORE V1.2 §24 — Today 认知首屏（桌面）
+   全部类以 .hc- 前缀，作用域收敛；Android 走移动端布局，不受影响。
+   ============================================================================ */
+
+.hc-today {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+/* §35：>=1280 hero 三栏（hero | orb | signals）；900–1279 收窄；<900 纵向堆叠 */
+.hc-today__top {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) auto minmax(0, 0.85fr);
+  align-items: center;
+  gap: 22px;
+  padding: 24px 26px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  box-shadow: var(--hc-shadow);
+}
+
+.hc-today__signals {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* ---- Hero ---- */
+.hc-hero {
+  min-width: 0;
+}
+
+.hc-hero__clock {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+
+.hc-hero__time {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  color: var(--hc-cyan);
+}
+
+.hc-hero__greeting {
+  font-size: 13px;
+  color: var(--hc-muted);
+}
+
+.hc-hero__headline {
+  margin: 0 0 8px;
+  font-size: 28px;
+  line-height: 1.24;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+  color: var(--hc-text);
+}
+
+.hc-hero__support {
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--hc-muted);
+}
+
+.hc-hero__suggest {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--hc-muted);
+}
+
+.hc-hero__suggest b {
+  color: var(--hc-aqua);
+  font-weight: 600;
+}
+
+.hc-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ---- 通用 Higher 按钮（Only 壳内使用，不改动既有 .btn）---- */
+.hc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 1px solid var(--hc-border);
+  background: rgba(151, 214, 255, 0.06);
+  color: var(--hc-text);
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, opacity 150ms ease;
+}
+
+.hc-btn:hover:not(:disabled) {
+  background: rgba(151, 214, 255, 0.12);
+  border-color: var(--hc-border-strong);
+}
+
+.hc-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.hc-btn--primary {
+  border-color: var(--hc-border-strong);
+  background: linear-gradient(
+    135deg,
+    rgba(120, 227, 255, 0.22),
+    rgba(129, 239, 210, 0.16)
+  );
+  color: var(--hc-text);
+  box-shadow: 0 8px 26px rgba(120, 227, 255, 0.14);
+}
+
+.hc-btn--primary:hover:not(:disabled) {
+  background: linear-gradient(
+    135deg,
+    rgba(120, 227, 255, 0.3),
+    rgba(129, 239, 210, 0.22)
+  );
+}
+
+.hc-btn--quiet {
+  border-color: var(--hc-border);
+  background: transparent;
+  color: var(--hc-muted);
+}
+
+.hc-btn--quiet:hover:not(:disabled) {
+  color: var(--hc-text);
+}
+
+/* ---- Cognitive Orb（纯 SVG；动效只做 transform/opacity，16–24s）---- */
+.hc-orb {
+  position: relative;
+  width: 236px;
+  height: 236px;
+  flex-shrink: 0;
+  justify-self: center;
+}
+
+.hc-orb__svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hc-orb__layer {
+  transform-box: view-box;
+  transform-origin: center;
+}
+
+.hc-orb__layer--a {
+  animation: hc-orb-spin 24s linear infinite;
+}
+
+.hc-orb__layer--b {
+  animation: hc-orb-spin 19s linear infinite reverse;
+}
+
+.hc-orb__layer--c {
+  animation: hc-orb-tilt 16s ease-in-out infinite;
+}
+
+.hc-orb__core {
+  animation: hc-orb-breathe 20s ease-in-out infinite;
+}
+
+@keyframes hc-orb-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes hc-orb-tilt {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+    opacity: 0.75;
+  }
+  50% {
+    transform: rotate(6deg);
+    opacity: 1;
+  }
+}
+
+@keyframes hc-orb-breathe {
+  0%,
+  100% {
+    opacity: 0.88;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.hc-orb__copy {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.hc-orb__brand {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: 0.6px;
+  color: var(--hc-text);
+}
+
+.hc-orb__tagline {
+  margin-top: 4px;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: var(--hc-cyan);
+}
+
+.hc-orb__promise {
+  margin-top: 6px;
+  max-width: 150px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--hc-muted);
+}
+
+.hc-orb__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- Coach Signal Card ---- */
+.hc-signal {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel-strong);
+}
+
+.hc-signal__title {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  color: var(--hc-muted);
+}
+
+.hc-signal__primary {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--hc-text);
+}
+
+.hc-signal__hint {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--hc-muted);
+}
+
+.hc-signal__meta {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  color: var(--hc-muted);
+  opacity: 0.85;
+}
+
+.hc-signal--memory .hc-signal__primary {
+  color: var(--hc-aqua);
+}
+
+.hc-signal--load .hc-signal__primary {
+  color: var(--hc-cyan);
+}
+
+/* ---- Training Plan Strip ---- */
+.hc-plan {
+  padding: 16px 18px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.hc-plan__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.hc-plan__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--hc-text);
+}
+
+.hc-plan__total {
+  font-size: 12px;
+  color: var(--hc-muted);
+}
+
+/* §35 <900：块横向滚动；宽屏一行放下 */
+.hc-plan__blocks {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.hc-plan__block {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-width: 190px;
+  max-width: 260px;
+  padding: 11px 13px;
+  border-radius: 13px;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel-strong);
+}
+
+.hc-plan__block--break {
+  border-style: dashed;
+  background: transparent;
+}
+
+.hc-plan__ordinal {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--hc-cyan);
+  background: rgba(120, 227, 255, 0.12);
+}
+
+.hc-plan__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.hc-plan__goal {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--hc-text);
+}
+
+.hc-plan__rule {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--hc-muted);
+}
+
+.hc-plan__flag {
+  font-size: 11px;
+  color: var(--hc-warning);
+}
+
+.hc-plan__minutes {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--hc-muted);
+}
+
+.hc-plan__empty {
+  padding: 6px 0 2px;
+}
+
+.hc-plan__empty-primary {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--hc-text);
+}
+
+.hc-plan__empty-hint {
+  margin: 4px 0 12px;
+  font-size: 12.5px;
+  color: var(--hc-muted);
+}
+
+/* ---- Recommendation Rationale ---- */
+.hc-rationale {
+  padding: 14px 18px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.hc-rationale__title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--hc-text);
+}
+
+.hc-rationale__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hc-rationale__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--hc-muted);
+}
+
+.hc-rationale__label {
+  color: var(--hc-text);
+  font-weight: 550;
+}
+
+.hc-rationale__item--caution .hc-rationale__label {
+  color: var(--hc-warning);
+}
+
+.hc-rationale__item--positive .hc-rationale__label {
+  color: var(--hc-aqua);
+}
+
+.hc-rationale__value {
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-rationale__trend {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hc-border);
+  opacity: 0.8;
+}
+
+/* ---- §24 次 CTA 的 DIRECT 起点选择面 ---- */
+.hc-choice {
+  padding: 14px 18px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel-strong);
+}
+
+.hc-choice__hint {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--hc-muted);
+}
+
+.hc-choice__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ---- §24 legacy 详情折叠区 ---- */
+.hc-legacy {
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  padding: 0 18px;
+}
+
+.hc-legacy__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 13px 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--hc-muted);
+  list-style: none;
+}
+
+.hc-legacy__summary::-webkit-details-marker {
+  display: none;
+}
+
+.hc-legacy__summary::before {
+  content: "▸";
+  font-size: 11px;
+  color: var(--hc-cyan);
+  transition: transform 150ms ease;
+}
+
+.hc-legacy[open] > .hc-legacy__summary::before {
+  transform: rotate(90deg);
+}
+
+.hc-legacy__summary-title {
+  font-weight: 600;
+  color: var(--hc-text);
+}
+
+.hc-legacy__summary-hint {
+  font-size: 12px;
+}
+
+.hc-legacy__body {
+  padding-bottom: 18px;
+}
+
+/* Android：折叠区恒展开且不显示 summary，视觉与改动前一致（§37） */
+.platform-android .hc-legacy {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.platform-android .hc-legacy__summary {
+  display: none;
+}
+
+.platform-android .hc-legacy__body {
+  padding-bottom: 0;
+}
+
+/* ============================================================================
+   COGNITIVE CORE V1.2 §25 — Memory 页（第一个真正的记忆界面）
+   桌面与 Android 共用同一套 token；不引入任何平台分支逻辑。
+   ============================================================================ */
+
+.hc-memory {
+  max-width: 940px;
+  gap: 18px;
+}
+
+.hc-memory__loading {
+  margin: 0;
+  color: var(--hc-muted);
+  font-size: 13px;
+}
+
+/* §25 空状态：文案为任务书锁定文案，视觉上要「高级」而不是「失败」 */
+.hc-memory__empty {
+  padding: 28px 26px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: var(--hc-shadow);
+}
+
+.hc-memory__empty-primary {
+  margin: 0;
+  color: var(--hc-text);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.hc-memory__empty-hint {
+  margin: 8px 0 0;
+  color: var(--hc-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---- 压力摘要 ---- */
+.hc-memsum {
+  padding: 18px 22px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: var(--hc-shadow);
+}
+
+.hc-memsum__head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.hc-memsum__band {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+  color: var(--hc-text);
+}
+
+.hc-memsum__band--calm {
+  color: var(--hc-aqua);
+}
+
+.hc-memsum__band--watch {
+  color: var(--hc-cyan);
+}
+
+.hc-memsum__band--high {
+  color: var(--hc-warning);
+}
+
+.hc-memsum__counts {
+  font-size: 13px;
+  color: var(--hc-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-memsum__timing {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--hc-muted);
+}
+
+/* ---- 到期 / 下一次复习 列表 ---- */
+.hc-memlist {
+  padding: 16px 22px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.hc-memlist__title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--hc-text);
+}
+
+.hc-memlist__empty {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--hc-muted);
+}
+
+.hc-memlist__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.hc-memrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 11px 0;
+  border-top: 1px solid var(--hc-border);
+  font-size: 13px;
+  color: var(--hc-muted);
+}
+
+.hc-memrow:first-child {
+  border-top: 0;
+}
+
+.hc-memrow__main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.hc-memrow__label {
+  color: var(--hc-text);
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-memrow__kind {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hc-border);
+  color: var(--hc-muted);
+}
+
+.hc-memrow__timing {
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-memrow__count {
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-memrow__status {
+  font-size: 11.5px;
+  padding: 1px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hc-border);
+  color: var(--hc-muted);
+}
+
+.hc-memrow[data-status="due"] .hc-memrow__status {
+  color: var(--hc-cyan);
+  border-color: var(--hc-border-strong);
+}
+
+.hc-memrow[data-status="stable"] .hc-memrow__status {
+  color: var(--hc-aqua);
+}
+
+/* ---- 「为什么现在复习」 ---- */
+.hc-memwhy {
+  padding: 14px 20px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.hc-memwhy__title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--hc-text);
+}
+
+.hc-memwhy__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hc-memwhy__item {
+  font-size: 12.5px;
+  color: var(--hc-muted);
+}
+
+.hc-memwhy__item--caution {
+  color: var(--hc-warning);
+}
+
+.hc-memwhy__item--positive {
+  color: var(--hc-aqua);
+}
+
+/* ============================================================================
+   COGNITIVE CORE V1.2 §26 — Progress 页（四轴，不是一个魔法分数）
+   ============================================================================ */
+
+.hc-progress {
+  max-width: 940px;
+  gap: 18px;
+}
+
+.hc-progress__loading,
+.hc-progress__window {
+  margin: 0;
+  font-size: 13px;
+  color: var(--hc-muted);
+}
+
+.hc-progress__more {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.hc-axis {
+  padding: 18px 22px;
+  border-radius: var(--hc-radius);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-panel);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: var(--hc-shadow);
+}
+
+.hc-axis--missing {
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.hc-axis__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hc-axis__title {
+  margin: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+  color: var(--hc-text);
+}
+
+.hc-axis__zh {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--hc-muted);
+}
+
+/* Radix Popover 触发器（§26：轴口径必须走 Radix 原语披露） */
+.hc-axis__info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--hc-border);
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--hc-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.hc-axis__info:hover {
+  color: var(--hc-cyan);
+  border-color: var(--hc-border-strong);
+}
+
+.hc-pop {
+  border-radius: 12px;
+  border: 1px solid var(--hc-border-strong);
+  background: var(--hc-panel-strong);
+  color: var(--hc-text);
+  box-shadow: var(--hc-shadow);
+  padding: 10px 12px;
+}
+
+.hc-pop__text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--hc-text);
+}
+
+.hc-axis__stats {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 28px;
+}
+
+.hc-axis__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.hc-axis__stat-label {
+  font-size: 11.5px;
+  color: var(--hc-muted);
+}
+
+.hc-axis__stat-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--hc-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-axis__missing {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--hc-muted);
+}
+
+.hc-axis__missing-hint {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--hc-muted);
+}
+
+.hc-axis__note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--hc-muted);
+}
+
+.hc-chart {
+  margin-top: 14px;
+  width: 100%;
+}
+
+/* §35 响应式：<900 时行布局改为纵向堆叠，避免挤爆 */
+@media (max-width: 899px) {
+  .hc-memrow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* §35 响应式：900–1279 orb 收缩；<900 纵向堆叠 */
+@media (max-width: 1279px) {
+  .hc-today__top {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  }
+
+  .hc-orb {
+    width: 176px;
+    height: 176px;
+  }
+
+  .hc-orb__promise {
+    display: none;
+  }
+
+  .hc-today__signals {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .hc-today__signals > * {
+    flex: 1 1 200px;
+  }
+}
+
+@media (max-width: 899px) {
+  .hc-today__top {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hc-orb {
+    width: 150px;
+    height: 150px;
+  }
+
+  .hc-hero__headline {
+    font-size: 23px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-ai-drawer {
+    animation: none;
+  }
+  .hc-cmd,
+  .hc-cmd__icon-btn,
+  .hc-cmd__submit {
+    transition: none;
+  }
+  /* §23：orb 在 reduced-motion 下完全静止（不做任何位移/旋转） */
+  .hc-orb__layer--a,
+  .hc-orb__layer--b,
+  .hc-orb__layer--c,
+  .hc-orb__core {
+    animation: none;
+  }
+  .hc-btn,
+  .hc-legacy__summary::before {
+    transition: none;
+  }
 }
 
 /* ============ 页面通用 ============ */

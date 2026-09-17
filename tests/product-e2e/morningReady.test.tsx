@@ -270,6 +270,13 @@ vi.mock("../../src/api", async (importOriginal) => {
       alternates: [],
     })),
     materializeRecurringRolling: vi.fn(async () => 0),
+    /**
+     * COGNITIVE CORE V1.2 §19：Today 认知首屏的单一后端视图。
+     * 本套 e2e 步骤面向既有闭环与 AI Runtime，因此显式给出「尚无快照」（null）；
+     * 其余命令走下面的 `async () => undefined` 兜底 —— 但 react-query 不允许
+     * queryFn 解析为 undefined，所以这里必须显式覆盖。
+     */
+    getTodayCoachSnapshot: vi.fn(async () => null),
     listLearningItemsByProfile: vi.fn(async () => []),
     getGoalTree: vi.fn(async () => null),
     isPlanningReviewDue: vi.fn(async () => false),

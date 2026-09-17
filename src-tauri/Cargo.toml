@@ -66,7 +66,10 @@ base64 = "0.22"
 rig = "=0.41.0"            # Agent 运行时（替代自研 ai/ 调度）
 rmcp = "=3.3.0"           # 外部 MCP 官方 Rust SDK（替代自研 MCP 桥）
 rrule = "=0.14.0"         # RFC 5545 递归规则（替代自研 Recurrence）
-ts-rs = "=12.0.1"         # Rust→TS DTO 单一真相源（替代手维护 d.ts）
+ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] } # Rust→TS DTO 单一真相源（替代手维护 d.ts）
+# ^ serde-json-impl：HIGHER COGNITIVE CORE V1.2 §9 的 DTO 含 `metadata_json: serde_json::Value`，
+#   ts-rs 需要该 feature 才能导出 `any`。这是既有依赖的 feature 开关，**不是新依赖**
+#   （§5：不得新增其它依赖）。已在 ledger 记为 deviation。
 jieba-rs = "0.10"         # 中文分词（FTS5 中文全文检索）
 keyring = "=4.2.0"        # OS 原生 SecretStore（Windows 凭据管理器 / Android Keystore）
 usearch = { version = "=2.26.1", optional = true }  # 可选语义索引（behind semantic-search feature）
@@ -74,6 +77,15 @@ chrono = "0.4"
 chrono-tz = "0.10"
 schemars = "0.8"
 thiserror = "1"
+
+# --- HIGHER COGNITIVE CORE V1.2 §5：仅这两个新 Rust 依赖被批准（精确钉版本，禁止自行升版） ---
+# fsrs 6.6.2：FSRS 排程实现；**只有 memory/engine.rs 允许直接 import**。
+#   license = BSD-3-Clause（permissive，允许嵌入生产）。
+fsrs = "=6.6.2"
+# sysinfo 0.38.4：轻量资源监视器使用。**不得**用 0.39.x（其 MSRV 高于本仓库锁定基线）。
+#   0.38.4 的 rust_version = "1.88" 与本仓库 rust-version = "1.88.0" 精确匹配；
+#   feature "system" / "disk" 已核验存在。license = MIT。
+sysinfo = { version = "=0.38.4", default-features = false, features = ["system", "disk"] }
 
 [target.'cfg(windows)'.dependencies]
 # DEV-SYNC-003 §五：枚举本机 IPv4 候选（QR candidate_ips；仅 Windows 侧需要）

@@ -927,6 +927,70 @@ pub fn format_learning_load_evidence(ev: &LearningLoadEvidence) -> String {
     out
 }
 
+// =============== §19（COGNITIVE CORE V1.2）窗口总分钟复用入口 ===============
+
+/// 某窗口内**真实观测到的学习总分钟**（completed 会话）。
+///
+/// 与 [`build_learning_load_evidence`] 保持**同一张表、同一过滤条件、同一取整规则
+/// （`round(duration_seconds / 60)`）、同一非法时长处理（`duration_seconds <= 0` 不计）**。
+///
+/// 为什么需要它：Cognitive Core 的 `LearningLoadSummary` 需要「7 天总分钟」，
+/// 而既有证据只暴露 30 天总量与 7 天**日均**。与其在 cognitive 层另起一套统计
+/// （那就是第二个真相源），不如在同一模块里补一个同口径窗口查询。
+/// `observed_minutes_in_window` 的 30 天结果与 `data_summary.observed_study_minutes_30d`
+/// 的一致性由守卫测试固定。
+///
+/// 返回 `None` = 该窗口内**没有任何有效学习记录**（区别于「观测到 0 分钟」）。
+pub fn observed_minutes_in_window(
+    conn: &Connection,
+    profile_id: i64,
+    today: &str,
+    days: i64,
+) -> Result<Option<i64>, String> {
+    if days <= 0 {
+        return Ok(None);
+    }
+    let cutoff = date_offset(today, -days);
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT started_at, COALESCE(duration_seconds, 0)
+             FROM study_sessions
+             WHERE profile_id = ?1 AND status = 'completed'
+             ORDER BY started_at",
+        )
+        .map_err(|e| format!("study_sessions 读取失败: {e}"))?;
+    let rows: Vec<(String, i64)> = stmt
+        .query_map(params![profile_id], |r| {
+            let started: String = r.get(0)?;
+            let secs: i64 = r.get(1)?;
+            Ok((day_of(&started), secs))
+        })
+        .map_err(|e| format!("study_sessions 读取失败: {e}"))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("study_sessions 读取失败: {e}"))?;
+
+    let mut total = 0i64;
+    let mut valid_sessions = 0usize;
+    for (day, secs) in rows {
+        if day.as_str() < cutoff.as_str() {
+            continue;
+        }
+        // §十四：非法 duration 不计入 actual（事实仍在 DB，不修改）
+        if secs <= 0 {
+            continue;
+        }
+        total += (secs as f64 / 60.0).round() as i64;
+        valid_sessions += 1;
+    }
+
+    if valid_sessions == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(total))
+    }
+}
+
 /// rusqlite OptionalExtension 便捷引入（read-only 查询用）。
 trait OptionalRow<T> {
     fn optional(self) -> Result<Option<T>, String>;

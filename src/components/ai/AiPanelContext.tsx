@@ -27,6 +27,7 @@ export interface AiPageContext {
     | "knowledge"
     | "learning"
     | "progress"
+    | "memory"
     | "data"
     | "settings";
   pageLabel: string;
@@ -107,6 +108,15 @@ interface AiPanelState {
   apiKeyMissing: boolean;
   /** DEV-0058：统一 Planner 待发消息（页面按钮 → AiPanel.send 同路径） */
   pendingSendRef: React.RefObject<string | null>;
+  /**
+   * W9 §22：桌面端 AI 呈现位（420px 右侧覆盖抽屉）。
+   * Android 走 MobileLayout 的 /ai 全屏页，不消费本状态。
+   * 关闭态不占任何布局宽度——打开入口 = 底部 HigherCommandBar / 页面 AI 按钮。
+   */
+  drawerOpen: boolean;
+  openDrawer: () => void;
+  closeDrawer: () => void;
+  toggleDrawer: () => void;
 }
 
 const Ctx = createContext<AiPanelState | null>(null);
@@ -135,6 +145,8 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   const [proposal, setProposal] = useState<AiKnowledgeProposal | null>(null);
   const [proposalItems, setProposalItems] = useState<LearningItem[]>([]);
   const [apiKeyMissing, setApiKeyMissing] = useState(false);
+  /** W9 §22：桌面端 AI 抽屉开合（Android 不消费） */
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const profileIdRef = useRef<number | null>(null);
   /** DEV-0058 §51-53：页面入口（AI 生成计划/AI安排）→ 统一 Planner 的待发消息 */
   const pendingSendRef = useRef<string | null>(null);
@@ -146,6 +158,13 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   // Higher AI 恒驻 App Shell（Expanded/Collapsed 两态），唯一视觉偏好是
   // higher.aiPanel.mode（AiPanel 本地管理）。DB 中的旧键值
   // 不迁移、不删除、不再被 UI 消费（stale 兼容数据）。
+  //
+  // W9 §22（COGNITIVE CORE V1.2）修订：桌面端不再「恒驻占宽」。
+  // 两态改为「关闭（零宽度） / 打开（420px 右侧覆盖抽屉）」，
+  // 状态源从 AiPanel 本地 localStorage 上移到本 Provider 的 drawerOpen，
+  // 因为开合要由 Shell 的 HigherCommandBar 与 AiPanel 双方共同驱动。
+  // 旧存储键 higher.aiPanel.mode 保留不迁移、不再被读取（stale 兼容数据）。
+  // Android（MobileLayout 的 /ai 全屏页）完全不消费 drawerOpen。
 
   // Profile 切换：立即清空对话 / Trace / Proposal（绝不跨档案携带）
   useEffect(() => {
@@ -154,9 +173,16 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
       setMessages([]);
       setProposal(null);
       setActiveAction(null);
+      // W9 §22：抽屉一并关闭——绝不把上一个档案的对话残留在屏幕上
+      setDrawerOpen(false);
     }
     profileIdRef.current = activeProfile?.id ?? null;
   }, [activeProfile, refreshKey]);
+
+  /** W9 §22：桌面端 AI 抽屉开合（Radix Dialog 的 open 受控位） */
+  const openDrawer = useCallback(() => setDrawerOpen(true), []);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
+  const toggleDrawer = useCallback(() => setDrawerOpen((v) => !v), []);
 
   const hasPendingProposal = proposal != null;
 
@@ -219,8 +245,9 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   const sendChat = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
-      // DEV-0065.1 §31：AI 恒驻，无需 setOpenState(true)；仍广播 pending-send
-      // 让 Panel 以主输入同路径 send()（AiPanel 收到事件会自动展开 rail §40）
+      // W9 §22：抽屉是唯一能看见 AI 回复的地方 → 发送即打开（Android 无副作用）
+      setDrawerOpen(true);
+      // DEV-0065.1 §31：仍广播 pending-send，让 Panel 以主输入同路径 send()
       pendingSendRef.current = text.trim();
       window.dispatchEvent(new CustomEvent("higher:aipanel-pending-send"));
     },
@@ -231,7 +258,8 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
   const runAction = useCallback(
     async (action: AiActionName, hint?: string, extra?: { date?: string }) => {
       if (busy) return;
-      // DEV-0065.1 §31：AI 恒驻；actionBusy 变化会让 Panel 自动展开 rail（§40）
+      // W9 §22：快捷 Action 的结果同样只出现在抽屉里 → 立即打开
+      setDrawerOpen(true);
       setActiveAction(action);
       setBusy(true);
       setApiKeyMissing(false);
@@ -334,11 +362,17 @@ export function AiPanelProvider({ children }: { children: React.ReactNode }) {
       apiKeyMissing,
       /** DEV-0058：统一 Planner 待发消息（AiPanel 消费后清空） */
       pendingSendRef,
+      /** W9 §22：桌面端 AI 抽屉 */
+      drawerOpen,
+      openDrawer,
+      closeDrawer,
+      toggleDrawer,
     }),
     [
       pageContext, messages, busy, activeAction, scope,
       runAction, sendChat, newConversation, proposal, proposalItems,
-      hasPendingProposal, apiKeyMissing,
+      hasPendingProposal, apiKeyMissing, drawerOpen,
+      openDrawer, closeDrawer, toggleDrawer,
     ]
   );
 

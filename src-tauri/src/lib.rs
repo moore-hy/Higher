@@ -1,14 +1,20 @@
 pub mod ai;
 pub mod app;
+pub mod cognitive;
 pub mod commands;
 pub mod companion;
 pub mod db;
+pub mod document_intelligence;
+pub mod domain_packs;
 pub mod ipc;
 pub mod learning_state;
+pub mod memory;
 pub mod migrations;
 pub mod notifications;
 pub mod platform;
 pub mod repository;
+pub mod resource;
+pub mod runtime;
 pub mod sandbox;
 pub mod sync;
 

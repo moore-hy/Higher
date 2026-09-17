@@ -24,6 +24,65 @@ pub fn get_learning_state(
     learning_state::build_learning_state(&conn, profile_id)
 }
 
+/// HIGHER COGNITIVE CORE V1.2 §19 / §20：Today Coach 的**唯一**后端视图入口。
+///
+/// 硬约束：
+/// - **只读**：不写任何表、不调用任何 AI/LLM（整条链路 0-LLM 确定性）；
+/// - 前端**不得**自行重算 readiness / memory pressure / 排序 / 协议选择 / 理由优先级；
+/// - 不为每张卡片各开一个命令（§19 明确禁止）；
+/// - 签名**逐字**遵循 §19：`(profile_id, available_minutes)`。决策模式取默认值
+///   （`copilot`）—— 不为 V1 额外发明一个 IPC 参数。
+///
+/// `available_minutes` 为 `None` 表示「用户还没选时长」→ 不编排计划（诚实呈现），
+/// 而不是偷偷用一个编造的默认时长。
+#[tauri::command]
+pub fn get_today_coach_snapshot(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    available_minutes: Option<i64>,
+) -> Result<crate::cognitive::TodayCoachSnapshot, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::cognitive::build_today_coach_snapshot(
+        &conn,
+        profile_id,
+        available_minutes,
+        crate::cognitive::DecisionMode::default(),
+    )
+}
+
+/// HIGHER COGNITIVE CORE V1.2 §25：Memory 页的**唯一**后端视图入口。
+///
+/// 硬约束：
+/// - **只读**：不写任何表、不调用任何 AI/LLM；
+/// - **一次 IPC** 返回压力 + 到期队列 + 下一次复习 + 理由顺序（§25 明确禁止 N+1）；
+/// - 空状态由后端判定（`pressure.status == insufficient`），前端不得自行编造；
+/// - `limit` 只是「到期列表要几条」，后端仍以 `MAX_DUE_UNITS` 兜底封顶。
+#[tauri::command]
+pub fn get_memory_dashboard(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    limit: Option<i64>,
+) -> Result<crate::cognitive::MemoryDashboard, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::cognitive::build_memory_dashboard(&conn, profile_id, limit.unwrap_or(0))
+}
+
+/// HIGHER COGNITIVE CORE V1.2 §26：Progress 页（四轴）的**唯一**后端视图入口。
+///
+/// 硬约束：
+/// - **只读**：不写任何表、不调用任何 AI/LLM；
+/// - 四轴各自 `available`，证据不足时明确返回「证据不足」的理由码，
+///   前端**不得**据此编造图表；
+/// - **没有**任何跨轴聚合分（不提供全局效率分，§26）。
+#[tauri::command]
+pub fn get_cognitive_progress(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+) -> Result<crate::cognitive::CognitiveProgressView, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::cognitive::build_cognitive_progress(&conn, profile_id)
+}
+
 /// PHASE 2 / 3：唯一 Next Best Learning Action（同一时刻 exactly one primary）。
 #[tauri::command]
 pub fn get_next_learning_action(

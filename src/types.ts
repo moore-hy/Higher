@@ -1767,3 +1767,377 @@ export interface LearningPack {
   /** Pack 上限（常数，供前端展示「不超过 N 条」）。 */
   max_items: number;
 }
+
+// =============== HIGHER COGNITIVE CORE V1.2（§19 / §20） ===============
+
+/**
+ * Decision Mode（§18 锁定）：direct | copilot | autopilot。
+ *
+ * - `direct`：用户点名的目标**永不被替换**；
+ * - `copilot`：先在用户点名的领域/目标内收窄；
+ * - `autopilot`：使用全量候选。
+ */
+export type CognitiveDecisionMode = "direct" | "copilot" | "autopilot";
+
+/** §17：readiness 是**类别**，不是分数。V1 永不返回 `high`。 */
+export type CognitiveReadinessBand = "insufficient" | "low" | "moderate" | "high";
+
+/** §17：Learning Load 类别（只使用真实观测到的学习时长）。 */
+export type CognitiveLoadBand = "insufficient" | "low" | "stable" | "elevated";
+
+/** 置信度是**类别标签**（低/中/高），**绝不是百分比**。 */
+export type CognitiveEvidenceConfidence = "low" | "medium" | "high";
+
+/** §10 证据质量阶梯。 */
+export type CognitiveEvidenceQuality = "low" | "medium" | "high";
+
+/** §13 记忆压力状态。`insufficient` = 一条 MemoryUnit 都没有（不是「一切正常」）。 */
+export type CognitiveMemoryPressureStatus = "insufficient" | "calm" | "watch" | "high";
+
+export type CognitiveRationaleTrend = "neutral" | "positive" | "caution";
+
+/** §18 锁定的 15 个理由码（完整清单，不增不减）。 */
+export type CognitiveReasonCode =
+  | "user_intent"
+  | "active_session"
+  | "recovery_needed"
+  | "memory_due"
+  | "memory_high_risk"
+  | "goal_urgent"
+  | "continue_recent"
+  | "friction_support"
+  | "new_content"
+  | "application_gap"
+  | "transfer_gap"
+  | "interest_followup"
+  | "time_fit"
+  | "resource_limited"
+  | "insufficient_evidence";
+
+/** §14 锁定的 22 个协议 id。 */
+export type CognitiveProtocolId =
+  | "learn_new"
+  | "worked_example"
+  | "faded_example"
+  | "free_recall"
+  | "cued_recall"
+  | "recognition"
+  | "explain_back"
+  | "standard_practice"
+  | "mixed_practice"
+  | "error_correction"
+  | "transfer_challenge"
+  | "reading_comprehension"
+  | "listening_comprehension"
+  | "pronunciation_discrimination"
+  | "translation_guided"
+  | "coding_trace"
+  | "coding_completion"
+  | "debugging"
+  | "independent_build"
+  | "review_short"
+  | "exploration"
+  | "recovery_light";
+
+export type CognitiveProtocolDifficulty = "light" | "medium" | "high";
+
+export type CognitiveCompletionRuleKind =
+  | "at_least_one_recall_outcome"
+  | "example_viewed_then_explanation_or_explicit"
+  | "at_least_one_practice_outcome"
+  | "error_detected_then_corrected_or_stopped"
+  | "at_least_one_transfer_outcome"
+  | "time_slice_or_user_stop"
+  | "at_least_one_explanation_outcome"
+  | "at_least_one_comprehension_outcome"
+  | "at_least_one_pronunciation_outcome"
+  | "at_least_one_translation_outcome"
+  | "at_least_one_trace_outcome"
+  | "at_least_one_coding_completion_outcome"
+  | "at_least_one_debug_outcome"
+  | "at_least_one_recognition_outcome"
+  | "session_completed_or_user_stop";
+
+/** §10 证据引用（可审计、可指向来源）。 */
+export interface CognitiveEvidenceRef {
+  source_type: string;
+  source_id: string | null;
+  learning_moment_id: number | null;
+  learning_item_id: number | null;
+  /** 非权威展示名；真相判断必须回到 source_type / quality / learning_moment_id。 */
+  label: string;
+  observed_at: string;
+  quality: CognitiveEvidenceQuality;
+}
+
+export interface CognitiveCompletionRule {
+  kind: CognitiveCompletionRuleKind;
+  description_zh: string;
+}
+
+export interface CognitiveTrainingBlock {
+  ordinal: number;
+  /** 学习块 = 对应协议；休息块 = null。 */
+  protocol_id: CognitiveProtocolId | null;
+  minutes: number;
+  goal: string;
+  completion_rule: CognitiveCompletionRule;
+  /** 休息伪块：**不产生任何 mastery 证据**。 */
+  is_break: boolean;
+}
+
+/**
+ * §16 编排结果。
+ *
+ * `reason_codes` 的顺序由后端决定；**前端不得重排**（§33 UI-06）。
+ */
+export interface CognitiveTrainingSessionPlan {
+  target_learning_item_id: number | null;
+  total_minutes: number;
+  blocks: CognitiveTrainingBlock[];
+  reason_codes: CognitiveReasonCode[];
+  evidence_refs: CognitiveEvidenceRef[];
+}
+
+export interface CognitiveTodayHeroState {
+  current_time_label: string;
+  /** 语义 key（如 `today.hero.recovery`）；**不含任何编造统计**。 */
+  headline: string;
+  supporting_text: string;
+  primary_cta_label: string;
+  secondary_cta_label: string;
+}
+
+export interface CognitiveReadinessSummary {
+  band: CognitiveReadinessBand;
+  /** 类别标签，不是百分比。 */
+  confidence: CognitiveEvidenceConfidence;
+  reason_codes: CognitiveReasonCode[];
+  /** false = 状态信息还不够 → UI 必须渲染「暂时没有足够证据」。 */
+  available: boolean;
+}
+
+export interface CognitiveMemoryPressureSummary {
+  status: CognitiveMemoryPressureStatus;
+  total_units: number;
+  due_count: number;
+  high_risk_count: number;
+  oldest_due_at: string | null;
+  /** false = 没有任何 MemoryUnit → **不得**编造「3 个知识点」。 */
+  available: boolean;
+}
+
+export interface CognitiveLearningLoadSummary {
+  band: CognitiveLoadBand;
+  /** null = 窗口内没有任何有效学习记录（**不是**「观测到 0 分钟」）。 */
+  observed_minutes_7d: number | null;
+  observed_minutes_30d: number | null;
+  /** insufficient | low | medium | high（既有 Learning Load Evidence 口径）。 */
+  evidence_quality: string;
+  available: boolean;
+}
+
+export interface CognitiveRationaleItem {
+  code: string;
+  label: string;
+  value: string | null;
+  trend: CognitiveRationaleTrend;
+  source_refs: CognitiveEvidenceRef[];
+}
+
+/** legacy `NextAction` 的摘要（不是第二份真相）。 */
+export interface CognitiveLegacyNextActionSummary {
+  action_type: string;
+  reason_code: string;
+  title: string;
+  subtitle: string | null;
+  estimated_minutes: number | null;
+  learning_item_id: number | null;
+}
+
+/**
+ * §19 锁定的 Today Coach 单一后端视图。
+ *
+ * **前端不得自行重算** readiness / memory pressure / 排序 / 协议选择 / 理由优先级。
+ */
+export interface CognitiveTodaySnapshot {
+  profile_id: number;
+  generated_at: string;
+  local_date: string;
+  mode: CognitiveDecisionMode;
+  hero: CognitiveTodayHeroState;
+  readiness: CognitiveReadinessSummary;
+  memory: CognitiveMemoryPressureSummary;
+  load: CognitiveLearningLoadSummary;
+  /** null = 当前没有可执行的计划（例如未选择时长、或没有候选）。 */
+  plan: CognitiveTrainingSessionPlan | null;
+  /** 固定顺序，最多 5 条。 */
+  rationale: CognitiveRationaleItem[];
+  legacy_next_action: CognitiveLegacyNextActionSummary | null;
+}
+
+// =============== COGNITIVE CORE V1.2 §25 — Memory 页单一后端视图 ===============
+
+/** §13 锁定的 7 种可作为整条 MemoryUnit 的记忆种类（不增不减）。 */
+export type CognitiveMemoryKind =
+  | "vocabulary"
+  | "definition"
+  | "formula"
+  | "fact"
+  | "distinction"
+  | "protocol_field"
+  | "short_answer";
+
+/** §11 Stability 轴口径的展示投影（**不是**掌握度百分比）。 */
+export type CognitiveMemoryUnitStatus = "new" | "due" | "stable";
+
+/**
+ * 一条 MemoryUnit（当前排程状态缓存；**FSRS 才是排程真相**）。
+ *
+ * UI 只允许渲染 `memory_kind` / `next_review_at` / `review_count` /
+ * `lapse_count` 这类真实字段；**绝不**把 `retrievability`、`stability`、
+ * `desired_retention` 或 `fsrs_state_json` 折算成任何「掌握度 %」（§25 / §36）。
+ */
+export interface CognitiveMemoryUnit {
+  id: number;
+  profile_id: number;
+  linked_learning_item_id: number;
+  memory_key: string;
+  memory_kind: CognitiveMemoryKind;
+  stability: number | null;
+  difficulty: number | null;
+  retrievability: number | null;
+  last_review_at: string | null;
+  next_review_at: string | null;
+  desired_retention: number;
+  review_count: number;
+  lapse_count: number;
+  /** 仅供 DTO 对齐；UI **绝不**渲染内部状态。 */
+  fsrs_state_json: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * 到期 / 待复习队列的一行。
+ *
+ * `overdue_days`：> 0 已逾期；0 今天到期；< 0 尚未到期（「下一次复习」区块）。
+ */
+export interface CognitiveMemoryRow {
+  unit: CognitiveMemoryUnit;
+  /** null = 取不到真实展示名（**不**回退成内部编号）。 */
+  learning_item_label: string | null;
+  overdue_days: number;
+  status: CognitiveMemoryUnitStatus;
+}
+
+/** §13 锁定的记忆压力投影（完整真实字段）。 */
+export interface CognitiveMemoryPressure {
+  total_units: number;
+  due_count: number;
+  high_risk_count: number;
+  next_due_at: string | null;
+  oldest_due_at: string | null;
+  /** insufficient = 一条 MemoryUnit 都没有（**不是**「一切正常」）。 */
+  status: CognitiveMemoryPressureStatus;
+}
+
+/** §25「为什么现在复习」的一条理由（`value` 是机器 token，由前端格式化）。 */
+export interface CognitiveMemoryRationaleItem {
+  code: string;
+  value: string | null;
+  trend: CognitiveRationaleTrend;
+}
+
+/**
+ * §25 Memory 页单一后端视图（一次 IPC）。
+ *
+ * 空状态判定：`pressure.status === "insufficient"` —— 此时三个列表必为空数组，
+ * UI **必须**渲染「记忆节奏正在建立」空状态，**绝不**展示 demo 行或伪造计数（§36）。
+ */
+export interface CognitiveMemoryDashboard {
+  profile_id: number;
+  generated_at: string;
+  pressure: CognitiveMemoryPressure;
+  /** 已到期（到期时间升序，后端封顶 20）。 */
+  due_units: CognitiveMemoryRow[];
+  /** 下一次复习（尚未到期，到期时间升序，后端封顶 20）。 */
+  upcoming_units: CognitiveMemoryRow[];
+  /** 顺序由后端决定，前端**不重排**。 */
+  rationale: CognitiveMemoryRationaleItem[];
+}
+
+// =============== COGNITIVE CORE V1.2 §26 — Progress 页四轴投影 ===============
+
+/**
+ * 某一轴「证据不足」的理由码。
+ *
+ * 前端据此渲染中文说明；**任何未知 code 一律不渲染**（绝不抛机器串给用户）。
+ */
+export type CognitiveProgressReasonCode =
+  | "no_observed_sessions"
+  | "no_recall_moments"
+  | "no_protocol_sessions"
+  | "no_historical_evidence";
+
+/** Volume（学了多少）。 */
+export interface CognitiveVolumeAxis {
+  available: boolean;
+  /** null = 窗口内没有任何有效学习记录（**不是**「观测到 0 分钟」）。 */
+  observed_minutes_7d: number | null;
+  observed_minutes_30d: number | null;
+  active_days_30d: number;
+  /** 恒为 true：30 天窗口包含 7 天窗口。UI **必须**明示，不得让两柱看起来是独立量。 */
+  nested_windows: boolean;
+  reason_code: CognitiveProgressReasonCode | null;
+}
+
+/** Quality（学习质量）。 */
+export interface CognitiveQualityAxis {
+  available: boolean;
+  recall_success: number;
+  recall_partial: number;
+  recall_failure: number;
+  hint_requests: number;
+  hint_uses: number;
+  reason_code: CognitiveProgressReasonCode | null;
+}
+
+export interface CognitiveDifficultyBucket {
+  /** light | medium | high（§14 锁定档位）。 */
+  difficulty: string;
+  count: number;
+}
+
+/** Difficulty（训练挑战度）。V1 恒为证据不足（协议会话尚未持久化）。 */
+export interface CognitiveDifficultyAxis {
+  available: boolean;
+  buckets: CognitiveDifficultyBucket[];
+  reason_code: CognitiveProgressReasonCode | null;
+}
+
+/** Adaptation（能力变化）—— 只统计**真实发生过**的状态迁移。 */
+export interface CognitiveAdaptationAxis {
+  available: boolean;
+  recall_to_independent: number;
+  application_to_independent: number;
+  acquisition_to_understood: number;
+  items_improved: number;
+  items_examined: number;
+  reason_code: CognitiveProgressReasonCode | null;
+}
+
+/**
+ * §26 锁定的 Progress 单一后端视图。
+ *
+ * **没有任何跨轴聚合字段** —— 不提供全局效率分 / 综合掌握度 / 总评级（§26）。
+ */
+export interface CognitiveProgressView {
+  profile_id: number;
+  generated_at: string;
+  window_days: number;
+  volume: CognitiveVolumeAxis;
+  quality: CognitiveQualityAxis;
+  difficulty: CognitiveDifficultyAxis;
+  adaptation: CognitiveAdaptationAxis;
+}

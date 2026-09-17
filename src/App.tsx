@@ -12,6 +12,7 @@ import MobileSettings from "./mobile/MobileSettings";
 import Evaluations from "./pages/Evaluations";
 import Goals from "./pages/Goals";
 import History from "./pages/History";
+import Memory from "./pages/Memory";
 import Planning from "./pages/Planning";
 import NotFound from "./pages/NotFound";
 import ProfileSelector from "./pages/ProfileSelector";
@@ -44,6 +45,12 @@ const DataPage = lazy(() => import("./pages/Data"));
 /** DEV-0057 PART Z：Knowledge（Tiptap/知识图重页）与 LearningWorkspace（编辑器）route-level lazy */
 const KnowledgePage = lazy(() => import("./pages/Knowledge"));
 const LearningWorkspacePage = lazy(() => import("./pages/LearningWorkspace"));
+
+/**
+ * COGNITIVE CORE V1.2 §26：Progress 页（四轴）route-level lazy。
+ * 它引入 `recharts`，沿用 DEV-0055 §125 的做法，不让图表库进主 bundle。
+ */
+const CognitiveProgressPage = lazy(() => import("./pages/CognitiveProgress"));
 
 /** Profile Gate：根据档案状态决定显示欢迎页/选择页/主应用 */
 function ProfileGate() {
@@ -90,8 +97,11 @@ function ProfileGate() {
           <Routes>
             {/* DEV-MOBILE-001 §64/§170：按平台只挂载一个 Shell（Windows=Layout，Android=MobileLayout） */}
             <Route element={IS_ANDROID ? <MobileLayout /> : <Layout />}>
-              <Route path="/" element={<Today />} />
-              <Route path="/planning" element={<Planning />} />
+            <Route path="/" element={<Today />} />
+            <Route path="/planning" element={<Planning />} />
+            {/* COGNITIVE CORE V1.2 §21（W9）：/journey 与 /planning 渲染同一 Planning 组件，
+                由 Shell 以 Journey 定位呈现。两条路由并存，绝不删除旧路由。 */}
+            <Route path="/journey" element={<Planning />} />
               {/* DEV-0041：学习复盘并入学习规划，兼容重定向 */}
               <Route path="/review" element={<ReviewRedirect />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
@@ -99,8 +109,12 @@ function ProfileGate() {
               <Route path="/data" element={<DataPage />} />
               {/* DEV-SYNC-002 §十：Windows 同步工作台一级入口（Android 走「我的 → 设备同步」） */}
               {!IS_ANDROID && <Route path="/sync" element={<Sync />} />}
-              {/* DEV-0301：整体进度并入学习规划，兼容重定向 */}
-              <Route path="/progress" element={<Navigate to="/planning" replace />} />
+              {/* COGNITIVE CORE V1.2 §25：/memory 是新的记忆界面（真正的第一个记忆面） */}
+              <Route path="/memory" element={<Memory />} />
+              {/* COGNITIVE CORE V1.2 §26：/progress 由「整体进度并入规划」的兼容重定向
+                  升级为四轴 Progress 页（§26 明确要求把 /progress 路由到新页）。
+                  旧 Progress.tsx 文件保留但不挂路由（§21「不删除既有页面」）。 */}
+              <Route path="/progress" element={<CognitiveProgressPage />} />
               {/* DEV-MOBILE-001 §68：Android AI 一级导航（内容=恒驻 MobileAiHost 全屏） */}
               {IS_ANDROID && <Route path="/ai" element={<MobileAiPage />} />}
               {/* Learning Workspace（DEV-0017：开始学习进入正式学习工作区；DEV-0057 lazy） */}

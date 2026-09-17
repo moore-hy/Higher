@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useNavigate } from "react-router-dom";
+// W9 §22：AI 抽屉的 modal / focus trap / Escape / ARIA 实现底座（锁定，不自研）
+import { Dialog } from "@radix-ui/themes";
 import { isTauriRuntime } from "../../utils/tauriEnv";
 import {
   aiCancelRun,
@@ -71,9 +73,10 @@ interface MemoryProposalCardData {
 /** 消息分页大小（加载最近 50 / 「加载更早」） */
 const MSG_PAGE = 50;
 
-/** DEV-0065.1 §8/§33：唯一视觉态偏好 higher.aiPanel.mode；
- *  missing/invalid → collapsed（AI 随手可用但不抢占学习工作区）。 */
-const AI_PANEL_MODE_KEY = "higher.aiPanel.mode";
+/** 废弃说明（W9 §22）：旧的桌面视觉态偏好键 `higher.aiPanel.mode`
+ *  （expanded|collapsed）**不再被读取/写入**——桌面端 AI 已改为 420px 右侧覆盖抽屉，
+ *  开合状态源 = `AiPanelContext.drawerOpen`（Shell 与 Panel 共同驱动）。
+ *  旧键留在 localStorage 中不迁移、不删除（stale 兼容数据，DEV-0065.1 §31 同口径）。 */
 
 /** DEV-0060.1 PART A：WebView 本地时钟 → Runtime Time Truth（YYYY-MM-DD / YYYY-MM-DD HH:mm） */
 function localIsoDate(d = new Date()): string {
@@ -128,6 +131,8 @@ export default function AiPanel({
     apiKeyMissing,
     pendingSendRef,
   } = useAiPanel();
+  /** W9 §22：桌面端 AI 抽屉开合（Radix Dialog 受控位；Android 不使用） */
+  const { drawerOpen, openDrawer, closeDrawer } = useAiPanel();
   const { activeProfile, triggerRefresh } = useActiveProfile();
   const navigate = useNavigate();
   const [input, setInput] = useState("");
@@ -140,26 +145,21 @@ export default function AiPanel({
   const [showProposal, setShowProposal] = useState(false);
   /** §61：上下文 chips 默认收起 */
   const [ctxOpen, setCtxOpen] = useState(false);
-  /** DEV-0065.1 §33：两态 collapsed 位（expanded|collapsed；missing/invalid → collapsed） */
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem(AI_PANEL_MODE_KEY) !== "expanded"
-  );
 
-  function setMode(c: boolean) {
-    setCollapsed(c);
-    localStorage.setItem(AI_PANEL_MODE_KEY, c ? "collapsed" : "expanded");
-  }
-
-  // 页面 AI 入口（runAction / sendChat pendingSend）触发时自动展开 rail（§29）
+  // W9 §22：桌面端 AI 由「恒驻 340px 右栏」改为「420px 右侧覆盖抽屉」。
+  // 关闭态不占任何宽度（不再有 46px collapsed rail）——打开入口 = 底部
+  // HigherCommandBar / 页面 AI 按钮 / Activity 变化。抽屉的 modal / focus trap /
+  // Escape / ARIA 全部交给 Radix Themes Dialog，无自定义实现（§22 锁定底座）。
+  // Android（presentation="mobile"）零改动：仍是 MobileLayout 内的全屏页（§37）。
   useEffect(() => {
-    if (actionBusy) setMode(false);
+    if (actionBusy) openDrawer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actionBusy]);
   useEffect(() => {
-    const expand = () => setMode(false);
+    const expand = () => openDrawer();
     window.addEventListener("higher:aipanel-pending-send", expand);
     return () => window.removeEventListener("higher:aipanel-pending-send", expand);
-  }, []);
+  }, [openDrawer]);
 
   // ---- DEV-0052 对话主流程状态（DEV-0061R §33：Unified Higher AI——无只读/助手双模式） ----
   const [conversationId, setConversationId] = useState<number | null>(null);
@@ -888,28 +888,9 @@ export default function AiPanel({
     [activeProfile, runId, streamSources]
   );
 
-  // DEV-0065.1 §7/§30：无 Closed 态——Panel 恒驻，仅 Expanded / Collapsed 两态
-  // DEV-MOBILE-001 §77：mobile 无 collapsed rail（全屏或隐藏由 MobileLayout 控制）
-  if (collapsed && !isMobile) {
-    // §34：整条 46px rail = 单个全尺寸按钮（点击/Enter/Space 原生语义展开；无嵌套按钮）
-    return (
-      <aside className="aipanel aipanel--rail" aria-label="Higher AI（已收起）">
-        <button
-          className="aipanel__rail-hit"
-          title="展开 Higher AI"
-          onClick={() => setMode(false)}
-        >
-          <span className="aipanel__rail-icon" aria-hidden="true">✦</span>
-          <span className="aipanel__rail-label" aria-hidden="true">
-            HIGHER&nbsp;AI
-          </span>
-        </button>
-      </aside>
-    );
-  }
-
-  return (
-    <aside className={`aipanel${isMobile ? " aipanel--mobile" : ""}`}>
+  // W9 §22：面板内容（桌面抽屉 / Android 全屏页 共用同一份 JSX 与全部内部逻辑）
+  const panelContent = (
+    <>
       {/* DEV-MOBILE-002 F1-B：AI 为一级页面——无“‹ 返回”主退出
           （BottomNav 即导航；History 等二级层自带关闭）。
           保留 subtitle：当前上下文（F1-C 来源页上下文）。 */}
@@ -917,7 +898,8 @@ export default function AiPanel({
         <div className="aipanel__mobile-subtitle">{pageContext.pageLabel}</div>
       )}
       {/* Header：Higher AI（DEV-0061R §33：单一模式；修改经审查后写入）
-          DEV-0065.1 §37：三动作 = 历史 / 新对话 / 收起为侧栏（无关闭） */}
+          DEV-0065.1 §37 的三动作原为「历史 / 新对话 / 收起为侧栏」。
+          W9 §22：桌面端第三动作改为**关闭抽屉**（无 rail 可收起）；Android 仍无第三动作。 */}
       <div className="aipanel__header">
         <div className="aipanel__header-main">
           <span className="aipanel__title">Higher AI</span>
@@ -945,14 +927,15 @@ export default function AiPanel({
           >
             ＋
           </button>
-          {/* DEV-MOBILE-001 §77：mobile 无“收起为侧栏”（返回键/底部导航负责离开 /ai） */}
+          {/* DEV-MOBILE-001 §77：mobile 无关闭动作（返回键/底部导航负责离开 /ai） */}
           {!isMobile && (
             <button
               className="aipanel__icon-btn"
-              title="收起为侧栏"
-              onClick={() => setMode(true)}
+              title="关闭 Higher AI"
+              aria-label="关闭 Higher AI"
+              onClick={closeDrawer}
             >
-              ⇥
+              ✕
             </button>
           )}
         </div>
@@ -1552,7 +1535,33 @@ export default function AiPanel({
           </span>
         </div>
       </div>
-    </aside>
+    </>
+  );
+
+  // Android：保持既有全屏页行为（§37 零改动）
+  if (isMobile) {
+    return <aside className="aipanel aipanel--mobile">{panelContent}</aside>;
+  }
+
+  // 桌面：Radix Themes Dialog 只提供 modal / focus trap / Escape / ARIA 行为，
+  // 视觉由 Higher CSS（.hc-ai-drawer）把 content 变成 420px 右侧玻璃抽屉。
+  // 关闭时 Dialog 不渲染任何节点 → 右侧零宽度（§22 / §35）。
+  // 注：Radix Themes 的 Dialog.Content **内部已自带 Portal**（Overlay + Scroll
+  // 包装层也在其中），因此这里不再自己包一层 Portal（该模块也不导出 Portal）。
+  return (
+    <Dialog.Root
+      open={drawerOpen}
+      onOpenChange={(open) => {
+        if (open) openDrawer();
+        else closeDrawer();
+      }}
+    >
+      <Dialog.Content className="hc-ai-drawer" aria-describedby={undefined}>
+        {/* 无障碍标题：视觉标题仍由 .aipanel__header 承担，避免重复可见标题 */}
+        <Dialog.Title className="hc-sr-only">Higher AI</Dialog.Title>
+        <div className="aipanel aipanel--drawer">{panelContent}</div>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 }
 

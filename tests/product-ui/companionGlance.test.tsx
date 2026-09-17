@@ -79,6 +79,8 @@ vi.mock("../../src/api", () => ({
   materializeRecurringRolling: vi.fn(async () => 0),
   getLearningState: vi.fn(),
   getNextLearningAction: vi.fn(),
+  /** COGNITIVE CORE V1.2 §19：本套用例只验证 companion 契约 → 认知视图返回「尚无快照」 */
+  getTodayCoachSnapshot: vi.fn(async () => null),
   getCompanionState: vi.fn(),
   interactCompanion: vi.fn(),
   startCompanionExpedition: vi.fn(),

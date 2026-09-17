@@ -1,9 +1,20 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
+import {
+  Brain,
+  Database,
+  Map as MapIcon,
+  Route as RouteIcon,
+  Settings as SettingsIcon,
+  Sun,
+  TrendingUp,
+  Waypoints,
+} from "lucide-react";
 import { useActiveProfile, canSwitchProfile } from "./contexts/ActiveProfileContext";
 import { createStudyProfile, updateStudyProfile } from "./api";
 import AiPanel from "./components/ai/AiPanel";
+import HigherCommandBar from "./components/cognitive/HigherCommandBar";
 import { useAiPanel } from "./components/ai/AiPanelContext";
 import { PROFILE_TYPE_LABELS } from "./types";
 import type { ProfileType, StudyProfile } from "./types";
@@ -11,25 +22,43 @@ import type { ProfileType, StudyProfile } from "./types";
 /**
  * Higher V2 Shell（DEV-0011）。
  *
- * 一级导航最终收敛（DEV-0055 PART 19 §69-71）：
- * 今日 / 规划 / 知识 / 数据；设置保留在 Sidebar footer。
- * 「学习复盘」入口删除（/review 兼容重定向到 /planning?date=…）；
- * 「整体进度」并入「学习规划」（/progress 兼容路由重定向）；
- * 学习数据成为一级页面（/data，DEV-0055 PART 26）。
+ * DEV-0055 PART 19 §69-71：一级导航收敛为 今日 / 规划 / 知识 / 数据，设置置于 footer。
+ * 「学习复盘」入口删除（/review 兼容重定向）；「整体进度」并入「学习规划」。
+ *
+ * COGNITIVE CORE V1.2 §21 修订（W9）：**桌面端**一级导航锁定为产品概念 IA
+ *
+ *   Today     /           我现在该做什么？
+ *   Journey   /journey    我要去哪、计划怎么展开？
+ *   Memory    /memory     什么正在被遗忘、该复习什么？
+ *   Progress  /progress    能力/数量/质量/适应性发生了什么变化？
+ *   Settings  /settings   sidebar footer
+ *
+ * 图标一律 lucide-react（§21：新桌面侧栏禁止 emoji 图标）。
+ * `/knowledge`、`/data`、`/sync` 按 §21 降级为 **preserved internal power-user route**：
+ * 路由、页面与全部能力**原样保留**（§37 未删除任何生产能力），
+ * 但不再占用一级导航，只在 sidebar 的「进阶」次级分组中以弱化样式可达
+ * （避免把生产功能退化成只能靠 deep link 才够得着的死路）。
+ *
+ * 平台切分：本组件只在桌面挂载（App.tsx：`IS_ANDROID ? <MobileLayout/> : <Layout/>`），
+ * 因此这里是天然的 desktop-only 改动点，Android shell IA 零改动（§22）。
  */
 const NAV_ITEMS = [
-  { to: "/", label: "今日", end: true, icon: "📅", group: "学习" },
-  { to: "/planning", label: "规划", end: false, icon: "🧭", group: "学习" },
-  { to: "/knowledge", label: "知识", end: false, icon: "🗂", group: "学习" },
-  { to: "/data", label: "数据", end: false, icon: "📊", group: "洞察" },
-  // DEV-SYNC-002 §十：同步一级入口（/sync 工作台；配对管理仍在 设置 → 设备同步）
-  { to: "/sync", label: "同步", end: false, icon: "🔄", group: "洞察" },
+  { to: "/", label: "Today", end: true, zh: "今日 · 我现在该做什么", Icon: Sun },
+  { to: "/journey", label: "Journey", end: false, zh: "学习旅程 · 我要去哪", Icon: RouteIcon },
+  { to: "/memory", label: "Memory", end: false, zh: "记忆 · 什么正在被遗忘", Icon: Brain },
+  { to: "/progress", label: "Progress", end: false, zh: "进展 · 什么发生了变化", Icon: TrendingUp },
+];
+
+/** §21 preserved power-user routes（不进一级导航，弱化分组呈现） */
+const ADVANCED_NAV_ITEMS = [
+  { to: "/knowledge", label: "知识", end: false, Icon: MapIcon },
+  { to: "/data", label: "数据", end: false, Icon: Database },
+  { to: "/sync", label: "同步", end: false, Icon: Waypoints },
 ];
 
 function Layout() {
   const { activeProfile, exitProfile, refreshGate, enterProfile, refreshKey } = useActiveProfile();
-  // DEV-0065.1 §32：AI Panel 恒驻（无 open 态）；Main 宽度由 flex 自动跟随
-  // 340px expanded / 46px collapsed，无 JS 宽度计算
+  /** W9 §22：AI 已成为 420px 覆盖抽屉（关闭零宽度），Shell 只汇报页面上下文 */
   const { setPageContext } = useAiPanel();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -42,8 +71,11 @@ function Layout() {
     const pageKey = (() => {
       const p = location.pathname;
       if (p.startsWith("/learn/")) return "learning" as const;
-      if (p === "/planning") return "planning" as const;
+      // §21：/journey 渲染既有 Planning 页面 → AI 上下文仍是 planning
+      if (p === "/planning" || p === "/journey") return "planning" as const;
       if (p === "/knowledge") return "knowledge" as const;
+      if (p === "/memory") return "memory" as const;
+      if (p === "/progress") return "progress" as const;
       if (p === "/data") return "data" as const;
       if (p === "/settings") return "settings" as const;
       return "today" as const;
@@ -53,6 +85,8 @@ function Layout() {
       planning: "学习规划",
       knowledge: "知识体系",
       learning: "学习工作区",
+      memory: "记忆",
+      progress: "进展",
       data: "学习数据",
       settings: "设置",
     } as const;
@@ -76,8 +110,8 @@ function Layout() {
   }
 
   return (
-    <div className="layout" key={refreshKey}>
-      <aside className="layout__sidebar">
+    <div className="layout layout--cognitive" key={refreshKey}>
+      <aside className="layout__sidebar hc-sidebar">
         <div className="layout__brand">
           <span className="layout__brand-mark">H</span>
           <span className="layout__brand-name">Higher</span>
@@ -134,24 +168,47 @@ function Layout() {
         )}
         {error && <div className="layout__error">{error}</div>}
 
-        <nav className="layout__nav">
-          {NAV_ITEMS.map((item, i) => (
-            <span key={item.to} className="layout__nav-slot">
-              {(i === 0 || NAV_ITEMS[i - 1].group !== item.group) && (
-                <span className="layout__nav-group">{item.group}</span>
-              )}
-              <NavLink
-                to={item.to}
-                end={item.end}
-                title={item.label}
-                className={({ isActive }) =>
-                  "layout__nav-item" + (isActive ? " layout__nav-item--active" : "")
-                }
-              >
-                <span className="layout__nav-icon">{item.icon}</span>
-                <span className="layout__nav-label">{item.label}</span>
-              </NavLink>
-            </span>
+        <nav className="layout__nav hc-nav" aria-label="主导航">
+          {NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              title={item.zh}
+              aria-label={`${item.label} · ${item.zh}`}
+              className={({ isActive }) =>
+                "layout__nav-item hc-nav__item" +
+                (isActive ? " layout__nav-item--active hc-nav__item--active" : "")
+              }
+            >
+              <span className="layout__nav-icon hc-nav__icon" aria-hidden="true">
+                <item.Icon size={17} strokeWidth={1.75} />
+              </span>
+              <span className="layout__nav-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* §21 preserved power-user routes：能力原样保留，只弱化呈现 */}
+        <nav className="hc-nav hc-nav--advanced" aria-label="进阶功能">
+          <div className="hc-nav__caption">进阶</div>
+          {ADVANCED_NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              title={item.label}
+              aria-label={item.label}
+              className={({ isActive }) =>
+                "layout__nav-item hc-nav__item hc-nav__item--advanced" +
+                (isActive ? " layout__nav-item--active hc-nav__item--active" : "")
+              }
+            >
+              <span className="layout__nav-icon hc-nav__icon" aria-hidden="true">
+                <item.Icon size={16} strokeWidth={1.75} />
+              </span>
+              <span className="layout__nav-label">{item.label}</span>
+            </NavLink>
           ))}
         </nav>
 
@@ -160,23 +217,31 @@ function Layout() {
           <NavLink
             to="/settings"
             title="设置"
+            aria-label="Settings · 设置"
             className={({ isActive }) =>
-              "layout__nav-item layout__nav-item--settings" +
-              (isActive ? " layout__nav-item--active" : "")
+              "layout__nav-item layout__nav-item--settings hc-nav__item" +
+              (isActive ? " layout__nav-item--active hc-nav__item--active" : "")
             }
           >
-            <span className="layout__nav-icon">⚙</span>
-            <span className="layout__nav-label">设置</span>
+            <span className="layout__nav-icon hc-nav__icon" aria-hidden="true">
+              <SettingsIcon size={17} strokeWidth={1.75} />
+            </span>
+            <span className="layout__nav-label">Settings</span>
           </NavLink>
         </div>
       </aside>
-      <div className="layout__body">
+
+      <div className="layout__body hc-mainstage">
         <main className="layout__main">
           <Outlet />
         </main>
-        {/* Higher AI Agent Panel（DEV-0022 → DEV-0065.1：恒驻右栏两态，340px/46px） */}
-        <AiPanel />
+        {/* §22：底部命令栏是本 Shell 的唯一自由文本入口（桌面） */}
+        <HigherCommandBar />
       </div>
+
+      {/* §22：桌面端 AI = 420px 右侧覆盖抽屉（关闭零宽度）。Radix Dialog portal 渲染，
+          放在这里只为与 Shell 同生命周期，不参与 flex 布局。 */}
+      <AiPanel />
 
       {editing && activeProfile && (
         <ProfileEditModal

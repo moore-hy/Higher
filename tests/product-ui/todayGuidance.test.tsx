@@ -121,6 +121,12 @@ vi.mock("../../src/api", () => {
     // ---- CLOSED LOOP V1：Today 只消费这两个入口 ----
     getLearningState: vi.fn(),
     getNextLearningAction: vi.fn(),
+    /**
+     * COGNITIVE CORE V1.2 §19：Today 认知首屏的单一后端视图。
+     * 本套用例只验证既有闭环契约，因此让认知视图返回 null（= 尚无快照），
+     * 认知区退化成诚实空态；其真值由 `today_coach_v1`（Rust）负责。
+     */
+    getTodayCoachSnapshot: vi.fn(async () => null),
     // ---- M6：Companion 子系统（附加能力，读失败也不得影响学习面）----
     getCompanionState: vi.fn(async () => companionIdle()),
     interactCompanion: vi.fn(async () => companionIdle()),

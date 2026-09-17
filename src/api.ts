@@ -28,6 +28,9 @@ import type {
   ChangeOperation,
   ChangeSet,
   CleanupPreview,
+  CognitiveMemoryDashboard,
+  CognitiveProgressView,
+  CognitiveTodaySnapshot,
   CountPair,
   DbStatus,
   DayDetail,
@@ -1778,6 +1781,45 @@ export const getPlanningReviewRisk = (profileId: number) =>
 /** PHASE 1：唯一运行时只读投影（Unified Learning State）。 */
 export const getLearningState = (profileId: number) =>
   invoke<LearningStateSnapshot>("get_learning_state", { profileId });
+
+/**
+ * HIGHER COGNITIVE CORE V1.2 §19 / §20：Today Coach 的**唯一**数据入口。
+ *
+ * - 后端返回**已经算好**的 readiness / memory pressure / 排序 / 协议选择 / 理由顺序；
+ *   前端**不得**重算或重排（§33 UI-06）。
+ * - `availableMinutes` 传 `null` 表示「还没选时长」→ 后端**不会**编造一个默认时长，
+ *   `plan` 会是 `null`。
+ * - 签名逐字遵循 §19（只有 profileId + availableMinutes；决策模式由后端取默认）。
+ */
+export const getTodayCoachSnapshot = (profileId: number, availableMinutes?: number | null) =>
+  invoke<CognitiveTodaySnapshot>("get_today_coach_snapshot", {
+    profileId,
+    availableMinutes: availableMinutes ?? null,
+  });
+
+/**
+ * HIGHER COGNITIVE CORE V1.2 §25：Memory 页的**唯一**数据入口。
+ *
+ * - **一次** IPC 返回压力 + 到期队列 + 下一次复习 + 「为什么现在复习」的理由顺序
+ *   （§25 明确禁止 N+1 调用）；
+ * - 空状态由后端判定（`pressure.status === "insufficient"`），前端**不得**自行编造行；
+ * - `limit` 只是「到期列表要几条」，后端仍以 `MAX_DUE_UNITS` 封顶。
+ */
+export const getMemoryDashboard = (profileId: number, limit?: number | null) =>
+  invoke<CognitiveMemoryDashboard>("get_memory_dashboard", {
+    profileId,
+    limit: limit ?? null,
+  });
+
+/**
+ * HIGHER COGNITIVE CORE V1.2 §26：Progress 页（四轴）的**唯一**数据入口。
+ *
+ * - 四轴各自 `available`；证据不足的轴返回理由码，前端**只**渲染「证据不足」，
+ *   **绝不**据此画一张假图；
+ * - **没有**跨轴聚合分：这里拿不到任何「全局效率 / 综合掌握度」（§26）。
+ */
+export const getCognitiveProgress = (profileId: number) =>
+  invoke<CognitiveProgressView>("get_cognitive_progress", { profileId });
 
 /** PHASE 2/3：唯一 Next Best Learning Action（budget ∈ 30s / 3m / 10m / 25m）。 */
 export const getNextLearningAction = (profileId: number, budget?: TimeBudgetKey | null) =>

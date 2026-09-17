@@ -36,6 +36,56 @@ export const queryKeys = {
     light: (profileId: number) => ["learningItems", "light", profileId] as const,
   },
 
+  /**
+   * HIGHER COGNITIVE CORE V1.2 §20：Today Coach 单一后端视图。
+   *
+   * 与 `learningState` / `nextAction` 是**同一份学习真相的不同投影**：
+   * 任何可能改变 LearningState / LearningMoments / Memory reviews / 已完成会话的动作，
+   * 都必须同时失效 `learningState` + `nextAction` + `review` + `companion` + `cognitiveToday`
+   * （闭环失效规则，§20）。
+   *
+   * 纯 Companion 交互**不得**反向失效本 key（Companion 不拥有学习真相）。
+   */
+  cognitiveToday: {
+    /** 该档案的全部 Today 视图（前缀失效）。 */
+    scope: (profileId: number) => ["cognitiveToday", profileId] as const,
+    /** 具体时长的视图（时长变了 → 只重取这一档）。 */
+    view: (profileId: number, availableMinutes: number | null) =>
+      ["cognitiveToday", profileId, availableMinutes] as const,
+  },
+
+  /**
+   * HIGHER COGNITIVE CORE V1.2 §25：Memory 页单一后端视图。
+   *
+   * 与 `cognitiveToday` 消费**同一份**记忆真相（同一张 `memory_units` /
+   * `memory_reviews`）。因此凡是会改变记忆排程的动作（完成一次复习 =
+   * 新增 LearningMoment 并推进排程），都必须同时失效两者——
+   * 否则 Memory 页会停在旧的到期队列上。
+   */
+  cognitiveMemory: {
+    /** 该档案的全部 Memory 视图（前缀失效）。 */
+    scope: (profileId: number) => ["cognitiveMemory", profileId] as const,
+    /** 具体 limit 的视图。 */
+    view: (profileId: number, limit: number) =>
+      ["cognitiveMemory", profileId, limit] as const,
+  },
+
+  /**
+   * HIGHER COGNITIVE CORE V1.2 §26：Progress 页四轴视图。
+   *
+   * 与 `cognitiveToday` / `cognitiveMemory` 同源（学习时刻 + 记忆排程 + 完成会话）。
+   * 任何会改变这三者的动作都必须同时失效本 key，否则四轴会停在旧数字上。
+   */
+  cognitiveProgress: {
+    /**
+     * 该档案的四轴视图。
+     *
+     * 本视图只有「档案」一个维度（不像 Today 还有时长档），因此
+     * **同一个 key 既用于查询也用于前缀失效**，不额外造一个 `view`。
+     */
+    scope: (profileId: number) => ["cognitiveProgress", profileId] as const,
+  },
+
   knowledge: {
     workspace: (profileId: number) => ["knowledge", "workspace", profileId] as const,
     documents: (profileId: number) => ["knowledge", "documents", profileId] as const,

@@ -37,6 +37,9 @@ pub mod v033_companion_skill;
 pub mod v034_readiness_consumption;
 pub mod v035_ai_provider_auth_mode;
 pub mod v036_ai_provider_secret_ref;
+// HIGHER COGNITIVE CORE V1.2 §7：本次锁定 v037 / v038（**不创建 v039**）。
+pub mod v037_learning_moments;
+pub mod v038_memory_engine;
 
 /// 单个 Migration 定义。
 ///
@@ -232,6 +235,18 @@ const MIGRATIONS: &[Migration] = &[
         version: 36,
         name: "ai_provider_secret_ref",
         up: v036_ai_provider_secret_ref::up,
+    },
+    // HIGHER COGNITIVE CORE V1.2 §7 / §8 / §12：v037 Learning Moments、v038 Memory Engine。
+    // 必须保持 version 升序；不得修改任何既有 migration。
+    Migration {
+        version: 37,
+        name: "learning_moments",
+        up: v037_learning_moments::up,
+    },
+    Migration {
+        version: 38,
+        name: "memory_engine",
+        up: v038_memory_engine::up,
     },
 ];
 

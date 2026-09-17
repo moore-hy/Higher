@@ -288,6 +288,12 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             // HIGHER CLOSED LOOP V1 §PHASE 1 / §PHASE 2
             get_learning_state,
             get_next_learning_action,
+            // HIGHER COGNITIVE CORE V1.2 §19 — Today Coach 单一后端视图
+            get_today_coach_snapshot,
+            // HIGHER COGNITIVE CORE V1.2 §25 — Memory 页单一后端视图（一次 IPC）
+            get_memory_dashboard,
+            // HIGHER COGNITIVE CORE V1.2 §26 — Progress 页四轴视图（无跨轴聚合分）
+            get_cognitive_progress,
             // HIGHER DAILY EXPERIENCE V1 §PHASE 3 / §PHASE 4
             record_micro_action,
             // HIGHER 1.0 §M1-A 有限 Learning Pack

@@ -6,6 +6,7 @@ import {
   getGoalTree,
   getLearningState,
   getNextLearningAction,
+  getTodayCoachSnapshot,
   listLearningItemsByProfile,
   materializeRecurringRolling,
   startQuickSession,
@@ -22,6 +23,12 @@ import DailyActivitiesSection from "../components/DailyActivitiesSection";
 import { PLAN_REQUEST_MESSAGE } from "../components/FinalGoalCard";
 import StartHere from "../components/StartHere";
 import CompanionGlance from "../components/companion/CompanionGlance";
+// COGNITIVE CORE V1.2 §24：Today 认知首屏（只消费 §19 单一后端视图，不重算任何真值）
+import CoachSignalCard from "../components/cognitive/CoachSignalCard";
+import CognitiveOrb from "../components/cognitive/CognitiveOrb";
+import RecommendationRationale from "../components/cognitive/RecommendationRationale";
+import TodayHero from "../components/cognitive/TodayHero";
+import TrainingPlanStrip from "../components/cognitive/TrainingPlanStrip";
 import { useAiPanel } from "../components/ai/AiPanelContext";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
 import { queryKeys } from "../query/keys";
@@ -36,6 +43,26 @@ import type {
   TimeBudgetKey,
 } from "../types";
 import { friendlyDate, todayDate } from "../utils";
+
+/**
+ * §19 `available_minutes` 只接受**分钟**。
+ *
+ * 「30 秒」档在新 UI 中已不可达（StartHere 的 TIME_BUDGETS 已隐藏它），
+ * 且 30 秒无法无损表达为整数分钟 —— 因此这里**不做**任何取整编造，
+ * 直接按「未指定时长」交给后端（后端对 None 有明确定义）。
+ */
+function budgetToMinutes(b: TimeBudgetKey | null): number | null {
+  switch (b) {
+    case "3m":
+      return 3;
+    case "10m":
+      return 10;
+    case "25m":
+      return 25;
+    default:
+      return null;
+  }
+}
 
 /** SQLite datetime（UTC）→ ms。 */
 function parseUtcMs(raw: string): number {
@@ -106,12 +133,18 @@ function Today() {
   const [dismissedReview, setDismissedReview] = useState(false);
   const [starting, setStarting] = useState(false);
   const [actionError, setActionError] = useState("");
+  /** §24 Hero 次 CTA「我有自己的计划」→ DIRECT 起点选择面（用户自选目标，Higher 不替换） */
+  const [choiceOpen, setChoiceOpen] = useState(false);
+  /** §24 legacy 详情折叠区（默认收起；桌面专属 <details>，内容始终留在 DOM 中） */
+  const legacyRef = useRef<HTMLDetailsElement | null>(null);
   const markedT5 = useRef(false);
 
   const { runAction: aiRunAction, sendChat, setPageContext } = useAiPanel();
   const { conflict, guard, close } = useActiveSessionConflict();
 
   const [now, setNow] = useState(() => Date.now());
+  /** §24：Hero 显示当前本地时间（30s 一跳，只读系统时钟，与学习数据无关） */
+  const [clockNow, setClockNow] = useState(() => new Date());
 
   // ---- PHASE 1：唯一学习状态（不自己拼）----
   const stateQuery = useQuery({
@@ -128,6 +161,18 @@ function Today() {
     enabled: profileId != null,
   });
   const action = actionQuery.data ?? null;
+
+  /**
+   * COGNITIVE CORE V1.2 §19：Today 的**唯一**认知视图（单一后端真值）。
+   * 前端绝不在本地重算 readiness / 记忆压力 / 排序 / 协议 / 块顺序（§19 / §33 UI-06）。
+   */
+  const budgetMinutes = budgetToMinutes(budget);
+  const coachQuery = useQuery({
+    queryKey: queryKeys.cognitiveToday.view(profileId ?? -1, budgetMinutes),
+    queryFn: () => getTodayCoachSnapshot(profileId as number, budgetMinutes),
+    enabled: profileId != null,
+  });
+  const coach = coachQuery.data ?? null;
 
   // ---- 参考数据（不是学习状态）----
   const itemsQuery = useQuery({
@@ -155,6 +200,11 @@ function Today() {
     if (profileId == null) return;
     void qc.invalidateQueries({ queryKey: queryKeys.learningState.all(profileId) });
     void qc.invalidateQueries({ queryKey: queryKeys.nextAction.scope(profileId) });
+    // §19：认知视图与学习闭环同源失效（它也是 LearningState 的投影，不是第二份真相）
+    void qc.invalidateQueries({ queryKey: queryKeys.cognitiveToday.scope(profileId) });
+    // §25：Memory 页读的是同一张 memory_units / memory_reviews，
+    // 复习一旦推进排程，到期队列就变了 —— 必须同源失效，否则 Memory 页会停在旧队列。
+    void qc.invalidateQueries({ queryKey: queryKeys.cognitiveMemory.scope(profileId) });
     // PHASE 8：Review 的闭环数据同源失效（Review 不再依赖 refreshKey）
     void qc.invalidateQueries({ queryKey: queryKeys.review.scope(profileId) });
     /**
@@ -221,6 +271,12 @@ function Today() {
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot?.active_session?.id]);
+
+  // §24：Hero 时钟（与 active session 的秒级计时器相互独立）
+  useEffect(() => {
+    const t = window.setInterval(() => setClockNow(new Date()), 30000);
+    return () => window.clearInterval(t);
+  }, []);
 
   useEffect(() => {
     setDismissedStale(false);
@@ -375,6 +431,55 @@ function Today() {
     }
   }
 
+  /** §24：把注意力交给计划条的首个可执行块（不创建任何 Session）。 */
+  function focusFirstPlanBlock() {
+    const el =
+      document.getElementById("hc-plan-first-block") ??
+      document.querySelector(".hc-plan");
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+
+  /**
+   * §24 Hero 主 CTA「按我的状态安排 →」。
+   *
+   * 只做「把后端计划接到**既有**启动路径」这一件事：
+   * ① 计划存在明确的 learning_item 锚点 → 走既有 `startSession`（含 Start Guard 冲突守卫）；
+   * ② 其余情况 → **不臆造**任何后端不支持的 StudySession 类型，只把注意力交给
+   *    TrainingPlanStrip 的首个可执行块（§24 明确要求的行为）。
+   */
+  async function handlePrimaryArrange() {
+    if (profileId == null || starting) return;
+    const anchor = coach?.plan?.target_learning_item_id ?? null;
+    if (anchor == null) {
+      focusFirstPlanBlock();
+      return;
+    }
+    setStarting(true);
+    setActionError("");
+    try {
+      const s = await startSession(anchor);
+      invalidateClosedLoop();
+      navigate(`/learn/${s.id}`);
+    } catch (e) {
+      if (guard(e)) return;
+      setActionError(String(e));
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  /** §24：展开 legacy 折叠区并把注意力放到既有任务列表（不改任何业务数据）。 */
+  function revealLegacyTasks() {
+    const el = legacyRef.current;
+    if (el) el.open = true;
+    const target = document.querySelector(".today__tasklist") ?? el;
+    if (target && typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  }
+
   const hasActive = active != null;
   const today = snapshot?.today ?? null;
   const reviewState = snapshot?.review_state ?? null;
@@ -382,10 +487,12 @@ function Today() {
   const loading = stateQuery.isLoading && !snapshot;
   // §PHASE 0.1：错误展示至少合并 actionError / stateQuery.error / actionQuery.error。
   // 若 Learning State 成功但 Next Action IPC 失败，用户必须明确看到错误，而非推荐卡静默消失。
+  // COGNITIVE CORE V1.2 §24：认知视图失败同样不得静默——它会退化成诚实空态并在此上报。
   const error =
     actionError ||
     (actionQuery.error ? String(actionQuery.error) : "") ||
-    (stateQuery.error ? String(stateQuery.error) : "");
+    (stateQuery.error ? String(stateQuery.error) : "") ||
+    (coachQuery.error ? String(coachQuery.error) : "");
 
   return (
     <div className="page page--wide">
@@ -416,6 +523,15 @@ function Today() {
               onClick={() => retryRecommendation()}
             >
               重新计算推荐
+            </button>
+          )}
+          {coachQuery.error && (
+            <button
+              type="button"
+              className="btn btn--small"
+              onClick={() => void coachQuery.refetch()}
+            >
+              重新获取状态
             </button>
           )}
         </div>
@@ -469,6 +585,97 @@ function Today() {
           </div>
         </section>
       )}
+
+      {/* ==================================================================
+          COGNITIVE CORE V1.2 §24：Today 认知首屏（桌面专属；Android shell 零改动 §37）
+          只消费 §19 单一后端视图；前端不重算 readiness / 记忆压力 / 排序 / 块顺序。
+          ================================================================== */}
+      {!IS_ANDROID && (
+        <div className="hc-today">
+          <div className="hc-today__top">
+            <TodayHero
+              snapshot={coach}
+              now={clockNow}
+              busy={starting}
+              onPrimary={() => void handlePrimaryArrange()}
+              onSecondary={() => setChoiceOpen((v) => !v)}
+            />
+            <CognitiveOrb />
+            {coach && (
+              <div className="hc-today__signals">
+                <CoachSignalCard kind="readiness" readiness={coach.readiness} />
+                <CoachSignalCard kind="memory" memory={coach.memory} />
+                <CoachSignalCard kind="load" load={coach.load} />
+              </div>
+            )}
+          </div>
+
+          {/* §24 次 CTA「我有自己的计划」→ DIRECT：用户自选起点，Higher 绝不替换目标 */}
+          {choiceOpen && (
+            <div className="hc-choice" role="group" aria-label="选择你自己的起点">
+              <p className="hc-choice__hint">
+                按你自己的计划开始 —— Higher 不会替换你选的目标。
+              </p>
+              <div className="hc-choice__row">
+                <button
+                  type="button"
+                  className="hc-btn"
+                  disabled={hasActive}
+                  onClick={() => {
+                    setChoiceOpen(false);
+                    void handleQuickStart();
+                  }}
+                >
+                  快速学习
+                </button>
+                <button
+                  type="button"
+                  className="hc-btn"
+                  onClick={() => {
+                    setChoiceOpen(false);
+                    revealLegacyTasks();
+                  }}
+                >
+                  从任务开始
+                </button>
+                <button
+                  type="button"
+                  className="hc-btn"
+                  onClick={() => navigate("/knowledge")}
+                >
+                  从知识项开始
+                </button>
+              </div>
+            </div>
+          )}
+
+          <TrainingPlanStrip
+            plan={coach?.plan ?? null}
+            onPickFirstBlock={focusFirstPlanBlock}
+            busy={starting}
+          />
+
+          {coach && (
+            <RecommendationRationale
+              items={coach.rationale}
+              itemNameOf={(id) => items.find((i) => i.name != null && i.id === id)?.name ?? null}
+            />
+          )}
+        </div>
+      )}
+
+      {/* ==================================================================
+          §24 legacy 详情折叠区：既有任务 / 活动 / 伙伴 / 其他入口全部保留，
+          只是下移到认知首屏之下并**默认收起**。
+          - 用原生 <details>：不删除任何能力（§37），且内容始终留在 DOM 中；
+          - Android 保持展开（`open`）+ 隐藏 summary，视觉与行为与改动前一致（§37）。
+          ================================================================== */}
+      <details className="hc-legacy" ref={legacyRef} open={IS_ANDROID ? true : undefined}>
+        <summary className="hc-legacy__summary">
+          <span className="hc-legacy__summary-title">今天的细节</span>
+          <span className="hc-legacy__summary-hint">任务 · 活动 · 伙伴 · 其他入口</span>
+        </summary>
+        <div className="hc-legacy__body">
 
       {/* ===== §M6-A：顶层 hero —— 一个连贯区域同时承载两条动机 =====
           宽屏：Companion glance | Primary Next Action（并列，谁也不被埋没）
@@ -592,6 +799,9 @@ function Today() {
           )
         )}
       </section>
+
+        </div>
+      </details>
 
       {/* 6 · Review / 风险提示：被动 signal，只有真正需要时才出现 */}
       {!dismissedReview && reviewState?.due && (
