@@ -4,7 +4,7 @@
 //! 二进制缺失时适配器**安全报告 unavailable**；**不下载、不编译、不安装**。
 //!
 //! 每个适配器提供：`configured_path_or_endpoint` / `managed_by_higher` /
-//! `availability_check` / `version_info` / `health_status` / `capabilities` /
+//! `availability_check` / `version_info` / `health_check` / `capabilities` /
 //! `start()`（仅 `managed_by_higher` 时）/ `stop()`（仅 `managed_by_higher` 时）。
 //!
 //! 既有 `ai/resource_governor.rs`（AI 并发治理）**不被本模块替换**。
@@ -13,3 +13,11 @@ pub mod docling;
 pub mod llama_cpp;
 pub mod types;
 pub mod whisper;
+
+pub use docling::DoclingRuntime;
+pub use llama_cpp::LlamaCppRuntime;
+pub use types::{
+    endpoint_present, RuntimeAdapter, RuntimeCapability, RuntimeControlError,
+    RuntimeControlOutcome, RuntimeDescriptor, RuntimeHealth,
+};
+pub use whisper::WhisperRuntime;

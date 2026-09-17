@@ -13,3 +13,12 @@
 
 pub mod context_compiler;
 pub mod types;
+
+pub use context_compiler::{compile, CompileInput, RetrievedChunk};
+pub use types::{
+    ContextCandidate, ContextPack, ContextRequest, DocumentChunk, DocumentGlossaryEntry,
+    DocumentRevision, DocumentSection, DocumentSource, DocumentTranslation, LEXICAL_TOP_K,
+    MAX_CONTEXT_TEXT_CHARS, MAX_FINAL_CONTEXT_CHUNKS, MAX_MERGED_CANDIDATES,
+    MAX_PARENT_CONTEXT_CHARS, MAX_PRIMARY_CHUNKS, MAX_RERANK_INPUT, NEIGHBOR_CHUNKS_PER_SIDE,
+    SEMANTIC_TOP_K,
+};
