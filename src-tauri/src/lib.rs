@@ -10,6 +10,7 @@ pub mod ipc;
 pub mod learning_state;
 pub mod memory;
 pub mod migrations;
+pub mod model_router;
 pub mod notifications;
 pub mod platform;
 pub mod repository;
