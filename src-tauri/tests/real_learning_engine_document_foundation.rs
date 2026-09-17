@@ -35,12 +35,17 @@
 
 use std::path::{Path, PathBuf};
 
+use app_lib::document_intelligence::ingestion::ingest_source;
+use app_lib::document_intelligence::parser::{
+    DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection,
+};
 use app_lib::migrations;
 use app_lib::repository::document_ingestion::{
     ChunkSection, DocumentIngestionErrorCode, DocumentIngestionRepository, NewChunk, NewSection,
     SectionParent,
 };
 use app_lib::repository::learning_item::LearningItemRepository;
+use app_lib::repository::search::SearchRepository;
 use app_lib::repository::study_profile::StudyProfileRepository;
 use rusqlite::{params, Connection};
 
@@ -750,4 +755,405 @@ fn o2_23_no_second_search_engine() {
             .collect()
     };
     assert_eq!(virtual_tables, vec!["search_fts".to_string()]);
+}
+
+// ============================ M2/M3 harness ============================
+
+/// 确定性假解析器：验证的是**真实**的生命周期代码路径，而不是「Docling 装没装」。
+struct ScriptedParser {
+    doc: ParsedDocument,
+}
+
+impl DocumentParser for ScriptedParser {
+    fn name(&self) -> String {
+        self.doc.parser_name.clone()
+    }
+    fn version(&self) -> Option<String> {
+        self.doc.parser_version.clone()
+    }
+    fn parse(&self, _file_name: &str, _bytes: &[u8]) -> Result<ParsedDocument, ParseFailure> {
+        Ok(self.doc.clone())
+    }
+}
+
+struct FailingParser {
+    failure: ParseFailure,
+}
+
+impl DocumentParser for FailingParser {
+    fn name(&self) -> String {
+        "failing-parser".to_string()
+    }
+    fn version(&self) -> Option<String> {
+        None
+    }
+    fn parse(&self, _file_name: &str, _bytes: &[u8]) -> Result<ParsedDocument, ParseFailure> {
+        Err(self.failure.clone())
+    }
+}
+
+/// 一份「一个章节 + 若干 chunk」的最小解析产物。
+fn sample_doc(texts: &[&str]) -> ParsedDocument {
+    ParsedDocument {
+        sections: vec![ParsedSection {
+            title: Some("第一章".to_string()),
+            ordinal: 0,
+            parent_index: None,
+        }],
+        chunks: texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ParsedChunk {
+                ordinal: i as i64,
+                text: (*t).to_string(),
+                section_index: Some(0),
+            })
+            .collect(),
+        parser_name: "scripted".to_string(),
+        parser_version: Some("0.0.1".to_string()),
+    }
+}
+
+fn count_where(conn: &Connection, table: &str, profile_id: i64) -> i64 {
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM {table} WHERE profile_id = ?1"),
+        params![profile_id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+fn indexed_chunk_count(conn: &Connection, profile_id: i64) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM search_index
+          WHERE profile_id = ?1 AND entity_type = 'document_chunk'",
+        params![profile_id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+// ============================ O2-10 / O2-11 ============================
+
+/// O2-10 —— 解析失败：`job = Failed`，且**没有**任何半成品结构。
+#[test]
+fn o2_10_parser_failure_leaves_no_partial_structure() {
+    let mut conn = setup();
+    let (profile, _, source) = scaffold(&conn, "A");
+
+    let parser = FailingParser {
+        failure: ParseFailure::RuntimeUnavailable("docling 运行时不可用".to_string()),
+    };
+    let outcome =
+        ingest_source(&mut conn, &parser, profile, source, "notes.md", b"whatever").unwrap();
+
+    assert_eq!(outcome.state, "Failed", "O2-10：状态必须是 Failed");
+    assert_eq!(
+        outcome.error_code.as_deref(),
+        Some("DOCLING_UNAVAILABLE"),
+        "O2-10：错误码必须可审计"
+    );
+
+    assert_eq!(
+        count_where(&conn, "document_revisions", profile),
+        0,
+        "O2-10：不得留下 revision"
+    );
+    assert_eq!(
+        count_where(&conn, "document_sections", profile),
+        0,
+        "O2-10：不得留下 section"
+    );
+    assert_eq!(
+        count_where(&conn, "document_chunks", profile),
+        0,
+        "O2-10：不得留下 chunk"
+    );
+    assert_eq!(
+        indexed_chunk_count(&conn, profile),
+        0,
+        "O2-10：不得留下检索条目"
+    );
+
+    // 作业本身必须落账为 Failed（这是「可恢复」的依据）。
+    let job = repo(&conn)
+        .latest_job_for_source(profile, source)
+        .unwrap()
+        .expect("O2-10：作业必须存在");
+    assert_eq!(job.state, "Failed");
+    assert!(
+        job.revision_id.is_none(),
+        "O2-10：失败作业不得指向 revision"
+    );
+}
+
+/// O2-11 —— 持久化 / 索引阶段失败：结构写入**回滚**，作业 `Failed`，
+/// 且**没有**任何「看起来 ready」的半成品文档。
+///
+/// 触发方式用的是真实的数据库约束（同一 revision 内 ordinal 重复），
+/// 而不是注入一个假的失败点。
+#[test]
+fn o2_11_persistence_failure_rolls_back_and_leaves_no_ready_doc() {
+    let mut conn = setup();
+    let (profile, _, source) = scaffold(&conn, "A");
+
+    // 两个 chunk 争同一个 ordinal → insert_chunks 必然失败。
+    let doc = ParsedDocument {
+        sections: vec![ParsedSection {
+            title: Some("第一章".to_string()),
+            ordinal: 0,
+            parent_index: None,
+        }],
+        chunks: vec![
+            ParsedChunk {
+                ordinal: 0,
+                text: "alpha".to_string(),
+                section_index: Some(0),
+            },
+            ParsedChunk {
+                ordinal: 0,
+                text: "beta".to_string(),
+                section_index: Some(0),
+            },
+        ],
+        parser_name: "scripted".to_string(),
+        parser_version: None,
+    };
+
+    let outcome = ingest_source(
+        &mut conn,
+        &ScriptedParser { doc },
+        profile,
+        source,
+        "notes.md",
+        b"x",
+    )
+    .unwrap();
+
+    assert_eq!(outcome.state, "Failed", "O2-11：状态必须是 Failed");
+    assert_eq!(
+        outcome.error_code.as_deref(),
+        Some("PERSIST_FAILED"),
+        "O2-11：错误码必须是 PERSIST_FAILED"
+    );
+    assert!(
+        outcome.revision_id.is_none(),
+        "O2-11：不得返回一个 revision"
+    );
+
+    // 回滚：revision / section / chunk 一个都不能留下。
+    assert_eq!(
+        count_where(&conn, "document_revisions", profile),
+        0,
+        "O2-11：结构写入必须被回滚（revision）"
+    );
+    assert_eq!(
+        count_where(&conn, "document_sections", profile),
+        0,
+        "O2-11：结构写入必须被回滚（section）"
+    );
+    assert_eq!(
+        count_where(&conn, "document_chunks", profile),
+        0,
+        "O2-11：结构写入必须被回滚（chunk）"
+    );
+    assert_eq!(
+        indexed_chunk_count(&conn, profile),
+        0,
+        "O2-11：不得留下检索条目"
+    );
+
+    let job = repo(&conn)
+        .latest_job_for_source(profile, source)
+        .unwrap()
+        .expect("O2-11：作业必须存在");
+    assert_eq!(job.state, "Failed");
+    assert!(job.revision_id.is_none());
+}
+
+// ============================ O2-12 / O2-14 ============================
+
+/// O2-12 —— **复用**既有 `SearchRepository`：ready chunk 进入既有统一索引，
+/// 且替换时不留孤儿词法条目。
+#[test]
+fn o2_12_search_repository_is_reused_without_orphans() {
+    let mut conn = setup();
+    let (profile, _, source) = scaffold(&conn, "A");
+
+    let parser = ScriptedParser {
+        doc: sample_doc(&["alpha material", "beta material"]),
+    };
+    let outcome = ingest_source(&mut conn, &parser, profile, source, "notes.md", b"x").unwrap();
+    assert!(outcome.is_ready(), "O2-12：前置条件 —— 必须 Ready");
+
+    assert_eq!(
+        indexed_chunk_count(&conn, profile),
+        2,
+        "O2-12：两个 ready chunk 必须进入既有 search_index"
+    );
+
+    // 记下第一轮的 chunk id，第二轮重新导入后它们必须彻底消失。
+    let first_ids: Vec<i64> = conn
+        .prepare("SELECT id FROM document_chunks WHERE profile_id = ?1 ORDER BY id")
+        .unwrap()
+        .query_map(params![profile], |r| r.get(0))
+        .unwrap()
+        .filter_map(|v| v.ok())
+        .collect();
+    assert_eq!(first_ids.len(), 2);
+
+    let parser2 = ScriptedParser {
+        doc: sample_doc(&["gamma material"]),
+    };
+    let outcome2 = ingest_source(&mut conn, &parser2, profile, source, "notes.md", b"x").unwrap();
+    assert!(outcome2.is_ready(), "O2-12：替换也必须成功");
+
+    // 旧 chunk 已随旧 revision 级联删除。
+    for id in &first_ids {
+        let still: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM document_chunks WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, 0, "O2-12：旧 chunk {id} 必须被删除");
+    }
+    // 且它们在既有索引里的派生条目也必须在**同一事务**里被清掉。
+    for id in &first_ids {
+        let orphan: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_index
+                  WHERE entity_type = 'document_chunk' AND entity_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            orphan, 0,
+            "O2-12：不得留下指向已删除 chunk 的孤儿词法条目（entity_id={id}）"
+        );
+    }
+    assert_eq!(
+        indexed_chunk_count(&conn, profile),
+        1,
+        "O2-12：替换后索引里只剩新一轮的 chunk"
+    );
+
+    // 源码级：导入模块必须真的调用既有 SearchRepository，而不是自带一套。
+    let ingestion_src = strip_rust_comments(&read_repo(
+        "src-tauri/src/document_intelligence/ingestion.rs",
+    ));
+    assert!(
+        ingestion_src.contains("SearchRepository"),
+        "O2-12：导入必须复用既有 SearchRepository"
+    );
+    assert!(
+        !ingestion_src.contains("document_fts"),
+        "O2-12：不得自带第二套 FTS"
+    );
+}
+
+/// O2-14 —— 既有词法检索能返回 `document_chunk`。
+#[test]
+fn o2_14_lexical_search_returns_document_chunk() {
+    let mut conn = setup();
+    let (profile, _, source) = scaffold(&conn, "A");
+
+    let parser = ScriptedParser {
+        doc: sample_doc(&["alpha unique token", "beta other token"]),
+    };
+    ingest_source(&mut conn, &parser, profile, source, "notes.md", b"x").unwrap();
+
+    let types = vec!["document_chunk".to_string()];
+    let hits = SearchRepository::new(&conn)
+        .search(profile, "alpha", Some(&types), 10)
+        .unwrap();
+
+    assert!(
+        hits.iter().any(|h| h.entity_type == "document_chunk"),
+        "O2-14：词法检索必须能返回 document_chunk；实际 {hits:?}"
+    );
+    let hit = hits
+        .iter()
+        .find(|h| h.entity_type == "document_chunk")
+        .unwrap();
+    assert!(
+        hit.title.contains("第一章"),
+        "O2-14：标题必须取章节标题（缺失时才回退到来源 display_name）"
+    );
+
+    // 跨档案检索不到（既有索引本身就是 profile 隔离的）。
+    let other = create_profile(&conn, "B");
+    let other_hits = SearchRepository::new(&conn)
+        .search(other, "alpha", Some(&types), 10)
+        .unwrap();
+    assert!(other_hits.is_empty(), "O2-14：别的档案不得检索到该 chunk");
+}
+
+// ============================ O2-15 / O2-16 / O2-17 ============================
+
+/// O2-15 / O2-16 / O2-17 —— 导入**不产生**任何学习事实。
+///
+/// 这三条其实是同一件事的三个面：本仓库的「Evidence」就是
+/// `learning_moments.evidence_quality`，掌握度是它的投影，
+/// FSRS 由 `memory_reviews` 承载。因此断言这三张表全零，
+/// 就等于同时断言了「没有 moment / 没有 evidence / 没有 FSRS 推进」。
+#[test]
+fn o2_15_16_17_ingestion_creates_zero_learning_evidence() {
+    let mut conn = setup();
+    let (profile, _, source) = scaffold(&conn, "A");
+
+    let parser = ScriptedParser {
+        doc: sample_doc(&["alpha", "beta", "gamma"]),
+    };
+    let outcome = ingest_source(&mut conn, &parser, profile, source, "notes.md", b"x").unwrap();
+    assert!(outcome.is_ready(), "前置条件：导入必须真的成功");
+
+    // O2-15 LearningMoment
+    assert_eq!(
+        count_where(&conn, "learning_moments", profile),
+        0,
+        "O2-15：导入不得产生 LearningMoment —— IMPORTED DOCUMENT != LEARNED KNOWLEDGE"
+    );
+    // O2-16 Evidence（本仓库中承载于 learning_moments）
+    assert_eq!(
+        count_where(&conn, "learning_moments", profile),
+        0,
+        "O2-16：导入不得产生任何证据质量的 Evidence"
+    );
+    // O2-17 MemoryReview / FSRS
+    assert_eq!(
+        count_where(&conn, "memory_reviews", profile),
+        0,
+        "O2-17：导入不得产生 MemoryReview（不推进 FSRS）"
+    );
+    assert_eq!(
+        count_where(&conn, "memory_units", profile),
+        0,
+        "O2-17：导入不得产生记忆单元"
+    );
+    // 训练交互也不得产生。
+    assert_eq!(
+        count_where(&conn, "training_interactions", profile),
+        0,
+        "O2-17：导入不得产生训练交互"
+    );
+
+    // 源码级：导入模块的**代码**里不得出现任何学习事实词。
+    let ingestion_src = strip_rust_comments(&read_repo(
+        "src-tauri/src/document_intelligence/ingestion.rs",
+    ));
+    for forbidden in [
+        "learning_moments",
+        "memory_reviews",
+        "learner_model",
+        "evidence_quality",
+        "fsrs",
+    ] {
+        assert!(
+            !ingestion_src.contains(forbidden),
+            "O2-15/16/17：导入模块的代码里出现了 `{forbidden}`"
+        );
+    }
 }

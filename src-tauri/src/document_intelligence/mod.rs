@@ -12,9 +12,13 @@
 //! 本次**不实现完整 Docling ingestion**。
 
 pub mod context_compiler;
+pub mod ingestion;
+pub mod parser;
 pub mod types;
 
 pub use context_compiler::{compile, CompileInput, RetrievedChunk};
+pub use ingestion::{ingest_source, IngestionOutcome, DOCUMENT_CHUNK_ENTITY};
+pub use parser::{DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection};
 pub use types::{
     ContextCandidate, ContextPack, ContextRequest, DocumentChunk, DocumentGlossaryEntry,
     DocumentRevision, DocumentSection, DocumentSource, DocumentTranslation, LEXICAL_TOP_K,
