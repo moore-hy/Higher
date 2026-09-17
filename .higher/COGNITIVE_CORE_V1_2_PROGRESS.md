@@ -82,7 +82,7 @@ v039+ 不允许在本次创建（§7 明确）
 | W11 Memory / Progress / Journey routes | **IMPLEMENTED** | §25 `get_memory_dashboard` + Memory 页；§26 `get_cognitive_progress` 四轴 + Progress 页；§27 Journey 双路由；`memoryPage` 15/15 + `cognitiveProgress` 17/17 绿；`memory_engine_v1` 11/11 绿（新增 ME-11） |
 | W12 Resource Governor + model router | **IMPLEMENTED** | |
 | W13 Runtime / document contracts | **IMPLEMENTED** | |
-| W14 Final validation + report | PENDING | |
+| W14 Final validation + report | **IMPLEMENTED** | |
 
 ---
 
@@ -515,9 +515,66 @@ v039+ 不允许在本次创建（§7 明确）
      **不发起连接、不探测进程**。缺失二进制 → `Unavailable`，Higher 仍可用。
   3. `version_info()` 返回 `None`（契约层不实际探测版本，避免下载/启动）；`RuntimeDescriptor.version` 字段仍保留为 `Option<String>` 供真实运行时填充。
   4. 基线 HEAD 注记：本 V1.2.2 任务书 §1 声明 `required baseline HEAD = 3248e2a08f707c451124de4d3c479c077ed7c18d`，
-     但本工作树在开工时（Ledger §1）实际 HEAD 为 `237c32785bf95c09ab9f84524c5833dd8988c91a` 且已匹配；
-     W12/W13 两个 checkpoint 均按锁定执行顺序落在 `main` 分支，**未偏离任何契约/范围**。该差异为两版任务书的提交哈希登记不一致，非施工缺陷。
+     经验证该提交即 `feat(cognitive): checkpoint Higher cognitive core through W11`，且为最终 HEAD 的祖先；
+     Ledger §1 早期登记的 `237c32785bf95c09ab9f84524c5833dd8988c91a` 亦为祖先提交（两版任务书哈希登记差异，非分叉）。
+     W12/W13/W14 三个 checkpoint 均按锁定执行顺序落在 `main` 分支，**未偏离任何契约/范围**。
 - **next wave**: W14
+
+---
+
+## W14 — Final Validation + Closure
+
+- **status**: IMPLEMENTED（验证/收尾，无新功能 wave）
+- **commit SHA**: 见本 closure commit `chore(cognitive): close Cognitive Core V1.2`（最终 HEAD 即此提交）
+- **scope**: 仅运行 W12–W14 锁定门禁 + 收尾记账；未新增任何产品功能 / 导航 / 模型管理器 / migration / Companion 功能 / 知识树重设计 / UI 重设计
+- **starting baseline SHA**: `3248e2a08f707c451124de4d3c479c077ed7c18d`（`feat(cognitive): checkpoint Higher cognitive core through W11`，已验证为最终 HEAD 祖先）
+- **wave commit SHAs**:
+  - W12 feature: `a1076cc2fc3d0560759e334b9e507a3f35758378`
+  - W13 feature: `44d86e05686a0c2c5ac3af4bcf989edbec768f82`
+  - W13 ledger: `37aca9d11192cddbee2f57eff26233ef0ae8c041`
+  - W14 closure: 本 commit（见 `git log` 顶端）
+- **Rust targeted suites（§9，全部 --test-threads=1）**:
+  - `learning_moments_v1` → **9 passed / 0 failed**
+  - `memory_engine_v1` → **11 passed / 0 failed**
+  - `learner_model_v2` → **9 passed / 0 failed**
+  - `cognitive_decision_v2` → **16 passed / 0 failed**
+  - `today_coach_v1` → **6 passed / 0 failed**
+  - W12 `resource_governor_v2` → **10 passed / 0 failed**
+  - W12 `model_role_router` → **12 passed / 0 failed**
+  - W13 `runtime_adapters` → **12 passed / 0 failed**
+  - W13 `document_intelligence` → **23 passed / 0 failed**
+  - 合计 **108 passed / 0 failed**
+- **Frontend gates（§9）**:
+  - `npx tsc --noEmit` → **exit 0**
+  - `npx vitest run tests/product-ui`（bounded）→ **155 passed / 0 failed**（9 文件；含 `cognitiveShell` 26 / `cognitiveToday` 22 / `memoryPage` 15 / `cognitiveProgress` 17）
+  - `npm run build` → **built in 38.91s，exit 0**（产物含 route-level 懒加载 chunk；recharts 不进主 bundle）
+- **Cargo gate（§9，单独运行）**: `cargo check -j 1` → **0 error**（34 处基线 warnings，与开工同数）
+- **Formatting rule（§9）**: `cargo fmt --check` → 仅 3 个**基线**债务文件残留（`src-tauri/src/ai/secret_migration.rs` / `src-tauri/src/commands/agent.rs` / `src-tauri/tests/secret_store_cutover.rs`）；W12/W13/W14 文件**全部 format-clean**
+- **Migration invariant（§9 / §10）**: `src-tauri/src/migrations/` 共 **38** 个 `vNNN_*` 文件，最大 `v038_memory_engine.rs`；**NO v039+**
+- **Git gate（§9）**:
+  - `git diff --check` → **exit 0**（无 merge markers / 无尾部空白 / 无 secret / 无模型权重 / 无构建产物）
+  - `git status --short` → 仅 3 个已知取证/临时目录未跟踪（`.git_broken3/` / `.git_pack_rescue/` / `.w9_check/`），**未提交、未修改、未删除**
+  - `git log --oneline -5` → 链路正确，分支 `main`，无 push
+- **Final regression invariants（§10）— 逐项核实**:
+  1. W0–W11 仍编译/测试（9 套 Rust + 前端 155 全绿）✓
+  2. 无第二个 LearnerModel 真相存储（纯投影）✓
+  3. 无第二个 Memory 调度器（仅 `memory/engine.rs` 用 fsrs）✓
+  4. 无 v038 之外 migration ✓
+  5. cloud-disabled 受尊重（§30 cloud privacy contract；路由器永不静默返回 CLOUD）✓
+  6. AI 并发 max=2 未变（AiConcurrencyGovernor 未被替换）✓
+  7. Resource Governor 是设备压力，非 HTTP 并发（两系统独立）✓
+  8. 无 GPU/VRAM/NPU 探测（仅采 RAM/CPU/空闲磁盘/进程内存）✓
+  9. 无模型下载/安装路径（Scope locks 全部遵守；缺失二进制 → Unavailable）✓
+  10. 无 Qdrant/第二向量库（复用既有 FTS/usearch）✓
+  11. unavailable runtime 可恢复（typed Unavailable，不崩溃）✓
+  12. ContextPack 有界（≤12 候选 / ≤16000 字符 / parent ≤2000）✓
+  13. 检索分数非学习证据/mastery（DI-09 / §30）✓
+  14. 无原始 secret Rust→JS（RuntimeDescriptor 无 api_key/secret/authorization/token）✓
+  15. 用户意图仍高于 Higher 推荐（永久层级 USER INTENT > HIGHER RECOMMENDATION）✓
+- **resource state**: NORMAL（各编译/测试组执行前资源门禁通过）
+- **known risk**: 无（基线 HEAD 哈希登记差异已在上文澄清，非契约/范围偏离）
+- **deviation**: 无（W14 为纯验证/收尾，未引入任何偏离锁定契约的改动）
+- **next wave**: STOP（按任务书 §13.4 / §13.5 / §14，施工到此结束，等待用户评审/push）
 
 ---
 
