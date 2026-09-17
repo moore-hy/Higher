@@ -81,7 +81,7 @@ v039+ 不允许在本次创建（§7 明确）
 | W10 Today UI | **IMPLEMENTED** | §24 认知首屏 + legacy 折叠；`cognitiveToday` 22/22 绿 |
 | W11 Memory / Progress / Journey routes | **IMPLEMENTED** | §25 `get_memory_dashboard` + Memory 页；§26 `get_cognitive_progress` 四轴 + Progress 页；§27 Journey 双路由；`memoryPage` 15/15 + `cognitiveProgress` 17/17 绿；`memory_engine_v1` 11/11 绿（新增 ME-11） |
 | W12 Resource Governor + model router | **IMPLEMENTED** | |
-| W13 Runtime / document contracts | PENDING | |
+| W13 Runtime / document contracts | **IMPLEMENTED** | |
 | W14 Final validation + report | PENDING | |
 
 ---
@@ -468,6 +468,56 @@ v039+ 不允许在本次创建（§7 明确）
   2. `committed_percent` 在 Windows 以 `(used_memory + used_swap) / (total_memory + total_swap)` 作内部压力代理；拿不到则保守填 0（0 → NORMAL，不误报压力）。
   3. CRITICAL 下本路由器只阻断「新的重本地路由」（MR-03）；云端路由是否可用由 `cloud_allowed` 单独守门（§30 cloud privacy contract），未在 CRITICAL 额外阻断云端——任务书无对应测试要求，且云契约独立于设备压力。
 - **next wave**: W13
+
+---
+
+## W13 — Runtime Adapters + Document Intelligence Contracts
+
+- **status**: IMPLEMENTED
+- **commit SHA**: 44d86e05686a0c2c5ac3af4bcf989edbec768f82
+- **files changed**:
+  - `src-tauri/src/runtime/types.rs`（新增 `RuntimeHealth`/`RuntimeCapability`/`RuntimeDescriptor`/`RuntimeControlOutcome`/`RuntimeControlError`/`RuntimeAdapter` trait/`endpoint_present`）
+  - `src-tauri/src/runtime/llama_cpp.rs`（新增 `LlamaCppRuntime`，契约 + 安全检测）
+  - `src-tauri/src/runtime/docling.rs`（新增 `DoclingRuntime`，capabilities = [DocumentParse]）
+  - `src-tauri/src/runtime/whisper.rs`（新增 `WhisperRuntime`，capabilities = [SpeechToText]）
+  - `src-tauri/src/runtime/mod.rs`（re-export 契约项 + 三个具体适配器）
+  - `src-tauri/src/document_intelligence/types.rs`（§30 锁定文档模型 + Context 请求/产物 + 锁定常量）
+  - `src-tauri/src/document_intelligence/context_compiler.rs`（有界确定性流水线 + DI 内嵌单测）
+  - `src-tauri/src/document_intelligence/mod.rs`（re-export）
+  - `src-tauri/tests/runtime_adapters.rs`（新增，RT-01…RT-10 + 附测）
+  - `src-tauri/tests/document_intelligence.rs`（新增，DI-01…DI-23）
+- **contracts implemented**:
+  - §7 Runtime 公共 DTO：`RuntimeHealth` 四态（Unavailable/Available/Healthy/Degraded）；
+    `RuntimeCapability` 八种（Chat/Tools/StructuredOutput/Embeddings/Rerank/SpeechToText/TextToSpeech/DocumentParse）；
+    `RuntimeDescriptor` 七个锁定字段（runtime_kind/runtime_name/configured_path_or_endpoint:Option<String>/managed_by_higher/health/capabilities:Vec<RuntimeCapability>/version:Option<String>）；
+    trait `RuntimeAdapter`（descriptor/availability_check/health_check/version_info/start/stop）；
+    `RuntimeControlOutcome`/`RuntimeControlError`（NotManaged/RuntimeUnavailable/ProbeFailed）
+  - 缺失二进制 → `RuntimeHealth::Unavailable`，**不下载/不编译/不安装**、不构成 app 启动失败
+  - `managed_by_higher` 门禁：未托管 `start`/`stop` 返回 `RuntimeControlError::NotManaged`，**绝不触碰/杀死/重启外部进程**
+  - §8 Document Intelligence 公共契约（投影/契约，不新增 migration）：`DocumentSource`/`DocumentRevision`/`DocumentSection`/`DocumentChunk`/`DocumentTranslation`/`DocumentGlossaryEntry`；`ContextRequest`/`ContextCandidate`/`ContextPack`
+  - Context Compiler 有界确定性流水线：profile 过滤 → lexical/semantic top-k(20) → 合并去重(≤30) → 重排(可用且有分) → 主(≤8) → ±1 邻接 → 去重(≤12) → 已存在 parent_context(≤2000) → 总(≤16000)；稳定 tie-break（相关度↓ → doc↑ → revision↑ → section↑ → chunk↑）
+  - `parent_context` 仅取**已存在**父级/章节上下文（绝不 LLM 生成）；计入同一 16000 预算；不成为 mastery/evidence/学习证据
+  - 复用既有 FTS/usearch；**不引入 Qdrant / 第二向量库**；不实现完整 Docling ingestion
+  - 检索分数仅为检索元数据，永不转换为 mastery/EvidenceQuality/LearnerModel/LearningMoment
+  - 全部公开 Context DTO 字段与 §30 锁定契约逐项一致（DI-19 serde 键集校验）
+- **validation run + result**:
+  - `cargo check -j 1` → **0 error**（34 处基线 warnings，与开工同数）
+  - `cargo test --test runtime_adapters -- --test-threads=1` → **12 passed / 0 failed**
+    （RT-01…RT-10 + endpoint_present_rules + runtime_kind_shared_source）
+  - `cargo test --test document_intelligence -- --test-threads=1` → **23 passed / 0 failed**（DI-01…DI-23）
+  - `cargo fmt --check` → 仅 3 个**基线**债务文件残留；W13 文件**全部 format-clean**
+- **resource state**: NORMAL
+- **known risk**: 无
+- **deviation**:
+  1. `runtime/mod.rs` 新增 `pub use llama_cpp::LlamaCppRuntime; pub use docling::DoclingRuntime; pub use whisper::WhisperRuntime;`，
+     此前仅导出 trait/类型。属**契约暴露**（供集成测试与后续编排引用），不改变 `RuntimeDescriptor` DTO 形状。
+  2. `endpoint_present` 仅做形式判断：URL（`http://`/`https://`）视为 present；本地路径用 `Path::exists()`，
+     **不发起连接、不探测进程**。缺失二进制 → `Unavailable`，Higher 仍可用。
+  3. `version_info()` 返回 `None`（契约层不实际探测版本，避免下载/启动）；`RuntimeDescriptor.version` 字段仍保留为 `Option<String>` 供真实运行时填充。
+  4. 基线 HEAD 注记：本 V1.2.2 任务书 §1 声明 `required baseline HEAD = 3248e2a08f707c451124de4d3c479c077ed7c18d`，
+     但本工作树在开工时（Ledger §1）实际 HEAD 为 `237c32785bf95c09ab9f84524c5833dd8988c91a` 且已匹配；
+     W12/W13 两个 checkpoint 均按锁定执行顺序落在 `main` 分支，**未偏离任何契约/范围**。该差异为两版任务书的提交哈希登记不一致，非施工缺陷。
+- **next wave**: W14
 
 ---
 
