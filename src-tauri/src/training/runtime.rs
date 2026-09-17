@@ -678,6 +678,38 @@ pub fn record_interaction(
         .map_err(TrainingError::db)?;
         let interaction_id = tx.last_insert_rowid();
 
+        // ---- §10 / §16 / item 10（owner 收口决定）：休息块不产生任何学习事实 ----
+        //
+        // 休息块（§10：`protocol_id IS NULL` + `is_break = 1`）**只**写交互行作为审计轨迹；
+        // 它**绝不**变成 LearningMoment、Evidence 或 FSRS 推进。这一点过去被 §6.4 标记为
+        // 「Owner 待定」，现在 owner 已明确：休息块 = 零学习事实。
+        //
+        // 注意：交互行本身仍是合法的审计轨迹（谁、什么时间、做了什么动作），但本模块
+        // 不再把它推导成任何 LearningMoment —— 否则 break 会污染 mastery / FSRS（§50）。
+        if block.is_break {
+            let effect = EffectSummary {
+                learning_moment_ids: Vec::new(),
+                fsrs_applied: false,
+                memory_review_id: None,
+                memory_unit_id: None,
+                fsrs_skip_reason: Some(FSRS_SKIP_BLOCK_IS_BREAK.to_string()),
+                verification: p.verification.as_str().to_string(),
+            };
+            let effect_json = serde_json::to_string(&effect)
+                .map_err(|e| TrainingError::db(format!("效果摘要序列化失败：{e}")))?;
+            tx.execute(
+                "UPDATE training_interactions SET effect_summary_json = ?1 WHERE id = ?2",
+                params![effect_json, interaction_id],
+            )
+            .map_err(TrainingError::db)?;
+            let interaction = load_interaction(tx, p.profile_id, interaction_id)?;
+            return Ok(InteractionOutcome {
+                interaction,
+                effect,
+                replayed: false,
+            });
+        }
+
         // ---- §18：记录 LearningMoment（来源可溯源到这次交互）----
         let evidence_quality = p.verification.max_evidence_quality();
         let source_type = source_type_for(p.verification);
@@ -723,9 +755,8 @@ pub fn record_interaction(
         };
 
         // ---- §15 + §11：可信回忆结果 + 已绑定记忆单元 → 恰好一次推进 FSRS ----
-        if block.is_break {
-            effect.fsrs_skip_reason = Some(FSRS_SKIP_BLOCK_IS_BREAK.to_string());
-        } else if source_type.is_non_authoritative() {
+        // 休息块的路径已在上面提前返回（见 item 10），这里只会到达学习块。
+        if source_type.is_non_authoritative() {
             // §22 / §50：AI 导师的语义评估可以落库（MEDIUM），但它**不是**可授权的
             // 学习事实。FSRS 是权威记忆排程，只有确定性/结构化/用户显式证据能移动它。
             // 这条判定刻意放在「是否回忆类 moment」之前 —— 否则 AI 降级后的

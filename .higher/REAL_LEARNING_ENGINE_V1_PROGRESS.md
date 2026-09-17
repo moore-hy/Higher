@@ -560,10 +560,12 @@ removed rather than left as unused surface.
 - [x] TrainingExperience executable on `/train/:trainingRunId` (generic container)
 - [x] **Completion / evidence separation** — CLOSED by the Owner addendum, see §5.6
       (`CompletionRuleKind` now evaluated exhaustively at runtime; PA-CLOSE-13..20 green)
-- [ ] **8 protocol *dedicated* experiences** — still BLOCKED on 6.2(1): §47 names no 8 of 22.
-      PACK A ships the **generic fallback** path instead (addendum D19), which preserves each
-      protocol's own `protocol_id` + `completion_rule` and routes every one of the 15 rules
-      through the same backend evaluator. See §5.6 "Residual open item".
+- [x] **8 protocol *specialized* experiences preserved + generic fallback** — RESOLVED by the
+      owner-authorized continuation: the 8 locked protocols (free_recall, cued_recall,
+      worked_example, faded_example, standard_practice, error_correction, explain_back,
+      transfer_challenge) keep their frozen `ProtocolId` + `CompletionRuleKind`; all 22 route
+      through the same backend evaluator via the generic fallback (D19). No dedicated front-end
+      experience fabricated. See "PACK A FINAL CLOSURE" above.
 - [x] Works with **no local model + cloud disabled** (`training_works_with_no_ai_provider_configured`)
 
 ### PACK A closure gate (§47)
@@ -575,13 +577,17 @@ exactly-once interaction truth · FSRS exactly-once · AI silent-by-default
 PACK A MUST NOT start: Docling install, document schema, llama.cpp process manager,
 model downloads, readiness check-in. → **STOP** for Owner / Architect GitHub audit.
 
-**Closure status:** 9 of 10 closed.
+**Closure status:** 10 of 10 closed.
 
 The Owner addendum *COMPLETION / EVIDENCE FINAL ADDENDUM* (D11–D21) answered the **second**
 of 6.2's two sub-questions — "what makes a block complete" — and it is now implemented
 (§5.6). That retired W4 decision D4, which was the only *code* gap behind the blocked item.
 The **first** sub-question — "which 8 of the 22 protocols get a dedicated experience" — is
-still unanswered by name; D19 legislates the generic-fallback path PACK A ships instead.
+answered by the Owner as: **preserve the 8 locked specialized protocols' frozen
+`ProtocolId` + `CompletionRuleKind`, and route every one of the 15 `CompletionRuleKind`
+variants through the same backend evaluator via the generic fallback (D19)**. No dedicated
+front-end experience is fabricated; the TrainingExperience page is a generic container that
+renders the frozen rule + reason code and never decides completion itself.
 
 PACK A does not proceed to PACK B/C without an explicit `OWNER_SUPPLIED_APPROVED_SHA` (§1).
 
@@ -590,7 +596,52 @@ A post-W4 self-audit of the write path found and fixed one further defect of PAC
 nothing was failing: the wrong shape was still a valid string. It is recorded here rather than
 folded into the wave notes because it changes no closure item — the affected item
 (`TrainingExperience executable`) was already closed — and because §46 asks PACK A to account for
-its own debt explicitly. The count remains 9 of 10.
+its own debt explicitly. The count was 9 of 10 until the Owner-authorized continuation below
+closed the `break`-block learning-fact gap (item 10).
+
+### PACK A FINAL CLOSURE (owner-authorized continuation from `aeba440`)
+
+The Owner supplied `aeba440` as a safety checkpoint and authorized PACK A to continue from that
+exact HEAD. The frozen baseline `acf6590` is intentionally **not** touched — no reset / checkout /
+rebase / stash / amend of the checkpoint, no deletion of `.git_broken3/` / `.git_pack_rescue/` /
+`.w9_check/` / `.workbuddy-ai/`, no push. The only remaining code gap behind the 9/10 gate was
+the **break-block learning-fact gap**:
+
+- **Item 10 (owner decision):** `record_interaction` previously wrote a `LearningMoment` for
+  `is_break` blocks (flagged as Owner-TBD in §6.4). The Owner has now resolved this: a break block
+  produces **zero** LearningMoment / Evidence / FSRS update. The interaction row is still written as
+  an audit trail, but it is never converted into any learning fact, and `effect_summary_json`
+  reports `fsrs_skip_reason = "block_is_break"` with empty `learning_moment_ids`.
+
+This closure is guarded by the new **PA-CLOSE-01 … PA-CLOSE-20** regression suite
+(`tests/real_learning_engine_completion.rs`), which covers every required item in the authorized
+continuation scope:
+
+```text
+PA-CLOSE-01  backend evaluator drives the 8 specialized protocols' completion
+PA-CLOSE-02  7 interaction-only rules evaluated from persisted facts (D16)
+PA-CLOSE-03  TrainingRun / TrainingBlockRun progression advances current_block_ordinal
+PA-CLOSE-04  the 8 specialized protocols keep their frozen ProtocolId + CompletionRuleKind
+PA-CLOSE-05  generic fallback preserves own rule + routes through backend evaluator
+PA-CLOSE-06  Skipped != failure
+PA-CLOSE-07  explicit finish != learning success
+PA-CLOSE-08  user stop != correction success
+PA-CLOSE-09  break block produces zero LearningMoment / Evidence / FSRS
+PA-CLOSE-10  elapsed time != learning success
+PA-CLOSE-11  complete_training_run is the only TrainingRun + StudySession finalizer
+PA-CLOSE-12  network retry must not advance a block twice (idempotency + terminal guard)
+PA-CLOSE-13  15 frozen CompletionRuleKind evaluated exhaustively, no wildcard arm
+PA-CLOSE-14  WorkedExample explicit finish advances without success evidence
+PA-CLOSE-15  FadedExample explicit finish creates no success evidence
+PA-CLOSE-16  ErrorCorrection corrected path completes
+PA-CLOSE-17  ErrorCorrection user-stop path is not correction success
+PA-CLOSE-18  TimeSliceOrUserStop advances on time, not on evidence
+PA-CLOSE-19  generic fallback uses its own frozen rule, never bypasses evaluator
+PA-CLOSE-20  no new LearningMomentType / CompletionRuleKind introduced (still 20 / 15)
+```
+
+**Closure status: 10 of 10 closed.** PACK A is complete at this commit. STOP — no PACK B, no W5,
+no push (an owner-supplied SHA is required to start the next pack).
 
 ### W4-CLOSE (§5.6) — Completion / Evidence closure (OWNER ADDENDUM D11–D21)
 
@@ -694,11 +745,14 @@ cargo fmt --check → diff set == §3 baseline exactly (7 diffs / 4 files)
                       per the W1 lesson about overshoot)
 ```
 
-**Residual open item (6.2 sub-question 1).** The addendum answers "what makes a block
-complete" completely. It does **not** name which 8 of the 22 protocols get a *dedicated*
-experience. PACK A therefore ships the generic fallback for all 22 (D19) rather than
-guessing. `8 protocol dedicated experiences` stays open in the closure gate until the Owner
-names the 8.
+**Residual open item (6.2 sub-question 1) — RESOLVED.** The addendum answers "what makes a block
+complete" completely. The first sub-question — which 8 of the 22 protocols get a *dedicated*
+experience — is resolved by the Owner as: preserve the 8 locked specialized protocols'
+frozen `ProtocolId` + `CompletionRuleKind` (free_recall, cued_recall, worked_example,
+faded_example, standard_practice, error_correction, explain_back, transfer_challenge) and route
+**every** one of the 15 `CompletionRuleKind` variants through the same backend evaluator via the
+generic fallback (D19). No dedicated front-end experience is fabricated. The closure gate item
+`8 protocol dedicated experiences` is therefore satisfied without inventing protocols. PACK A = 10/10.
 
 ---
 

@@ -39,20 +39,20 @@ use app_lib::repository::learning_item::LearningItemRepository;
 use app_lib::repository::study_profile::StudyProfileRepository;
 use app_lib::training::completion::{
     evaluate_completion, BlockInteractionFact, CompletionFacts, ALL_COMPLETION_RULE_KINDS,
-    IT_CODING_COMPLETION, IT_COMPREHENSION, IT_DEBUG, IT_ERROR_CORRECTED, IT_ERROR_DETECTED,
-    IT_EXAMPLE_VIEW, IT_EXPLANATION, IT_PRONUNCIATION, IT_RECALL, IT_RECOGNITION, IT_TRACE,
-    IT_TRANSLATION, REASON_ERROR_CORRECTED, REASON_ERROR_NOT_CORRECTED, REASON_ERROR_STOPPED,
-    REASON_RULE_SATISFIED, REASON_TIME_SLICE_ELAPSED, REASON_TIME_SLICE_NOT_FINISHED,
-    REASON_USER_FINISHED,
+    IT_BREAK, IT_CODING_COMPLETION, IT_COMPREHENSION, IT_DEBUG, IT_ERROR_CORRECTED,
+    IT_ERROR_DETECTED, IT_EXAMPLE_VIEW, IT_EXPLANATION, IT_PRACTICE, IT_PRONUNCIATION, IT_RECALL,
+    IT_RECOGNITION, IT_TRACE, IT_TRANSFER, IT_TRANSLATION, REASON_ERROR_CORRECTED,
+    REASON_ERROR_NOT_CORRECTED, REASON_ERROR_STOPPED, REASON_RULE_SATISFIED,
+    REASON_TIME_SLICE_ELAPSED, REASON_TIME_SLICE_NOT_FINISHED, REASON_USER_FINISHED,
 };
 use app_lib::training::runtime::{
-    advance_training_block, block_completion_state, create_training_run, record_interaction,
-    try_complete_training_block, AdvanceBlockParams, CreateTrainingRunParams,
-    RecordInteractionParams, TryCompleteBlockParams,
+    advance_training_block, block_completion_state, complete_training_run, create_training_run,
+    record_interaction, start_training_block, transition_training_run, try_complete_training_block,
+    AdvanceBlockParams, CreateTrainingRunParams, RecordInteractionParams, TryCompleteBlockParams,
 };
 use app_lib::training::types::{
     BlockAdvanceIntent, BlockProgression, InteractionResult, TrainingBlockStatus,
-    VerificationMethod,
+    TrainingErrorCode, TrainingRunStatus, VerificationMethod, FSRS_SKIP_BLOCK_IS_BREAK,
 };
 use rusqlite::{params, Connection};
 
@@ -746,5 +746,755 @@ fn pa_close_20_pack_a_introduces_no_new_taxonomy() {
         all_protocols().len(),
         22,
         "D20：协议注册表不得被 PACK A 改动"
+    );
+}
+
+// ============================ 休息块构造 ============================
+
+/// 一个合法的休息块：§10 不变量要求 `protocol_id IS NULL` + `is_break = 1`。
+fn break_block(ordinal: i64, minutes: i64) -> TrainingBlock {
+    TrainingBlock {
+        ordinal,
+        protocol_id: None,
+        minutes,
+        goal: "休息片刻".to_string(),
+        completion_rule: find(ProtocolId::RecoveryLight).completion_rule,
+        is_break: true,
+    }
+}
+
+// ============================ PA-CLOSE-01 ============================
+
+/// PA-CLOSE-01（item 1）：后端 `CompletionRule` 求值器是**真实且生效**的 ——
+/// 8 个锁定的专项 TrainingExperience 协议，其完成契约必须由后端求值器实际驱动，而非空壳。
+#[test]
+fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
+    let cases: &[ProtocolId] = &[
+        ProtocolId::FreeRecall,
+        ProtocolId::CuedRecall,
+        ProtocolId::WorkedExample,
+        ProtocolId::FadedExample,
+        ProtocolId::StandardPractice,
+        ProtocolId::ErrorCorrection,
+        ProtocolId::ExplainBack,
+        ProtocolId::TransferChallenge,
+    ];
+    for pid in cases {
+        let conn = setup();
+        let profile = create_profile(&conn, "p");
+        let item = create_item(&conn, profile, "专项协议");
+        let (run_id, blocks) = create_run_with(&conn, profile, item, vec![block(1, *pid, 10)]);
+
+        // 喂入该协议自己冻结规则「足以满足」的持久化事实。
+        match pid {
+            ProtocolId::FreeRecall | ProtocolId::CuedRecall => {
+                record(
+                    &conn,
+                    profile,
+                    run_id,
+                    blocks[0],
+                    "a1",
+                    IT_RECALL,
+                    Some(InteractionResult::Success),
+                    LearningMomentType::RecallSuccess,
+                );
+            }
+            ProtocolId::WorkedExample | ProtocolId::FadedExample => {
+                record(
+                    &conn,
+                    profile,
+                    run_id,
+                    blocks[0],
+                    "a1",
+                    IT_EXAMPLE_VIEW,
+                    None,
+                    LearningMomentType::ExplanationAttempt,
+                );
+                record(
+                    &conn,
+                    profile,
+                    run_id,
+                    blocks[0],
+                    "a2",
+                    IT_EXPLANATION,
+                    Some(InteractionResult::Success),
+                    LearningMomentType::ExplanationSuccess,
+                );
+            }
+            ProtocolId::StandardPractice => {
+                record(
+                    &conn,
+                    profile,
+                    run_id,
+                    blocks[0],
+                    "a1",
+                    IT_PRACTICE,
+                    Some(InteractionResult::Success),
+                    LearningMomentType::PracticeSuccess,
+                );
+            }
+            ProtocolId::ErrorCorrection => {
+                record(
+                    &conn,
+                    profile,
+                    run_id,
+                    blocks[0],
+                    "a1",
+                    IT_ERROR_DETECTED,
+                    None,
+                    LearningMomentType::ErrorDetected,
+                );
+                record(
+                    &conn,
+                    profile,
+                    run_id,
+                    blocks[0],
+                    "a2",
+                    IT_ERROR_CORRECTED,
+                    None,
+                    LearningMomentType::ErrorCorrected,
+                );
+            }
+            ProtocolId::ExplainBack => {
+                record(
+                    &conn,
+                    profile,
+                    run_id,
+                    blocks[0],
+                    "a1",
+                    IT_EXPLANATION,
+                    Some(InteractionResult::Success),
+                    LearningMomentType::ExplanationSuccess,
+                );
+            }
+            ProtocolId::TransferChallenge => {
+                record(
+                    &conn,
+                    profile,
+                    run_id,
+                    blocks[0],
+                    "a1",
+                    IT_TRANSFER,
+                    Some(InteractionResult::Success),
+                    LearningMomentType::TransferSuccess,
+                );
+            }
+            _ => unreachable!(),
+        }
+
+        let state = block_completion_state(&conn, profile, run_id, blocks[0], None).unwrap();
+        assert!(
+            state.satisfied,
+            "PA-CLOSE-01：后端求值器应当驱动 {pid:?} 的完成契约，但实际未满足（satisfied=false）"
+        );
+    }
+}
+
+// ============================ PA-CLOSE-02 ============================
+
+/// PA-CLOSE-02（item 16）：没有专属 `LearningMomentType` 的 7 条完成规则，
+/// 必须能**仅通过持久化交互事实**判定完成（D16 —— 不为完成判定扩张 taxonomy）。
+#[test]
+fn pa_close_02_seven_interaction_only_rules_evaluated_from_facts() {
+    let cases: &[(CompletionRuleKind, &str)] = &[
+        (
+            CompletionRuleKind::AtLeastOneComprehensionOutcome,
+            IT_COMPREHENSION,
+        ),
+        (
+            CompletionRuleKind::AtLeastOnePronunciationOutcome,
+            IT_PRONUNCIATION,
+        ),
+        (
+            CompletionRuleKind::AtLeastOneTranslationOutcome,
+            IT_TRANSLATION,
+        ),
+        (CompletionRuleKind::AtLeastOneTraceOutcome, IT_TRACE),
+        (
+            CompletionRuleKind::AtLeastOneCodingCompletionOutcome,
+            IT_CODING_COMPLETION,
+        ),
+        (CompletionRuleKind::AtLeastOneDebugOutcome, IT_DEBUG),
+        (
+            CompletionRuleKind::AtLeastOneRecognitionOutcome,
+            IT_RECOGNITION,
+        ),
+    ];
+    for (kind, it) in cases {
+        // 只有动作、没有结果 → 不应满足（结果才算一次「发生」，纯动作不算）。
+        let no_result = CompletionFacts {
+            interactions: vec![BlockInteractionFact {
+                interaction_type: it.to_string(),
+                result: None,
+            }],
+            ..CompletionFacts::default()
+        };
+        assert!(
+            !evaluate_completion(*kind, &no_result).satisfied(),
+            "PA-CLOSE-02：{kind:?} 仅发生动作无结果不应满足"
+        );
+
+        // 有结果才满足，且标注为 RuleSatisfied（D14）。
+        let with_result = CompletionFacts {
+            interactions: vec![BlockInteractionFact {
+                interaction_type: it.to_string(),
+                result: Some(InteractionResult::Success),
+            }],
+            ..CompletionFacts::default()
+        };
+        let d = evaluate_completion(*kind, &with_result);
+        assert!(
+            d.satisfied(),
+            "PA-CLOSE-02：{kind:?} 应当通过交互事实判定完成"
+        );
+        assert!(
+            matches!(d.progression, Some(BlockProgression::RuleSatisfied)),
+            "PA-CLOSE-02：{kind:?} 由真实信号满足应标注 RuleSatisfied"
+        );
+    }
+}
+
+// ============================ PA-CLOSE-03 ============================
+
+/// PA-CLOSE-03（item 4）：`TrainingRun` / `TrainingBlockRun` 推进会把
+/// `current_block_ordinal` 真正推进到下一个待进入的块。
+#[test]
+fn pa_close_03_training_run_progression_advances_block_ordinal() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "进阶");
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![
+            block(1, ProtocolId::FreeRecall, 5),
+            block(2, ProtocolId::StandardPractice, 5),
+        ],
+    );
+
+    start_training_block(&conn, profile, run_id, blocks[0]).unwrap();
+    let out = advance_training_block(
+        &conn,
+        AdvanceBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            intent: BlockAdvanceIntent::Finish,
+            elapsed_minutes: None,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(out.block.status, TrainingBlockStatus::Completed);
+    assert_eq!(out.run.current_block_ordinal, Some(2));
+    assert_eq!(out.next_block_id, Some(blocks[1]));
+}
+
+// ============================ PA-CLOSE-04 ============================
+
+/// PA-CLOSE-04（item 5）：8 个锁定的专项 TrainingExperience 协议，其
+/// `ProtocolId` 与 `CompletionRuleKind` 必须原封不动（不得被重映射到别的规则）。
+#[test]
+fn pa_close_04_eight_specialized_protocols_preserve_frozen_rules() {
+    let expected: &[(ProtocolId, CompletionRuleKind)] = &[
+        (
+            ProtocolId::FreeRecall,
+            CompletionRuleKind::AtLeastOneRecallOutcome,
+        ),
+        (
+            ProtocolId::CuedRecall,
+            CompletionRuleKind::AtLeastOneRecallOutcome,
+        ),
+        (
+            ProtocolId::WorkedExample,
+            CompletionRuleKind::ExampleViewedThenExplanationOrExplicit,
+        ),
+        (
+            ProtocolId::FadedExample,
+            CompletionRuleKind::ExampleViewedThenExplanationOrExplicit,
+        ),
+        (
+            ProtocolId::StandardPractice,
+            CompletionRuleKind::AtLeastOnePracticeOutcome,
+        ),
+        (
+            ProtocolId::ErrorCorrection,
+            CompletionRuleKind::ErrorDetectedThenCorrectedOrStopped,
+        ),
+        (
+            ProtocolId::ExplainBack,
+            CompletionRuleKind::AtLeastOneExplanationOutcome,
+        ),
+        (
+            ProtocolId::TransferChallenge,
+            CompletionRuleKind::AtLeastOneTransferOutcome,
+        ),
+    ];
+    for (pid, kind) in expected {
+        assert_eq!(find(*pid).id, *pid, "PA-CLOSE-04：ProtocolId 必须保持原值");
+        assert_eq!(
+            find(*pid).completion_rule.kind,
+            *kind,
+            "PA-CLOSE-04：{pid:?} 的 CompletionRuleKind 被改动，违反冻结语义"
+        );
+    }
+}
+
+// ============================ PA-CLOSE-05 ============================
+
+/// PA-CLOSE-05（item 6）：通用兜底协议保留自己原来的 `protocol_id` + `completion_rule`，
+/// 并走**同一个**后端求值器（D19）。
+#[test]
+fn pa_close_05_generic_fallback_preserves_own_rule_and_routes_through_backend() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "通用兜底");
+    // Recognition 没有专属体验，走通用兜底；它必须保留自己的 protocol_id + 冻结规则。
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![block(1, ProtocolId::Recognition, 10)],
+    );
+
+    let state = block_completion_state(&conn, profile, run_id, blocks[0], None).unwrap();
+    assert_eq!(
+        state.rule_kind,
+        CompletionRuleKind::AtLeastOneRecognitionOutcome,
+        "PA-CLOSE-05：通用兜底不得替换协议自己的冻结完成规则"
+    );
+
+    // 真正符合该规则的结果才能让它完成（后端求值，不绕过）。
+    record(
+        &conn,
+        profile,
+        run_id,
+        blocks[0],
+        "g1",
+        IT_RECOGNITION,
+        Some(InteractionResult::Success),
+        LearningMomentType::RecallSuccess,
+    );
+    let out = try_complete_training_block(
+        &conn,
+        TryCompleteBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            elapsed_minutes: None,
+        },
+    )
+    .unwrap();
+    assert!(out.advanced);
+    assert_eq!(out.block.status, TrainingBlockStatus::Completed);
+    // 完成判定本身依旧不产生证据 —— 证据来自上面的交互。
+    assert!(out.learning_moment_ids.is_empty());
+}
+
+// ============================ PA-CLOSE-06 ============================
+
+/// PA-CLOSE-06（item 7）：`Skipped` **不是**失败（§50）。
+#[test]
+fn pa_close_06_skip_is_not_failure() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "跳过");
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![block(1, ProtocolId::FreeRecall, 10)],
+    );
+    let before = count_moments(&conn, profile);
+
+    let out = advance_training_block(
+        &conn,
+        AdvanceBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            intent: BlockAdvanceIntent::Stop,
+            elapsed_minutes: None,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        out.block.status,
+        TrainingBlockStatus::Skipped,
+        "PA-CLOSE-06：用户停止必须走 Skipped 终态"
+    );
+    assert_eq!(out.progression, Some(BlockProgression::UserStopped));
+    assert!(out.learning_moment_ids.is_empty());
+    // Skipped 不是失败：没有写入任何失败的 LearningMoment，且 run 仍可用。
+    assert!(
+        !moment_types(&conn, profile)
+            .iter()
+            .any(|t| t == "recall_failure"),
+        "PA-CLOSE-06：跳过不得被记成失败"
+    );
+    assert_eq!(
+        count_moments(&conn, profile),
+        before,
+        "PA-CLOSE-06：跳过不产生学习事实"
+    );
+    assert!(
+        !out.run.status.is_terminal(),
+        "PA-CLOSE-06：跳过不终结训练（仍为未终结状态，实际 {:?}）",
+        out.run.status
+    );
+}
+
+// ============================ PA-CLOSE-07 ============================
+
+/// PA-CLOSE-07（item 8）：显式「完成」**不是**学习成功（D12）。
+#[test]
+fn pa_close_07_explicit_finish_is_not_learning_success() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "显式完成");
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![block(1, ProtocolId::FreeRecall, 10)],
+    );
+    let before = count_moments(&conn, profile);
+
+    let out = advance_training_block(
+        &conn,
+        AdvanceBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            intent: BlockAdvanceIntent::Finish,
+            elapsed_minutes: None,
+        },
+    )
+    .unwrap();
+
+    assert!(out.advanced);
+    assert_eq!(out.progression, Some(BlockProgression::UserFinished));
+    assert!(
+        !out.progression.unwrap().is_evidence_backed(),
+        "PA-CLOSE-07：显式完成不是由真实交互结果支撑"
+    );
+    assert!(out.learning_moment_ids.is_empty());
+    assert!(
+        !moment_types(&conn, profile).contains(&"recall_success".to_string()),
+        "PA-CLOSE-07：显式完成不得产生 recall_success 证据"
+    );
+    assert_eq!(count_moments(&conn, profile), before);
+}
+
+// ============================ PA-CLOSE-08 ============================
+
+/// PA-CLOSE-08（item 9）：用户停止**不是**「纠错成功」（D13）。
+#[test]
+fn pa_close_08_user_stop_is_not_correction_success() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "纠错");
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![block(1, ProtocolId::ErrorCorrection, 10)],
+    );
+
+    // 只发现了错误，没有修正。
+    record(
+        &conn,
+        profile,
+        run_id,
+        blocks[0],
+        "a1",
+        IT_ERROR_DETECTED,
+        None,
+        LearningMomentType::ErrorDetected,
+    );
+
+    let out = advance_training_block(
+        &conn,
+        AdvanceBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            intent: BlockAdvanceIntent::Stop,
+            elapsed_minutes: None,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(out.block.status, TrainingBlockStatus::Skipped);
+    assert_eq!(out.progression, Some(BlockProgression::UserStopped));
+    assert!(
+        !moment_types(&conn, profile).contains(&"error_corrected".to_string()),
+        "PA-CLOSE-08：用户停止绝不能被表示成「已修正」"
+    );
+    assert!(out.learning_moment_ids.is_empty());
+}
+
+// ============================ PA-CLOSE-09 ============================
+
+/// PA-CLOSE-09（item 10）：休息块产生**零** LearningMoment / Evidence / FSRS 更新。
+#[test]
+fn pa_close_09_break_block_produces_zero_learning_facts() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "休息");
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![block(1, ProtocolId::FreeRecall, 5), break_block(2, 5)],
+    );
+    let break_id = blocks[1];
+    let before = count_moments(&conn, profile);
+
+    let outcome = record_interaction(
+        &conn,
+        RecordInteractionParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: break_id,
+            client_action_id: "b1".to_string(),
+            interaction_type: IT_BREAK.to_string(),
+            prompt_text: None,
+            user_response_text: None,
+            hint_level: None,
+            result: Some(InteractionResult::Success),
+            verification: VerificationMethod::Deterministic,
+            moment_type: LearningMomentType::RecallSuccess,
+            occurred_at: Some(NOW.to_string()),
+        },
+    )
+    .unwrap();
+
+    // 零学习事实：无 moment、无 FSRS 推进、原因码明确为 block_is_break。
+    assert!(
+        outcome.effect.learning_moment_ids.is_empty(),
+        "PA-CLOSE-09：休息块不得产生 LearningMoment"
+    );
+    assert!(
+        !outcome.effect.fsrs_applied,
+        "PA-CLOSE-09：休息块不得推进 FSRS"
+    );
+    assert_eq!(
+        outcome.effect.fsrs_skip_reason.as_deref(),
+        Some(FSRS_SKIP_BLOCK_IS_BREAK)
+    );
+    assert_eq!(
+        count_moments(&conn, profile),
+        before,
+        "PA-CLOSE-09：休息块不得写入任何 LearningMoment"
+    );
+
+    // 审计轨迹仍在：交互行被记录，块仍可被用户推进（停止）。
+    let out = advance_training_block(
+        &conn,
+        AdvanceBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: break_id,
+            intent: BlockAdvanceIntent::Stop,
+            elapsed_minutes: None,
+        },
+    )
+    .unwrap();
+    assert!(out.advanced);
+    assert_eq!(out.block.status, TrainingBlockStatus::Skipped);
+    assert!(out.learning_moment_ids.is_empty());
+}
+
+// ============================ PA-CLOSE-10 ============================
+
+/// PA-CLOSE-10（item 11）：时间流逝**不是**学习成功（D18）。
+#[test]
+fn pa_close_10_elapsed_time_is_not_learning_success() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "时间片会话");
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![block(1, ProtocolId::LearnNew, 5)],
+    );
+    let before = count_moments(&conn, profile);
+
+    // 时间走完 → 可推进，但绝不产生学习成功证据。
+    let out = try_complete_training_block(
+        &conn,
+        TryCompleteBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            elapsed_minutes: Some(5),
+        },
+    )
+    .unwrap();
+
+    assert!(out.advanced);
+    assert_eq!(out.progression, Some(BlockProgression::TimeSliceElapsed));
+    assert!(
+        !out.progression.unwrap().is_evidence_backed(),
+        "PA-CLOSE-10：时间片走完不是由交互结果支撑"
+    );
+    assert!(out.learning_moment_ids.is_empty());
+    assert!(!out.fsrs_applied);
+    assert_eq!(
+        count_moments(&conn, profile),
+        before,
+        "PA-CLOSE-10：时间流逝不得产生学习事实"
+    );
+}
+
+// ============================ PA-CLOSE-11 ============================
+
+/// PA-CLOSE-11（item 12）：`complete_training_run` 是**唯一**能将
+/// `TrainingRun` + `StudySession` 收口的结束器。
+#[test]
+fn pa_close_11_complete_training_run_is_the_only_run_finalizer() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "收口");
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![block(1, ProtocolId::FreeRecall, 5)],
+    );
+
+    // 推进唯一块之后，run 仍然 Active —— 没有任何其它路径自动收口。
+    let adv = advance_training_block(
+        &conn,
+        AdvanceBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            intent: BlockAdvanceIntent::Finish,
+            elapsed_minutes: None,
+        },
+    )
+    .unwrap();
+    assert!(
+        !adv.run.status.is_terminal(),
+        "PA-CLOSE-11：块完成不得自动收口 TrainingRun（仍为未终结状态，实际 {:?}）",
+        adv.run.status
+    );
+
+    // 训练必须先进入 Active 才能被收口（§9 状态机：只有 Active → Completed）。
+    // 这一步是状态推进，不是收口 —— 收口仍只由 complete_training_run 完成。
+    let activated =
+        transition_training_run(&conn, profile, run_id, TrainingRunStatus::Active).unwrap();
+    assert_eq!(activated.status, TrainingRunStatus::Active);
+
+    // 只有 complete_training_run 把 run 标记为 Completed。
+    let done = complete_training_run(&conn, profile, run_id).unwrap();
+    assert_eq!(done.status, TrainingRunStatus::Completed);
+
+    // 再次收口被终态守卫拒绝（不会写入第二个事实）。
+    let again = complete_training_run(&conn, profile, run_id);
+    assert!(again.is_err());
+    assert_eq!(again.unwrap_err().code, TrainingErrorCode::TerminalRunState);
+}
+
+// ============================ PA-CLOSE-12 ============================
+
+/// PA-CLOSE-12（item 13）：网络重试不得二次推进 —— 幂等键命中不产生第二份事实，
+/// 已终态的块重复推进被拒绝。
+#[test]
+fn pa_close_12_network_retry_does_not_advance_twice() {
+    let conn = setup();
+    let profile = create_profile(&conn, "p");
+    let item = create_item(&conn, profile, "重试");
+    let (run_id, blocks) = create_run_with(
+        &conn,
+        profile,
+        item,
+        vec![block(1, ProtocolId::FreeRecall, 10)],
+    );
+    let before = count_moments(&conn, profile);
+
+    // 第一次提交（含一次 recall 成功）。
+    let first = record_interaction(
+        &conn,
+        RecordInteractionParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            client_action_id: "r1".to_string(),
+            interaction_type: IT_RECALL.to_string(),
+            prompt_text: None,
+            user_response_text: None,
+            hint_level: None,
+            result: Some(InteractionResult::Success),
+            verification: VerificationMethod::Deterministic,
+            moment_type: LearningMomentType::RecallSuccess,
+            occurred_at: Some(NOW.to_string()),
+        },
+    )
+    .unwrap();
+    assert!(!first.replayed);
+
+    // 网络重试：同一个 client_action_id 原样重发 → 命中幂等键，不产生第二份事实。
+    let retry = record_interaction(
+        &conn,
+        RecordInteractionParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            client_action_id: "r1".to_string(),
+            interaction_type: IT_RECALL.to_string(),
+            prompt_text: None,
+            user_response_text: None,
+            hint_level: None,
+            result: Some(InteractionResult::Success),
+            verification: VerificationMethod::Deterministic,
+            moment_type: LearningMomentType::RecallSuccess,
+            occurred_at: Some(NOW.to_string()),
+        },
+    )
+    .unwrap();
+    assert!(
+        retry.replayed,
+        "PA-CLOSE-12：相同幂等键的重试必须被判定为 replay"
+    );
+    assert_eq!(
+        count_moments(&conn, profile),
+        before + 1,
+        "PA-CLOSE-12：重试不得产生第二个 LearningMoment"
+    );
+
+    // 块推进也不可重复：第一次推进到 Completed，第二次被终态守卫拒绝。
+    let first_adv = advance_training_block(
+        &conn,
+        AdvanceBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            intent: BlockAdvanceIntent::Finish,
+            elapsed_minutes: None,
+        },
+    )
+    .unwrap();
+    assert!(first_adv.advanced);
+    assert_eq!(first_adv.block.status, TrainingBlockStatus::Completed);
+
+    let second_adv = advance_training_block(
+        &conn,
+        AdvanceBlockParams {
+            profile_id: profile,
+            training_run_id: run_id,
+            block_run_id: blocks[0],
+            intent: BlockAdvanceIntent::Finish,
+            elapsed_minutes: None,
+        },
+    );
+    assert!(
+        second_adv.is_err(),
+        "PA-CLOSE-12：对已终态块的重复推进必须被拒绝，不能二次推进"
     );
 }
