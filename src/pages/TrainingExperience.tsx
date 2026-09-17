@@ -2,13 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import {
+  abandonTrainingRun,
   advanceTrainingBlock,
   completeTrainingRun,
   getTrainingSession,
   recordTrainingInteraction,
   startTrainingBlock,
-  transitionTrainingRun,
+  startTrainingRun,
 } from "../api";
+import TrainingExperienceDispatch from "../components/training/TrainingExperienceDispatch";
+import type { ExperienceSubmit } from "../components/training/experienceTypes";
 import { useActiveProfile } from "../contexts/ActiveProfileContext";
 import { queryKeys } from "../query/keys";
 import type {
@@ -16,7 +19,6 @@ import type {
   BlockCompletionState,
   CompletionRuleKind,
   EffectSummary,
-  InteractionResult,
   TrainingBlockRun,
   TrainingSessionView,
   VerificationMethod,
@@ -31,15 +33,30 @@ import type {
  * 页面只做三件事：渲染已持久化的计划、把用户动作交给后端、**诚实呈现结果**。
  * 因此这里没有「掌握度」、没有进度百分比、没有本地重排。
  *
+ * # HOTFIX-01 改变了这个页面的四件事
+ *
+ * ```text
+ * FIX A1  删掉「这次怎么核对」选择器 —— 前端结构上就不能自授权威
+ * FIX C   提交控件只在「当前 + 活跃 + run 活跃」时可点
+ * FIX D   初始「开始」走 start_training_run（原子地激活第一个块并起算时间）
+ * FIX F3  「完成本次训练」与「提前结束训练」是两件不同的事，不能合并成一个按钮
+ * FIX J   正文交给按 ProtocolId 分派的专项体验（见 components/training/）
+ * FIX K   交互与收口之后的缓存失效是**有范围的**，不是整库刷新
+ * ```
+ *
  * # 一次用户动作 = 一个学习事实（§15）
  *
  * `clientActionId` 的生命周期是本页最关键的正确性细节：
  *
  * ```text
- * 用户开始编辑回答   → 作废上一个 id（这是一次**新**动作）
- * 提交失败 / 重试    → **复用**同一个 id（后端返回既有结果，不产生第二个事实）
- * 提交成功           → 作废 id（下一次动作必须是新的）
+ * 新动作（内容变了）  → 新 id
+ * 同一动作重试        → **复用**同一个 id（后端返回既有结果，不产生第二个事实）
+ * 提交成功            → 作废 id（下一次动作必须是新的）
  * ```
+ *
+ * 这里用「载荷指纹」判断「还是不是同一个动作」：只要块、动作类型、回答、结果、
+ * 提示次数里任何一项变了，就是一次**新**动作。这比「改一个字就换 id」更准确 ——
+ * 后者会在用户「改了又改回来」时把一次重试变成两个事实。
  *
  * # 「没有发生」必须被显示出来（§50）
  *
@@ -55,21 +72,16 @@ const VERIFICATION_LABEL: Record<VerificationMethod, string> = {
   ai_tutor: "AI 导师判断",
 };
 
-/** §22：AI 判定永远不能作为权威证据 —— 页面必须提前说清楚，而不是等用户猜。 */
-const VERIFICATION_HINT: Record<VerificationMethod, string> = {
-  deterministic: "答案由系统确定性核对，可以推进记忆排程。",
-  structured: "答案按结构确定性核对，可以推进记忆排程。",
-  self_check: "由你自己判断。会记录，但不会推进记忆排程。",
-  ai_tutor: "由 AI 判断。证据上限为中等，且不会推进记忆排程。",
-};
-
 /** §15 未推进 FSRS 的原因码 → 人话。**不允许**出现「未知原因」这种兜底文案。 */
 const FSRS_SKIP_LABEL: Record<string, string> = {
   no_memory_unit_bound: "这个块没有绑定记忆单元，所以没有排程可推进。",
   block_is_break: "休息块不产生掌握证据，所以不推进记忆排程。",
   moment_not_recall_result: "这次动作不是回忆结果，因此不推进记忆排程。",
   evidence_quality_too_low: "这次证据强度不足以推进记忆排程。",
-  source_is_non_authoritative: "这次结果来自 AI 判断，AI 不能推进记忆排程。",
+  source_is_non_authoritative:
+    "这次判定不是权威核对（手工提交固定为自检），所以不推进记忆排程。",
+  no_learning_moment_derived:
+    "这次动作在这个协议下没有对应的学习事实类型，所以没有可推进的东西。",
 };
 
 const BLOCK_STATUS_LABEL: Record<string, string> = {
@@ -93,19 +105,15 @@ const MODE_LABEL: Record<string, string> = {
   autopilot: "跟着安排",
 };
 
-/** §12：结果只有三种取值；`null`（未知）**不是**失败，因此不在这个列表里。 */
-const RESULT_OPTIONS: Array<{ value: InteractionResult; label: string }> = [
-  { value: "success", label: "想起来了" },
-  { value: "partial", label: "想起一部分" },
-  { value: "failure", label: "没想起来" },
-];
-
 /**
  * D15 / D19 —— 冻结完成规则 → 这次动作属于哪一类。
  *
  * 这是一张**纯查表**，不是判断：把「这次提交算什么」的口径交回后端词表，
  * 前端不发明新的 `interaction_type`，也**绝不**据此判定块是否完成 ——
  * 判定在 `advance_training_block` / `try_complete_training_block` 里由后端完成。
+ *
+ * 只有**通用兜底**体验会用到这张表（八个专项协议各自知道自己的动作是什么，
+ * 见 FIX J）。
  */
 const RULE_INTERACTION_TYPE: Record<CompletionRuleKind, string> = {
   at_least_one_recall_outcome: "recall",
@@ -164,6 +172,11 @@ function isTerminal(status: string): boolean {
   return status === "completed" || status === "abandoned";
 }
 
+/** 块的终态：Completed / Skipped 之后不再接受新动作（FIX C）。 */
+function isBlockTerminal(status: string): boolean {
+  return status === "completed" || status === "skipped";
+}
+
 export default function TrainingExperience() {
   const { activeProfile } = useActiveProfile();
   const profileId = activeProfile?.id ?? null;
@@ -182,16 +195,6 @@ export default function TrainingExperience() {
 
   const [selectedBlockId, setSelectedBlockId] = useState<number | null>(null);
   const [response, setResponse] = useState("");
-  /**
-   * §12：结果由**用户**声明，页面不替他推导。
-   *
-   * `null` 表示「还没想起来 / 说不清」—— 这是合法取值，且**不是失败**。
-   * 页面刻意不提供「未知」按钮之外的默认值：默认即 `null`，
-   * 用户必须显式选一个结果才会提交一个确定的结果。
-   */
-  const [result, setResult] = useState<InteractionResult | null>(null);
-  const [verification, setVerification] = useState<VerificationMethod>("deterministic");
-  const [hintLevel, setHintLevel] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastEffect, setLastEffect] = useState<EffectSummary | null>(null);
@@ -200,20 +203,25 @@ export default function TrainingExperience() {
   const [lastAdvance, setLastAdvance] = useState<BlockAdvanceOutcome | null>(null);
 
   /**
-   * §13：一次用户动作的幂等键。
+   * §13：一次用户动作的幂等键 + 它对应的**载荷指纹**。
    *
    * 只在「这次动作还没成功落库」期间保持有效 —— 一旦成功就必须作废，
    * 否则用户的下一次动作会被后端当成重试而**静默丢弃**。
    */
-  const actionIdRef = useRef<string | null>(null);
+  const attemptRef = useRef<{ id: string; fingerprint: string } | null>(null);
 
   const blocks = session?.blocks ?? [];
 
-  /** 默认选中第一个**学习**块（休息块不是「学什么」）。 */
+  /** 默认选中**当前该进行的那一块**；没有当前块时退到第一个学习块。 */
   const defaultBlockId = useMemo(() => {
+    const run = session?.run;
+    if (run && run.current_block_ordinal !== null) {
+      const current = blocks.find((b) => b.ordinal === run.current_block_ordinal);
+      if (current) return current.id;
+    }
     const learning = blocks.find((b) => !b.is_break);
     return learning?.id ?? blocks[0]?.id ?? null;
-  }, [blocks]);
+  }, [blocks, session?.run]);
 
   useEffect(() => {
     if (selectedBlockId === null && defaultBlockId !== null) {
@@ -237,132 +245,232 @@ export default function TrainingExperience() {
     [session?.interactions, selectedBlockId],
   );
 
-  /** 编辑回答 = 开始一次**新**动作 → 作废旧幂等键。 */
+  const run = session?.run ?? null;
+
+  /**
+   * FIX C 的唯一判定 —— 与后端 `block_is_current_active` 逐字对齐：
+   *
+   * ```text
+   * run.status == Active
+   * block.status == Active
+   * run.current_block_ordinal == block.ordinal
+   * ```
+   *
+   * 三者缺一，提交控件必须禁用。这不是「让界面好看一点」：
+   * 后端会以 `TRAINING_BLOCK_NOT_CURRENT_ACTIVE` 拒绝任何其它情况，
+   * 界面若还允许点，就只是在骗用户。
+   */
+  const selectedIsCurrentActive =
+    run !== null &&
+    run.status === "active" &&
+    selectedBlock !== null &&
+    selectedBlock.status === "active" &&
+    run.current_block_ordinal === selectedBlock.ordinal;
+
+  /** 通用兜底体验用的 `interaction_type`：由该块**自己的**冻结完成规则查表得到。 */
+  const defaultInteractionType = selectedBlock
+    ? selectedBlock.is_break
+      ? "break"
+      : (RULE_INTERACTION_TYPE[
+          (selectedCompletion?.rule_kind ?? "session_completed_or_user_stop") as CompletionRuleKind
+        ] ?? "note")
+    : "note";
+
+  /** 所有块都已终结 —— FIX F3 的「完成本次训练」按钮只在这时出现。 */
+  const allBlocksTerminal =
+    blocks.length > 0 && blocks.every((b) => isBlockTerminal(b.status));
+
+  /**
+   * FIX K —— 一次交互之后的**有范围**失效。
+   *
+   * 交互可能产生 LearningMoment、可能推进记忆排程，因此以下投影都会变：
+   *
+   * ```text
+   * TrainingSession  这次训练本身
+   * LearningState    §20 闭环快照
+   * NextAction       下一步推荐
+   * TodayCoach       认知首屏（§19 单一视图）
+   * Memory           到期队列 / 记忆压力
+   * Progress         四轴
+   * Review           观察窗口
+   * Journey          = companion（远征就绪度由 Meaningful Contribution 驱动）
+   * ```
+   *
+   * 刻意**不**整库清缓存：有范围失效存在时，全局清空只会掩盖「哪一个投影漏了」。
+   */
+  const invalidateAfterInteraction = useCallback(async () => {
+    if (profileId === null) return;
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.training.session(profileId, trainingRunId),
+      }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.learningState.all(profileId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.nextAction.scope(profileId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.cognitiveToday.scope(profileId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.cognitiveMemory.scope(profileId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.cognitiveProgress.scope(profileId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.review.scope(profileId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.companion.scope(profileId) }),
+    ]);
+  }, [profileId, trainingRunId, queryClient]);
+
+  /**
+   * FIX K —— 收口（完成 / 提前结束）之后的失效。
+   *
+   * 比交互多三处：`sessions`（Session 被终结）、`learningPack`（Planning 侧的
+   * 候选截断视图）与 `learningState`（已含 planning_state）。
+   * 「Planning」在这里没有独立的 query key —— 它的真值是 `learningState`
+   * 的投影，所以失效它就是失效 Planning，不另造一个 key。
+   */
+  const invalidateAfterRunFinalized = useCallback(async () => {
+    if (profileId === null) return;
+    await invalidateAfterInteraction();
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.active(profileId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.recent(profileId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.learningPack.scope(profileId) }),
+    ]);
+  }, [invalidateAfterInteraction, profileId, queryClient]);
+
+  /** 编辑回答 = 内容变了 = 可能是一次**新**动作（指纹不同时才会真的换键）。 */
   const onResponseChange = useCallback((value: string) => {
     setResponse(value);
-    actionIdRef.current = null;
     setError(null);
   }, []);
 
-  /** 改选结果同样是「新动作」的一部分 → 作废旧幂等键。 */
-  const onResultChange = useCallback((value: InteractionResult | null) => {
-    setResult(value);
-    actionIdRef.current = null;
-    setError(null);
-  }, []);
+  /**
+   * §13 / §15 的提交管线。**只有这里**会生成幂等键。
+   *
+   * `fingerprint` 覆盖「这次动作到底是什么」：块 + 动作类型 + 回答 + 结果 + 提示次数。
+   * 指纹一致 → 视为同一次动作的重试，复用同一个键；指纹变了 → 新动作，新键。
+   */
+  const onSubmit = useCallback(
+    async (args: ExperienceSubmit) => {
+      if (profileId === null || !selectedBlock) return;
 
-  const onSubmit = useCallback(async () => {
-    if (profileId === null || !selectedBlock) return;
+      const fingerprint = JSON.stringify([
+        selectedBlock.id,
+        args.interactionType,
+        response,
+        args.result,
+        args.hintLevel,
+      ]);
 
-    setBusy(true);
-    setError(null);
-    try {
-      // 只有「这一次动作」还没有键时才生成；重试必须复用。
-      if (actionIdRef.current === null) {
-        actionIdRef.current =
-          typeof crypto !== "undefined" && "randomUUID" in crypto
-            ? crypto.randomUUID()
-            : `act-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      setBusy(true);
+      setError(null);
+      try {
+        if (attemptRef.current === null || attemptRef.current.fingerprint !== fingerprint) {
+          attemptRef.current = {
+            id:
+              typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? crypto.randomUUID()
+                : `act-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            fingerprint,
+          };
+        }
+
+        const outcome = await recordTrainingInteraction({
+          profileId,
+          trainingRunId,
+          blockRunId: selectedBlock.id,
+          clientActionId: attemptRef.current.id,
+          interactionType: args.interactionType,
+          userResponseText: response.trim() === "" ? null : response,
+          promptText: null,
+          hintLevel: args.hintLevel > 0 ? args.hintLevel : null,
+          // 用户显式声明的结果；`null` 表示未知 —— 未知永远不等于失败（§50）。
+          result: args.result,
+          occurredAt: null,
+        });
+
+        setLastEffect(outcome.effect);
+        setLastReplayed(outcome.replayed);
+        // 成功落库 → 作废键，下一次动作必须是新的。
+        attemptRef.current = null;
+        setResponse("");
+        await invalidateAfterInteraction();
+      } catch (e) {
+        // 失败**不**作废键：用户重试时必须复用同一个 id（§13）。
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
       }
+    },
+    [
+      profileId,
+      selectedBlock,
+      trainingRunId,
+      response,
+      invalidateAfterInteraction,
+    ],
+  );
 
-      const outcome = await recordTrainingInteraction({
-        profileId,
-        trainingRunId,
-        blockRunId: selectedBlock.id,
-        clientActionId: actionIdRef.current,
-        // D19：交互类型由**该块的冻结完成规则**查表得出，前端不发明新类型。
-        // 休息块例外 —— 它不参与任何完成判定（§10）。
-        interactionType: selectedBlock.is_break
-          ? "break"
-          : RULE_INTERACTION_TYPE[
-              ((session?.completions ?? []).find((c) => c.block_run_id === selectedBlock.id)
-                ?.rule_kind ?? "session_completed_or_user_stop") as CompletionRuleKind
-            ] ?? "note",
-        userResponseText: response.trim() === "" ? null : response,
-        promptText: null,
-        hintLevel: hintLevel > 0 ? hintLevel : null,
-        // 用户显式声明的结果；`null` 表示未知 —— 未知永远不等于失败（§50）。
-        result,
-        verification,
-        occurredAt: null,
-      });
-
-      setLastEffect(outcome.effect);
-      setLastReplayed(outcome.replayed);
-      // 成功落库 → 作废键，下一次动作必须是新的。
-      actionIdRef.current = null;
-      setResponse("");
-      setResult(null);
-      setHintLevel(0);
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.training.session(profileId, trainingRunId),
-      });
-    } catch (e) {
-      // 失败**不**作废键：用户重试时必须复用同一个 id（§13）。
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [
-    profileId,
-    selectedBlock,
-    trainingRunId,
-    response,
-    result,
-    verification,
-    hintLevel,
-    session,
-    queryClient,
-  ]);
-
+  /**
+   * FIX D：**初始启动**。
+   *
+   * 必须走 `start_training_run` —— 它同时做三件事：run → Active、
+   * 第一个 pending 块 → Active、`current_block_ordinal` 指向它并起算时间。
+   * 用通用的 `transition_training_run(..., "active")` 只会改 run 状态，
+   * 第一个块仍是 Pending，于是「开始学习」之后一个字也提交不进去。
+   */
   const onStart = useCallback(async () => {
     if (profileId === null) return;
     setBusy(true);
     setError(null);
     try {
-      await transitionTrainingRun(profileId, trainingRunId, "active");
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.training.session(profileId, trainingRunId),
-      });
+      await startTrainingRun(profileId, trainingRunId);
+      await invalidateAfterInteraction();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [profileId, trainingRunId, queryClient]);
+  }, [profileId, trainingRunId, invalidateAfterInteraction]);
 
+  /** FIX F3：所有块都终结之后的正常收口。 */
   const onComplete = useCallback(async () => {
     if (profileId === null) return;
     setBusy(true);
     setError(null);
     try {
       await completeTrainingRun(profileId, trainingRunId);
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.training.session(profileId, trainingRunId),
-      });
+      await invalidateAfterRunFinalized();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [profileId, trainingRunId, queryClient]);
+  }, [profileId, trainingRunId, invalidateAfterRunFinalized]);
 
-  /** 激活当前块：写入 `started_at`，让时间片规则有计时可依（D17 / D18）。 */
+  /** FIX F3：还有块没走完时用户要离开 —— 这是「提前结束」，不是「完成」。 */
+  const onAbandon = useCallback(async () => {
+    if (profileId === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await abandonTrainingRun(profileId, trainingRunId);
+      await invalidateAfterRunFinalized();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [profileId, trainingRunId, invalidateAfterRunFinalized]);
+
+  /** FIX E：激活**当前**块（写入 `started_at`，让时间片规则有计时可依）。 */
   const onStartBlock = useCallback(async () => {
     if (profileId === null || !selectedBlock) return;
     setBusy(true);
     setError(null);
     try {
       await startTrainingBlock(profileId, trainingRunId, selectedBlock.id);
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.training.session(profileId, trainingRunId),
-      });
+      await invalidateAfterInteraction();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [profileId, selectedBlock, trainingRunId, queryClient]);
+  }, [profileId, selectedBlock, trainingRunId, invalidateAfterInteraction]);
 
   /**
    * 用户权威推进一个块。
@@ -387,16 +495,14 @@ export default function TrainingExperience() {
         if (outcome.next_block_id !== null) {
           setSelectedBlockId(outcome.next_block_id);
         }
-        await queryClient.invalidateQueries({
-          queryKey: queryKeys.training.session(profileId, trainingRunId),
-        });
+        await invalidateAfterInteraction();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
         setBusy(false);
       }
     },
-    [profileId, selectedBlock, trainingRunId, queryClient],
+    [profileId, selectedBlock, trainingRunId, invalidateAfterInteraction],
   );
 
   if (profileId === null) {
@@ -425,7 +531,7 @@ export default function TrainingExperience() {
     );
   }
 
-  if (sessionQuery.isError || !session) {
+  if (sessionQuery.isError || !session || !run) {
     return (
       <div className="page hc-train">
         <p className="hc-train__note">
@@ -435,7 +541,6 @@ export default function TrainingExperience() {
     );
   }
 
-  const { run } = session;
   const terminal = isTerminal(run.status);
 
   return (
@@ -454,9 +559,17 @@ export default function TrainingExperience() {
               开始
             </button>
           )}
-          {!terminal && (
+          {/* FIX F3：两个按钮表达两件不同的事，不合并。
+              「完成」= 所有块都走完了；「提前结束」= 还有块没走完但用户要离开。
+              合并成一个「结束本次训练」会让「做完了」与「不想做了」变成同一个事实。 */}
+          {!terminal && allBlocksTerminal && (
             <button type="button" className="btn" onClick={onComplete} disabled={busy}>
-              结束本次训练
+              完成本次训练
+            </button>
+          )}
+          {!terminal && !allBlocksTerminal && (
+            <button type="button" className="btn btn--ghost" onClick={onAbandon} disabled={busy}>
+              提前结束训练
             </button>
           )}
         </div>
@@ -500,6 +613,7 @@ export default function TrainingExperience() {
                 <span className="hc-train__block-meta">
                   {block.planned_minutes} 分钟 ·{" "}
                   {BLOCK_STATUS_LABEL[block.status] ?? block.status}
+                  {run.current_block_ordinal === block.ordinal && " · 当前"}
                 </span>
               </button>
             </li>
@@ -524,6 +638,19 @@ export default function TrainingExperience() {
             </div>
           )}
 
+          {/* FIX C：把「现在能不能提交」的原因说清楚，而不是给一个灰掉却不解释的界面。 */}
+          {!selectedIsCurrentActive && !terminal && !isBlockTerminal(selectedBlock.status) && (
+            <p className="hc-train__note">
+              {run.status === "ready"
+                ? "这次训练还没开始 —— 点上面的「开始」，第一个块才会进入进行中。"
+                : run.status === "paused"
+                  ? "这次训练已暂停，恢复之后才能继续提交。"
+                  : selectedBlock.status === "pending"
+                    ? "这一段还没开始。只有当前进行中的块才能写入学习事实 —— 先点下面的「开始这一段」。"
+                    : "这一段现在不是当前进行中的块，因此不能提交新的动作。"}
+            </p>
+          )}
+
           {selectedBlock.is_break ? (
             <p className="hc-train__note">
               这是休息块。休息不会产生任何掌握证据，也不会推进记忆排程 —— 这是刻意的。
@@ -532,92 +659,26 @@ export default function TrainingExperience() {
             <>
               <p className="hc-train__note">
                 {selectedBlock.memory_unit_id !== null
-                  ? "这个块已绑定一个记忆单元：结果可信时会推进记忆排程。"
+                  ? "这个块已绑定一个记忆单元：只有权威核对的结果才会推进记忆排程。"
                   : "这个块没有绑定记忆单元：本次不会推进记忆排程（这不是失败，是「暂时没有可排程的记忆」）。"}
               </p>
 
-              <div className="form-stack">
-                <label className="form-label" htmlFor="hc-train-response">
-                  你的回答
-                </label>
-                <textarea
-                  id="hc-train-response"
-                  className="input"
-                  rows={4}
-                  value={response}
-                  onChange={(e) => onResponseChange(e.target.value)}
-                  placeholder="先自己回想，再写下来。写不出来也没关系 —— 留空提交表示「还没想起来」。"
-                />
-
-                <div className="form-row">
-                  <span className="field-label">这次结果</span>
-                  <div className="hc-train__choices">
-                    {RESULT_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        className={opt.value === result ? "chip chip--active" : "chip"}
-                        onClick={() => onResultChange(opt.value)}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      className={result === null ? "chip chip--active" : "chip"}
-                      onClick={() => onResultChange(null)}
-                    >
-                      说不清
-                    </button>
-                  </div>
-                  <p className="hc-train__note">
-                    「说不清」不是失败 —— 它会被如实记录为未知，不会推进记忆排程。
-                  </p>
-                </div>
-
-                <div className="form-row">
-                  <span className="field-label">这次怎么核对</span>
-                  <div className="hc-train__choices">
-                    {(Object.keys(VERIFICATION_LABEL) as VerificationMethod[]).map((v) => (
-                      <button
-                        key={v}
-                        type="button"
-                        className={
-                          v === verification ? "chip chip--active" : "chip"
-                        }
-                        onClick={() => setVerification(v)}
-                      >
-                        {VERIFICATION_LABEL[v]}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="hc-train__note">{VERIFICATION_HINT[verification]}</p>
-                </div>
-
-                <div className="form-row">
-                  <span className="field-label">提示</span>
-                  <div className="hc-train__choices">
-                    <button
-                      type="button"
-                      className="btn btn--small btn--ghost"
-                      onClick={() => setHintLevel((n) => Math.min(3, n + 1))}
-                    >
-                      我用了一次提示（{hintLevel}）
-                    </button>
-                  </div>
-                </div>
-
-                <div className="btn-row">
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    onClick={onSubmit}
-                    disabled={busy || terminal}
-                  >
-                    提交
-                  </button>
-                </div>
-              </div>
+              {/* FIX J：正文交给按 ProtocolId 分派的专项体验。
+                  `key` 用块 id —— 切块时重置体验内部的本地状态（揭晓 / 重试 / 结果选择），
+                  避免把上一段的状态带进下一段。 */}
+              <TrainingExperienceDispatch
+                key={selectedBlock.id}
+                block={selectedBlock}
+                completion={selectedCompletion}
+                interactions={interactionsForBlock}
+                response={response}
+                onResponseChange={onResponseChange}
+                canSubmit={selectedIsCurrentActive}
+                blockTerminal={isBlockTerminal(selectedBlock.status)}
+                busy={busy}
+                defaultInteractionType={defaultInteractionType}
+                submit={onSubmit}
+              />
 
               {lastEffect && (
                 <div className="hc-train__effect">
@@ -641,40 +702,28 @@ export default function TrainingExperience() {
             </>
           )}
 
-          <h3 className="hc-train__h3">这个块上已发生的动作</h3>
-          {interactionsForBlock.length === 0 ? (
-            <p className="hc-train__note">还没有。</p>
-          ) : (
-            <ul className="hc-train__interactions">
-              {interactionsForBlock.map((i) => (
-                <li key={i.id}>
-                  <span className="hc-train__tag">{i.interaction_type}</span>
-                  <span>{i.result ?? "未知"}</span>
-                  <span className="hc-train__note">{i.created_at}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-
           {/* D11 / D19 —— 推进**只能**由后端判定。
-              这两个按钮只表达用户意图，不表达「这个块做完了没有」。 */}
-          {!terminal && selectedBlock.status !== "completed" && selectedBlock.status !== "skipped" && (
+              这两个按钮只表达用户意图，不表达「这个块做完了没有」。
+              FIX C 同样适用：非当前块不能推进，否则会出现「跳着走」的假进度。 */}
+          {!terminal && !isBlockTerminal(selectedBlock.status) && (
             <div className="btn-row">
-              {selectedBlock.status === "pending" && (
-                <button
-                  type="button"
-                  className="btn btn--small btn--ghost"
-                  onClick={onStartBlock}
-                  disabled={busy}
-                >
-                  开始这一段
-                </button>
-              )}
+              {selectedBlock.status === "pending" &&
+                run.status === "active" &&
+                run.current_block_ordinal === selectedBlock.ordinal && (
+                  <button
+                    type="button"
+                    className="btn btn--small btn--ghost"
+                    onClick={onStartBlock}
+                    disabled={busy}
+                  >
+                    开始这一段
+                  </button>
+                )}
               <button
                 type="button"
                 className="btn"
                 onClick={() => onAdvance("finish")}
-                disabled={busy}
+                disabled={busy || !selectedIsCurrentActive}
               >
                 我做完了，继续
               </button>
@@ -682,7 +731,7 @@ export default function TrainingExperience() {
                 type="button"
                 className="btn btn--ghost"
                 onClick={() => onAdvance("stop")}
-                disabled={busy}
+                disabled={busy || !selectedIsCurrentActive}
               >
                 停下，跳过这一段
               </button>

@@ -33,7 +33,7 @@ use app_lib::repository::active_learning_intent::{
 use app_lib::repository::goal::GoalRepository;
 use app_lib::repository::learning_item::LearningItemRepository;
 use app_lib::repository::study_profile::StudyProfileRepository;
-use app_lib::training::{start_training_for_item, TrainingErrorCode};
+use app_lib::training::{start_training_for_item, start_training_run, TrainingErrorCode};
 use rusqlite::{params, Connection};
 
 /// 刻意取一个「很久以前」的时刻，保证相对任何真实现在都逾期。
@@ -355,14 +355,23 @@ fn st08_the_session_view_returns_everything_the_page_needs_in_one_read() {
 
     let (run, blocks) = start_training_for_item(&conn, p, Some(25)).unwrap();
 
+    // FIX D：`start_training_for_item` 只负责「编排 + 落库」，run 仍是 Ready。
+    // 真正开始学习是一个**显式**动作，它同时把第一个块置为 active —— 这也是
+    // FIX C 允许写入交互事实的前提。
+    start_training_run(&conn, p, run.id).unwrap();
+    let current = app_lib::training::list_block_runs(&conn, p, run.id)
+        .unwrap()
+        .into_iter()
+        .find(|b| b.status == app_lib::training::TrainingBlockStatus::Active)
+        .expect("启动训练后必有且仅有一个 active 块");
+
     // 记一次交互，这样三种数据都有内容
-    let learning_block = blocks.iter().find(|b| !b.is_break).expect("至少一个学习块");
     app_lib::training::record_interaction(
         &conn,
         app_lib::training::RecordInteractionParams {
             profile_id: p,
             training_run_id: run.id,
-            block_run_id: learning_block.id,
+            block_run_id: current.id,
             client_action_id: "view-1".to_string(),
             interaction_type: "recall".to_string(),
             prompt_text: None,
@@ -370,7 +379,6 @@ fn st08_the_session_view_returns_everything_the_page_needs_in_one_read() {
             hint_level: None,
             result: Some(app_lib::training::InteractionResult::Success),
             verification: app_lib::training::VerificationMethod::Deterministic,
-            moment_type: app_lib::cognitive::LearningMomentType::RecallSuccess,
             occurred_at: Some("2026-09-17 09:00:00".to_string()),
         },
     )
@@ -387,7 +395,7 @@ fn st08_the_session_view_returns_everything_the_page_needs_in_one_read() {
     assert_eq!(view.interactions.len(), 1);
     assert_eq!(view.interactions[0].client_action_id, "view-1");
     assert_eq!(
-        view.interactions[0].block_run_id, learning_block.id,
+        view.interactions[0].block_run_id, current.id,
         "交互必须指回它所属的块，页面才能按块分组"
     );
 }

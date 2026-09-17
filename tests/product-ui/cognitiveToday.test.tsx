@@ -87,6 +87,8 @@ vi.mock("../../src/api", () => ({
   startQuickSession: vi.fn(),
   startSession: vi.fn(),
   startTaskSession: vi.fn(),
+  // HOTFIX-01 FIX G：认知主 CTA 现在进入 Real Learning Engine。
+  createTrainingRunForItem: vi.fn(),
   endSession: vi.fn(),
   createTaskV2: vi.fn(),
   updateTaskV2: vi.fn(),
@@ -397,6 +399,11 @@ function renderToday() {
         <Routes>
           <Route path="/" element={<Today />} />
           <Route path="/learn/:id" element={<div data-testid="learn-page">学习工作区</div>} />
+          {/* HOTFIX-01 FIX G：真实训练路由（与 App.tsx 的 /train/:trainingRunId 同形）。 */}
+          <Route
+            path="/train/:trainingRunId"
+            element={<div data-testid="train-page">真实训练</div>}
+          />
           <Route path="/knowledge" element={<div data-testid="knowledge-page">知识</div>} />
         </Routes>
       </MemoryRouter>
@@ -757,58 +764,76 @@ describe("UI-07 — direct-plan CTA preserves selected target", () => {
     expect(api.startSession).not.toHaveBeenCalled();
   });
 
-  it("主 CTA 有 learning_item 锚点 → 走既有 startSession（含冲突守卫），不发明新类型", async () => {
+  /**
+   * HOTFIX-01 FIX G 取代了旧断言「主 CTA 有 learning_item 锚点 → 走 startSession」。
+   *
+   * 旧行为把认知主 CTA 接到 legacy `/learn/:sessionId`，于是「按我的状态安排」
+   * 永远进不了 Real Learning Engine —— 后端把计划编排出来了，却没有任何一条
+   * 产品路径真的去执行它。新行为是：
+   *
+   * ```text
+   * coach.plan 存在 AND 真实 available_minutes > 0
+   *   → createTrainingRunForItem(...) → /train/:trainingRunId
+   * ```
+   */
+  it("FIX G：主 CTA 有真实时长 + 可执行计划 → 创建 TrainingRun 并进入 /train/:id", async () => {
     mockAll();
-    vi.mocked(api.startSession).mockResolvedValue({ id: 902 } as never);
+    vi.mocked(api.createTrainingRunForItem).mockResolvedValue({
+      run: { id: 902 },
+      blocks: [],
+    } as never);
     renderToday();
     await waitTodayLoaded();
 
-    const hero = await screen.findByLabelText("今日概览");
+    // 先给出**真实**时长：后端对 available_minutes=None 会拒绝，前端也不许猜一个。
     const user = userEvent.setup();
-    await user.click(within(hero).getByRole("button", { name: "按我的状态安排 →" }));
-
-    expect(api.startSession).toHaveBeenCalledWith(42);
-    expect(api.startQuickSession).not.toHaveBeenCalled();
-    expect(api.startTaskSession).not.toHaveBeenCalled();
-    expect(await screen.findByTestId("learn-page")).toBeInTheDocument();
-  });
-
-  it("主 CTA 无锚点 → 不创建任何 Session（只把注意力交给计划条）", async () => {
-    mockAll(
-      coach({
-        plan: {
-          target_learning_item_id: null,
-          total_minutes: 12,
-          blocks: [
-            {
-              ordinal: 1,
-              protocol_id: "recovery_light",
-              minutes: 12,
-              goal: "先做一段轻量内容",
-              completion_rule: {
-                kind: "time_slice_or_user_stop",
-                description_zh: "到时间或主动结束",
-              },
-              is_break: false,
-            },
-          ],
-          reason_codes: ["recovery_needed"],
-          evidence_refs: [],
-        },
-      })
-    );
-    renderToday();
-    await waitTodayLoaded();
+    await user.click(screen.getByRole("button", { name: "25 分钟" }));
 
     const hero = await screen.findByLabelText("今日概览");
-    const user = userEvent.setup();
     await user.click(within(hero).getByRole("button", { name: "按我的状态安排 →" }));
 
+    expect(api.createTrainingRunForItem).toHaveBeenCalledWith(1, 25);
+    // FIX G：**不**先建 legacy StudySession，也不走 legacy /learn 路由。
     expect(api.startSession).not.toHaveBeenCalled();
     expect(api.startQuickSession).not.toHaveBeenCalled();
     expect(api.startTaskSession).not.toHaveBeenCalled();
-    // 首个可执行块被暴露出来（§24）
-    expect(document.getElementById("hc-plan-first-block")).not.toBeNull();
+    expect(await screen.findByTestId("train-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("learn-page")).toBeNull();
+  });
+
+  it("FIX G：主 CTA 没有真实时长 → 不编造时长，先请用户选（不创建任何东西）", async () => {
+    mockAll();
+    renderToday();
+    await waitTodayLoaded();
+
+    const hero = await screen.findByLabelText("今日概览");
+    const user = userEvent.setup();
+    await user.click(within(hero).getByRole("button", { name: "按我的状态安排 →" }));
+
+    expect(api.createTrainingRunForItem).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(api.startQuickSession).not.toHaveBeenCalled();
+    expect(api.startTaskSession).not.toHaveBeenCalled();
+    // 缺的是「真实时长」—— 必须如实说出来，且不是错误（不是 alert）。
+    expect(await screen.findByText(/先选一个真实的可用时长/)).toBeInTheDocument();
+  });
+
+  it("FIX G：主 CTA 有真实时长但没有可执行计划 → 诚实兜底，不创建任何东西", async () => {
+    mockAll(coach({ plan: null }));
+    renderToday();
+    await waitTodayLoaded();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "10 分钟" }));
+
+    const hero = await screen.findByLabelText("今日概览");
+    await user.click(within(hero).getByRole("button", { name: "按我的状态安排 →" }));
+
+    expect(api.createTrainingRunForItem).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(api.startQuickSession).not.toHaveBeenCalled();
+    expect(api.startTaskSession).not.toHaveBeenCalled();
+    expect(await screen.findByText(/现在编排不出可执行的训练计划/)).toBeInTheDocument();
   });
 });
 

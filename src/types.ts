@@ -2234,7 +2234,8 @@ export interface EffectSummary {
    *
    * 明确的「没有发生」永远优于沉默：`no_memory_unit_bound` / `block_is_break` /
    * `moment_not_recall_result` / `evidence_quality_too_low` /
-   * `source_is_non_authoritative` 都是**合法结果**，不是失败。
+   * `source_is_non_authoritative` / `no_learning_moment_derived`
+   * 都是**合法结果**，不是失败。
    */
   fsrs_skip_reason: string | null;
   verification: VerificationMethod;
@@ -2343,4 +2344,22 @@ export interface TrainingSessionView {
    * 前端只负责把已经写死的冻结规则讲给用户听。
    */
   completions: BlockCompletionState[];
+}
+
+/**
+ * HOTFIX-01 FIX H —— Command Bar 确定性意图捕获的结果。
+ *
+ * 后端只会写 `autopilot` 或 `copilot` + 领域，**不会**从自由文本推断 `direct`。
+ * `wrote_intent = false` 是**正常结果**（保守优先：拿不准就不写），
+ * 不是错误 —— 因此它带着一个稳定 `reason`，让界面能如实解释「为什么没写」。
+ */
+export interface IntentCaptureOutcome {
+  /** `null` = 没有捕获到任何当前学习意图。 */
+  mode: "autopilot" | "copilot" | null;
+  /** 仅 `copilot` 时有值：`generic` / `english` / `mathematics` / `computer_science_408` / `programming`。 */
+  domain: string | null;
+  /** 稳定原因码：`negation_guard` / `not_current_intent` / `autopilot_phrase` / `domain_intent` / `no_match`。 */
+  reason: string;
+  /** 是否真的写入了一条 ActiveLearningIntent。 */
+  wrote_intent: boolean;
 }

@@ -43,6 +43,11 @@ vi.mock("../../src/contexts/ActiveProfileContext", () => {
 vi.mock("../../src/api", () => ({
   createStudyProfile: vi.fn(),
   updateStudyProfile: vi.fn(),
+  // HOTFIX-01 FIX H：命令栏提交时并行走一次确定性意图捕获。
+  // 默认「没捕获到」—— 那是最常见的结果，也是**正常**结果（保守优先）。
+  captureLearningIntentFromText: vi.fn(() =>
+    Promise.resolve({ mode: null, domain: null, reason: "no_match", wrote_intent: false })
+  ),
 }));
 
 /** mock 工厂会被提升到 import 之前 → 共享可变状态必须走 vi.hoisted。 */
@@ -98,6 +103,7 @@ vi.mock("../../src/components/ai/AiPanel", async () => {
 });
 
 import Layout from "../../src/Layout";
+import * as api from "../../src/api";
 
 const SRC = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
@@ -319,6 +325,46 @@ describe("UI-10 — command bar submits through existing AI context", () => {
     // 唯一出口 = AiPanelContext 的 sendChat
     expect(src).toContain("sendChat");
     expect(src).toContain("useAiPanel");
+  });
+
+  it("UI-10b — HOTFIX-01 FIX H：提交时同一句话也走确定性意图捕获（且不写学习证据）", async () => {
+    renderShell();
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("告诉 Higher 你现在想做什么");
+
+    await user.type(input, "下午我想学数学{Enter}");
+
+    // 主通路不变：对话照常发出。
+    expect(H.sendChat).toHaveBeenCalledWith("下午我想学数学");
+
+    // FIX H：同一句话并行交给后端确定性意图捕获（后端决定写不写）。
+    await vi.waitFor(() => {
+      expect(api.captureLearningIntentFromText).toHaveBeenCalledWith(1, "下午我想学数学");
+    });
+
+    // 空 Enter 仍然什么都不做 —— 不捕获意图、不发送（§22）。
+    vi.mocked(api.captureLearningIntentFromText).mockClear();
+    await user.type(input, "{Enter}");
+    expect(H.sendChat).toHaveBeenCalledTimes(1);
+    expect(api.captureLearningIntentFromText).not.toHaveBeenCalled();
+  });
+
+  it("UI-10c — FIX H：意图捕获失败绝不打断已经发出的对话（保守优先）", async () => {
+    vi.mocked(api.captureLearningIntentFromText).mockRejectedValueOnce(
+      new Error("intent capture unavailable")
+    );
+    renderShell();
+    const user = userEvent.setup();
+    const input = screen.getByLabelText("告诉 Higher 你现在想做什么");
+
+    await user.type(input, "随便聊聊{Enter}");
+
+    // 捕获失败是**正常结果**：对话必须已经发出，且界面不出现任何错误。
+    expect(H.sendChat).toHaveBeenCalledWith("随便聊聊");
+    await vi.waitFor(() => {
+      expect(api.captureLearningIntentFromText).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

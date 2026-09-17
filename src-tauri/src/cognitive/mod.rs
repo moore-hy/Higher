@@ -13,6 +13,7 @@
 
 pub mod decision;
 pub mod evidence;
+pub mod intent_capture;
 pub mod learner_model;
 pub mod learning_domain;
 pub mod learning_moment;

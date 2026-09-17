@@ -74,6 +74,25 @@ pub fn get_training_session(
 /// `client_action_id` 由前端生成；网络重试必须复用同一个值 —— 命中后
 /// 原样返回既有结果（`replayed = true`），不产生第二个学习事实。
 /// 同一个键配上不同 payload → `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD`。
+///
+/// # HOTFIX-01 FIX A1 —— 前端**不能**选择判定方式
+///
+/// 这个命令**没有** `verification` 参数，这是刻意的，而且它就是 FIX A1 的全部内容：
+///
+/// ```text
+/// 前端不能把 SelfCheck 提升成 Deterministic / Structured
+/// 前端也不能自己指定 AiTutor
+/// ```
+///
+/// 手工前端提交在后端一律记 `SelfCheck`（非权威，证据质量上限 MEDIUM）。
+/// `Deterministic` / `Structured` 只允许由**真实执行过的**后端验证器签发
+/// （FIX A4：PACK A 不发明验证器），因此它们不可能经由 IPC 从外部获得。
+///
+/// 删掉参数而不是「忽略前端传来的值」：一个不存在的参数是**结构性**保证，
+/// 而「接收后覆盖」只是约定 —— 后者会在下一次有人重构时悄悄失效。
+///
+/// `moment_type` 同样不再由调用方声明（FIX B）：它由 runtime 从
+/// `(ProtocolId, interaction_type, result, verification)` 推导。
 #[tauri::command]
 pub fn record_training_interaction(
     state: tauri::State<'_, db::DbState>,
@@ -86,15 +105,13 @@ pub fn record_training_interaction(
     prompt_text: Option<String>,
     hint_level: Option<i64>,
     result: Option<InteractionResult>,
-    verification: VerificationMethod,
     occurred_at: Option<String>,
 ) -> Result<training::InteractionOutcome, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
 
-    // `moment_type` 由**确定性结果**推导，不由前端声明、更不由 AI 生成。
-    // 这一步刻意放在命令层与 runtime 的边界上：前端只能表达「结果是什么」，
-    // 不能表达「应该记成哪种学习事实」。
-    let moment_type = training::moment_type_for_result(result, verification);
+    // FIX A1：手工提交的唯一判定方式。前端无从选择，因此这里不是「默认值」，
+    // 而是**该通路的定义**。
+    let verification = VerificationMethod::SelfCheck;
 
     crate::training::record_interaction(
         &conn,
@@ -109,7 +126,6 @@ pub fn record_training_interaction(
             hint_level,
             result,
             verification,
-            moment_type,
             // 原样透传：`None` 表示「用领域层的当前时间」。
             // 命令层刻意不在这里取时钟 —— 见 `RecordInteractionParams::occurred_at`
             // 的注释：格式若有第二个来源，就会静默污染按时间排序的真相。
@@ -117,6 +133,34 @@ pub fn record_training_interaction(
         },
     )
     .map_err(|e| e.to_string())
+}
+
+/// HOTFIX-01 FIX D：**唯一**的初始启动通路。
+///
+/// 前端「开始这次训练」按钮必须调用它，而**不是**
+/// `transition_training_run(..., Active)` —— 后者只改 run 状态，
+/// 会留下一个没有任何活跃块的 active 训练（见 `training::start_training_run`）。
+#[tauri::command]
+pub fn start_training_run(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<training::TrainingRun, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::training::start_training_run(&conn, profile_id, training_run_id)
+        .map_err(|e| e.to_string())
+}
+
+/// HOTFIX-01 FIX F2：提前结束训练（剩余块 → Skipped，零成功证据，零 FSRS）。
+#[tauri::command]
+pub fn abandon_training_run(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<training::TrainingRun, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::training::abandon_training_run(&conn, profile_id, training_run_id)
+        .map_err(|e| e.to_string())
 }
 
 /// §9：推进 run 状态（`ready → active → paused → completed / abandoned`）。

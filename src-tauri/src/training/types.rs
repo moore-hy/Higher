@@ -325,37 +325,179 @@ impl VerificationMethod {
         matches!(self, Self::Deterministic | Self::Structured)
     }
 
-    /// §22 / §50：该判定方式是否**不能**签发权威学习事实。
+    /// §22 / §50 / HOTFIX-01 FIX A：该判定方式是否**有权**签发权威学习事实。
     ///
-    /// `AiTutor` 是唯一非权威判定方式：AI 的语义评估可以落库（MEDIUM），
-    /// 但它既不能写出「成功」类 moment，也不能推进 FSRS 排程。
+    /// # 这是「权威」的**唯一定义**（HOTFIX-01 A2）
+    ///
+    /// ```text
+    /// Deterministic → 权威
+    /// Structured    → 权威
+    /// SelfCheck     → **非**权威
+    /// AiTutor       → **非**权威
+    /// ```
+    ///
+    /// 只有**真实执行过的**后端验证器才能声明 `Deterministic` / `Structured`
+    /// （HOTFIX-01 A4：PACK A 不发明验证器）。用户自检与 AI 语义评估都不具备
+    /// 权威性，因此都不得独立签发成功事实、不得写出 HIGH 证据、不得推进 FSRS。
+    ///
+    /// # 为什么必须在这里、而不是在 FSRS 前面加一句特判
+    ///
+    /// 旧实现是 `!matches!(self, Self::AiTutor)` —— 那让 `SelfCheck` 成了权威来源。
+    /// 若改成「在 FSRS 推进前判一下 `verification == SelfCheck` 就跳过」，
+    /// 那么**其他**证据路径（LearningMoment 推导、完成判定、掌握度）仍会把
+    /// 自检当成权威。权威是 `VerificationMethod` **自身**的属性，
+    /// 所以必须在这里集中定义，由所有调用方共享同一个判据。
     pub fn is_authoritative(self) -> bool {
-        !matches!(self, Self::AiTutor)
+        matches!(self, Self::Deterministic | Self::Structured)
     }
 }
 
-/// §19 / §22：由**确定性结果**推导本次交互产生的 LearningMoment 类型。
+/// HOTFIX-01 FIX B 的协议族划分。
 ///
-/// 这是「AI 不能生成学习事实」这条约束的落点：前端只能表达「结果是什么」
-/// （success / partial / failure），**不能**表达「应该记成哪种学习事实」。
-/// 类型由 (结果, 判定方式) 共同决定，因此：
+/// 族的边界来自 B1–B5，并且与 [`RECALL_COMPATIBLE_PROTOCOLS`]（§11 FSRS 绑定集合）
+/// 刻意保持一致：能推进 FSRS 的协议，正是回忆族的四个。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MomentFamily {
+    /// B1：`free_recall` / `cued_recall` / `recognition` / `review_short`。
+    Recall,
+    /// B2：`faded_example` / `standard_practice` / `mixed_practice`。
+    Practice,
+    /// B3：`worked_example` / `explain_back`。
+    Explanation,
+    /// B4：`transfer_challenge`。
+    Transfer,
+    /// B5：`error_correction`。
+    ErrorCorrection,
+    /// B7：没有专属 `LearningMomentType` 的协议。
+    Generic,
+}
+
+fn moment_family(protocol: Option<ProtocolId>) -> MomentFamily {
+    match protocol {
+        Some(ProtocolId::FreeRecall)
+        | Some(ProtocolId::CuedRecall)
+        | Some(ProtocolId::Recognition)
+        | Some(ProtocolId::ReviewShort) => MomentFamily::Recall,
+        Some(ProtocolId::FadedExample)
+        | Some(ProtocolId::StandardPractice)
+        | Some(ProtocolId::MixedPractice) => MomentFamily::Practice,
+        Some(ProtocolId::WorkedExample) | Some(ProtocolId::ExplainBack) => {
+            MomentFamily::Explanation
+        }
+        Some(ProtocolId::TransferChallenge) => MomentFamily::Transfer,
+        Some(ProtocolId::ErrorCorrection) => MomentFamily::ErrorCorrection,
+        // `None`（休息块，已被 `record_interaction` 提前拦截）与其余 11 个通用协议。
+        _ => MomentFamily::Generic,
+    }
+}
+
+/// HOTFIX-01 FIX B —— 由**后端**从落库事实推导本次交互产生的 LearningMoment 类型。
 ///
-/// - `AiTutor` 判定的成功 → `RecallAttempt`（AI 只能说「发生了一次尝试」）；
-/// - 权威判定方式下的成功 → `RecallSuccess`。
+/// # 它取代了什么
 ///
-/// `result = None` 表示**未知**，映射为 `RecallAttempt` —— 未知永远不等于失败
-/// （§50：unknown is not failure）。
-pub fn moment_type_for_result(
+/// 旧实现（W4 的 `moment_type_for_result`）只读 `(result, verification)`，
+/// 因此实际上把**每一个**成功都写成 `RecallSuccess` —— 无论这个块是练习、
+/// 讲解、迁移还是代码追踪。HOTFIX-01 FIX B 明令删除这条假设：
+///
+/// ```text
+/// Practice success != Recall success
+/// Transfer success != Recall success
+/// Viewing example  != mastery
+/// ```
+///
+/// # 输入恰好是 FIX B 锁定的四项
+///
+/// ```text
+/// ProtocolId        这个块是什么（由计划决定，前端改不了）
+/// interaction_type  用户这一次做了什么
+/// result            结果；`None` = **未知**（未知永远不等于失败）
+/// verification      判定方式 —— 决定这次结果有没有权威性
+/// ```
+///
+/// 族**只**由 `ProtocolId` 决定，不由 `interaction_type` 决定：否则前端就能靠
+/// 发明一个交互类型把练习块变成回忆块。`interaction_type` 只用来识别那些
+/// **自带专属类型**的用户显式动作（提示 / 提问 / 笔记 / 发现错误 / 修正 / 看例题）。
+///
+/// # 为什么返回 `Option`
+///
+/// `None` 表示**不存在一个诚实的 moment 类型**（FIX B7）：这时只持久化
+/// `TrainingInteraction`，让完成规则去读那些交互事实。刻意不为了「凑一个类型」
+/// 而借用别的语义 —— 那是编造，不是降级。
+pub fn derive_moment_type(
+    protocol: Option<ProtocolId>,
+    interaction_type: &str,
     result: Option<InteractionResult>,
     verification: VerificationMethod,
-) -> crate::cognitive::learning_moment::LearningMomentType {
-    use crate::cognitive::learning_moment::LearningMomentType as T;
-    match (result, verification.is_authoritative()) {
-        (Some(InteractionResult::Success), true) => T::RecallSuccess,
-        (Some(InteractionResult::Partial), true) => T::RecallPartial,
-        (Some(InteractionResult::Failure), true) => T::RecallFailure,
-        // 非权威来源：一律记为 attempt，结果保留在 `result` 字段里。
-        (Some(_), false) | (None, _) => T::RecallAttempt,
+) -> Option<LearningMomentType> {
+    use super::completion::{
+        IT_ERROR_CORRECTED, IT_ERROR_DETECTED, IT_EXAMPLE_VIEW, IT_HINT, IT_NOTE, IT_QUESTION,
+    };
+    use LearningMomentType as T;
+
+    // ---- 1. 用户显式动作：自带专属类型，与协议族无关 ----
+    match interaction_type {
+        // FIX B6：用户**显式请求帮助** → `HintRequested`。
+        //
+        // `HintUsed` 要求「真的有一个提示/来源被展示过」。PACK A 没有任何后端信号
+        // 能证明这一点（前端本地计数器不是证据），因此这里**不**签发 `HintUsed` ——
+        // 宁可少一条事实，也不把「点了一下」写成「用了一个提示」。
+        IT_HINT => return Some(T::HintRequested),
+        IT_QUESTION => return Some(T::QuestionAsked),
+        IT_NOTE => return Some(T::ManualNote),
+
+        // FIX B3 / FIX M：**看**例题本身不产生任何学习成功证据。
+        IT_EXAMPLE_VIEW => return None,
+
+        // FIX B5：真实发现错误。
+        IT_ERROR_DETECTED => return Some(T::ErrorDetected),
+
+        // FIX B5：只有**真实验证过的**修正才能签发 `ErrorCorrected`。
+        //
+        // 自检（`SelfCheck`）与 AI（`AiTutor`）都不是「真实验证」（FIX A2），
+        // 而 `ErrorCorrected` 没有对应的 attempt 形态 —— 所以这里不落任何 moment，
+        // 只保留 interaction 行。用户停止 / 显式完成走的是块推进路径，
+        // 那条路径本来就不写证据（FIX M），两者合起来保证「未核实即不签发已修正」。
+        IT_ERROR_CORRECTED => return verification.is_authoritative().then_some(T::ErrorCorrected),
+
+        _ => {}
+    }
+
+    let authoritative = verification.is_authoritative();
+
+    // ---- 2. 按协议族推导 ----
+    match moment_family(protocol) {
+        // FIX B1：回忆族。非权威 / 未知结果 → 只记 attempt。
+        MomentFamily::Recall => Some(match (result, authoritative) {
+            (Some(InteractionResult::Success), true) => T::RecallSuccess,
+            (Some(InteractionResult::Partial), true) => T::RecallPartial,
+            (Some(InteractionResult::Failure), true) => T::RecallFailure,
+            _ => T::RecallAttempt,
+        }),
+
+        // FIX B2：练习族。partial **不**写成 `RecallPartial` —— 那是另一个族的语义，
+        // 借过来就等于宣称「发生了一次回忆」，而这里根本没有回忆。
+        MomentFamily::Practice => Some(match (result, authoritative) {
+            (Some(InteractionResult::Success), true) => T::PracticeSuccess,
+            (Some(InteractionResult::Failure), true) => T::PracticeFailure,
+            _ => T::PracticeAttempt,
+        }),
+
+        // FIX B3：讲解族。只有权威判定的成功才升级为 `ExplanationSuccess`。
+        MomentFamily::Explanation => Some(match (result, authoritative) {
+            (Some(InteractionResult::Success), true) => T::ExplanationSuccess,
+            _ => T::ExplanationAttempt,
+        }),
+
+        // FIX B4：迁移族。**绝不**产出回忆类 moment。
+        MomentFamily::Transfer => Some(match (result, authoritative) {
+            (Some(InteractionResult::Success), true) => T::TransferSuccess,
+            (Some(InteractionResult::Failure), true) => T::TransferFailure,
+            _ => T::TransferAttempt,
+        }),
+
+        // FIX B7：纠错块的普通提交与 11 个通用协议一样 —— 没有诚实的专属类型。
+        // 交互行仍然落库，完成规则按 D16 读它们。
+        MomentFamily::ErrorCorrection | MomentFamily::Generic => None,
     }
 }
 
@@ -477,6 +619,12 @@ pub const FSRS_SKIP_EVIDENCE_TOO_LOW: &str = "evidence_quality_too_low";
 /// 这不是「证据质量不够」，而是**来源类别**不够：AI 的语义评估可以落库
 /// （MEDIUM），但它不是可授权的学习事实，因此不得移动 FSRS 排程。
 pub const FSRS_SKIP_NON_AUTHORITATIVE: &str = "source_is_non_authoritative";
+/// HOTFIX-01 FIX B7：这次交互**没有**推导出任何诚实的 LearningMoment 类型。
+///
+/// 通用协议（没有专属 moment 类型的 11 个）与「看例题」都属于这一类：
+/// 交互行照常落库，但它不构成学习成功证据，因此没有任何东西可以推进 FSRS。
+/// 这是一条**明确的「没有发生」**，不是沉默（§50）。
+pub const FSRS_SKIP_NO_MOMENT: &str = "no_learning_moment_derived";
 
 // ============================ 错误 ============================
 
@@ -508,6 +656,17 @@ pub enum TrainingErrorCode {
     /// 谎报成「什么都没发生」（§50：明确的「没有发生」优于沉默，但**伪造**的
     /// 「没有发生」比沉默更糟）。
     EffectSummaryUnreadable,
+    /// HOTFIX-01 FIX C：只有**当前活跃块**才允许写入学习事实。
+    ///
+    /// 触发条件（三者任一不满足）：`run.status != active`、
+    /// `block.status != active`、`block.ordinal != run.current_block_ordinal`。
+    TrainingBlockNotCurrentActive,
+    /// HOTFIX-01 FIX E：`start_training_block` 只允许按序激活当前块。
+    TrainingBlockOutOfOrder,
+    /// HOTFIX-01 FIX D：`start_training_run` 时计划里没有任何块。
+    TrainingRunHasNoBlocks,
+    /// HOTFIX-01 FIX F1：还有未终结的块，训练不能算完成。
+    TrainingRunHasOpenBlocks,
     Db,
 }
 
@@ -532,6 +691,10 @@ impl TrainingErrorCode {
                 "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD"
             }
             Self::EffectSummaryUnreadable => "EFFECT_SUMMARY_UNREADABLE",
+            Self::TrainingBlockNotCurrentActive => "TRAINING_BLOCK_NOT_CURRENT_ACTIVE",
+            Self::TrainingBlockOutOfOrder => "TRAINING_BLOCK_OUT_OF_ORDER",
+            Self::TrainingRunHasNoBlocks => "TRAINING_RUN_HAS_NO_BLOCKS",
+            Self::TrainingRunHasOpenBlocks => "TRAINING_RUN_HAS_OPEN_BLOCKS",
             Self::Db => "DB_ERROR",
         }
     }

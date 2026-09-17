@@ -50,12 +50,12 @@ use crate::repository::study_session::StudySessionRepository;
 
 use super::completion::{evaluate_completion, BlockInteractionFact, CompletionFacts};
 use super::types::{
-    is_recall_compatible, is_recall_moment, transition_block_status, transition_run_status,
-    validate_block_invariant, BlockAdvanceIntent, BlockProgression, EffectSummary,
-    InteractionResult, TrainingBlockRun, TrainingBlockStatus, TrainingError, TrainingErrorCode,
-    TrainingInteraction, TrainingRun, TrainingRunStatus, VerificationMethod,
+    derive_moment_type, is_recall_compatible, is_recall_moment, transition_block_status,
+    transition_run_status, validate_block_invariant, BlockAdvanceIntent, BlockProgression,
+    EffectSummary, InteractionResult, TrainingBlockRun, TrainingBlockStatus, TrainingError,
+    TrainingErrorCode, TrainingInteraction, TrainingRun, TrainingRunStatus, VerificationMethod,
     FSRS_SKIP_BLOCK_IS_BREAK, FSRS_SKIP_EVIDENCE_TOO_LOW, FSRS_SKIP_NON_AUTHORITATIVE,
-    FSRS_SKIP_NOT_RECALL_MOMENT, FSRS_SKIP_NO_MEMORY_UNIT,
+    FSRS_SKIP_NOT_RECALL_MOMENT, FSRS_SKIP_NO_MEMORY_UNIT, FSRS_SKIP_NO_MOMENT,
 };
 
 /// §18：训练派生的 moment 统一来源前缀。
@@ -212,8 +212,28 @@ fn assert_item_in_profile(
     }
 }
 
-// ============================ §11 回忆块 → MemoryUnit 绑定 ============================
+/// HOTFIX-01 FIX C 的**单一**判据：这个块现在是不是「当前活跃块」。
+///
+/// ```text
+/// run.status               == Active
+/// block.status             == Active
+/// run.current_block_ordinal == block.ordinal
+/// ```
+///
+/// 抽成一个函数而不是内联，是因为它有多个调用点（写入事实、审计测试），
+/// 而它们必须共享**同一个**判据 —— 否则就会出现「后端允许写、前端却禁用」
+/// 这类两个真相源的经典分裂。
+///
+/// 注意 `current_block_ordinal` 的比较：FIX E 之后，`current_block_ordinal`
+/// 指向的是「下一个待开始的块」，而那个块是 **Pending**。所以「是当前块」
+/// 与「是活跃块」在 FIX E 语义下**恰好**同时成立，缺一不可。
+pub fn block_is_current_active(run: &TrainingRun, block: &TrainingBlockRun) -> bool {
+    run.status == TrainingRunStatus::Active
+        && block.status == TrainingBlockStatus::Active
+        && run.current_block_ordinal == Some(block.ordinal)
+}
 
+// ============================ §11 回忆块 → MemoryUnit 绑定 ============================
 /// §11 锁定的绑定规则。**绝不猜测**。
 ///
 /// ```text
@@ -509,6 +529,112 @@ pub fn transition_training_run(
     finish_immediate(conn, result)
 }
 
+/// HOTFIX-01 FIX D —— 训练的**唯一**初始启动通路。
+///
+/// ```text
+/// BEGIN IMMEDIATE
+///   run.status                Ready → Active      （started_at = 真实开始时刻）
+///   找 ordinal 最小的 pending 块
+///   该块                      Pending → Active    （started_at = 真实开始时刻）
+///   run.current_block_ordinal = 该块 ordinal
+/// COMMIT
+/// ```
+///
+/// # 为什么不能用 `transition_training_run(..., Active)` 代替
+///
+/// 通用状态推进**只**改 run 的状态。用它启动训练会留下一个「已经 active、
+/// 却没有任何活跃块」的训练：`current_block_ordinal` 仍是 `NULL`，
+/// 第一个块仍是 `Pending`，而 FIX C 又禁止 `Pending` 块写入学习事实 ——
+/// 结果是一个「已经开始、但什么都做不了」的死状态。
+///
+/// 初始启动是一个**复合**事实（run 状态 + 块状态 + 当前块指针 + 两个真实时刻），
+/// 所以它必须是一个原子操作，而不是让调用方按顺序拼三步。
+///
+/// # 没有块
+///
+/// 计划为空 → `TRAINING_RUN_HAS_NO_BLOCKS`，整个事务回滚。
+/// 不伪造一个块，也不把 run 留在半启动状态。
+pub fn start_training_run(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<TrainingRun, TrainingError> {
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<TrainingRun, TrainingError> {
+        let run = load_run(tx, profile_id, training_run_id)?;
+        if run.status.is_terminal() {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TerminalRunState,
+                format!(
+                    "训练 {} 已处于终态 {}，不能启动（§9）",
+                    run.id,
+                    run.status.as_str()
+                ),
+            ));
+        }
+        // 只有 Ready 是「初始启动」。Active 再启动一次会重置块计时；
+        // Paused 的恢复属于状态推进，不属于启动（FIX D）。
+        if run.status != TrainingRunStatus::Ready {
+            return Err(TrainingError::new(
+                TrainingErrorCode::IllegalRunTransition,
+                format!(
+                    "训练 {} 的状态是 {}，只有 ready 才能被启动；\
+                     暂停后恢复请走状态推进（FIX D）",
+                    run.id,
+                    run.status.as_str()
+                ),
+            ));
+        }
+
+        // 第一个块 = ordinal 最小的 pending 块。**不猜测**：没有就是没有。
+        let first: Option<(i64, i64)> = match tx.query_row(
+            "SELECT id, ordinal FROM training_block_runs
+              WHERE training_run_id = ?1 AND status = 'pending'
+              ORDER BY ordinal ASC
+              LIMIT 1",
+            params![run.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(TrainingError::db(e)),
+        };
+
+        let Some((block_id, ordinal)) = first else {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingRunHasNoBlocks,
+                format!("训练 {} 没有任何待进行的块，无法开始（FIX D）", run.id),
+            ));
+        };
+
+        tx.execute(
+            "UPDATE training_runs
+                SET status = 'active',
+                    started_at = COALESCE(started_at, datetime('now')),
+                    current_block_ordinal = ?1,
+                    updated_at = datetime('now')
+              WHERE id = ?2 AND profile_id = ?3",
+            params![ordinal, run.id, profile_id],
+        )
+        .map_err(TrainingError::db)?;
+
+        // 第一个块的计时从**此刻**开始，而不是从 run 创建那一刻开始。
+        tx.execute(
+            "UPDATE training_block_runs
+                SET status = 'active',
+                    started_at = COALESCE(started_at, datetime('now')),
+                    updated_at = datetime('now')
+              WHERE id = ?1 AND profile_id = ?2",
+            params![block_id, profile_id],
+        )
+        .map_err(TrainingError::db)?;
+
+        load_run(tx, profile_id, training_run_id)
+    })();
+    finish_immediate(conn, result)
+}
+
 /// §20 —— 完成必须与 StudySession 终结**同事务**。
 ///
 /// `TrainingRun` 只在 `StudySession` 终结成功之后才被标记为 `completed`；
@@ -525,6 +651,40 @@ pub fn complete_training_run(
         let run = load_run(tx, profile_id, training_run_id)?;
         transition_run_status(run.status, TrainingRunStatus::Completed)?;
 
+        // ---- HOTFIX-01 FIX F1：还有没走完的块，就不能算完成 ----
+        //
+        // 三个条件必须同时成立：
+        //
+        // ```text
+        // 没有 pending 块
+        // 没有 active 块
+        // current_block_ordinal IS NULL
+        // ```
+        //
+        // 第三条不是前两条的推论，而是**独立**要求：它保证「当前块指针」也归零，
+        // 否则一个所有块都终结、指针却仍指向某块的 run 会被判成完成 ——
+        // 那样下次读它会以为「还有一个当前块」，而那个块其实早已终态。
+        //
+        // 提前完成会同时虚报两件事：训练做完了、这次学习结束了（§50）。
+        let open_blocks: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM training_block_runs
+                  WHERE training_run_id = ?1 AND status IN ('pending','active')",
+                params![run.id],
+                |r| r.get(0),
+            )
+            .map_err(TrainingError::db)?;
+        if open_blocks > 0 || run.current_block_ordinal.is_some() {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingRunHasOpenBlocks,
+                format!(
+                    "训练 {} 还有 {open_blocks} 个未终结的块（current_block_ordinal={:?}），\
+                     不能标记为完成；请先完成或提前结束（FIX F1）",
+                    run.id, run.current_block_ordinal
+                ),
+            ));
+        }
+
         // 先终结 Session：它失败则整个事务回滚，Run 不会被标记完成。
         if let Some(session_id) = run.study_session_id {
             StudySessionRepository::new(tx)
@@ -535,6 +695,81 @@ pub fn complete_training_run(
         tx.execute(
             "UPDATE training_runs
                 SET status = 'completed',
+                    ended_at = datetime('now'),
+                    updated_at = datetime('now')
+              WHERE id = ?1 AND profile_id = ?2",
+            params![training_run_id, profile_id],
+        )
+        .map_err(TrainingError::db)?;
+
+        load_run(tx, profile_id, training_run_id)
+    })();
+    finish_immediate(conn, result)
+}
+
+/// HOTFIX-01 FIX F2 —— 提前结束训练。
+///
+/// ```text
+/// BEGIN IMMEDIATE
+///   run.status ∈ Ready / Active / Paused
+///   所有剩余 Pending / Active 块 → Skipped
+///   终结 StudySession
+///   run.status = Abandoned
+///   current_block_ordinal = NULL
+///   ended_at = 真实结束时刻
+/// COMMIT
+/// ```
+///
+/// # 为什么必须是一个原子操作
+///
+/// 半终结是最糟的中间态：run 已经 `abandoned` 而 Session 还 `active`，
+/// 或者块还是 `active` 而 run 已终结 —— 前者会让「唯一 active Session」的
+/// 既有规则一直挡着用户开新学习，后者会让一个终态 run 里留着活跃块。
+/// 所以四件事必须同生共死。
+///
+/// # 它**不**做什么
+///
+/// ```text
+/// 不写任何成功证据        不推进 FSRS
+/// 不写 ErrorCorrected     不把「停止」写成「失败」
+/// ```
+///
+/// 用户的「我不学了」是一条**关于时间的事实**，不是一条关于学会了什么的事实（§50）。
+pub fn abandon_training_run(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<TrainingRun, TrainingError> {
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<TrainingRun, TrainingError> {
+        let run = load_run(tx, profile_id, training_run_id)?;
+        transition_run_status(run.status, TrainingRunStatus::Abandoned)?;
+
+        // 剩余块一律记 `Skipped` —— 刻意**不**记 `Completed`：
+        // 「跳过」与「完成」是两种不同的真相（§50），把提前结束写成完成
+        // 等于虚报了一次完整训练。
+        tx.execute(
+            "UPDATE training_block_runs
+                SET status = 'skipped',
+                    ended_at = COALESCE(ended_at, datetime('now')),
+                    updated_at = datetime('now')
+              WHERE training_run_id = ?1 AND profile_id = ?2
+                AND status IN ('pending','active')",
+            params![run.id, profile_id],
+        )
+        .map_err(TrainingError::db)?;
+
+        if let Some(session_id) = run.study_session_id {
+            StudySessionRepository::new(tx)
+                .end(session_id, None)
+                .map_err(TrainingError::db)?;
+        }
+
+        tx.execute(
+            "UPDATE training_runs
+                SET status = 'abandoned',
+                    current_block_ordinal = NULL,
                     ended_at = datetime('now'),
                     updated_at = datetime('now')
               WHERE id = ?1 AND profile_id = ?2",
@@ -565,10 +800,11 @@ pub struct RecordInteractionParams {
     pub user_response_text: Option<String>,
     pub hint_level: Option<i64>,
     pub result: Option<InteractionResult>,
-    /// §21 的判定方式；决定本次证据质量上限（§22）。
+    /// §21 的判定方式；决定本次证据质量上限（§22）**与权威性**（HOTFIX-01 FIX A）。
+    ///
+    /// 手工前端提交永远只能拿到 `SelfCheck`（FIX A1）—— 由命令层决定，
+    /// 前端没有参数可以把它调高。
     pub verification: VerificationMethod,
-    /// 本次交互产生的 LearningMoment 类型（由**确定性结果**推导，不由 AI 生成）。
-    pub moment_type: LearningMomentType,
     /// 本次事实的发生时间。`None` = 由领域层取当前 UTC（§18）。
     ///
     /// 这里刻意是 `Option`：时钟属于领域层，不属于传输层。若让命令层负责填默认值，
@@ -657,6 +893,31 @@ pub fn record_interaction(
             ));
         }
 
+        // ---- HOTFIX-01 FIX C：只有「当前活跃块」才允许写入学习事实 ----
+        //
+        // 为什么必须在写 interaction **之前**：interaction 行本身也是事实。
+        // 若先写行再判，一个 pending 块就会留下「用户确实提交过」的痕迹 ——
+        // 而那次提交发生在一次**尚未开始**（或已经结束）的学习里，
+        // 那是一条本不该存在的事实。所以判定必须发生在第一个 INSERT 之前。
+        //
+        // 结果：没有 TrainingInteraction、没有 LearningMoment、没有 Evidence、
+        // 没有 MemoryReview、没有 FSRS —— 整个事务在写任何东西之前就结束了。
+        if !block_is_current_active(&run, &block) {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingBlockNotCurrentActive,
+                format!(
+                    "块 {} 不是当前进行中的块（run.status={}, block.status={}, \
+                     block.ordinal={}, current_block_ordinal={:?}）；\
+                     只有当前活跃块才能写入学习事实（HOTFIX-01 FIX C）",
+                    block.id,
+                    run.status.as_str(),
+                    block.status.as_str(),
+                    block.ordinal,
+                    run.current_block_ordinal,
+                ),
+            ));
+        }
+
         // ---- 写入 interaction ----
         tx.execute(
             "INSERT INTO training_interactions
@@ -711,42 +972,25 @@ pub fn record_interaction(
         }
 
         // ---- §18：记录 LearningMoment（来源可溯源到这次交互）----
+        //
+        // HOTFIX-01 FIX B：类型由**后端**从 (ProtocolId, interaction_type, result,
+        // verification) 推导 —— 调用方连一个可以声明的字段都没有了。
+        // 推导结果可能是 `None`（FIX B7：不存在诚实的类型），那时只落交互行。
         let evidence_quality = p.verification.max_evidence_quality();
         let source_type = source_type_for(p.verification);
-        // §22 + §50：非权威来源（AI 导师）**不能**写出「成功」类 moment。
-        // `learning_moment::validate_new_moment` 的规则 (5) 会直接拒绝
-        // `tutor_observed + recall_success`。协议实现声明的 moment_type 因此在这里
-        // 被**降级为 attempt**：AI 可以记录「发生了这次尝试」，但不能签发「你成功了」。
-        let moment_type = moment_type_for(p.moment_type, source_type);
-        let mut moment = NewLearningMoment::new(
-            p.profile_id,
-            moment_type,
-            occurred_at.clone(),
-            source_type,
-            evidence_quality,
-        );
-        moment.session_id = run.study_session_id;
-        moment.learning_item_id = run.learning_item_id;
-        moment.hint_level = p.hint_level;
-        // 把调用方声明的 result 原样交给既有的 `validate_new_moment`：
-        // 若它与 moment_type 的内在结果矛盾，写入会失败并整体回滚 —— 这是刻意的，
-        // 宁可拒绝一条自相矛盾的证据，也不要落库一条无法解释的 moment。
-        moment.result = p.result.map(|r| r.as_str().to_string());
-        moment.source_id = Some(training_source_id(interaction_id));
-        moment.metadata_json = serde_json::json!({
-            "provenance": {
-                "training_run_id": p.training_run_id,
-                "block_run_id": p.block_run_id,
-                "interaction_id": interaction_id,
-            },
-            "verification": p.verification.as_str(),
-            "interaction_type": p.interaction_type,
-        });
-        let recorded = record_learning_moment(tx, moment)
-            .map_err(|e| TrainingError::db(format!("LearningMoment 写入失败：{e}")))?;
+        let moment_type = derive_moment_type(
+            block.protocol_id,
+            &p.interaction_type,
+            p.result,
+            p.verification,
+        )
+        // 第二道防线（FIX A3）：即便推导逻辑将来被改错，非权威判定也**绝不**
+        // 可能写出「成功」类事实。这一层保护的是数据库写入路径本身，
+        // 而不是某一个调用方。
+        .map(|declared| enforce_authority(declared, p.verification));
 
         let mut effect = EffectSummary {
-            learning_moment_ids: vec![recorded.id],
+            learning_moment_ids: Vec::new(),
             fsrs_applied: false,
             memory_review_id: None,
             memory_unit_id: block.memory_unit_id,
@@ -754,15 +998,56 @@ pub fn record_interaction(
             verification: p.verification.as_str().to_string(),
         };
 
-        // ---- §15 + §11：可信回忆结果 + 已绑定记忆单元 → 恰好一次推进 FSRS ----
+        let recorded = match moment_type {
+            Some(moment_type) => {
+                let mut moment = NewLearningMoment::new(
+                    p.profile_id,
+                    moment_type,
+                    occurred_at.clone(),
+                    source_type,
+                    evidence_quality,
+                );
+                moment.session_id = run.study_session_id;
+                moment.learning_item_id = run.learning_item_id;
+                moment.hint_level = p.hint_level;
+                // 把调用方声明的 result 原样交给既有的 `validate_new_moment`：
+                // 若它与 moment_type 的内在结果矛盾，写入会失败并整体回滚 —— 这是刻意的，
+                // 宁可拒绝一条自相矛盾的证据，也不要落库一条无法解释的 moment。
+                moment.result = p.result.map(|r| r.as_str().to_string());
+                moment.source_id = Some(training_source_id(interaction_id));
+                moment.metadata_json = serde_json::json!({
+                    "provenance": {
+                        "training_run_id": p.training_run_id,
+                        "block_run_id": p.block_run_id,
+                        "interaction_id": interaction_id,
+                    },
+                    "verification": p.verification.as_str(),
+                    "interaction_type": p.interaction_type,
+                });
+                let recorded = record_learning_moment(tx, moment)
+                    .map_err(|e| TrainingError::db(format!("LearningMoment 写入失败：{e}")))?;
+                effect.learning_moment_ids = vec![recorded.id];
+                Some(recorded)
+            }
+            // FIX B7：这次交互没有诚实的 moment 类型 —— 交互行已经落库，
+            // 完成规则会去读它（D16），但**不**签发任何学习证据。
+            None => None,
+        };
+
+        // ---- §15 + §11 + FIX A3：可信回忆结果 + 已绑定记忆单元 → 恰好一次推进 FSRS ----
         // 休息块的路径已在上面提前返回（见 item 10），这里只会到达学习块。
-        if source_type.is_non_authoritative() {
-            // §22 / §50：AI 导师的语义评估可以落库（MEDIUM），但它**不是**可授权的
-            // 学习事实。FSRS 是权威记忆排程，只有确定性/结构化/用户显式证据能移动它。
-            // 这条判定刻意放在「是否回忆类 moment」之前 —— 否则 AI 降级后的
-            // `recall_attempt` 会被笼统归因为「不是回忆结果」，掩盖真正的原因。
+        if !p.verification.is_authoritative() {
+            // FIX A3：权威性是 `VerificationMethod` **自身**的属性，在这里集中判一次。
+            // 自检（`SelfCheck`）与 AI（`AiTutor`）都不是可授权的学习事实：
+            // 无论证据质量看起来多高、moment 类型看起来多像结果，都不得移动 FSRS。
+            // 这条判定刻意放在「是否回忆类 moment」之前 —— 否则非权威结果会被
+            // 笼统归因为「不是回忆结果」，掩盖真正的原因。
             effect.fsrs_skip_reason = Some(FSRS_SKIP_NON_AUTHORITATIVE.to_string());
-        } else if !is_recall_moment(moment_type) {
+        } else if moment_type.is_none() {
+            // FIX B7：没有推导出任何诚实的 moment → 没有任何东西可以推进排程。
+            // 明确说出「没有发生」，而不是沉默（§50）。
+            effect.fsrs_skip_reason = Some(FSRS_SKIP_NO_MOMENT.to_string());
+        } else if !is_recall_moment(moment_type.expect("上一臂已排除 None")) {
             effect.fsrs_skip_reason = Some(FSRS_SKIP_NOT_RECALL_MOMENT.to_string());
         } else if block.memory_unit_id.is_none() {
             // §11：未绑定 → 不推进。这是 unknown/unbound，**不是失败**。
@@ -771,6 +1056,7 @@ pub fn record_interaction(
             effect.fsrs_skip_reason = Some(FSRS_SKIP_EVIDENCE_TOO_LOW.to_string());
         } else {
             let unit_id = block.memory_unit_id.expect("上面已判空");
+            let recorded = recorded.expect("权威 + 回忆类 moment 必然已经写入");
             // §16：`_in_tx` 内部先查该 moment 是否已推进过。这里是**同事务**调用，
             // 因此 interaction / moment / review / unit 更新共同构成一个原子事实。
             let review = record_review_from_moment_in_tx(tx, p.profile_id, unit_id, &recorded)
@@ -875,32 +1161,34 @@ fn source_type_for(v: VerificationMethod) -> MomentSourceType {
     }
 }
 
-/// §22 + §50：非权威来源（AI 导师）产出的 moment 一律降级为 attempt。
+/// §22 / §50 / HOTFIX-01 FIX A3 —— **第二道防线**：非权威判定不得写出「结果」类事实。
 ///
-/// 为什么必须存在这个函数：`learning_moment` 的规则 (5) 已经**硬性拒绝**
-/// `tutor_observed + recall_success`。如果协议实现声明了 `RecallSuccess` 而判定方式
-/// 是 `AiTutor`，整条交互会写入失败并回滚 —— 那等于「配了 AI 反而不能用」，
-/// 与 §21（AI 默认沉默、应用必须照常可用）直接冲突。
+/// # 为什么是 `verification` 而不是 `source_type`
 ///
-/// 因此这里做的是**语义降级**而不是「换个类型凑过去」：
+/// 旧版本按 `source_type.is_non_authoritative()` 判（只覆盖 `TutorObserved` /
+/// `Imported`），于是 `SelfCheck` → `UserExplicit` 被视为权威来源，自检成功
+/// 可以一路写成 `RecallSuccess`。HOTFIX-01 FIX A2 把权威性收敛到
+/// `VerificationMethod::is_authoritative()`，这一层必须跟着**同一个判据**，
+/// 否则两道防线会各判各的，而「权威」就又有了第二个定义。
+///
+/// # 它做什么
 ///
 /// ```text
-/// AI 能说的    ：「这一次尝试发生了，我的评估是 success / partial / failure」
-/// AI 不能说的   ：「你确实掌握了」——那是权威学习事实
+/// 权威（Deterministic / Structured） → 原样返回
+/// 非权威（SelfCheck / AiTutor）      → 成功/部分/失败一律降级为 attempt
 /// ```
 ///
-/// 降级对**全部结果**统一生效（不只是成功）：AI 对一次失败的判断同样是观察，
-/// 不是权威事实。信息没有丢失 —— AI 的评估仍原样保存在 moment 的 `result`
-/// 字段与 `training_interactions.result` 里。
+/// 信息没有丢失：调用方声明的 `result` 仍原样保存在 moment 的 `result` 字段
+/// 与 `training_interactions.result` 里。降级的是**断言强度**，不是数据。
 ///
-/// 这是**防御性后备**：命令层已经通过 [`super::types::moment_type_for_result`]
-/// 给出同样的类型。保留这一层是因为它保护的是**数据库写入路径本身**，
-/// 而不是某一个调用方。
-fn moment_type_for(
+/// 这是**防御性后备**：`derive_moment_type` 已经做了同样的事。保留这一层，
+/// 是因为它保护的是**数据库写入路径本身**，而不是某一个调用方 ——
+/// 将来任何新的写路径都无法绕过它。
+fn enforce_authority(
     declared: LearningMomentType,
-    source_type: MomentSourceType,
+    verification: VerificationMethod,
 ) -> LearningMomentType {
-    if !source_type.is_non_authoritative() {
+    if verification.is_authoritative() {
         return declared;
     }
     match declared {
@@ -918,6 +1206,11 @@ fn moment_type_for(
         LearningMomentType::TransferSuccess | LearningMomentType::TransferFailure => {
             LearningMomentType::TransferAttempt
         }
+
+        // `ErrorCorrected` 是「真实修正」的断言，非权威判定不得签发它。
+        // 它没有 attempt 形态，因此降级为 `ErrorDetected` —— 这是**保守**方向：
+        // 「发现过错误」为真，而「已修正」不再被声称。
+        LearningMomentType::ErrorCorrected => LearningMomentType::ErrorDetected,
 
         // 其余类型本身就不是「权威结果」（HintRequested / QuestionAsked /
         // InterestSignal / ManualNote …），无需降级。
@@ -1234,6 +1527,51 @@ pub fn start_training_block(
             ));
         }
 
+        // ---- HOTFIX-01 FIX E：按序激活，且只激活「当前」块 ----
+        //
+        // 四个条件必须同时成立：
+        //
+        // ```text
+        // run.status               == Active      （Ready / Paused 都不行）
+        // block.status             == Pending     （终态块 / 已活跃块都不行）
+        // block.ordinal            == run.current_block_ordinal
+        // 同 run 内没有别的 active 块
+        // ```
+        //
+        // 第三条是 FIX E 的核心：块终结后 `current_block_ordinal` 指向**下一个
+        // pending 块**，而那个块此刻是「当前但未激活」。用户必须显式开始它，
+        // 时间才从那一刻起算 —— 否则「读完反馈 / 想一想 / 走开一会儿」的时间
+        // 会被算进下一块的学习时长里。
+        if run.status != TrainingRunStatus::Active {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingBlockOutOfOrder,
+                format!(
+                    "训练 {} 的状态是 {}，不是 active —— 不能激活块（FIX E）",
+                    run.id,
+                    run.status.as_str()
+                ),
+            ));
+        }
+        if block.status != TrainingBlockStatus::Pending {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingBlockOutOfOrder,
+                format!(
+                    "块 {} 的状态是 {}，只有 pending 块可以被激活（FIX E）",
+                    block.id,
+                    block.status.as_str()
+                ),
+            ));
+        }
+        if run.current_block_ordinal != Some(block.ordinal) {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingBlockOutOfOrder,
+                format!(
+                    "块 {} 的 ordinal 是 {}，但当前应进行的是 {:?} —— 不能越序激活（FIX E）",
+                    block.id, block.ordinal, run.current_block_ordinal
+                ),
+            ));
+        }
+
         // §10 `idx_training_blocks_one_active`：一次至多一个 active 块。
         // 提前给出可读诊断，而不是让唯一索引抛一个难懂的约束错误。
         let active_other: Option<i64> = match tx.query_row(
@@ -1249,9 +1587,9 @@ pub fn start_training_block(
         };
         if let Some(other) = active_other {
             return Err(TrainingError::new(
-                TrainingErrorCode::IllegalBlockTransition,
+                TrainingErrorCode::TrainingBlockOutOfOrder,
                 format!(
-                    "块 {other} 仍是 active，同一训练一次只能有一个进行中的块（§10）；\
+                    "块 {other} 仍是 active，同一训练一次只能有一个进行中的块（§10 / FIX E）；\
                      请先结束它再开始块 {block_run_id}"
                 ),
             ));

@@ -1375,6 +1375,19 @@ html[data-h-wallpaper="on"] #root {
   min-width: 0;
 }
 
+/* HOTFIX-01 FIX G —— 主 CTA 的非错误提示。
+   缺时长 / 编排不出计划都不是失败，因此用中性提示色，而不是 error 红。 */
+.hc-today__hint {
+  margin: -6px 0 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--hc-border-strong);
+  border-radius: var(--h-radius-md);
+  background: rgba(255, 176, 143, 0.06);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--hc-text);
+}
+
 /* ---- Hero ---- */
 .hc-hero {
   min-width: 0;
@@ -13496,4 +13509,36 @@ html.higher-qr-scanning body .qr-scan-frame,
   align-items: baseline;
   gap: 10px;
   color: var(--hc-text);
+}
+
+/* HOTFIX-01 FIX J —— 诚实的不可用状态。
+   它不是错误（红色会让人以为程序坏了），也不是加载中（转圈会让人以为等一下就有）。
+   它是「这里本来需要真实素材，而现在没有」，因此用中性的警示色 + 明确的解释。 */
+.hc-train__unavailable {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--hc-border-strong);
+  border-radius: var(--h-radius-md);
+  background: rgba(255, 176, 143, 0.06);
+}
+
+.hc-train__unavailable-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hc-warning);
+}
+
+/* FIX J2 —— 线索面板：只摆线索，不摆答案。 */
+.hc-train__cue {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--hc-border-strong);
+  border-left: 3px solid var(--hc-aqua);
+  border-radius: var(--h-radius-md);
+  background: rgba(129, 239, 210, 0.04);
+}
+
+.hc-train__cue .hc-train__effect-title {
+  margin-bottom: 2px;
 }

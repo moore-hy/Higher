@@ -33,13 +33,15 @@ use app_lib::repository::learning_item::LearningItemRepository;
 use app_lib::repository::study_profile::StudyProfileRepository;
 use app_lib::repository::study_session::StudySessionRepository;
 use app_lib::training::runtime::{
-    complete_training_run, create_training_run, list_block_runs, list_interactions,
-    record_interaction, resolve_recall_memory_unit, transition_training_run,
-    CreateTrainingRunParams, RecordInteractionParams,
+    advance_training_block, complete_training_run, create_training_run, list_block_runs,
+    list_interactions, record_interaction, resolve_recall_memory_unit, start_training_block,
+    start_training_run, transition_training_run, AdvanceBlockParams, CreateTrainingRunParams,
+    RecordInteractionParams,
 };
 use app_lib::training::types::{
-    is_legal_run_transition, transition_run_status, validate_block_invariant, InteractionResult,
-    TrainingErrorCode, TrainingRunStatus, VerificationMethod,
+    derive_moment_type, is_legal_run_transition, transition_run_status, validate_block_invariant,
+    BlockAdvanceIntent, InteractionResult, TrainingBlockStatus, TrainingErrorCode,
+    TrainingRunStatus, VerificationMethod,
 };
 use rusqlite::{params, Connection};
 
@@ -170,6 +172,63 @@ fn create_run(conn: &Connection, profile_id: i64, item_id: i64) -> (i64, Vec<i64
     (run.id, blocks.iter().map(|b| b.id).collect())
 }
 
+/// 建一个 run 并**启动它**（HOTFIX-01 FIX D：Ready→Active + 第一个块 Active）。
+///
+/// HOTFIX-01 FIX C 之后，只有「当前活跃块」才允许写入学习事实。因此所有
+/// 真正提交交互的测试都必须先走这一步 —— 这正是 FIX C 想要的效果：
+/// 一个**还没开始**的训练，写不进任何学习事实。
+fn create_active_run(conn: &Connection, profile_id: i64, item_id: i64) -> (i64, Vec<i64>) {
+    let (run_id, blocks) = create_run(conn, profile_id, item_id);
+    start_training_run(conn, profile_id, run_id).unwrap();
+    (run_id, blocks)
+}
+
+/// 同上，但使用自定义计划（例如「休息块排在最前」这种刻意构造的场景）。
+fn create_active_run_with_plan(
+    conn: &Connection,
+    profile_id: i64,
+    item_id: i64,
+    plan: TrainingSessionPlan,
+) -> (i64, Vec<i64>) {
+    let (run, blocks) = create_training_run(
+        conn,
+        CreateTrainingRunParams {
+            profile_id,
+            learning_item_id: Some(item_id),
+            mode: DecisionMode::Copilot,
+            plan,
+            now_utc: NOW.to_string(),
+        },
+    )
+    .unwrap();
+    start_training_run(conn, profile_id, run.id).unwrap();
+    (run.id, blocks.iter().map(|b| b.id).collect())
+}
+
+/// 把该 run 里所有还没终结的块按用户「做完了」推进掉，让 run 满足 FIX F1 的完成条件。
+fn finish_all_blocks(conn: &Connection, profile_id: i64, run_id: i64) {
+    let blocks = list_block_runs(conn, profile_id, run_id).unwrap();
+    for block in blocks {
+        if block.status.is_terminal() {
+            continue;
+        }
+        if block.status == TrainingBlockStatus::Pending {
+            start_training_block(conn, profile_id, run_id, block.id).unwrap();
+        }
+        advance_training_block(
+            conn,
+            AdvanceBlockParams {
+                profile_id,
+                training_run_id: run_id,
+                block_run_id: block.id,
+                intent: BlockAdvanceIntent::Finish,
+                elapsed_minutes: None,
+            },
+        )
+        .unwrap();
+    }
+}
+
 fn interaction_params(
     profile_id: i64,
     run_id: i64,
@@ -189,7 +248,6 @@ fn interaction_params(
         hint_level: None,
         result: Some(result),
         verification,
-        moment_type: LearningMomentType::RecallSuccess,
         occurred_at: Some(NOW.to_string()),
     }
 }
@@ -653,7 +711,7 @@ fn retrying_the_same_action_creates_no_second_fact() {
     let item = create_item(&conn, profile, "学习项");
     // 建一个 MemoryUnit，让回忆块有记忆可绑定（FSRS 才会真正推进）。
     new_memory_unit(&conn, profile, item, "k1");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     let first = record_interaction(
         &conn,
@@ -736,7 +794,7 @@ fn reusing_the_key_with_a_different_payload_is_rejected() {
     let conn = setup();
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     record_interaction(
         &conn,
@@ -785,7 +843,7 @@ fn fsrs_advances_exactly_once_per_interaction() {
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
     let unit = new_memory_unit(&conn, profile, item, "k1");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     let outcome = record_interaction(
         &conn,
@@ -897,7 +955,7 @@ fn fsrs_skip_reasons_are_recorded_instead_of_silently_ignored() {
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
     // 刻意**不**创建 MemoryUnit → 回忆块无记忆可绑定。
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     let outcome = record_interaction(
         &conn,
@@ -942,13 +1000,26 @@ fn a_break_block_never_advances_fsrs() {
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
     new_memory_unit(&conn, profile, item, "k1");
-    let (run_id, _) = create_run(&conn, profile, item);
-    let break_block_id = list_block_runs(&conn, profile, run_id)
-        .unwrap()
-        .into_iter()
-        .find(|b| b.is_break)
-        .unwrap()
-        .id;
+    // 刻意让**休息块排在第一位**：FIX C 只允许「当前活跃块」写入事实，
+    // 所以要提交到休息块上，就必须让它成为当前块 —— 而它只有在计划里排第一时
+    // 才会被 `start_training_run` 激活。
+    //
+    // 同时必须**至少有一个学习块**：`create_training_run` 会以
+    // `PLAN_HAS_NO_BLOCKS` 拒绝一个只有休息块的计划（§19）。所以这里在休息块
+    // 之后补一个真实的回忆块 —— 它只是为了让计划合法，本用例不会碰它。
+    let (run_id, blocks) = create_active_run_with_plan(
+        &conn,
+        profile,
+        item,
+        plan_of(
+            item,
+            vec![
+                break_block(0, 5),
+                learning_block(1, ProtocolId::FreeRecall, 5),
+            ],
+        ),
+    );
+    let break_block_id = blocks[0];
 
     let outcome = record_interaction(
         &conn,
@@ -976,7 +1047,7 @@ fn moment_provenance_points_back_to_the_interaction() {
     let conn = setup();
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     let outcome = record_interaction(
         &conn,
@@ -1034,7 +1105,7 @@ fn the_default_timestamp_uses_the_single_house_format() {
     let conn = setup();
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     let mut p = interaction_params(
         profile,
@@ -1115,11 +1186,19 @@ fn completion_ends_the_session_and_the_run_together() {
         .study_session_id
         .unwrap();
 
-    transition_training_run(&conn, profile, run_id, TrainingRunStatus::Active).unwrap();
+    // HOTFIX-01 FIX F1：run 只有在**所有块都终结**、且 `current_block_ordinal`
+    // 归零之后才能完成。所以这里先把每个块按用户「做完了」推进掉。
+    start_training_run(&conn, profile, run_id).unwrap();
+    finish_all_blocks(&conn, profile, run_id);
+
     let completed = complete_training_run(&conn, profile, run_id).unwrap();
 
     assert_eq!(completed.status, TrainingRunStatus::Completed);
     assert!(completed.ended_at.is_some());
+    assert_eq!(
+        completed.current_block_ordinal, None,
+        "FIX F1：完成后当前块指针必须归零"
+    );
 
     let (status, ended_at): (String, Option<String>) = conn
         .query_row(
@@ -1139,7 +1218,8 @@ fn a_terminal_run_refuses_further_interactions() {
     let item = create_item(&conn, profile, "学习项");
     let (run_id, blocks) = create_run(&conn, profile, item);
 
-    transition_training_run(&conn, profile, run_id, TrainingRunStatus::Active).unwrap();
+    start_training_run(&conn, profile, run_id).unwrap();
+    finish_all_blocks(&conn, profile, run_id);
     complete_training_run(&conn, profile, run_id).unwrap();
 
     let err = record_interaction(
@@ -1154,6 +1234,8 @@ fn a_terminal_run_refuses_further_interactions() {
         ),
     )
     .unwrap_err();
+    // 终态诊断优先于 FIX C 的「当前块」诊断：`TERMINAL_TRAINING_RUN_STATE`
+    // 比「这个块不是当前块」更准确，也更早被判定。
     assert_eq!(err.code, TrainingErrorCode::TerminalRunState);
 }
 
@@ -1166,7 +1248,7 @@ fn training_works_with_no_ai_provider_configured() {
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
     new_memory_unit(&conn, profile, item, "k1");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     // 确认确实没有**可用**的 AI 连接。
     //
@@ -1230,7 +1312,7 @@ fn ai_tutor_evidence_can_never_be_high() {
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
     let unit = new_memory_unit(&conn, profile, item, "k1");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
     // 让回忆块真的绑上记忆单元，这样「AI 不推进 FSRS」才是一个有意义的断言：
     // 如果绑定为空，FSRS 本来就不会被推进，测试会因为错误的原因通过。
     conn.execute(
@@ -1298,44 +1380,64 @@ fn verification_priority_matches_the_locked_order() {
 // ============================ §19 / §22：结果 → moment 类型的确定性推导 ============================
 
 /// 前端**不能**声明 moment 类型；它只能声明「结果是什么」。
-/// 类型由 (结果, 判定方式) 共同决定 —— 这是「AI 不能生成学习事实」的落点。
+///
+/// 类型由 `(ProtocolId, interaction_type, result, verification)` 共同推导 ——
+/// 这是「AI 不能生成学习事实」（§22）与 FIX B「成功 ≠ 回忆成功」的共同落点。
 #[test]
-fn moment_type_is_derived_from_result_and_verification_never_declared_by_the_client() {
-    use app_lib::training::types::moment_type_for_result;
-
-    // 权威判定（确定性 / 结构化）→ 结果如实映射
+fn moment_type_is_derived_from_protocol_result_and_verification() {
+    // ---- 回忆族：权威判定下结果如实映射 ----
     for authoritative in [
         VerificationMethod::Deterministic,
         VerificationMethod::Structured,
     ] {
         assert_eq!(
-            moment_type_for_result(Some(InteractionResult::Success), authoritative),
-            LearningMomentType::RecallSuccess
+            derive_moment_type(
+                Some(ProtocolId::FreeRecall),
+                "recall",
+                Some(InteractionResult::Success),
+                authoritative
+            ),
+            Some(LearningMomentType::RecallSuccess)
         );
         assert_eq!(
-            moment_type_for_result(Some(InteractionResult::Partial), authoritative),
-            LearningMomentType::RecallPartial
+            derive_moment_type(
+                Some(ProtocolId::FreeRecall),
+                "recall",
+                Some(InteractionResult::Partial),
+                authoritative
+            ),
+            Some(LearningMomentType::RecallPartial)
         );
         assert_eq!(
-            moment_type_for_result(Some(InteractionResult::Failure), authoritative),
-            LearningMomentType::RecallFailure
+            derive_moment_type(
+                Some(ProtocolId::FreeRecall),
+                "recall",
+                Some(InteractionResult::Failure),
+                authoritative
+            ),
+            Some(LearningMomentType::RecallFailure)
         );
     }
 
-    // 非权威判定（AI）→ 一律 attempt：AI 只能说「发生了一次尝试」
+    // ---- 非权威判定 → 一律 attempt ----
     for (result, why) in [
         (Some(InteractionResult::Success), "AI 判定的成功"),
         (Some(InteractionResult::Partial), "AI 判定的部分成功"),
         (Some(InteractionResult::Failure), "AI 判定的失败"),
     ] {
         assert_eq!(
-            moment_type_for_result(result, VerificationMethod::AiTutor),
-            LearningMomentType::RecallAttempt,
+            derive_moment_type(
+                Some(ProtocolId::FreeRecall),
+                "recall",
+                result,
+                VerificationMethod::AiTutor
+            ),
+            Some(LearningMomentType::RecallAttempt),
             "{why} 不得被记录成权威回忆结果（§22）"
         );
     }
 
-    // 未知（result = None）永远不是失败（§50）—— 无论谁来判定
+    // ---- 未知（result = None）永远不是失败（§50）—— 无论谁来判定 ----
     for v in [
         VerificationMethod::Deterministic,
         VerificationMethod::Structured,
@@ -1343,59 +1445,180 @@ fn moment_type_is_derived_from_result_and_verification_never_declared_by_the_cli
         VerificationMethod::AiTutor,
     ] {
         assert_eq!(
-            moment_type_for_result(None, v),
-            LearningMomentType::RecallAttempt,
+            derive_moment_type(Some(ProtocolId::FreeRecall), "recall", None, v),
+            Some(LearningMomentType::RecallAttempt),
             "unknown 必须落成 attempt，绝不落成 failure"
         );
     }
+
+    // ---- FIX B 的可执行证明：**同一个结果**，换个协议族就是另一种 moment ----
+    //
+    // 这一段正是 HOTFIX-01 要删除的那条假设的反面：
+    // 旧实现下 `Success` 永远等于 `RecallSuccess`。
+    for (protocol, interaction_type, expected, why) in [
+        (
+            ProtocolId::StandardPractice,
+            "practice",
+            LearningMomentType::PracticeSuccess,
+            "练习成功 ≠ 回忆成功",
+        ),
+        (
+            ProtocolId::TransferChallenge,
+            "transfer",
+            LearningMomentType::TransferSuccess,
+            "迁移成功 ≠ 回忆成功",
+        ),
+        (
+            ProtocolId::ExplainBack,
+            "explanation",
+            LearningMomentType::ExplanationSuccess,
+            "讲解成功是 ExplanationSuccess",
+        ),
+    ] {
+        assert_eq!(
+            derive_moment_type(
+                Some(protocol),
+                interaction_type,
+                Some(InteractionResult::Success),
+                VerificationMethod::Deterministic
+            ),
+            Some(expected),
+            "{why}"
+        );
+    }
+
+    // ---- FIX B3 / FIX M：**看**例题不产生任何学习成功证据 ----
+    assert_eq!(
+        derive_moment_type(
+            Some(ProtocolId::WorkedExample),
+            "example_view",
+            None,
+            VerificationMethod::Deterministic
+        ),
+        None,
+        "FIX B3：观看例题本身不得产生 moment（更不得产生 ExplanationSuccess）"
+    );
+
+    // ---- FIX B5：未核实过的「修正」不得签发 ErrorCorrected ----
+    assert_eq!(
+        derive_moment_type(
+            Some(ProtocolId::ErrorCorrection),
+            "error_corrected",
+            Some(InteractionResult::Success),
+            VerificationMethod::SelfCheck
+        ),
+        None,
+        "FIX B5：自检的修正不是「真实验证过的修正」"
+    );
+    assert_eq!(
+        derive_moment_type(
+            Some(ProtocolId::ErrorCorrection),
+            "error_corrected",
+            Some(InteractionResult::Success),
+            VerificationMethod::Deterministic
+        ),
+        Some(LearningMomentType::ErrorCorrected),
+        "FIX B5：真实验证过的修正才写 ErrorCorrected"
+    );
+
+    // ---- FIX B7：通用协议没有诚实的专属类型 → 只落交互行 ----
+    assert_eq!(
+        derive_moment_type(
+            Some(ProtocolId::CodingTrace),
+            "trace",
+            Some(InteractionResult::Success),
+            VerificationMethod::Deterministic
+        ),
+        None,
+        "FIX B7：不得为了凑一个类型而借用回忆语义"
+    );
 }
 
-/// `is_authoritative` 是 §22 的单一判据，必须只有 AI 一个例外。
+/// FIX A2：权威性是 `VerificationMethod` **自身**的属性。
+///
+/// 只有**真实执行过的**后端验证器（`Deterministic` / `Structured`）可以签发权威事实；
+/// 用户自检与 AI 语义评估都不行。
+///
+/// 这条断言取代了 PACK A 收口时的旧断言 `SelfCheck.is_authoritative() == true`
+/// —— HOTFIX-01 FIX A2 明确作废了那个语义。
 #[test]
-fn only_ai_tutor_is_non_authoritative() {
+fn only_real_executed_verifiers_are_authoritative() {
     assert!(VerificationMethod::Deterministic.is_authoritative());
     assert!(VerificationMethod::Structured.is_authoritative());
-    assert!(VerificationMethod::SelfCheck.is_authoritative());
+    assert!(
+        !VerificationMethod::SelfCheck.is_authoritative(),
+        "HOTFIX-01 FIX A2：SelfCheck 是**非**权威判定方式"
+    );
     assert!(
         !VerificationMethod::AiTutor.is_authoritative(),
         "§22：AI 是唯一不能签发权威学习事实的判定方式"
     );
 }
 
-/// 非权威来源在 runtime 层的**防御性后备**：即使调用方硬塞一个成功类 moment，
-/// 也必须被降级，而不是让整条交互写入失败。
+/// FIX A / FIX B：非权威提交**照常落库**，但落下来的绝不是成功类事实。
+///
+/// 这里刻意走**真实 runtime 路径**而不是只测纯函数：要证明的是数据库里
+/// 那条 moment 确实不是权威成功，而且 FSRS 确实没有被移动。
 #[test]
-fn the_runtime_downgrades_a_client_supplied_success_moment_from_a_non_authoritative_source() {
+fn a_non_authoritative_submission_cannot_write_a_success_fact() {
     let conn = setup();
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let unit = new_memory_unit(&conn, profile, item, "k1");
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
+    // 让回忆块真的绑上记忆单元：否则「不推进 FSRS」会因为「本来就没绑定」而通过，
+    // 测试就失去了意义。
+    conn.execute(
+        "UPDATE training_block_runs SET memory_unit_id = ?1 WHERE id = ?2",
+        params![unit, blocks[0]],
+    )
+    .unwrap();
 
-    // 刻意绕过命令层，直接塞 RecallSuccess + AiTutor
-    let mut params = interaction_params(
-        profile,
-        run_id,
-        blocks[0],
-        "ai-forced",
-        InteractionResult::Success,
-        VerificationMethod::AiTutor,
-    );
-    params.moment_type = LearningMomentType::RecallSuccess;
+    // 用户自检 + 声明成功。FIX A2 之后这**不是**权威结果。
+    let outcome = record_interaction(
+        &conn,
+        interaction_params(
+            profile,
+            run_id,
+            blocks[0],
+            "self-1",
+            InteractionResult::Success,
+            VerificationMethod::SelfCheck,
+        ),
+    )
+    .expect("非权威提交必须照常落库，而不是整条回滚");
 
-    let outcome = record_interaction(&conn, params).expect("必须成功降级，而不是整条回滚");
-
-    let stored: String = conn
+    let (quality, moment_type): (String, String) = conn
         .query_row(
-            "SELECT moment_type FROM learning_moments WHERE profile_id = ?1",
+            "SELECT evidence_quality, moment_type FROM learning_moments WHERE profile_id = ?1",
             params![profile],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
+
     assert_eq!(
-        stored, "recall_attempt",
-        "后备防线：非权威来源的成功类 moment 必须被降级"
+        quality, "medium",
+        "FIX A3：SelfCheck 的证据质量上限是 MEDIUM，永远不是 HIGH"
     );
-    assert!(!outcome.effect.fsrs_applied, "降级后不得推进 FSRS");
+    assert_eq!(
+        moment_type, "recall_attempt",
+        "FIX A2：自检不得写出成功类 moment"
+    );
+    assert!(!outcome.effect.fsrs_applied, "FIX A3：自检不得推进 FSRS");
+    assert_eq!(
+        outcome.effect.fsrs_skip_reason.as_deref(),
+        Some("source_is_non_authoritative"),
+        "跳过原因必须说明是「来源不权威」"
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM memory_reviews WHERE profile_id = ?1",
+            profile
+        ),
+        0,
+        "FIX A3：自检不得留下任何 memory_review"
+    );
 }
 
 // ============================ §15：重放绝不伪造「什么都没发生」 ============================
@@ -1413,7 +1636,7 @@ fn a_replay_never_fabricates_an_empty_effect_summary() {
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
     new_memory_unit(&conn, profile, item, "k1");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     let params = interaction_params(
         profile,
@@ -1478,7 +1701,7 @@ fn a_healthy_replay_returns_the_original_effect_verbatim() {
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
     new_memory_unit(&conn, profile, item, "k1");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     let params = interaction_params(
         profile,
@@ -1626,7 +1849,7 @@ fn the_database_itself_refuses_a_reused_client_action_id() {
     let profile = create_profile(&conn, "档案A");
     let item = create_item(&conn, profile, "学习项");
     new_memory_unit(&conn, profile, item, "k1");
-    let (run_id, blocks) = create_run(&conn, profile, item);
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
 
     let params = interaction_params(
         profile,

@@ -22,12 +22,24 @@
 //! （违反 V1.2 契约）。因此这里保持两个类型，并在**唯一一个显式函数**里做桥接，
 //! 而不是散落各处的隐式转换。
 //!
-//! # 桥接是 PROVISIONAL 的
+//! # 桥接是 OWNER 批准的**临时协议适配器**
 //!
 //! 见 [`LearningDomain::to_protocol_domain`]。`programming` 在协议注册表中
 //! 没有对应值 —— 这是 §6 词表与 V1.2 注册表之间一个**真实存在的落差**，
-//! 不是实现疏漏。本文件用一条单点、可审计、可替换的映射临时跨过它，
-//! 并在 PACK A 账本中标记为待 Owner 确认项。executor 不擅自扩张协议注册表。
+//! 不是实现疏漏。HOTFIX-01 FIX I 已由 Owner 明确批准：Real Learning Engine V1
+//! 期间，`LearningDomain::Programming` **临时复用**现成的编码类协议族
+//! （即 `ProtocolDomain::ComputerScience408`）。
+//!
+//! 这个批准**只**覆盖「协议选择」，不覆盖任何语义等同：
+//!
+//! ```text
+//! Programming != CS408
+//! Programming mastery != CS408 mastery
+//! Programming goal != CS408 goal
+//! ```
+//!
+//! 存储侧始终是 `programming`（§6 schema 未变），协议注册表也**不**扩张。
+//! 一旦 Owner 给注册表补上编程专属协议，本函数是**唯一**需要改的地方。
 
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +95,7 @@ impl LearningDomain {
         }
     }
 
-    /// 领域 → 协议选择词表的桥接。**PROVISIONAL：待 Owner 确认。**
+    /// 领域 → 协议选择词表的桥接。**OWNER 批准的临时协议适配器（FIX I）。**
     ///
     /// 四个同名值直接对应。`programming` 在 V1.2 协议注册表中不存在，
     /// 这里映射到 [`ProtocolDomain::ComputerScience408`]，依据是**可核验的**：
@@ -92,9 +104,20 @@ impl LearningDomain {
     /// 作为领域（`independent_build` 另加 `generic`）。也就是说，
     /// 「编程」这一语义在协议层此刻**确实**由 CS408 承载。
     ///
-    /// 之所以仍然标记为 PROVISIONAL：一旦 Owner 决定给 `ProtocolDomain`
-    /// 增加 `Programming`，或给注册表补充编程专属协议，本函数就是**唯一**需要改的地方。
-    /// 在此之前的任何行为，都不得被当作「编程领域已有专属协议」来解读。
+    /// # 这个映射**不**声称任何语义等同（FIX I）
+    ///
+    /// ```text
+    /// Programming != CS408
+    /// Programming mastery != CS408 mastery
+    /// Programming goal != CS408 goal
+    /// ```
+    ///
+    /// 它只是一个**协议适配器**：让编程领域的学习也能拿到一套可执行的训练协议。
+    /// 存储侧（`learning_items.domain` / `goals.domain` / 意图 domain）始终写
+    /// `programming`，协议注册表**不**扩张，掌握度也仍然按各自的记忆单元计算。
+    ///
+    /// 因此这里不再有「待 Owner 确认」的状态 —— Owner 已批准（HOTFIX-01 FIX I），
+    /// 且批准的范围恰好就是「临时复用现有协议族」。
     pub fn to_protocol_domain(self) -> ProtocolDomain {
         match self {
             Self::Generic => ProtocolDomain::Generic,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  createTrainingRunForItem,
   endSession,
   getGoalTree,
   getLearningState,
@@ -133,6 +134,13 @@ function Today() {
   const [dismissedReview, setDismissedReview] = useState(false);
   const [starting, setStarting] = useState(false);
   const [actionError, setActionError] = useState("");
+  /**
+   * HOTFIX-01 FIX G：Hero 主 CTA 的**非错误**提示。
+   *
+   * 「没选时长」「编排不出计划」都不是失败，而是「现在还不能开始，缺的是 X」。
+   * 把它们塞进 `actionError` 会变成红色报错，那是在谎报严重性（§50）。
+   */
+  const [heroHint, setHeroHint] = useState("");
   /** §24 Hero 次 CTA「我有自己的计划」→ DIRECT 起点选择面（用户自选目标，Higher 不替换） */
   const [choiceOpen, setChoiceOpen] = useState(false);
   /** §24 legacy 详情折叠区（默认收起；桌面专属 <details>，内容始终留在 DOM 中） */
@@ -292,6 +300,11 @@ function Today() {
     setAltIdx(0);
   }, [budget, action?.reason_code, action?.title]);
 
+  // FIX G：用户真的选了时长之后，「先选一个时长」这条提示就过期了 —— 必须撤掉。
+  useEffect(() => {
+    setHeroHint("");
+  }, [budget]);
+
   const active = snapshot?.active_session ?? null;
   const tasks = snapshot?.today_tasks ?? [];
   const activities = snapshot?.today_activities ?? [];
@@ -441,27 +454,65 @@ function Today() {
     }
   }
 
+  /** 把注意力交给时间档选择器（3m / 10m / 25m 就在 Primary Next Action 卡上）。 */
+  function focusBudgetPicker() {
+    const el = document.getElementById("primary-next-action");
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+
   /**
-   * §24 Hero 主 CTA「按我的状态安排 →」。
+   * HOTFIX-01 FIX G —— §24 Hero 主 CTA「按我的状态安排 →」必须进入**真实训练**。
    *
-   * 只做「把后端计划接到**既有**启动路径」这一件事：
-   * ① 计划存在明确的 learning_item 锚点 → 走既有 `startSession`（含 Start Guard 冲突守卫）；
-   * ② 其余情况 → **不臆造**任何后端不支持的 StudySession 类型，只把注意力交给
-   *    TrainingPlanStrip 的首个可执行块（§24 明确要求的行为）。
+   * ```text
+   * coach.plan 存在 AND 真实 available_minutes > 0
+   *   → createTrainingRunForItem(...)
+   *   → navigate(`/train/${trainingRunId}`)
+   * ```
+   *
+   * 三条被 HOTFIX-01 明确锁定的纪律：
+   *
+   * ① **不先建 legacy StudySession**。过去这里调 `startSession(anchor)` 再跳 `/learn/:id`，
+   *    于是「按我的状态安排」永远进不了 Real Learning Engine —— 认知计划被编排出来，
+   *    却没有任何一条产品路径真的去执行它。StudySession 的创建与绑定由
+   *    TrainingRuntime 在**同一个事务**里完成，不由前端先建一条。
+   * ② **没有真实时长就不编造**。后端对 `available_minutes = None` 会返回
+   *    `NO_AVAILABLE_MINUTES`（§36），所以前端也不许猜一个默认值；
+   *    正确的行为是把用户带到时长选择处。
+   * ③ **没有可执行计划就不臆造**。此时只把注意力交给计划条，不生成任何假计划。
+   *
+   * legacy `/learn` 仍然有效（快速学习 / 手动自由学习 / 既有显式学习流），
+   * 只是不再承载这条认知计划的主入口。
    */
   async function handlePrimaryArrange() {
     if (profileId == null || starting) return;
-    const anchor = coach?.plan?.target_learning_item_id ?? null;
-    if (anchor == null) {
+
+    // ② 先要一个**真实**的时长。`budgetMinutes` 只在用户真的选过档位时才非空。
+    const minutes = budgetMinutes;
+    if (minutes == null || minutes <= 0) {
+      setHeroHint(
+        "先选一个真实的可用时长（3 / 10 / 25 分钟）—— Higher 不会替你编一个时长。"
+      );
+      focusBudgetPicker();
+      return;
+    }
+
+    // ③ 有真实时长但后端编排不出可执行计划 → 诚实兜底，不造计划。
+    if (!coach?.plan) {
+      setHeroHint("现在编排不出可执行的训练计划。可以先按自己的节奏选一件事做。");
       focusFirstPlanBlock();
       return;
     }
+
     setStarting(true);
     setActionError("");
+    setHeroHint("");
     try {
-      const s = await startSession(anchor);
+      // ① 直接创建真实训练；**不**先建 legacy StudySession。
+      const created = await createTrainingRunForItem(profileId, minutes);
       invalidateClosedLoop();
-      navigate(`/learn/${s.id}`);
+      navigate(`/train/${created.run.id}`);
     } catch (e) {
       if (guard(e)) return;
       setActionError(String(e));
@@ -609,6 +660,14 @@ function Today() {
               </div>
             )}
           </div>
+
+          {/* HOTFIX-01 FIX G：主 CTA 的非错误提示（缺时长 / 编排不出计划）。
+              刻意不用 alert--error：那两件事都不是失败，红色报错会谎报严重性。 */}
+          {heroHint && (
+            <p className="hc-today__hint" role="status">
+              {heroHint}
+            </p>
+          )}
 
           {/* §24 次 CTA「我有自己的计划」→ DIRECT：用户自选起点，Higher 绝不替换目标 */}
           {choiceOpen && (

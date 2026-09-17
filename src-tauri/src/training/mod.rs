@@ -35,18 +35,19 @@ pub use completion::{
     evaluate_completion, CompletionDecision, CompletionFacts, ALL_COMPLETION_RULE_KINDS,
 };
 pub use runtime::{
-    advance_training_block, complete_training_run, create_training_run, find_open_training_run,
-    get_training_run, list_block_runs, list_interactions, record_interaction,
-    resolve_recall_memory_unit, start_training_block, training_source_id, transition_training_run,
-    try_complete_training_block, AdvanceBlockParams, BlockAdvanceOutcome, CreateTrainingRunParams,
-    InteractionOutcome, RecordInteractionParams, TryCompleteBlockParams, TRAINING_SOURCE_PREFIX,
+    abandon_training_run, advance_training_block, block_is_current_active, complete_training_run,
+    create_training_run, find_open_training_run, get_training_run, list_block_runs,
+    list_interactions, record_interaction, resolve_recall_memory_unit, start_training_block,
+    start_training_run, training_source_id, transition_training_run, try_complete_training_block,
+    AdvanceBlockParams, BlockAdvanceOutcome, CreateTrainingRunParams, InteractionOutcome,
+    RecordInteractionParams, TryCompleteBlockParams, TRAINING_SOURCE_PREFIX,
 };
 pub use start::{load_training_session, start_training_for_item, TrainingSessionView};
 pub use types::{
-    is_legal_block_transition, is_legal_run_transition, is_recall_compatible, is_recall_moment,
-    moment_type_for_result, transition_block_status, transition_run_status,
-    validate_block_invariant, BlockAdvanceIntent, BlockProgression, EffectSummary,
-    InteractionResult, TrainingBlockRun, TrainingBlockStatus, TrainingError, TrainingErrorCode,
-    TrainingInteraction, TrainingRun, TrainingRunStatus, VerificationMethod,
-    LEGAL_BLOCK_TRANSITIONS, LEGAL_RUN_TRANSITIONS, RECALL_COMPATIBLE_PROTOCOLS,
+    derive_moment_type, is_legal_block_transition, is_legal_run_transition, is_recall_compatible,
+    is_recall_moment, transition_block_status, transition_run_status, validate_block_invariant,
+    BlockAdvanceIntent, BlockProgression, EffectSummary, InteractionResult, TrainingBlockRun,
+    TrainingBlockStatus, TrainingError, TrainingErrorCode, TrainingInteraction, TrainingRun,
+    TrainingRunStatus, VerificationMethod, FSRS_SKIP_NO_MOMENT, LEGAL_BLOCK_TRANSITIONS,
+    LEGAL_RUN_TRANSITIONS, RECALL_COMPATIBLE_PROTOCOLS,
 };

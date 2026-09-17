@@ -47,7 +47,7 @@ use app_lib::training::completion::{
 };
 use app_lib::training::runtime::{
     advance_training_block, block_completion_state, complete_training_run, create_training_run,
-    record_interaction, start_training_block, transition_training_run, try_complete_training_block,
+    record_interaction, start_training_run, transition_training_run, try_complete_training_block,
     AdvanceBlockParams, CreateTrainingRunParams, RecordInteractionParams, TryCompleteBlockParams,
 };
 use app_lib::training::types::{
@@ -124,6 +124,15 @@ fn create_run_with(
     (run.id, blocks.iter().map(|b| b.id).collect())
 }
 
+/// 启动训练（FIX D）：`Ready → Active`，并把 ordinal 最小的 pending 块置为 active。
+///
+/// HOTFIX-01 FIX C 之后，`record_interaction` 只接受**当前活跃块**。
+/// 因此凡是「要往块里写交互事实」的用例，都必须先真的把这次训练开起来 ——
+/// 而不是像以前那样，对一个尚未开始的块直接提交。
+fn start_run(conn: &Connection, profile_id: i64, run_id: i64) {
+    start_training_run(conn, profile_id, run_id).unwrap();
+}
+
 #[allow(clippy::too_many_arguments)]
 fn record(
     conn: &Connection,
@@ -133,7 +142,6 @@ fn record(
     action_id: &str,
     interaction_type: &str,
     result: Option<InteractionResult>,
-    moment_type: LearningMomentType,
 ) {
     record_interaction(
         conn,
@@ -148,7 +156,6 @@ fn record(
             hint_level: None,
             result,
             verification: VerificationMethod::Deterministic,
-            moment_type,
             occurred_at: Some(NOW.to_string()),
         },
     )
@@ -441,6 +448,7 @@ fn pa_close_16_error_correction_corrected_path_completes() {
         item,
         vec![block(1, ProtocolId::ErrorCorrection, 10)],
     );
+    start_run(&conn, profile, run_id);
 
     record(
         &conn,
@@ -450,7 +458,6 @@ fn pa_close_16_error_correction_corrected_path_completes() {
         "a-1",
         IT_ERROR_DETECTED,
         None,
-        LearningMomentType::ErrorDetected,
     );
     record(
         &conn,
@@ -460,7 +467,6 @@ fn pa_close_16_error_correction_corrected_path_completes() {
         "a-2",
         IT_ERROR_CORRECTED,
         None,
-        LearningMomentType::ErrorCorrected,
     );
 
     assert!(
@@ -501,6 +507,8 @@ fn pa_close_17_error_correction_user_stop_is_not_correction() {
         vec![block(1, ProtocolId::ErrorCorrection, 10)],
     );
 
+    start_run(&conn, profile, run_id);
+
     // 只发现了错误，没有修正。
     record(
         &conn,
@@ -510,7 +518,6 @@ fn pa_close_17_error_correction_user_stop_is_not_correction() {
         "a-1",
         IT_ERROR_DETECTED,
         None,
-        LearningMomentType::ErrorDetected,
     );
 
     // 规则自己**不**满足：不能靠停止冒充修正。
@@ -646,6 +653,7 @@ fn pa_close_19_generic_fallback_uses_its_own_frozen_rule() {
         item,
         vec![block(1, ProtocolId::TranslationGuided, 10)],
     );
+    start_run(&conn, profile, run_id);
 
     // (1) 原始 protocol_id / completion_rule 被保留（D19）。
     let state = block_completion_state(&conn, profile, run_id, blocks[0], None).unwrap();
@@ -664,7 +672,6 @@ fn pa_close_19_generic_fallback_uses_its_own_frozen_rule() {
         "g-1",
         IT_RECALL,
         Some(InteractionResult::Success),
-        LearningMomentType::RecallSuccess,
     );
     let after_recall = try_complete_training_block(
         &conn,
@@ -690,7 +697,6 @@ fn pa_close_19_generic_fallback_uses_its_own_frozen_rule() {
         "g-2",
         IT_TRANSLATION,
         Some(InteractionResult::Success),
-        LearningMomentType::PracticeSuccess,
     );
     let out = try_complete_training_block(
         &conn,
@@ -784,8 +790,15 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
         let profile = create_profile(&conn, "p");
         let item = create_item(&conn, profile, "专项协议");
         let (run_id, blocks) = create_run_with(&conn, profile, item, vec![block(1, *pid, 10)]);
+        // HOTFIX-01 FIX C：交互只能写进当前活跃块，所以先把这次训练真的开起来。
+        start_run(&conn, profile, run_id);
 
         // 喂入该协议自己冻结规则「足以满足」的持久化事实。
+        //
+        // 注意：这里**不再**声明 moment 类型（FIX B）。后端按
+        // `(ProtocolId, interaction_type, result, verification)` 自行推导 ——
+        // 例如 `example_view` 在 FIX B3 下不产生任何 moment，
+        // 而 `explanation + success` 才产生 `explanation_success`。
         match pid {
             ProtocolId::FreeRecall | ProtocolId::CuedRecall => {
                 record(
@@ -796,7 +809,6 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
                     "a1",
                     IT_RECALL,
                     Some(InteractionResult::Success),
-                    LearningMomentType::RecallSuccess,
                 );
             }
             ProtocolId::WorkedExample | ProtocolId::FadedExample => {
@@ -808,7 +820,6 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
                     "a1",
                     IT_EXAMPLE_VIEW,
                     None,
-                    LearningMomentType::ExplanationAttempt,
                 );
                 record(
                     &conn,
@@ -818,7 +829,6 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
                     "a2",
                     IT_EXPLANATION,
                     Some(InteractionResult::Success),
-                    LearningMomentType::ExplanationSuccess,
                 );
             }
             ProtocolId::StandardPractice => {
@@ -830,7 +840,6 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
                     "a1",
                     IT_PRACTICE,
                     Some(InteractionResult::Success),
-                    LearningMomentType::PracticeSuccess,
                 );
             }
             ProtocolId::ErrorCorrection => {
@@ -842,7 +851,6 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
                     "a1",
                     IT_ERROR_DETECTED,
                     None,
-                    LearningMomentType::ErrorDetected,
                 );
                 record(
                     &conn,
@@ -852,7 +860,6 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
                     "a2",
                     IT_ERROR_CORRECTED,
                     None,
-                    LearningMomentType::ErrorCorrected,
                 );
             }
             ProtocolId::ExplainBack => {
@@ -864,7 +871,6 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
                     "a1",
                     IT_EXPLANATION,
                     Some(InteractionResult::Success),
-                    LearningMomentType::ExplanationSuccess,
                 );
             }
             ProtocolId::TransferChallenge => {
@@ -876,7 +882,6 @@ fn pa_close_01_backend_evaluator_drives_eight_specialized_protocols() {
                     "a1",
                     IT_TRANSFER,
                     Some(InteractionResult::Success),
-                    LearningMomentType::TransferSuccess,
                 );
             }
             _ => unreachable!(),
@@ -973,7 +978,8 @@ fn pa_close_03_training_run_progression_advances_block_ordinal() {
         ],
     );
 
-    start_training_block(&conn, profile, run_id, blocks[0]).unwrap();
+    // FIX D/E：启动训练即把第一个块置为 active 且成为当前块。
+    start_run(&conn, profile, run_id);
     let out = advance_training_block(
         &conn,
         AdvanceBlockParams {
@@ -1057,6 +1063,7 @@ fn pa_close_05_generic_fallback_preserves_own_rule_and_routes_through_backend() 
         item,
         vec![block(1, ProtocolId::Recognition, 10)],
     );
+    start_run(&conn, profile, run_id);
 
     let state = block_completion_state(&conn, profile, run_id, blocks[0], None).unwrap();
     assert_eq!(
@@ -1074,7 +1081,6 @@ fn pa_close_05_generic_fallback_preserves_own_rule_and_routes_through_backend() 
         "g1",
         IT_RECOGNITION,
         Some(InteractionResult::Success),
-        LearningMomentType::RecallSuccess,
     );
     let out = try_complete_training_block(
         &conn,
@@ -1202,6 +1208,7 @@ fn pa_close_08_user_stop_is_not_correction_success() {
         item,
         vec![block(1, ProtocolId::ErrorCorrection, 10)],
     );
+    start_run(&conn, profile, run_id);
 
     // 只发现了错误，没有修正。
     record(
@@ -1212,7 +1219,6 @@ fn pa_close_08_user_stop_is_not_correction_success() {
         "a1",
         IT_ERROR_DETECTED,
         None,
-        LearningMomentType::ErrorDetected,
     );
 
     let out = advance_training_block(
@@ -1248,9 +1254,13 @@ fn pa_close_09_break_block_produces_zero_learning_facts() {
         &conn,
         profile,
         item,
-        vec![block(1, ProtocolId::FreeRecall, 5), break_block(2, 5)],
+        vec![break_block(1, 5), block(2, ProtocolId::FreeRecall, 5)],
     );
-    let break_id = blocks[1];
+    // FIX C 之后交互只能写进「当前活跃块」，所以把休息块排在计划首位，
+    // `start_training_run` 就会直接把它置为 active —— 与训练套件里
+    // `a_break_block_never_advances_fsrs` 采用同一手法。
+    let break_id = blocks[0];
+    start_run(&conn, profile, run_id);
     let before = count_moments(&conn, profile);
 
     let outcome = record_interaction(
@@ -1266,7 +1276,6 @@ fn pa_close_09_break_block_produces_zero_learning_facts() {
             hint_level: None,
             result: Some(InteractionResult::Success),
             verification: VerificationMethod::Deterministic,
-            moment_type: LearningMomentType::RecallSuccess,
             occurred_at: Some(NOW.to_string()),
         },
     )
@@ -1416,6 +1425,7 @@ fn pa_close_12_network_retry_does_not_advance_twice() {
         item,
         vec![block(1, ProtocolId::FreeRecall, 10)],
     );
+    start_run(&conn, profile, run_id);
     let before = count_moments(&conn, profile);
 
     // 第一次提交（含一次 recall 成功）。
@@ -1432,7 +1442,6 @@ fn pa_close_12_network_retry_does_not_advance_twice() {
             hint_level: None,
             result: Some(InteractionResult::Success),
             verification: VerificationMethod::Deterministic,
-            moment_type: LearningMomentType::RecallSuccess,
             occurred_at: Some(NOW.to_string()),
         },
     )
@@ -1453,7 +1462,6 @@ fn pa_close_12_network_retry_does_not_advance_twice() {
             hint_level: None,
             result: Some(InteractionResult::Success),
             verification: VerificationMethod::Deterministic,
-            moment_type: LearningMomentType::RecallSuccess,
             occurred_at: Some(NOW.to_string()),
         },
     )

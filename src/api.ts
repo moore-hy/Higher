@@ -94,7 +94,8 @@ import type {
   TrainingRun,
   TrainingRunStatus,
   TrainingSessionView,
-  VerificationMethod,
+  // HOTFIX-01 FIX H —— Command Bar 确定性意图捕获
+  IntentCaptureOutcome,
 } from "./types";
 
 // ---- DB ----
@@ -2534,13 +2535,19 @@ export const deleteCanvasEmbed = (profileId: number, id: number) =>
 // ============================================================================
 // REAL LEARNING ENGINE V1 · W4 —— TrainingExperience
 //
-// 全部通过本模块访问，前端组件不直接 invoke。三个纪律：
+// 全部通过本模块访问，前端组件不直接 invoke。四个纪律：
 //
 // - **计划不由前端编排**：`createTrainingRunForItem` 只接受「学多久」，
 //   协议选择 / 块编排 / 时长分配全部由后端确定性完成（§19）。
 // - **幂等键由前端生成一次**：`clientActionId` 为每一次用户动作生成一次，
 //   网络重试必须**复用同一个值**，否则会留下第二个学习事实（§13 / §15）。
-// - **`momentType` 不由前端声明**：后端从 (结果, 判定方式) 确定性推导（§22）。
+// - **`momentType` 不由前端声明**：后端从
+//   (ProtocolId, interactionType, result, verification) 确定性推导
+//   （HOTFIX-01 FIX B）—— 这里连一个可以传的字段都没有。
+// - **`verification` 不由前端选择**（HOTFIX-01 FIX A1）：
+//   手工前端提交在命令层被固定为 `SelfCheck`。前端**没有**参数可以把自己
+//   提升为 `Deterministic` / `Structured` / `AiTutor` 权威 ——
+//   这不是「传了会被覆盖」，而是结构上就传不进来。
 // ============================================================================
 
 /**
@@ -2566,6 +2573,14 @@ export const getTrainingSession = (profileId: number, trainingRunId: number) =>
  * `clientActionId` 由调用方为**这一次用户动作**生成一次；重试必须复用。
  * 命中幂等键 → 原样返回既有结果（`replayed: true`），不产生第二个学习事实；
  * 同一个键配上不同 payload → `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD`。
+ *
+ * HOTFIX-01 FIX A1：**没有** `verification` 参数。手工前端提交在命令层被固定为
+ * `SelfCheck`（非权威），因此 `Deterministic` / `Structured` / `AiTutor` 都不可能
+ * 由前端授予自己。想看到这次判定方式，读返回的 `effect.verification`。
+ *
+ * HOTFIX-01 FIX C：只有**当前进行中的块**才能写入事实。对一个 Pending /
+ * Completed / Skipped / 非当前块提交 → `TRAINING_BLOCK_NOT_CURRENT_ACTIVE`，
+ * 且后端在写任何东西之前就结束了事务。
  */
 export const recordTrainingInteraction = (args: {
   profileId: number;
@@ -2577,7 +2592,6 @@ export const recordTrainingInteraction = (args: {
   promptText?: string | null;
   hintLevel?: number | null;
   result?: InteractionResult | null;
-  verification: VerificationMethod;
   occurredAt?: string | null;
 }) =>
   invoke<InteractionOutcome>("record_training_interaction", {
@@ -2590,9 +2604,24 @@ export const recordTrainingInteraction = (args: {
     promptText: args.promptText ?? null,
     hintLevel: args.hintLevel ?? null,
     result: args.result ?? null,
-    verification: args.verification,
     occurredAt: args.occurredAt ?? null,
   });
+
+/**
+ * HOTFIX-01 FIX D：**初始启动**一次训练（原子）。
+ *
+ * ```text
+ * Ready → Active
+ * 第一个 pending 块 → Active（started_at = 真正的开始时刻）
+ * current_block_ordinal = 第一个块的 ordinal
+ * ```
+ *
+ * 这不是「通用状态推进」：`transitionTrainingRun(..., "active")` 仍然存在，
+ * 但它不是初始启动的路径 —— 初始启动必须同时激活第一个块并开始计时。
+ * 没有块 → `TRAINING_RUN_HAS_NO_BLOCKS`。
+ */
+export const startTrainingRun = (profileId: number, trainingRunId: number) =>
+  invoke<TrainingRun>("start_training_run", { profileId, trainingRunId });
 
 /** §9：推进 run 状态。非法迁移返回 typed error，而不是被静默改成合法值。 */
 export const transitionTrainingRun = (
@@ -2604,6 +2633,16 @@ export const transitionTrainingRun = (
 /** §20：原子完成一次训练（结束 StudySession 与 run 在同一个事务内）。 */
 export const completeTrainingRun = (profileId: number, trainingRunId: number) =>
   invoke<TrainingRun>("complete_training_run", { profileId, trainingRunId });
+
+/**
+ * HOTFIX-01 FIX F2：提前结束一次训练（原子）。
+ *
+ * 剩余 Pending / Active 块 → `Skipped`，StudySession 终结，run → `Abandoned`，
+ * `current_block_ordinal` 归零。**不**产生任何成功证据，也**不**推进 FSRS ——
+ * 「我不学了」是一条关于时间的事实，不是关于学会了什么的事实（§50）。
+ */
+export const abandonTrainingRun = (profileId: number, trainingRunId: number) =>
+  invoke<TrainingRun>("abandon_training_run", { profileId, trainingRunId });
 
 /**
  * 激活一个块（写入 `started_at`，成为当前块）。
@@ -2654,3 +2693,28 @@ export const tryCompleteTrainingBlock = (args: {
     blockRunId: args.blockRunId,
     elapsedMinutes: args.elapsedMinutes ?? null,
   });
+
+// ============================================================================
+// HOTFIX-01 FIX H —— Command Bar 的确定性意图捕获
+// ============================================================================
+
+/**
+ * 把用户刚提交的一句话交给**确定性**意图捕获（纯函数 + 最多一次 intent 写入）。
+ *
+ * 它只会产出三种结果：
+ *
+ * ```text
+ * mode = null                → 没有捕获到任何当前学习意图（不写）
+ * mode = "autopilot"         → 「你来安排」这类显式授权
+ * mode = "copilot" + domain  → 领域 + 当前学习意图动词
+ * ```
+ *
+ * 三条纪律（FIX H）：
+ * - **保守优先**：拿不准一律**不写**（宁可漏，不可错 —— 假阳性会被当成高优先级决策输入）；
+ * - **不做推断**：HOTFIX-01 **不**从自由文本推断 `Direct`；
+ * - **零学习事实**：它**不**产生 LearningMoment / Evidence，也**不**改变掌握度。
+ *
+ * 返回的 `reason` 是稳定原因码，用于解释「为什么没写」，而不是让界面猜。
+ */
+export const captureLearningIntentFromText = (profileId: number, text: string) =>
+  invoke<IntentCaptureOutcome>("capture_learning_intent_from_text", { profileId, text });

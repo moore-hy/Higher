@@ -305,6 +305,11 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             start_training_block,
             advance_training_block,
             try_complete_training_block,
+            // PACK A POST-PUSH AUDIT HOTFIX-01 —— 启动与提前结束（FIX D / FIX F2）
+            start_training_run,
+            abandon_training_run,
+            // PACK A POST-PUSH AUDIT HOTFIX-01 —— 命令栏主动意图捕获（FIX H）
+            crate::commands::learning_intent::capture_learning_intent_from_text,
             // HIGHER DAILY EXPERIENCE V1 §PHASE 3 / §PHASE 4
             record_micro_action,
             // HIGHER 1.0 §M1-A 有限 Learning Pack
