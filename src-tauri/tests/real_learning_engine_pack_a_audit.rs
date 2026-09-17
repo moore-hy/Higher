@@ -53,6 +53,8 @@
 //! A28  PACK B / W5 未被触碰
 //! A29  「我不想学数学」→ 不写意图（LOCK 3 / H5）
 //! A30  「我数学学得很差」→ 不写意图、零证据（LOCK 3 / H6）
+//! A31  通用「看」求助不产生学习意图（NIGHT SHIFT O2 · M0 · O2-01）
+//! A32  显式学习陈述仍产生预期意图（NIGHT SHIFT O2 · M0 · O2-02）
 //! ```
 //!
 //! 运行：
@@ -63,7 +65,8 @@ use std::path::{Path, PathBuf};
 
 use app_lib::cognitive::decision::DecisionMode;
 use app_lib::cognitive::intent_capture::{
-    capture_intent, CapturedIntent, REASON_NEGATION, REASON_NOT_CURRENT_INTENT,
+    capture_intent, CapturedIntent, REASON_ASSISTANCE_NOT_INTENT, REASON_NEGATION,
+    REASON_NOT_CURRENT_INTENT,
 };
 use app_lib::cognitive::learning_domain::LearningDomain;
 use app_lib::cognitive::learning_moment::{EvidenceQuality, LearningMomentType, ALL_MOMENT_TYPES};
@@ -1716,14 +1719,16 @@ fn audit_a19_you_arrange_maps_to_autopilot() {
 
 /// A20 —— 无关闲聊 → **不写** ActiveLearningIntent。
 ///
-/// # 这条门的边界（刻意写清楚，避免它被读成比实际更宽的保证）
+/// # 这条门的边界（O2 M0 之后已收窄，措辞随之更新）
 ///
-/// 它锁的是**与学习无关**的话。一条同时含有领域词与学习动词的请求
-/// （例如「帮我看看这段代码为什么报错」→ `Copilot(Programming)`）
-/// 是规则链**有意**命中的：它确实在谈论编程。H3 + H4 只要求
-/// 「领域词 + 当前学习意图动词」，并没有要求意图必须是显式的「我想学 X」。
-/// 把这种边界情形写进断言，只会让审计门替 OWNER 改语义 —— 那正是
-/// HOTFIX-01 明令禁止的事。因此这里只断言**无关**文本。
+/// 它锁的是**与学习无关**的话。收窄之前，一条同时含有领域词与学习动词的
+/// 求助请求（例如「帮我看看这段代码为什么报错」）会被规则链命中为
+/// `Copilot(Programming)`；O2 M0 判定那是**误判**（用户在求助排障，
+/// 不是在说「我现在想学编程」），因此 `看` 已从动词表移除，
+/// 并新增通用求助守卫。
+///
+/// 求助类文本的边界现在由 A31 / A32（O2-01 / O2-02）单独锁定；
+/// 本门仍然只断言**无关**文本。
 #[test]
 fn audit_a20_ambiguous_unrelated_chat_writes_no_active_learning_intent() {
     let conn = setup();
@@ -2398,4 +2403,125 @@ fn audit_a30_ability_statement_writes_no_intent_evidence_or_moment() {
             "A30：「{other}」是能力 / 历史陈述，不得被当成当前意图"
         );
     }
+}
+
+// ============================ AUDIT-A31 (O2-01) ============================
+
+/// A31 / **O2-01** —— 通用「看」求助**不产生**学习意图。
+///
+/// O2 M0 的收窄目标。收窄前 `看` 与 `学` 并列在动词表里，于是
+/// 「帮我看看这段代码为什么报错」会因为「含领域词 `代码` + 含动词 `看`」
+/// 被判成 `COPILOT + Programming` —— 用户只是在求助排障，
+/// 应用却会开始给他安排编程训练。
+///
+/// 本门锁定两件事：
+/// 1. §11 的 MUST-NOT 清单**全部**不产生意图（纯函数层 + 落库层）；
+/// 2. 原因码是**明确**的 [`REASON_ASSISTANCE_NOT_INTENT`]，而不是笼统的「没命中」。
+#[test]
+fn audit_a31_o2_01_generic_assistance_request_creates_no_learning_intent() {
+    let conn = setup();
+    let profile = create_profile(&conn, "A31");
+
+    // O2 §11 逐字给出的 MUST-NOT 清单。
+    for text in [
+        "帮我看看这段代码为什么报错",
+        "帮我改一下 Python 代码",
+        "这道数学题为什么错了",
+        "解释一下这个算法",
+        "帮我看看英语翻译",
+        "我不想学数学",
+        "我数学学得很差",
+        "我以前一直在学英语",
+    ] {
+        let capture = capture_intent(text);
+        assert_eq!(
+            capture.intent, None,
+            "O2-01：「{text}」是求助 / 陈述，不得被当成学习意图"
+        );
+
+        let outcome = capture_and_store(&conn, profile, text).unwrap();
+        assert!(
+            !outcome.wrote_intent,
+            "O2-01：「{text}」不得写入 ActiveLearningIntent（false positive 是禁止的）"
+        );
+        assert_eq!(outcome.mode, None, "O2-01：「{text}」不得产生 mode");
+        assert_eq!(outcome.domain, None, "O2-01：「{text}」不得产生 domain");
+    }
+
+    // 纯求助类（无否定 / 无历史陈述）必须落到**专用**原因码上。
+    for text in [
+        "帮我看看这段代码为什么报错",
+        "帮我看看英语翻译",
+        "解释一下这个算法",
+        "帮我调试一下 Python",
+    ] {
+        assert_eq!(
+            capture_intent(text).reason,
+            REASON_ASSISTANCE_NOT_INTENT,
+            "O2-01：「{text}」必须落到 generic_assistance_request_is_not_learning_intent"
+        );
+    }
+
+    assert!(
+        ActiveLearningIntentRepository::new(&conn)
+            .get_active_intent(profile, NOW)
+            .unwrap()
+            .is_none(),
+        "O2-01：整个档案都不该有任何 ActiveLearningIntent"
+    );
+}
+
+// ============================ AUDIT-A32 (O2-02) ============================
+
+/// A32 / **O2-02** —— 显式学习陈述**仍然**产生预期意图。
+///
+/// 收窄必须是**单向**的：把误判关掉，绝不能把真意图一起关掉。
+/// 本门逐字锁定 §11 的 MUST-STILL-WORK 清单。
+#[test]
+fn audit_a32_o2_02_explicit_learning_statements_still_produce_expected_intent() {
+    let conn = setup();
+    let profile = create_profile(&conn, "A32");
+
+    // (文本, 期望 mode, 期望 domain)
+    let cases: [(&str, &str, Option<&str>); 4] = [
+        ("下午我想学数学", "copilot", Some("mathematics")),
+        ("今天复习408", "copilot", Some("computer_science_408")),
+        ("我想练英语", "copilot", Some("english")),
+        ("我要学 Python", "copilot", Some("programming")),
+    ];
+
+    for (text, mode, domain) in cases {
+        let capture = capture_intent(text);
+        assert!(
+            capture.intent.is_some(),
+            "O2-02：「{text}」是显式学习陈述，必须命中"
+        );
+
+        let outcome = capture_and_store(&conn, profile, text).unwrap();
+        assert!(outcome.wrote_intent, "O2-02：「{text}」必须写入意图");
+        assert_eq!(outcome.mode.as_deref(), Some(mode), "O2-02：「{text}」mode");
+        assert_eq!(outcome.domain.as_deref(), domain, "O2-02：「{text}」domain");
+    }
+
+    // 显式委托语义不变：「帮我安排数学学习」仍然是 AUTOPILOT，不是 COPILOT。
+    let delegated = capture_intent("帮我安排数学学习");
+    assert_eq!(
+        delegated.intent,
+        Some(CapturedIntent::Autopilot),
+        "O2-02：显式委托必须仍然是 AUTOPILOT（收窄不得改动这条语义）"
+    );
+    let delegated_outcome = capture_and_store(&conn, profile, "帮我安排数学学习").unwrap();
+    assert!(delegated_outcome.wrote_intent, "O2-02：显式委托必须写入");
+    assert_eq!(delegated_outcome.mode.as_deref(), Some("autopilot"));
+    assert_eq!(
+        delegated_outcome.domain, None,
+        "O2-02：AUTOPILOT 不点名领域"
+    );
+
+    let stored = ActiveLearningIntentRepository::new(&conn)
+        .get_active_intent(profile, NOW)
+        .unwrap()
+        .expect("O2-02：最后一次写入必须可读回");
+    assert_eq!(stored.mode, "autopilot");
+    assert_eq!(stored.domain, None);
 }

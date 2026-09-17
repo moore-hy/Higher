@@ -21,10 +21,11 @@
 //! 『现在想学数学』，然后开始给他安排数学训练」。后者是**替用户决定**，
 //! 而且用户很难意识到发生了什么。两者不对称，所以规则一律向保守一侧倒。
 //!
-//! # 判定顺序（H1 锁定）
+//! # 判定顺序（H1 锁定 + O2 M0 收窄）
 //!
 //! ```text
 //! 1. 否定 / 非意图守卫
+//! 1b. 通用求助守卫（O2 M0 新增）
 //! 2. 显式 AUTOPILOT 短语
 //! 3. 领域词 + 当前学习意图动词
 //! 4. 不写
@@ -32,6 +33,27 @@
 //!
 //! 顺序本身就是语义：`我不想学数学` 同时命中了否定词和领域词，
 //! 但因为第 1 步先跑，结果是**不写**。
+//!
+//! # O2 M0 —— 为什么必须收窄「看」
+//!
+//! 收窄前 `看` 与 `学` 并列在 [`VERB_TOKENS_ZH`] 里，于是
+//! `帮我看看这段代码为什么报错` 会因为「含领域词 `代码` + 含动词 `看`」
+//! 被判成 `COPILOT + Programming`。这是**误判**：用户在求助排错，
+//! 不是在说「我现在想学编程」。一旦写进 `ActiveLearningIntent`，
+//! 它会改写 Decision Engine 的 `user_target` / mode，开始给用户安排编程训练 ——
+//! 又一次「替用户决定」。
+//!
+//! 两处修改：
+//!
+//! 1. `看` 从 [`VERB_TOKENS_ZH`] 移除 —— 它不再是一个学习意图动词。
+//! 2. 新增 [`ASSISTANCE_TOKENS`] 通用求助守卫，位于否定守卫之后、
+//!    AUTOPILOT 之前：命中即**不写**，原因码
+//!    [`REASON_ASSISTANCE_NOT_INTENT`]。
+//!
+//! 代价是明确的、也是刻意的：`我想学数学，顺便帮我看看这段代码`
+//! 这类「真意图 + 求助」混合句会被整体判为不写。按唯一政策
+//! `false negative > false positive`，这个代价必须付 ——
+//! 漏判只是「用户再说一次」，误判是「应用擅自开始安排训练」。
 //!
 //! # 它绝不产生学习事实
 //!
@@ -68,6 +90,8 @@ pub const REASON_NO_MATCH: &str = "no_deterministic_match";
 pub const REASON_NEGATION: &str = "negation_guard";
 /// 命中了「能力 / 历史陈述」守卫（H6）。
 pub const REASON_NOT_CURRENT_INTENT: &str = "history_or_ability_is_not_current_intent";
+/// 命中了通用求助守卫（O2 M0）。
+pub const REASON_ASSISTANCE_NOT_INTENT: &str = "generic_assistance_request_is_not_learning_intent";
 /// 命中了显式安排短语（H2）。
 pub const REASON_AUTOPILOT: &str = "explicit_arrangement_phrase";
 /// 领域词 + 当前学习意图动词（H3 + H4）。
@@ -127,6 +151,38 @@ const ABILITY_TOKENS: [&str; 9] = [
 
 /// 完成体标记（「学过 / 复习过」）。它描述的是**已经发生过**的事。
 const PERFECTIVE_TOKENS: [&str; 7] = ["学过", "复习过", "练过", "做过", "看过", "背过", "读过"];
+
+// ============================ O2 M0 通用求助守卫 ============================
+
+/// 通用求助 / 排障动词。命中**任意**一个 → 不写意图。
+///
+/// 这些词描述的是「帮我把眼前这个东西弄好」，不是「我现在想学某领域」。
+/// 它们与领域词高度共现（`代码` / `算法` / `英语`），所以误判风险最大：
+///
+/// ```text
+/// 帮我看看这段代码为什么报错  -> 领域词 `代码`，收窄前会被误判为 COPILOT + Programming
+/// 帮我改一下 Python 代码       -> 领域词 `python` / `代码`
+/// 解释一下这个算法             -> 与 `数学`/`408` 共现时同理
+/// 帮我看看英语翻译             -> 领域词 `英语`
+/// ```
+///
+/// 逐字取自 O2 §11 的 MUST-NOT 清单。`看` 同时从动词表移除（见 [`VERB_TOKENS_ZH`]），
+/// 这里保留它是为了让「看不是学习动词」这条规则在代码里**显式可读、可直接断言**，
+/// 而不是靠「动词表里恰好没有它」这种隐式事实。
+const ASSISTANCE_TOKENS: [&str; 12] = [
+    "看",
+    "看看",
+    "帮我看",
+    "解释",
+    "说明",
+    "修",
+    "修改",
+    "改",
+    "调试",
+    "debug",
+    "排查",
+    "报错",
+];
 
 // ============================ H2 显式安排短语 ============================
 
@@ -191,9 +247,17 @@ const LANGUAGE_TOKENS: [(&str, LearningDomain); 5] = [
 
 // ============================ H4 当前学习意图动词 ============================
 
-/// 中文动词。`学` 刻意放在最后 —— 它是最短、最容易误伤的一个，
-/// 而且**必须**在领域词被剔除之后才允许参与判定（见 `capture_intent`）。
-const VERB_TOKENS_ZH: [&str; 7] = ["学习", "复习", "练习", "做题", "练", "学", "看"];
+/// 中文动词。
+///
+/// O2 M0：`看` 已从本表**移除**。它是最典型的通用求助动词
+/// （`帮我看看这段代码为什么报错` / `帮我看看英语翻译`），
+/// 把它当学习意图动词会产生「用户求助排错 → 应用开始安排训练」的误判。
+/// 参见 [`ASSISTANCE_TOKENS`]。
+///
+/// 保留的动词都要求用户表达**自己的学习行为**：学习 / 复习 / 练习 / 做题 / 练 / 学。
+/// `学` 仍刻意放在最后 —— 它是最短、最容易误伤的一个，而且**必须**在领域词被剔除
+/// 之后才允许参与判定（见 `capture_intent`）。
+const VERB_TOKENS_ZH: [&str; 6] = ["学习", "复习", "练习", "做题", "练", "学"];
 
 /// 英文动词。
 const VERB_TOKENS_EN: [&str; 4] = ["study", "learn", "review", "practice"];
@@ -317,6 +381,13 @@ pub fn capture_intent(text: &str) -> IntentCapture {
         return IntentCapture {
             intent: None,
             reason: REASON_NEGATION,
+        };
+    }
+    // 通用求助 / 排障请求：讲的是「帮我弄好眼前这个东西」，不是当前学习意图（O2 M0）。
+    if any_hit(&haystack, &ASSISTANCE_TOKENS) {
+        return IntentCapture {
+            intent: None,
+            reason: REASON_ASSISTANCE_NOT_INTENT,
         };
     }
     // 能力 / 历史 / 完成体陈述：讲的是**过去或水平**，不是当前请求（H6）。
