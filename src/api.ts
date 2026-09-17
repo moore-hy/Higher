@@ -84,6 +84,17 @@ import type {
   VaultSnapshot,
   VaultStatus,
   WebSource,
+  // REAL LEARNING ENGINE V1 · W4 —— TrainingExperience
+  BlockAdvanceIntent,
+  BlockAdvanceOutcome,
+  InteractionOutcome,
+  InteractionResult,
+  StartTrainingResponse,
+  TrainingBlockRun,
+  TrainingRun,
+  TrainingRunStatus,
+  TrainingSessionView,
+  VerificationMethod,
 } from "./types";
 
 // ---- DB ----
@@ -2519,3 +2530,127 @@ export const updateCanvasEmbedGeometry = (args: {
 
 export const deleteCanvasEmbed = (profileId: number, id: number) =>
   invoke<void>("delete_canvas_embed", { profileId, id });
+
+// ============================================================================
+// REAL LEARNING ENGINE V1 · W4 —— TrainingExperience
+//
+// 全部通过本模块访问，前端组件不直接 invoke。三个纪律：
+//
+// - **计划不由前端编排**：`createTrainingRunForItem` 只接受「学多久」，
+//   协议选择 / 块编排 / 时长分配全部由后端确定性完成（§19）。
+// - **幂等键由前端生成一次**：`clientActionId` 为每一次用户动作生成一次，
+//   网络重试必须**复用同一个值**，否则会留下第二个学习事实（§13 / §15）。
+// - **`momentType` 不由前端声明**：后端从 (结果, 判定方式) 确定性推导（§22）。
+// ============================================================================
+
+/**
+ * §19：开始一次训练。
+ *
+ * - `availableMinutes` 必须是真实正数；传 `null` → 后端返回
+ *   `NO_AVAILABLE_MINUTES`，**不编造默认时长**（§36）；
+ * - 一个档案同时只能有一个未终结的 run → `OPEN_TRAINING_RUN_EXISTS`。
+ */
+export const createTrainingRunForItem = (profileId: number, availableMinutes: number | null) =>
+  invoke<StartTrainingResponse>("create_training_run_for_item", {
+    profileId,
+    availableMinutes: availableMinutes ?? null,
+  });
+
+/** 读取一次训练的全部状态（run + 块 + 已发生的交互），一次 IPC 返回整页所需。 */
+export const getTrainingSession = (profileId: number, trainingRunId: number) =>
+  invoke<TrainingSessionView>("get_training_session", { profileId, trainingRunId });
+
+/**
+ * §13 / §15：记录一次用户交互。
+ *
+ * `clientActionId` 由调用方为**这一次用户动作**生成一次；重试必须复用。
+ * 命中幂等键 → 原样返回既有结果（`replayed: true`），不产生第二个学习事实；
+ * 同一个键配上不同 payload → `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD`。
+ */
+export const recordTrainingInteraction = (args: {
+  profileId: number;
+  trainingRunId: number;
+  blockRunId: number;
+  clientActionId: string;
+  interactionType: string;
+  userResponseText?: string | null;
+  promptText?: string | null;
+  hintLevel?: number | null;
+  result?: InteractionResult | null;
+  verification: VerificationMethod;
+  occurredAt?: string | null;
+}) =>
+  invoke<InteractionOutcome>("record_training_interaction", {
+    profileId: args.profileId,
+    trainingRunId: args.trainingRunId,
+    blockRunId: args.blockRunId,
+    clientActionId: args.clientActionId,
+    interactionType: args.interactionType,
+    userResponseText: args.userResponseText ?? null,
+    promptText: args.promptText ?? null,
+    hintLevel: args.hintLevel ?? null,
+    result: args.result ?? null,
+    verification: args.verification,
+    occurredAt: args.occurredAt ?? null,
+  });
+
+/** §9：推进 run 状态。非法迁移返回 typed error，而不是被静默改成合法值。 */
+export const transitionTrainingRun = (
+  profileId: number,
+  trainingRunId: number,
+  to: TrainingRunStatus,
+) => invoke<TrainingRun>("transition_training_run", { profileId, trainingRunId, to });
+
+/** §20：原子完成一次训练（结束 StudySession 与 run 在同一个事务内）。 */
+export const completeTrainingRun = (profileId: number, trainingRunId: number) =>
+  invoke<TrainingRun>("complete_training_run", { profileId, trainingRunId });
+
+/**
+ * 激活一个块（写入 `started_at`，成为当前块）。
+ *
+ * 时间片完成规则需要块计时状态（D17），没有被激活过的块没有 `started_at`。
+ */
+export const startTrainingBlock = (
+  profileId: number,
+  trainingRunId: number,
+  blockRunId: number,
+) => invoke<TrainingBlockRun>("start_training_block", { profileId, trainingRunId, blockRunId });
+
+/**
+ * 用户权威推进一个块（D12 `finish` / D13 `stop`）。
+ *
+ * 前端**只表达用户按了哪个键**，「这个块算不算完成」由后端走冻结规则求值后决定
+ * （D19）。无论结果如何，这条命令都不产生学习证据（D11 / D21）。
+ */
+export const advanceTrainingBlock = (args: {
+  profileId: number;
+  trainingRunId: number;
+  blockRunId: number;
+  intent: BlockAdvanceIntent;
+  elapsedMinutes?: number | null;
+}) =>
+  invoke<BlockAdvanceOutcome>("advance_training_block", {
+    profileId: args.profileId,
+    trainingRunId: args.trainingRunId,
+    blockRunId: args.blockRunId,
+    intent: args.intent,
+    elapsedMinutes: args.elapsedMinutes ?? null,
+  });
+
+/**
+ * 纯规则推进：只有冻结完成规则**已经**被满足时才往前走。
+ *
+ * 规则未满足 → `advanced: false`，并且后端什么都不写。
+ */
+export const tryCompleteTrainingBlock = (args: {
+  profileId: number;
+  trainingRunId: number;
+  blockRunId: number;
+  elapsedMinutes?: number | null;
+}) =>
+  invoke<BlockAdvanceOutcome>("try_complete_training_block", {
+    profileId: args.profileId,
+    trainingRunId: args.trainingRunId,
+    blockRunId: args.blockRunId,
+    elapsedMinutes: args.elapsedMinutes ?? null,
+  });

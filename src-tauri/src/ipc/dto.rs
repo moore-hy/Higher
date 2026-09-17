@@ -32,6 +32,18 @@ use crate::repository::task::Task;
 use crate::sync::client::ClientStatus;
 #[allow(unused_imports)]
 use crate::sync::server::{PeerCard, PeerStatus, ServerStatus, WorkspaceStatus};
+// REAL LEARNING ENGINE V1 · W4 — TrainingExperience 的 IPC 面（§7–§22）。
+#[allow(unused_imports)]
+use crate::commands::training::StartTrainingResponse;
+#[allow(unused_imports)]
+use crate::training::runtime::{BlockAdvanceOutcome, BlockCompletionState, InteractionOutcome};
+#[allow(unused_imports)]
+use crate::training::start::TrainingSessionView;
+#[allow(unused_imports)]
+use crate::training::types::{
+    BlockAdvanceIntent, BlockProgression, EffectSummary, InteractionResult, TrainingBlockRun,
+    TrainingBlockStatus, TrainingInteraction, TrainingRun, TrainingRunStatus, VerificationMethod,
+};
 
 /// §7 "LearningItem light DTO": the flat projection served by
 /// `list_learning_items_light` (tree/list rendering without full content).
@@ -96,6 +108,30 @@ mod tests {
         ClientStatus::export_all(&cfg).unwrap();
         ServerStatus::export_all(&cfg).unwrap();
         WorkspaceStatus::export_all(&cfg).unwrap();
+
+        // REAL LEARNING ENGINE V1 · W4 — TrainingExperience IPC surface.
+        // `TrainingRun` pulls in `DecisionMode`; `TrainingBlockRun` pulls in
+        // `ProtocolId`; the enums below are the value domains the frontend
+        // must not re-invent locally.
+        StartTrainingResponse::export_all(&cfg).unwrap();
+        TrainingSessionView::export_all(&cfg).unwrap();
+        InteractionOutcome::export_all(&cfg).unwrap();
+        TrainingRun::export_all(&cfg).unwrap();
+        TrainingBlockRun::export_all(&cfg).unwrap();
+        TrainingInteraction::export_all(&cfg).unwrap();
+        EffectSummary::export_all(&cfg).unwrap();
+        TrainingRunStatus::export_all(&cfg).unwrap();
+        TrainingBlockStatus::export_all(&cfg).unwrap();
+        InteractionResult::export_all(&cfg).unwrap();
+        VerificationMethod::export_all(&cfg).unwrap();
+
+        // PACK A 收口 —— 块推进 IPC 面（D11–D21）。
+        // `BlockCompletionState` 会带出 `CompletionRuleKind`，
+        // `BlockAdvanceOutcome` 会带出 `BlockProgression`。
+        BlockCompletionState::export_all(&cfg).unwrap();
+        BlockAdvanceOutcome::export_all(&cfg).unwrap();
+        BlockAdvanceIntent::export_all(&cfg).unwrap();
+        BlockProgression::export_all(&cfg).unwrap();
     }
 
     /// §7: "对 i64 ID 明确使用 TS number，并加入 safe-integer assertion/test".

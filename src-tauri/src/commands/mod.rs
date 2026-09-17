@@ -16,3 +16,4 @@ pub mod recurrence;
 pub mod settings;
 pub mod sync;
 pub mod system;
+pub mod training;

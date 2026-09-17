@@ -2141,3 +2141,206 @@ export interface CognitiveProgressView {
   difficulty: CognitiveDifficultyAxis;
   adaptation: CognitiveAdaptationAxis;
 }
+
+// ============================================================================
+// REAL LEARNING ENGINE V1 · W4 —— TrainingExperience IPC 契约
+//
+// 与 `src-tauri/src/training/types.rs` / `start.rs` 一一对应。字段名与取值必须
+// 严格一致：后端是唯一真相源，这里只是手写镜像。
+//
+// 前端**不得**在本文件之外重新发明这些取值：例如不得把 `ai_tutor` 当成
+// 一个「更弱的 deterministic」，也不得自行推导 `moment_type`。
+// ============================================================================
+
+/** §9 状态机取值。终态：completed / abandoned。 */
+export type TrainingRunStatus = "ready" | "active" | "paused" | "completed" | "abandoned";
+
+/** §10 块状态。 */
+export type TrainingBlockStatus = "pending" | "active" | "completed" | "skipped";
+
+/** §12 一次交互的确定性结果。`null` 表示**未知**，未知不等于失败。 */
+export type InteractionResult = "success" | "partial" | "failure";
+
+/**
+ * §21 判定方式，按优先级排列。
+ *
+ * `deterministic` / `structured` 是权威判定；`self_check` 是用户自检；
+ * `ai_tutor` 的证据质量上限是 MEDIUM，且**不得**推进 FSRS（§22）。
+ */
+export type VerificationMethod = "deterministic" | "structured" | "self_check" | "ai_tutor";
+
+/** §8 `training_runs` 的一行。 */
+export interface TrainingRun {
+  id: number;
+  profile_id: number;
+  study_session_id: number | null;
+  learning_item_id: number | null;
+  mode: "direct" | "copilot" | "autopilot";
+  status: TrainingRunStatus;
+  current_block_ordinal: number | null;
+  /** 计划快照（JSON 字符串）。前端只读，不得重排或重算。 */
+  plan_snapshot_json: string;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** §10 `training_block_runs` 的一行。 */
+export interface TrainingBlockRun {
+  id: number;
+  profile_id: number;
+  training_run_id: number;
+  ordinal: number;
+  /** 休息块为 `null`。 */
+  protocol_id: string | null;
+  /** 休息块**不产生任何 mastery 证据**，也永不绑定记忆单元（§10）。 */
+  is_break: boolean;
+  goal: string;
+  planned_minutes: number;
+  memory_unit_id: number | null;
+  status: TrainingBlockStatus;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** §12 `training_interactions` 的一行。 */
+export interface TrainingInteraction {
+  id: number;
+  profile_id: number;
+  training_run_id: number;
+  block_run_id: number;
+  /** §13：由前端为**用户动作**生成一次；网络重试必须复用同一个值。 */
+  client_action_id: string;
+  interaction_type: string;
+  prompt_text: string | null;
+  user_response_text: string | null;
+  hint_level: number | null;
+  result: InteractionResult | null;
+  effect_summary_json: string;
+  created_at: string;
+}
+
+/** §15 效果摘要：一次交互**究竟改变了什么**（恰好一次的可审计凭证）。 */
+export interface EffectSummary {
+  learning_moment_ids: number[];
+  fsrs_applied: boolean;
+  memory_review_id: number | null;
+  memory_unit_id: number | null;
+  /**
+   * 未推进 FSRS 的稳定原因码（推进了则为 `null`）。
+   *
+   * 明确的「没有发生」永远优于沉默：`no_memory_unit_bound` / `block_is_break` /
+   * `moment_not_recall_result` / `evidence_quality_too_low` /
+   * `source_is_non_authoritative` 都是**合法结果**，不是失败。
+   */
+  fsrs_skip_reason: string | null;
+  verification: VerificationMethod;
+}
+
+/** 一次交互的返回值。`replayed = true` 表示命中幂等键，没有产生任何新事实。 */
+export interface InteractionOutcome {
+  interaction: TrainingInteraction;
+  effect: EffectSummary;
+  replayed: boolean;
+}
+
+/** §19 开始训练的结果：新 run + 被物化出来的块（顺序与时长均为后端事实）。 */
+export interface StartTrainingResponse {
+  run: TrainingRun;
+  blocks: TrainingBlockRun[];
+}
+
+/**
+ * D15 —— 冻结的完成规则全集（**15** 个变体）。
+ *
+ * 这是 Cognitive Core V1.2 的契约，不是前端可自行扩展的枚举。
+ * 前端**只能展示**它，绝不能自己判定某条规则是否满足 —— 判定在后端
+ * `training/completion.rs` 里对全部 15 个变体逐一求值（D14 / D19）。
+ */
+export type CompletionRuleKind =
+  | "at_least_one_recall_outcome"
+  | "example_viewed_then_explanation_or_explicit"
+  | "at_least_one_practice_outcome"
+  | "error_detected_then_corrected_or_stopped"
+  | "at_least_one_transfer_outcome"
+  | "time_slice_or_user_stop"
+  | "at_least_one_explanation_outcome"
+  | "at_least_one_comprehension_outcome"
+  | "at_least_one_pronunciation_outcome"
+  | "at_least_one_translation_outcome"
+  | "at_least_one_trace_outcome"
+  | "at_least_one_coding_completion_outcome"
+  | "at_least_one_debug_outcome"
+  | "at_least_one_recognition_outcome"
+  | "session_completed_or_user_stop";
+
+/**
+ * D11 —— 一次块推进的**性质**（回答「凭什么可以往下走」）。
+ *
+ * ```text
+ * rule_satisfied       冻结规则被真实交互结果满足
+ * user_finished        用户显式「做完了」      ≠ 学会了
+ * user_stopped         用户「停下 / 跳过」     ≠ 已修正，也 ≠ 失败
+ * time_slice_elapsed   时间片走完              ≠ 学习证据
+ * ```
+ *
+ * 只有 `rule_satisfied` 由真实交互结果支撑；其余三种都只是
+ * 「用户 / 时间允许你往下走」（D18 / D21）。
+ */
+export type BlockProgression =
+  | "rule_satisfied"
+  | "user_finished"
+  | "user_stopped"
+  | "time_slice_elapsed";
+
+/** D12 `finish`（用户做完了）/ D13 `stop`（用户停下）。两者都允许往下走，后果不同。 */
+export type BlockAdvanceIntent = "finish" | "stop";
+
+/** 一个块的完成契约状态（后端算好的只读投影）。 */
+export interface BlockCompletionState {
+  block_run_id: number;
+  /** 该块使用的冻结完成规则（D15）。 */
+  rule_kind: CompletionRuleKind;
+  /** 冻结规则的人话描述（`description_zh`）。 */
+  rule_zh: string;
+  /** 按**当前**已落库事实，完成契约是否已满足。 */
+  satisfied: boolean;
+  /** 稳定原因码（永不为空）。 */
+  reason: string;
+}
+
+/**
+ * 一次块推进的结果。
+ *
+ * `learning_moment_ids` 恒为空、`fsrs_applied` 恒为 false ——
+ * 这两个字段不是装饰，而是把 D11 的约束显式暴露给前端与测试：
+ * **块推进永远不产生学习证据**（BLOCK COMPLETED ≠ LEARNING MASTERED）。
+ */
+export interface BlockAdvanceOutcome {
+  run: TrainingRun;
+  block: TrainingBlockRun;
+  progression: BlockProgression | null;
+  reason: string;
+  /** false = 规则未满足，什么都没写。 */
+  advanced: boolean;
+  next_block_id: number | null;
+  learning_moment_ids: number[];
+  fsrs_applied: boolean;
+}
+
+/** 一次训练的完整持久化视图（一次 IPC 返回整页所需）。 */
+export interface TrainingSessionView {
+  run: TrainingRun;
+  blocks: TrainingBlockRun[];
+  interactions: TrainingInteraction[];
+  /**
+   * 每个块的完成契约状态（与 `blocks` 一一对应）。
+   *
+   * D19：前端**不得**自己判定「看起来做完了」。这里由后端算好一起返回，
+   * 前端只负责把已经写死的冻结规则讲给用户听。
+   */
+  completions: BlockCompletionState[];
+}

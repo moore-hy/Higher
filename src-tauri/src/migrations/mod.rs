@@ -37,9 +37,13 @@ pub mod v033_companion_skill;
 pub mod v034_readiness_consumption;
 pub mod v035_ai_provider_auth_mode;
 pub mod v036_ai_provider_secret_ref;
-// HIGHER COGNITIVE CORE V1.2 §7：本次锁定 v037 / v038（**不创建 v039**）。
+// HIGHER COGNITIVE CORE V1.2 §7：锁定 v037 / v038。
 pub mod v037_learning_moments;
 pub mod v038_memory_engine;
+// REAL LEARNING ENGINE V1 §2：锁定 v039–v044（PACK A 先落 v039 / v040 / v041）。
+pub mod v039_active_learning_intent;
+pub mod v040_learning_domain;
+pub mod v041_training_runtime;
 
 /// 单个 Migration 定义。
 ///
@@ -247,6 +251,25 @@ const MIGRATIONS: &[Migration] = &[
         version: 38,
         name: "memory_engine",
         up: v038_memory_engine::up,
+    },
+    // REAL LEARNING ENGINE V1 §2 / §3：v039 Active Learning Intent。
+    // 必须保持 version 升序；不得修改任何既有 migration。
+    Migration {
+        version: 39,
+        name: "active_learning_intent",
+        up: v039_active_learning_intent::up,
+    },
+    // REAL LEARNING ENGINE V1 §6：v040 Learning Domain（learning_items / goals）。
+    Migration {
+        version: 40,
+        name: "learning_domain",
+        up: v040_learning_domain::up,
+    },
+    // REAL LEARNING ENGINE V1 §7 / §8 / §10 / §12 / §16 / §18：v041 Training Runtime。
+    Migration {
+        version: 41,
+        name: "training_runtime",
+        up: v041_training_runtime::up,
     },
 ];
 

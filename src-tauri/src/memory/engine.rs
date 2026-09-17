@@ -187,20 +187,46 @@ pub fn is_high_risk(unit: &MemoryUnit, now_utc: &str) -> bool {
 
 // ============================ 复习事务（7 步） ============================
 
-/// 由一条可信 Learning Moment 记录一次复习。
+/// 由一条可信 Learning Moment 记录一次复习（**自带事务**，公共入口）。
 ///
-/// 事务顺序（§13 锁定，任一失败 → 整体回滚，绝不留下部分记忆更新）：
+/// 这是 §17 要求保留的**既有公共行为**：开启事务 → 执行
+/// [`record_review_from_moment_in_tx`] → 提交。任一失败都会让事务在析构时回滚，
+/// 绝不留下部分记忆更新。
+///
+/// 需要把「交互 / moment / memory_review / memory_unit」放进**同一个**外层事务
+/// （§15 的恰好一次事实管线）时，必须使用 `_in_tx` 版本：本函数会再开一层事务，
+/// 而嵌套事务在 SQLite 里没有意义。
+pub fn record_review_from_moment(
+    conn: &Connection,
+    profile_id: i64,
+    memory_unit_id: i64,
+    moment: &LearningMoment,
+) -> Result<MemoryReview, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let review = record_review_from_moment_in_tx(&tx, profile_id, memory_unit_id, moment)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(review)
+}
+
+/// 由一条可信 Learning Moment 记录一次复习（**不自开事务**，§17）。
+///
+/// 事务边界归**调用方**：可以是自带事务的 [`record_review_from_moment`]，
+/// 也可以是 §15 的 TrainingRuntime 恰好一次管线。
+///
+/// 事务顺序（§13 锁定，任一失败 → 由调用方的事务整体回滚）：
 ///
 /// ```text
+/// 0. §16 该 moment 若已推进过 FSRS → 返回既有 MemoryReview，不再动 MemoryUnit
 /// 1. verify profile ownership
 /// 2. load MemoryUnit
 /// 3. load prior FSRS state
 /// 4. compute next state through fsrs crate
 /// 5. insert memory_reviews row
 /// 6. update memory_units cached scheduling fields
-/// 7. commit transaction
 /// ```
-pub fn record_review_from_moment(
+///
+/// 第 7 步（commit）**不在这里**：事务归调用方所有。
+pub fn record_review_from_moment_in_tx(
     conn: &Connection,
     profile_id: i64,
     memory_unit_id: i64,
@@ -227,11 +253,18 @@ pub fn record_review_from_moment(
         return Err("Easy 在 V1 永不自动推断（§13）".to_string());
     }
 
-    // 事务开启（rusqlite 动态 SQL 不做编译期检查，故全部步骤走真实 DB）。
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // ---- §16：恰好一次 ----
+    // 同一个 LearningMoment 至多推进一次 FSRS。若它已经排程过，直接返回既有 review，
+    // **不再**计算、不再写 memory_reviews、不再动 memory_units。
+    //
+    // 这条检查与 v041 的 `idx_memory_reviews_moment_once` 是同一不变量的两层防线：
+    // 这里是可读的短路路径，索引是数据库层的最终保证（并发下仍然成立）。
+    if let Some(existing) = repo::find_review_by_moment(conn, profile_id, moment.id)? {
+        return Ok(existing);
+    }
 
     // 1 + 2：归属校验 + 加载 MemoryUnit（一次查询同时完成两件事）。
-    let unit = repo::get_memory_unit_scoped(&tx, profile_id, memory_unit_id)?
+    let unit = repo::get_memory_unit_scoped(conn, profile_id, memory_unit_id)?
         .ok_or_else(|| format!("MemoryUnit 不存在或不属于该档案（unit={memory_unit_id}）"))?;
 
     // 学习项一致性：moment 若绑定了学习项，必须与 unit 绑定的一致。
@@ -283,7 +316,7 @@ pub fn record_review_from_moment(
 
     // 5：写入不可变复习账本。
     let review_id = repo::insert_memory_review(
-        &tx,
+        conn,
         profile_id,
         memory_unit_id,
         Some(moment.id),
@@ -297,7 +330,7 @@ pub fn record_review_from_moment(
 
     // 6：更新缓存排程字段。
     repo::update_unit_scheduling(
-        &tx,
+        conn,
         profile_id,
         memory_unit_id,
         next_state.stability,
@@ -310,9 +343,8 @@ pub fn record_review_from_moment(
         rating == ReviewRating::Again,
     )?;
 
-    // 7：提交。commit 失败 → 前面所有写入随之失效（rusqlite 事务语义）。
-    tx.commit().map_err(|e| e.to_string())?;
-
+    // 注意：commit **不在这里**（§17）。事务归调用方所有 ——
+    // 自带事务的 `record_review_from_moment`，或 §15 的 TrainingRuntime 恰好一次管线。
     let reviews = repo::list_reviews_for_unit(conn, profile_id, memory_unit_id, 1)?;
     reviews
         .into_iter()

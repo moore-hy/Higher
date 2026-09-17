@@ -35,8 +35,8 @@ use super::session_composer::{
 use crate::learning_state::next_action::build_next_learning_action;
 use crate::learning_state::state::build_learning_state;
 use crate::memory::types::MemoryPressureStatus;
+use crate::repository::active_learning_intent::ActiveLearningIntentRepository;
 use crate::resource::types::ResourceState;
-
 // ============================ 子结构（§19 锁定字段） ============================
 
 /// §19 锁定的 hero 状态。
@@ -199,6 +199,36 @@ pub fn build_today_coach_snapshot_at(
     let candidate_ids =
         collect_candidate_item_ids(conn, profile_id, now_utc, legacy_action.as_ref())?;
 
+    // ---- §5 / §6：把**当前有效**意图接进决策输入（REAL LEARNING ENGINE V1 · W4）----
+    //
+    // 这是「Intent real」的落点。在此之前 Decision Engine 已经完整支持
+    // `user_target` / `user_named_domain` / `DecisionMode::Direct` 的过滤与理由码，
+    // 但**没有任何调用方喂过它们** —— 于是 §5 的「DIRECT 意图在创建 TrainingRun
+    // 时被同事务消费」在实现上不可达（没有任何路径会走到 `DecisionMode::Direct`）。
+    //
+    // 三条纪律：
+    // - **过期即不存在**：`get_active_intent` 内部已过滤过期行，所以过期意图
+    //   在这里**完全不会**影响决策（§50：过期意图 ≠ 当前意图）；
+    // - **读不到 ≠ 负向信号**：读取失败按「没有意图」处理，而不是报错或猜一个；
+    // - **无意图时行为不变**：没有有效意图 → 沿用调用方传入的 `mode`，
+    //   V1.2 既有行为逐字保留（既有 `today_coach_v1` 测试不受影响）。
+    let intent = ActiveLearningIntentRepository::new(conn)
+        .get_active_intent(profile_id, now_utc)
+        .ok()
+        .flatten();
+
+    let intent_item_id = intent.as_ref().and_then(|i| i.learning_item_id);
+    let intent_domain = intent
+        .as_ref()
+        .and_then(|i| i.domain.as_deref())
+        .and_then(super::learning_domain::LearningDomain::parse)
+        .map(|d| d.to_protocol_domain());
+    // 有有效意图 → 意图里的模式说了算；否则沿用调用方给的模式。
+    let effective_mode = intent
+        .as_ref()
+        .and_then(|i| DecisionMode::parse(&i.mode))
+        .unwrap_or(mode);
+
     let mut facts: Vec<DecisionItemFacts> = Vec::new();
     for item_id in &candidate_ids {
         let learner_state = build_learner_item_state_v2(conn, profile_id, *item_id, now_utc)?;
@@ -217,15 +247,36 @@ pub fn build_today_coach_snapshot_at(
             .map(|s| s.learning_item_id == Some(*item_id))
             .unwrap_or(false);
 
+        // §6 领域解析：intent → item → goal →（PACK B 文档来源）→ Generic。
+        //
+        // 解析失败时不向上传播：候选池中的 id 可能来自 legacy NextAction，
+        // 而该来源**没有**做过 profile 归属校验。此时既不能读取他人档案的领域，
+        // 也不该因为一个上下文信号让整个 Today 快照失败 ——
+        // 唯一诚实的降级是 `Generic`（=「明确不知道具体领域」），
+        // 它不会泄漏任何跨档案信息，也不会伪造一个具体领域。
+        let domain = crate::repository::learning_domain::resolve_domain_for_item(
+            conn, profile_id, *item_id, now_utc,
+        )
+        .map(|r| r.domain.to_protocol_domain())
+        .unwrap_or(ProtocolDomain::Generic);
+
+        // W3 兴趣接线：读取与 Learner Model **同一份** moments（同函数、同 limit）。
+        // 读取失败 → `absent()`（= `Unknown`），绝不把「读不到」当成负向兴趣：
+        // §35 只允许显式或行为证据，而「没有数据」两者都不是。
+        let interest = super::learner_model::interest_detail_for_item(conn, profile_id, *item_id)
+            .unwrap_or_else(|_| super::learner_model::InterestDetail::absent());
+
         facts.push(DecisionItemFacts {
             learning_item_id: *item_id,
-            // V1：领域由**领域适配器显式标记**（§15）。没有标记 → Generic。
-            domain: ProtocolDomain::Generic,
+            domain,
             learner_state,
             memory,
             friction_band,
             in_active_session: is_active_session,
-            explicit_user_target: false,
+            // §5：DIRECT 意图点名的那个学习项，才是 `explicit_user_target`。
+            // 其余候选项保持 false —— 这正是 `filter_candidates` 在 Direct 模式下的
+            // 过滤依据（「宁可空，也不替换用户目标」）。
+            explicit_user_target: intent_item_id == Some(*item_id),
             user_named_domain: false,
             legacy_next_action: legacy_item == Some(*item_id),
             legacy_protocol: None,
@@ -234,8 +285,8 @@ pub fn build_today_coach_snapshot_at(
             goal_urgent: false,
             recent_unfinished: false,
             recent_touched: true,
-            explicit_interest: false,
-            repeated_interest: false,
+            explicit_interest: interest.explicit_interest(),
+            repeated_interest: interest.repeated_interest(),
         });
     }
 
@@ -247,14 +298,17 @@ pub fn build_today_coach_snapshot_at(
     // ---- 决策 ----
     let mut decision_input = DecisionInput {
         profile_id,
-        mode,
+        // 有效意图存在时用意图的模式（§5）；否则保持 V1.2 既有行为。
+        mode: effective_mode,
         available_minutes: available_minutes.unwrap_or(0),
         readiness: readiness_band,
         recent_load: load_band,
         resource_state: ResourceState::Normal,
         recovery_active: recovery,
-        user_target: None,
-        user_named_domain: None,
+        // §5：用户显式点名的目标（DIRECT 的过滤依据 + `user_intent` 理由码的来源）。
+        user_target: intent_item_id,
+        // §6：COPILOT 的领域过滤依据（意图声明的领域 → 协议领域）。
+        user_named_domain: intent_domain,
         items: facts,
     };
     // 恢复态必须真的走到 composer 的步骤 3（低 readiness → recovery_light + 10 分钟上限）
@@ -268,7 +322,9 @@ pub fn build_today_coach_snapshot_at(
         if available_minutes.map(|m| m > 0).unwrap_or(false) && !decision_input.items.is_empty() {
             select_decision(&decision_input)
         } else {
-            CognitiveDecision::empty(profile_id, mode)
+            // 空决策也必须报告**真正生效**的模式，而不是调用方传入的那个 ——
+            // 否则快照会在有意图时说「一起定」，而意图其实是「我来定」。
+            CognitiveDecision::empty(profile_id, effective_mode)
         };
 
     let plan = if decision.session_plan.is_executable() {
@@ -344,7 +400,8 @@ pub fn build_today_coach_snapshot_at(
         profile_id,
         generated_at: now_utc.to_string(),
         local_date: today_local.to_string(),
-        mode,
+        // 报告真正生效的模式（有有效意图时来自意图，见上文）。
+        mode: effective_mode,
         hero,
         readiness: readiness_summary,
         memory,

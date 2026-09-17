@@ -45,6 +45,8 @@ const DataPage = lazy(() => import("./pages/Data"));
 /** DEV-0057 PART Z：Knowledge（Tiptap/知识图重页）与 LearningWorkspace（编辑器）route-level lazy */
 const KnowledgePage = lazy(() => import("./pages/Knowledge"));
 const LearningWorkspacePage = lazy(() => import("./pages/LearningWorkspace"));
+// REAL LEARNING ENGINE V1 · W4 —— 持久化训练体验。
+const TrainingExperiencePage = lazy(() => import("./pages/TrainingExperience"));
 
 /**
  * COGNITIVE CORE V1.2 §26：Progress 页（四轴）route-level lazy。
@@ -119,6 +121,10 @@ function ProfileGate() {
               {IS_ANDROID && <Route path="/ai" element={<MobileAiPage />} />}
               {/* Learning Workspace（DEV-0017：开始学习进入正式学习工作区；DEV-0057 lazy） */}
               <Route path="/learn/:sessionId" element={<LearningWorkspacePage />} />
+
+              {/* REAL LEARNING ENGINE V1 · W4 —— 一次已持久化的训练（§19 / §15 / §20）。
+                  计划由后端编排并落库；本页只渲染与提交用户动作。 */}
+              <Route path="/train/:trainingRunId" element={<TrainingExperiencePage />} />
               {/* 设置（DEV-0016：非学习业务模块；Android=「我的」列表入口，F1 §十七） */}
               <Route path="/settings" element={IS_ANDROID ? <MobileSettings /> : <Settings />} />
               {/* 内部兼容 / 技术调试路由 */}

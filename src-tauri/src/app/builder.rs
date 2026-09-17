@@ -11,6 +11,7 @@ use crate::commands::recurrence::*;
 use crate::commands::settings::*;
 use crate::commands::sync::*;
 use crate::commands::system::*;
+use crate::commands::training::*;
 
 /// DEV-SYNC-003：barcode-scanner crate 为 mobile-only（#![cfg(mobile)]），
 /// 桌面端注入 no-op 插件占位以保持 Builder 链一致。
@@ -294,6 +295,16 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             get_memory_dashboard,
             // HIGHER COGNITIVE CORE V1.2 §26 — Progress 页四轴视图（无跨轴聚合分）
             get_cognitive_progress,
+            // REAL LEARNING ENGINE V1 · W4 — TrainingExperience（§19 / §13 / §15 / §20）
+            create_training_run_for_item,
+            get_training_session,
+            record_training_interaction,
+            transition_training_run,
+            complete_training_run,
+            // PACK A 收口 —— 块推进（Owner 补充决定 D11–D21）
+            start_training_block,
+            advance_training_block,
+            try_complete_training_block,
             // HIGHER DAILY EXPERIENCE V1 §PHASE 3 / §PHASE 4
             record_micro_action,
             // HIGHER 1.0 §M1-A 有限 Learning Pack

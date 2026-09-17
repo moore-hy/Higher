@@ -13327,3 +13327,173 @@ html.higher-qr-scanning body .qr-scan-frame,
   background: var(--h-border-strong);
   border-top-left-radius: 4px;
 }
+
+/* ============================================================================
+   REAL LEARNING ENGINE V1 · W4 —— TrainingExperience（/train/:trainingRunId）
+
+   沿用 COGNITIVE CORE V1.2 §23 的 `--hc-*` 深色玻璃 token 家族，与
+   Today / Memory / Progress 保持同一视觉语言。
+
+   这里刻意**没有**进度条、百分比或「掌握度」：一次训练的全部事实都在后端
+   （run / blocks / interactions），页面只渲染它们。
+   ============================================================================ */
+
+.hc-train {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 940px;
+}
+
+.hc-train__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hc-train__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--hc-text);
+}
+
+.hc-train__sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--hc-muted);
+}
+
+.hc-train__actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.hc-train__h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--hc-text);
+}
+
+.hc-train__h3 {
+  margin: 18px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hc-muted);
+}
+
+.hc-train__note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--hc-muted);
+}
+
+.hc-train__blocks {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hc-train__block {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hc-border);
+  border-radius: var(--h-radius-md);
+  background: transparent;
+  color: var(--hc-text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.hc-train__block:hover {
+  border-color: var(--hc-border-strong);
+}
+
+.hc-train__block--on {
+  border-color: var(--hc-cyan);
+  background: rgba(120, 227, 255, 0.08);
+}
+
+.hc-train__block-ord {
+  flex: 0 0 auto;
+  width: 20px;
+  font-variant-numeric: tabular-nums;
+  color: var(--hc-muted);
+  font-size: 12px;
+}
+
+.hc-train__block-goal {
+  flex: 1 1 auto;
+  font-size: 13.5px;
+}
+
+.hc-train__block-meta {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--hc-muted);
+}
+
+.hc-train__tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--hc-border);
+  font-size: 11px;
+  color: var(--hc-muted);
+}
+
+.hc-train__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hc-train__effect {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--hc-border-strong);
+  border-radius: var(--h-radius-md);
+  background: rgba(129, 239, 210, 0.06);
+}
+
+.hc-train__effect-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hc-aqua);
+}
+
+.hc-train__effect-line {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--hc-text);
+}
+
+.hc-train__interactions {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.hc-train__interactions li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--hc-text);
+}

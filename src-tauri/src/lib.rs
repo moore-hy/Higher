@@ -18,6 +18,7 @@ pub mod resource;
 pub mod runtime;
 pub mod sandbox;
 pub mod sync;
+pub mod training;
 
 /// 附件根目录（app data / attachments；Dev 与 Prod 均使用系统 app data 路径）。
 pub struct AttachmentDir(pub std::path::PathBuf);

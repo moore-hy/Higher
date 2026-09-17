@@ -1,0 +1,1606 @@
+//! Training Runtime 仓储与事务（REAL LEARNING ENGINE V1 · §11 / §13–§20）。
+//!
+//! # 事务边界是本模块的核心产出
+//!
+//! 三个写路径各自是一个**不可分割**的事实：
+//!
+//! ```text
+//! create_training_run    §19  StudySession + TrainingRun + 全部块 + DIRECT 意图消费
+//! record_interaction     §15  interaction + LearningMoment + memory_review + memory_unit
+//! complete_training_run  §20  TrainingRun.completed + StudySession 终结
+//! ```
+//!
+//! 绝不允许出现的中间态（§15 / §19）：
+//!
+//! ```text
+//! 有 StudySession 但没有 TrainingRun
+//! 有 TrainingRun 但没有块列表
+//! 有 interaction 但没有 moment
+//! 有 moment 但 FSRS 只更新了一半
+//! ```
+//!
+//! # §15 为什么必须 BEGIN IMMEDIATE
+//!
+//! 交互管线是「先读（查幂等键）再写」。默认的 DEFERRED 事务会在**第一次写**时才
+//! 升级为写锁，于是两个并发重试可能都读到「没有该键」，然后都尝试插入 ——
+//! 唯一索引会挡住第二次，但错误会以约束冲突的形式出现，而不是返回既有结果。
+//! IMMEDIATE 在事务开始时就取得写锁，让「查幂等键 → 写」成为真正的临界区。
+//!
+//! 事务通过 `execute_batch("BEGIN IMMEDIATE")` 显式开启，之后**复用同一个连接**
+//! 完成全部读写，最后 `COMMIT` / `ROLLBACK`。这里刻意不构造第二个 `Connection`
+//! 句柄：同一个 SQLite 连接上开一个事务，所有语句都必须走这同一个连接。
+//!
+//! # §21 AI 默认静默
+//!
+//! 本模块不引用任何 LLM / provider / agent 符号。AI 是否存在，对训练流程的
+//! **可用性**没有任何影响：确定性路径（`VerificationMethod::Deterministic`）
+//! 在没有本地模型、云端关闭时照常工作。
+
+use rusqlite::{params, Connection};
+
+use crate::cognitive::decision::DecisionMode;
+use crate::cognitive::learning_moment::{
+    record_learning_moment, LearningMomentType, MomentSourceType, NewLearningMoment,
+};
+use crate::cognitive::protocol::{find as find_protocol, CompletionRuleKind, ProtocolId};
+use crate::cognitive::session_composer::TrainingSessionPlan;
+use crate::memory::engine::record_review_from_moment_in_tx;
+use crate::repository::active_learning_intent::clear_active_intent_in_tx;
+use crate::repository::study_session::StudySessionRepository;
+
+use super::completion::{evaluate_completion, BlockInteractionFact, CompletionFacts};
+use super::types::{
+    is_recall_compatible, is_recall_moment, transition_block_status, transition_run_status,
+    validate_block_invariant, BlockAdvanceIntent, BlockProgression, EffectSummary,
+    InteractionResult, TrainingBlockRun, TrainingBlockStatus, TrainingError, TrainingErrorCode,
+    TrainingInteraction, TrainingRun, TrainingRunStatus, VerificationMethod,
+    FSRS_SKIP_BLOCK_IS_BREAK, FSRS_SKIP_EVIDENCE_TOO_LOW, FSRS_SKIP_NON_AUTHORITATIVE,
+    FSRS_SKIP_NOT_RECALL_MOMENT, FSRS_SKIP_NO_MEMORY_UNIT,
+};
+
+/// §18：训练派生的 moment 统一来源前缀。
+pub const TRAINING_SOURCE_PREFIX: &str = "training_interaction:";
+
+pub fn training_source_id(interaction_id: i64) -> String {
+    format!("{TRAINING_SOURCE_PREFIX}{interaction_id}")
+}
+
+// ============================ 行映射 ============================
+
+const RUN_COLUMNS: &str = "id, profile_id, study_session_id, learning_item_id, mode, status,
+     current_block_ordinal, plan_snapshot_json, started_at, ended_at, created_at, updated_at";
+
+fn conversion_error(idx: usize, what: &str, raw: &str) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        idx,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("未知 {what}：{raw}"),
+        )),
+    )
+}
+
+fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrainingRun> {
+    let mode_raw: String = row.get(4)?;
+    let status_raw: String = row.get(5)?;
+    let mode = match mode_raw.as_str() {
+        "direct" => DecisionMode::Direct,
+        "copilot" => DecisionMode::Copilot,
+        "autopilot" => DecisionMode::Autopilot,
+        _ => return Err(conversion_error(4, "mode", &mode_raw)),
+    };
+    let status = TrainingRunStatus::parse(&status_raw)
+        .ok_or_else(|| conversion_error(5, "status", &status_raw))?;
+    Ok(TrainingRun {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        study_session_id: row.get(2)?,
+        learning_item_id: row.get(3)?,
+        mode,
+        status,
+        current_block_ordinal: row.get(6)?,
+        plan_snapshot_json: row.get(7)?,
+        started_at: row.get(8)?,
+        ended_at: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+const BLOCK_COLUMNS: &str = "id, profile_id, training_run_id, ordinal, protocol_id, is_break,
+     goal, planned_minutes, memory_unit_id, status, started_at, ended_at, created_at, updated_at";
+
+fn row_to_block(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrainingBlockRun> {
+    let protocol_raw: Option<String> = row.get(4)?;
+    let status_raw: String = row.get(9)?;
+    let protocol_id = match protocol_raw.as_deref() {
+        None => None,
+        Some(raw) => {
+            Some(ProtocolId::parse(raw).ok_or_else(|| conversion_error(4, "protocol_id", raw))?)
+        }
+    };
+    let status = TrainingBlockStatus::parse(&status_raw)
+        .ok_or_else(|| conversion_error(9, "block status", &status_raw))?;
+    Ok(TrainingBlockRun {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        training_run_id: row.get(2)?,
+        ordinal: row.get(3)?,
+        protocol_id,
+        is_break: row.get::<_, i64>(5)? != 0,
+        goal: row.get(6)?,
+        planned_minutes: row.get(7)?,
+        memory_unit_id: row.get(8)?,
+        status,
+        started_at: row.get(10)?,
+        ended_at: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+    })
+}
+
+const INTERACTION_COLUMNS: &str = "id, profile_id, training_run_id, block_run_id, client_action_id,
+     interaction_type, prompt_text, user_response_text, hint_level, result, effect_summary_json,
+     created_at";
+
+fn row_to_interaction(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrainingInteraction> {
+    let result_raw: Option<String> = row.get(9)?;
+    let result = match result_raw.as_deref() {
+        None => None,
+        Some(raw) => {
+            Some(InteractionResult::parse(raw).ok_or_else(|| conversion_error(9, "result", raw))?)
+        }
+    };
+    Ok(TrainingInteraction {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        training_run_id: row.get(2)?,
+        block_run_id: row.get(3)?,
+        client_action_id: row.get(4)?,
+        interaction_type: row.get(5)?,
+        prompt_text: row.get(6)?,
+        user_response_text: row.get(7)?,
+        hint_level: row.get(8)?,
+        result,
+        effect_summary_json: row.get(10)?,
+        created_at: row.get(11)?,
+    })
+}
+
+// ============================ 前置校验 ============================
+
+fn assert_profile_exists(conn: &Connection, profile_id: i64) -> Result<(), TrainingError> {
+    let found: Option<i64> = match conn.query_row(
+        "SELECT id FROM study_profiles WHERE id = ?1",
+        params![profile_id],
+        |r| r.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(TrainingError::db(e)),
+    };
+    match found {
+        Some(_) => Ok(()),
+        None => Err(TrainingError::new(
+            TrainingErrorCode::ProfileNotFound,
+            format!("学习档案不存在（id={profile_id}）"),
+        )),
+    }
+}
+
+fn assert_item_in_profile(
+    conn: &Connection,
+    profile_id: i64,
+    learning_item_id: i64,
+) -> Result<(), TrainingError> {
+    let owner: Option<i64> = match conn.query_row(
+        "SELECT profile_id FROM learning_items WHERE id = ?1",
+        params![learning_item_id],
+        |r| r.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(TrainingError::db(e)),
+    };
+    match owner {
+        Some(o) if o == profile_id => Ok(()),
+        _ => Err(TrainingError::new(
+            TrainingErrorCode::LearningItemNotInProfile,
+            format!("学习项不存在或不属于该档案（item={learning_item_id}, profile={profile_id}）"),
+        )),
+    }
+}
+
+// ============================ §11 回忆块 → MemoryUnit 绑定 ============================
+
+/// §11 锁定的绑定规则。**绝不猜测**。
+///
+/// ```text
+/// 1. 查该档案 + 该学习项的到期 MemoryUnit（next_review_at <= now）
+/// 2. 排序 next_review_at ASC, id ASC
+/// 3. 有一个或多个到期 → 绑定第一个
+/// 4. 否则若该学习项**恰好只有一个** MemoryUnit → 绑定它
+/// 5. 否则 → None
+/// ```
+///
+/// 第 5 步是关键纪律：多个都未到期时，选哪一个都是**猜**。宁可不绑定 ——
+/// 不绑定只意味着「这次不推进 FSRS」，属于 unknown/unbound，**不是失败**（§11 / §50）。
+pub fn resolve_recall_memory_unit(
+    conn: &Connection,
+    profile_id: i64,
+    learning_item_id: i64,
+    now_utc: &str,
+) -> Result<Option<i64>, TrainingError> {
+    let now = crate::memory::types::normalize_utc(now_utc);
+
+    // 步骤 1–3：到期者优先，口径与 `list_due_memory_units` 一致。
+    let due: Option<i64> = match conn.query_row(
+        "SELECT id FROM memory_units
+          WHERE profile_id = ?1
+            AND linked_learning_item_id = ?2
+            AND next_review_at IS NOT NULL
+            AND next_review_at <= ?3
+          ORDER BY next_review_at ASC, id ASC
+          LIMIT 1",
+        params![profile_id, learning_item_id, now],
+        |r| r.get(0),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(TrainingError::db(e)),
+    };
+    if due.is_some() {
+        return Ok(due);
+    }
+
+    // 步骤 4 + 5：只取前两条即可判定「恰好一个」还是「多个」。
+    let mut stmt = conn
+        .prepare(
+            "SELECT id FROM memory_units
+              WHERE profile_id = ?1 AND linked_learning_item_id = ?2
+              ORDER BY id ASC
+              LIMIT 2",
+        )
+        .map_err(TrainingError::db)?;
+    let ids: Vec<i64> = stmt
+        .query_map(params![profile_id, learning_item_id], |r| r.get(0))
+        .map_err(TrainingError::db)?
+        .collect::<rusqlite::Result<Vec<i64>>>()
+        .map_err(TrainingError::db)?;
+
+    Ok(match ids.len() {
+        1 => Some(ids[0]),
+        _ => None,
+    })
+}
+
+// ============================ §19 create_training_run ============================
+
+/// `create_training_run` 的入参。
+///
+/// `Debug + Clone` 是给调用方与测试用的：重放/重试语义要求「同一份 payload 再来一次」，
+/// 因此这个结构必须可复制、可打印，否则调用方只能手工重建一遍 —— 那正是
+/// payload 不一致（`IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD`）的来源。
+#[derive(Debug, Clone)]
+pub struct CreateTrainingRunParams {
+    pub profile_id: i64,
+    pub learning_item_id: Option<i64>,
+    pub mode: DecisionMode,
+    pub plan: TrainingSessionPlan,
+    pub now_utc: String,
+}
+
+/// §19 —— **原子**创建。
+///
+/// ```text
+/// BEGIN IMMEDIATE
+///   verify profile
+///   verify target learning item belongs profile
+///   apply existing Active StudySession conflict rule
+///   create / bind StudySession
+///   insert TrainingRun
+///   materialize every TrainingBlockRun
+///   consume DIRECT intent when applicable
+/// COMMIT
+/// ```
+///
+/// 任一失败 → 回滚，因此不会留下「只有 Session 没有 Run」「Run 没有块」这类孤儿。
+pub fn create_training_run(
+    conn: &Connection,
+    p: CreateTrainingRunParams,
+) -> Result<(TrainingRun, Vec<TrainingBlockRun>), TrainingError> {
+    if !p.plan.is_executable() {
+        return Err(TrainingError::new(
+            TrainingErrorCode::PlanHasNoBlocks,
+            "计划没有任何学习块，不能创建训练（§19）".to_string(),
+        ));
+    }
+
+    // 计划里的 ordinal 必须唯一，否则 UNIQUE(training_run_id, ordinal) 会以约束错误暴露。
+    // 提前给出可读诊断，并明确这是**计划本身**的问题。
+    {
+        let mut seen: Vec<i64> = p.plan.blocks.iter().map(|b| b.ordinal).collect();
+        seen.sort_unstable();
+        let before = seen.len();
+        seen.dedup();
+        if seen.len() != before {
+            return Err(TrainingError::new(
+                TrainingErrorCode::PlanHasNoBlocks,
+                "计划中的块 ordinal 存在重复，无法物化（§10 的 UNIQUE(training_run_id, ordinal)）"
+                    .to_string(),
+            ));
+        }
+    }
+
+    // 先做纯校验（§10 不变量），再开事务 —— 能不进事务就发现的错误不必占写锁。
+    for block in &p.plan.blocks {
+        validate_block_invariant(block.is_break, block.protocol_id, None)?;
+    }
+
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<(TrainingRun, Vec<TrainingBlockRun>), TrainingError> {
+        assert_profile_exists(tx, p.profile_id)?;
+        if let Some(item_id) = p.learning_item_id {
+            assert_item_in_profile(tx, p.profile_id, item_id)?;
+        }
+
+        // §8 的唯一开放位：一个档案同时最多一个未终结的 TrainingRun。
+        let open_count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM training_runs
+                  WHERE profile_id = ?1 AND status IN ('ready','active','paused')",
+                params![p.profile_id],
+                |r| r.get(0),
+            )
+            .map_err(TrainingError::db)?;
+        if open_count > 0 {
+            return Err(TrainingError::new(
+                TrainingErrorCode::OpenTrainingRunExists,
+                "该档案已有一个未结束的训练，请先继续或放弃它（§8 唯一开放位）".to_string(),
+            ));
+        }
+
+        // ---- 既有 Active StudySession 冲突规则 + create/bind ----
+        let study_session_id = resolve_study_session(tx, &p)?;
+
+        // ---- 插入 TrainingRun（初始 ready）----
+        let plan_json = serde_json::to_string(&p.plan)
+            .map_err(|e| TrainingError::db(format!("计划序列化失败：{e}")))?;
+        tx.execute(
+            "INSERT INTO training_runs
+                 (profile_id, study_session_id, learning_item_id, mode, status,
+                  current_block_ordinal, plan_snapshot_json)
+             VALUES (?1, ?2, ?3, ?4, 'ready', NULL, ?5)",
+            params![
+                p.profile_id,
+                study_session_id,
+                p.learning_item_id,
+                p.mode.as_str(),
+                plan_json,
+            ],
+        )
+        .map_err(TrainingError::db)?;
+        let run_id = tx.last_insert_rowid();
+
+        // ---- 物化每一个块 ----
+        for block in &p.plan.blocks {
+            // §11：只有「回忆兼容协议 + 有目标学习项」的学习块才尝试绑定。
+            let memory_unit_id = match (block.is_break, block.protocol_id, p.learning_item_id) {
+                (false, Some(pid), Some(item_id)) if is_recall_compatible(pid) => {
+                    resolve_recall_memory_unit(tx, p.profile_id, item_id, &p.now_utc)?
+                }
+                _ => None,
+            };
+
+            // 带上 memory_unit_id 再校验一次：休息块绑定记忆单元会被这里挡住（§10）。
+            validate_block_invariant(block.is_break, block.protocol_id, memory_unit_id)?;
+
+            tx.execute(
+                "INSERT INTO training_block_runs
+                     (profile_id, training_run_id, ordinal, protocol_id, is_break,
+                      goal, planned_minutes, memory_unit_id, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')",
+                params![
+                    p.profile_id,
+                    run_id,
+                    block.ordinal,
+                    block.protocol_id.map(|pid| pid.as_str()),
+                    if block.is_break { 1 } else { 0 },
+                    block.goal,
+                    block.minutes,
+                    memory_unit_id,
+                ],
+            )
+            .map_err(TrainingError::db)?;
+        }
+
+        // ---- §5：DIRECT 意图在成功创建 TrainingRun 时**同事务**消费 ----
+        if p.mode == DecisionMode::Direct {
+            clear_active_intent_in_tx(tx, p.profile_id)
+                .map_err(|e| TrainingError::db(e.message))?;
+        }
+
+        let run = load_run(tx, p.profile_id, run_id)?;
+        let blocks = list_block_runs(tx, p.profile_id, run_id)?;
+        Ok((run, blocks))
+    })();
+
+    finish_immediate(conn, result)
+}
+
+/// 既有 Active StudySession 规则的**复用**，而不是第二套规则：
+/// 同一档案同一时刻只能有一个 active Session。
+///
+/// - 已有 active 且**指向同一个学习项** → 绑定它（训练发生在这次学习里）；
+/// - 已有 active 但指向**别的**学习项 → 冲突，明确报错（不静默切换，不偷偷新建）；
+/// - 没有 active → 新建一个（复用 `StudySessionRepository` 的既有语义）。
+fn resolve_study_session(
+    tx: &Connection,
+    p: &CreateTrainingRunParams,
+) -> Result<Option<i64>, TrainingError> {
+    let existing: Option<(i64, Option<i64>)> = match tx.query_row(
+        "SELECT id, learning_item_id FROM study_sessions
+          WHERE profile_id = ?1 AND status = 'active'
+          ORDER BY id DESC LIMIT 1",
+        params![p.profile_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(TrainingError::db(e)),
+    };
+
+    if let Some((session_id, session_item)) = existing {
+        if session_item == p.learning_item_id {
+            return Ok(Some(session_id));
+        }
+        return Err(TrainingError::new(
+            TrainingErrorCode::ActiveSessionConflict,
+            "你已有一项学习正在进行，请先继续或结束当前学习。".to_string(),
+        ));
+    }
+
+    let repo = StudySessionRepository::new(tx);
+    let session = match p.learning_item_id {
+        Some(item_id) => repo.start_for_item(item_id, None),
+        None => repo.start_quick(p.profile_id, None),
+    }
+    .map_err(TrainingError::db)?;
+    Ok(Some(session.id))
+}
+
+// ============================ 状态推进 ============================
+
+/// §9：按状态机推进一个 TrainingRun，非法转移返回 typed error。
+pub fn transition_training_run(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+    to: TrainingRunStatus,
+) -> Result<TrainingRun, TrainingError> {
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<TrainingRun, TrainingError> {
+        let run = load_run(tx, profile_id, training_run_id)?;
+        transition_run_status(run.status, to)?;
+
+        // 首次进入 Active 时记录 started_at；之后不再覆盖（时间事实只写一次）。
+        let started_at_sql = if to == TrainingRunStatus::Active && run.started_at.is_none() {
+            "datetime('now')"
+        } else {
+            "started_at"
+        };
+        tx.execute(
+            &format!(
+                "UPDATE training_runs
+                    SET status = ?1,
+                        started_at = {started_at_sql},
+                        updated_at = datetime('now')
+                  WHERE id = ?2 AND profile_id = ?3"
+            ),
+            params![to.as_str(), training_run_id, profile_id],
+        )
+        .map_err(TrainingError::db)?;
+
+        load_run(tx, profile_id, training_run_id)
+    })();
+    finish_immediate(conn, result)
+}
+
+/// §20 —— 完成必须与 StudySession 终结**同事务**。
+///
+/// `TrainingRun` 只在 `StudySession` 终结成功之后才被标记为 `completed`；
+/// 并且**不新建**第二套 Session 完成真相，而是复用既有
+/// `StudySessionRepository::end`（其本身已幂等，见其文档）。
+pub fn complete_training_run(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<TrainingRun, TrainingError> {
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<TrainingRun, TrainingError> {
+        let run = load_run(tx, profile_id, training_run_id)?;
+        transition_run_status(run.status, TrainingRunStatus::Completed)?;
+
+        // 先终结 Session：它失败则整个事务回滚，Run 不会被标记完成。
+        if let Some(session_id) = run.study_session_id {
+            StudySessionRepository::new(tx)
+                .end(session_id, None)
+                .map_err(TrainingError::db)?;
+        }
+
+        tx.execute(
+            "UPDATE training_runs
+                SET status = 'completed',
+                    ended_at = datetime('now'),
+                    updated_at = datetime('now')
+              WHERE id = ?1 AND profile_id = ?2",
+            params![training_run_id, profile_id],
+        )
+        .map_err(TrainingError::db)?;
+
+        load_run(tx, profile_id, training_run_id)
+    })();
+    finish_immediate(conn, result)
+}
+
+// ============================ §13–§15 交互的恰好一次管线 ============================
+
+/// `record_interaction` 的入参。
+///
+/// §13 要求「网络重试必须复用同一个 payload」。让这个结构可 `Clone`，
+/// 就是把「原样再来一次」变成一件调用方做得到、且不会写错的事。
+#[derive(Debug, Clone)]
+pub struct RecordInteractionParams {
+    pub profile_id: i64,
+    pub training_run_id: i64,
+    pub block_run_id: i64,
+    /// §13：由前端为**用户动作**生成一次；网络重试必须复用同一个值。
+    pub client_action_id: String,
+    pub interaction_type: String,
+    pub prompt_text: Option<String>,
+    pub user_response_text: Option<String>,
+    pub hint_level: Option<i64>,
+    pub result: Option<InteractionResult>,
+    /// §21 的判定方式；决定本次证据质量上限（§22）。
+    pub verification: VerificationMethod,
+    /// 本次交互产生的 LearningMoment 类型（由**确定性结果**推导，不由 AI 生成）。
+    pub moment_type: LearningMomentType,
+    /// 本次事实的发生时间。`None` = 由领域层取当前 UTC（§18）。
+    ///
+    /// 这里刻意是 `Option`：时钟属于领域层，不属于传输层。若让命令层负责填默认值，
+    /// 每个新增调用方都要重新猜一次格式，而格式错了不会报错、只会静默污染排序。
+    pub occurred_at: Option<String>,
+}
+
+/// 一次交互的返回值：既有行 + 效果摘要。
+///
+/// `replayed = true` 表示这是**重试命中幂等键**，没有产生任何新事实。
+///
+/// `Serialize` 是给 IPC 用的：前端需要看到 `effect` 才能诚实呈现
+/// 「这次有没有推进 FSRS / 为什么没有」，而不是自己猜。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
+pub struct InteractionOutcome {
+    pub interaction: TrainingInteraction,
+    pub effect: EffectSummary,
+    pub replayed: bool,
+}
+
+/// §15 —— 恰好一次事实管线。
+///
+/// ```text
+/// BEGIN IMMEDIATE
+///   check idempotency
+///   insert training_interaction
+///   record deterministic LearningMoment
+///   if trusted recall result AND block has memory_unit_id: apply FSRS exactly once
+///   store effect_summary_json
+/// COMMIT
+/// ```
+///
+/// 任何 DB 失败 → 整体回滚。**不允许**出现「有 interaction 没有 moment」
+/// 或「有 moment 但 FSRS 只更新一半」的状态。
+pub fn record_interaction(
+    conn: &Connection,
+    p: RecordInteractionParams,
+) -> Result<InteractionOutcome, TrainingError> {
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<InteractionOutcome, TrainingError> {
+        assert_profile_exists(tx, p.profile_id)?;
+
+        // ---- §14：先查幂等键 ----
+        if let Some(existing) =
+            find_interaction_by_action_id(tx, p.profile_id, &p.client_action_id)?
+        {
+            return handle_duplicate(existing, &p);
+        }
+
+        // §18：本次事实的**发生时间**。调用方可以不传；一旦不传，由领域层用与全库
+        // 完全一致的 UTC 文本格式（`YYYY-MM-DD HH:MM:SS`）落定。
+        //
+        // 为什么默认值必须在这里、而不是 IPC 层：`occurred_at` 会被 SQLite 当作
+        // **纯字符串**参与比较，并交给 `date()` / `datetime()` 解析 —— 见
+        // `learning_moment` 的时间窗查询、`ai/context.rs` 的 `date(occurred_at, '+8 hours')`、
+        // `memory/engine.rs` 的 `days_between`。格式一旦不统一，`'T'`(0x54) 与
+        // `' '`(0x20) 的差值会让同一天的记录排序错位，`date()` 的解析语义也会漂移。
+        // 那是一种不报错、只按时间累积的真相污染，所以格式必须只有一个来源。
+        let occurred_at = p
+            .occurred_at
+            .clone()
+            .unwrap_or_else(crate::cognitive::today_projection::utc_now);
+
+        // 归属校验：run 与 block 都必须属于该档案，且 block 属于该 run。
+        let run = load_run(tx, p.profile_id, p.training_run_id)?;
+        let block = load_block_run(tx, p.profile_id, p.block_run_id)?;
+        if block.training_run_id != run.id {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingBlockNotFound,
+                format!(
+                    "块 {} 不属于训练 {}（跨 run 引用被拒绝）",
+                    p.block_run_id, p.training_run_id
+                ),
+            ));
+        }
+        // 终态训练不接受新交互。
+        if run.status.is_terminal() {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TerminalRunState,
+                format!(
+                    "训练 {} 已处于终态 {}，不再接受交互（§9）",
+                    run.id,
+                    run.status.as_str()
+                ),
+            ));
+        }
+
+        // ---- 写入 interaction ----
+        tx.execute(
+            "INSERT INTO training_interactions
+                 (profile_id, training_run_id, block_run_id, client_action_id, interaction_type,
+                  prompt_text, user_response_text, hint_level, result, effect_summary_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '{}')",
+            params![
+                p.profile_id,
+                p.training_run_id,
+                p.block_run_id,
+                p.client_action_id,
+                p.interaction_type,
+                p.prompt_text,
+                p.user_response_text,
+                p.hint_level,
+                p.result.map(|r| r.as_str()),
+            ],
+        )
+        .map_err(TrainingError::db)?;
+        let interaction_id = tx.last_insert_rowid();
+
+        // ---- §18：记录 LearningMoment（来源可溯源到这次交互）----
+        let evidence_quality = p.verification.max_evidence_quality();
+        let source_type = source_type_for(p.verification);
+        // §22 + §50：非权威来源（AI 导师）**不能**写出「成功」类 moment。
+        // `learning_moment::validate_new_moment` 的规则 (5) 会直接拒绝
+        // `tutor_observed + recall_success`。协议实现声明的 moment_type 因此在这里
+        // 被**降级为 attempt**：AI 可以记录「发生了这次尝试」，但不能签发「你成功了」。
+        let moment_type = moment_type_for(p.moment_type, source_type);
+        let mut moment = NewLearningMoment::new(
+            p.profile_id,
+            moment_type,
+            occurred_at.clone(),
+            source_type,
+            evidence_quality,
+        );
+        moment.session_id = run.study_session_id;
+        moment.learning_item_id = run.learning_item_id;
+        moment.hint_level = p.hint_level;
+        // 把调用方声明的 result 原样交给既有的 `validate_new_moment`：
+        // 若它与 moment_type 的内在结果矛盾，写入会失败并整体回滚 —— 这是刻意的，
+        // 宁可拒绝一条自相矛盾的证据，也不要落库一条无法解释的 moment。
+        moment.result = p.result.map(|r| r.as_str().to_string());
+        moment.source_id = Some(training_source_id(interaction_id));
+        moment.metadata_json = serde_json::json!({
+            "provenance": {
+                "training_run_id": p.training_run_id,
+                "block_run_id": p.block_run_id,
+                "interaction_id": interaction_id,
+            },
+            "verification": p.verification.as_str(),
+            "interaction_type": p.interaction_type,
+        });
+        let recorded = record_learning_moment(tx, moment)
+            .map_err(|e| TrainingError::db(format!("LearningMoment 写入失败：{e}")))?;
+
+        let mut effect = EffectSummary {
+            learning_moment_ids: vec![recorded.id],
+            fsrs_applied: false,
+            memory_review_id: None,
+            memory_unit_id: block.memory_unit_id,
+            fsrs_skip_reason: None,
+            verification: p.verification.as_str().to_string(),
+        };
+
+        // ---- §15 + §11：可信回忆结果 + 已绑定记忆单元 → 恰好一次推进 FSRS ----
+        if block.is_break {
+            effect.fsrs_skip_reason = Some(FSRS_SKIP_BLOCK_IS_BREAK.to_string());
+        } else if source_type.is_non_authoritative() {
+            // §22 / §50：AI 导师的语义评估可以落库（MEDIUM），但它**不是**可授权的
+            // 学习事实。FSRS 是权威记忆排程，只有确定性/结构化/用户显式证据能移动它。
+            // 这条判定刻意放在「是否回忆类 moment」之前 —— 否则 AI 降级后的
+            // `recall_attempt` 会被笼统归因为「不是回忆结果」，掩盖真正的原因。
+            effect.fsrs_skip_reason = Some(FSRS_SKIP_NON_AUTHORITATIVE.to_string());
+        } else if !is_recall_moment(moment_type) {
+            effect.fsrs_skip_reason = Some(FSRS_SKIP_NOT_RECALL_MOMENT.to_string());
+        } else if block.memory_unit_id.is_none() {
+            // §11：未绑定 → 不推进。这是 unknown/unbound，**不是失败**。
+            effect.fsrs_skip_reason = Some(FSRS_SKIP_NO_MEMORY_UNIT.to_string());
+        } else if !evidence_quality.is_trusted() {
+            effect.fsrs_skip_reason = Some(FSRS_SKIP_EVIDENCE_TOO_LOW.to_string());
+        } else {
+            let unit_id = block.memory_unit_id.expect("上面已判空");
+            // §16：`_in_tx` 内部先查该 moment 是否已推进过。这里是**同事务**调用，
+            // 因此 interaction / moment / review / unit 更新共同构成一个原子事实。
+            let review = record_review_from_moment_in_tx(tx, p.profile_id, unit_id, &recorded)
+                .map_err(|e| TrainingError::db(format!("FSRS 推进失败：{e}")))?;
+            effect.fsrs_applied = true;
+            effect.memory_review_id = Some(review.id);
+        }
+
+        // ---- 回写 effect_summary_json（同一个事务内）----
+        let effect_json = serde_json::to_string(&effect)
+            .map_err(|e| TrainingError::db(format!("效果摘要序列化失败：{e}")))?;
+        tx.execute(
+            "UPDATE training_interactions SET effect_summary_json = ?1 WHERE id = ?2",
+            params![effect_json, interaction_id],
+        )
+        .map_err(TrainingError::db)?;
+
+        let interaction = load_interaction(tx, p.profile_id, interaction_id)?;
+        Ok(InteractionOutcome {
+            interaction,
+            effect,
+            replayed: false,
+        })
+    })();
+    finish_immediate(conn, result)
+}
+
+/// §14：幂等键已存在时的判定。
+///
+/// 这些字段全部一致 → 视为**同一个动作的重试**：原样返回既有结果，
+/// 不产生新 interaction、不产生新 LearningMoment、不产生新 Evidence、不推进 FSRS。
+///
+/// 任何一个不一致 → 同一个键被换成了不同 payload，这是客户端 bug，
+/// 必须显式报错而**不是**覆盖原始动作。
+fn handle_duplicate(
+    existing: TrainingInteraction,
+    p: &RecordInteractionParams,
+) -> Result<InteractionOutcome, TrainingError> {
+    let same = existing.training_run_id == p.training_run_id
+        && existing.block_run_id == p.block_run_id
+        && existing.interaction_type == p.interaction_type
+        && existing.user_response_text == p.user_response_text
+        && existing.hint_level == p.hint_level;
+
+    if !same {
+        return Err(TrainingError::new(
+            TrainingErrorCode::IdempotencyKeyReusedWithDifferentPayload,
+            format!(
+                "幂等键 {} 已被另一个动作使用（原 run={} block={} type={}，新 run={} block={} type={}）；\
+                 重试必须复用完全相同的 payload（§14）",
+                p.client_action_id,
+                existing.training_run_id,
+                existing.block_run_id,
+                existing.interaction_type,
+                p.training_run_id,
+                p.block_run_id,
+                p.interaction_type,
+            ),
+        ));
+    }
+
+    // §15：重放必须返回**当时真实发生的事**。
+    //
+    // 这里刻意**不**用 `unwrap_or_default()`：一份空的 `EffectSummary` 会报告
+    // `fsrs_applied: false`、没有 moment、没有跳过原因 —— 也就是把
+    // 「当时确实推进了 FSRS」谎报成「什么都没发生」。那比直接报错更糟，
+    // 因为调用方无法区分「真的没发生」和「读不出来」（§50）。
+    //
+    // 注意：返回错误**不会**重新执行这次动作，因此不会产生第二个学习事实 ——
+    // 幂等键的保护依然成立，只是我们拒绝编造一份摘要。
+    let effect: EffectSummary =
+        serde_json::from_str(&existing.effect_summary_json).map_err(|e| {
+            TrainingError::new(
+                TrainingErrorCode::EffectSummaryUnreadable,
+                format!(
+                    "交互 {} 已存在（幂等键 {}），但它的效果摘要无法解析：{e}。\
+                 拒绝用一份空摘要顶替 —— 那会把「确实发生过」谎报成「没发生」。",
+                    existing.id, p.client_action_id
+                ),
+            )
+        })?;
+
+    Ok(InteractionOutcome {
+        interaction: existing,
+        effect,
+        replayed: true,
+    })
+}
+
+/// §21 的判定方式 → moment 来源类型。
+///
+/// 确定性路径记为 `SystemDerived`；用户自检记为 `UserExplicit`；
+/// AI Tutor 记为 `TutorObserved` —— 后者在 `max_quality_for_source` 里上限就是 Medium，
+/// 与 §22 一致，构成**第二道**防线（第一道是 `VerificationMethod::max_evidence_quality`）。
+fn source_type_for(v: VerificationMethod) -> MomentSourceType {
+    match v {
+        VerificationMethod::Deterministic | VerificationMethod::Structured => {
+            MomentSourceType::SystemDerived
+        }
+        VerificationMethod::SelfCheck => MomentSourceType::UserExplicit,
+        VerificationMethod::AiTutor => MomentSourceType::TutorObserved,
+    }
+}
+
+/// §22 + §50：非权威来源（AI 导师）产出的 moment 一律降级为 attempt。
+///
+/// 为什么必须存在这个函数：`learning_moment` 的规则 (5) 已经**硬性拒绝**
+/// `tutor_observed + recall_success`。如果协议实现声明了 `RecallSuccess` 而判定方式
+/// 是 `AiTutor`，整条交互会写入失败并回滚 —— 那等于「配了 AI 反而不能用」，
+/// 与 §21（AI 默认沉默、应用必须照常可用）直接冲突。
+///
+/// 因此这里做的是**语义降级**而不是「换个类型凑过去」：
+///
+/// ```text
+/// AI 能说的    ：「这一次尝试发生了，我的评估是 success / partial / failure」
+/// AI 不能说的   ：「你确实掌握了」——那是权威学习事实
+/// ```
+///
+/// 降级对**全部结果**统一生效（不只是成功）：AI 对一次失败的判断同样是观察，
+/// 不是权威事实。信息没有丢失 —— AI 的评估仍原样保存在 moment 的 `result`
+/// 字段与 `training_interactions.result` 里。
+///
+/// 这是**防御性后备**：命令层已经通过 [`super::types::moment_type_for_result`]
+/// 给出同样的类型。保留这一层是因为它保护的是**数据库写入路径本身**，
+/// 而不是某一个调用方。
+fn moment_type_for(
+    declared: LearningMomentType,
+    source_type: MomentSourceType,
+) -> LearningMomentType {
+    if !source_type.is_non_authoritative() {
+        return declared;
+    }
+    match declared {
+        // 回忆类：成功 / 部分 / 失败 一律降级为 attempt。
+        LearningMomentType::RecallSuccess
+        | LearningMomentType::RecallPartial
+        | LearningMomentType::RecallFailure => LearningMomentType::RecallAttempt,
+
+        LearningMomentType::ExplanationSuccess => LearningMomentType::ExplanationAttempt,
+
+        LearningMomentType::PracticeSuccess | LearningMomentType::PracticeFailure => {
+            LearningMomentType::PracticeAttempt
+        }
+
+        LearningMomentType::TransferSuccess | LearningMomentType::TransferFailure => {
+            LearningMomentType::TransferAttempt
+        }
+
+        // 其余类型本身就不是「权威结果」（HintRequested / QuestionAsked /
+        // InterestSignal / ManualNote …），无需降级。
+        other => other,
+    }
+}
+
+// ============================ 块推进（PACK A 收口 · D11–D21）============================
+//
+// # 这一段存在的唯一理由
+//
+// W4 决策 D4 记录了一个缺口：`training_block_runs.status` 与
+// `training_runs.current_block_ordinal` 在创建之后**从未被写过**，
+// 因为当时没有任何东西评估 `CompletionRuleKind`，而两个候选猜测
+// （一律 `completed` / 一律 `skipped`）都是编造。
+//
+// Owner 补充决定 D11–D21 把这个缺口收口了。这一段的全部纪律可以写成三行：
+//
+// ```text
+// BLOCK COMPLETED  !=  LEARNING MASTERED
+// USER FINISHED    !=  USER SUCCEEDED
+// TIME SPENT       !=  LEARNING EVIDENCE
+// ```
+//
+// 因此这里**只写**块状态与 `current_block_ordinal`。它不写：
+//
+// ```text
+// learning_moments   memory_reviews   memory_units   mastery
+// ```
+//
+// # D19 —— 通用兜底同样不许绕过求值器
+//
+// 没有专属体验的 ProtocolId **保留它自己的** `protocol_id` 与
+// `completion_rule`，并走**同一个**后端求值器。前端可以渲染通用控件，
+// 但绝不能自己判定「看起来做完了」。
+
+/// 一个块的完成契约状态（只读投影，供 UI 显形）。
+///
+/// 前端拿到它之后**仍然**不能自行判定完成：它只用来把后端已经写死的
+/// 冻结规则讲给用户听，以及解释「为什么现在还不能往下走」。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
+pub struct BlockCompletionState {
+    pub block_run_id: i64,
+    /// 该块使用的冻结完成规则（D15）。
+    pub rule_kind: CompletionRuleKind,
+    /// 冻结规则的人话描述（`CompletionRule.description_zh`）。
+    pub rule_zh: String,
+    /// 按**当前**已落库事实，完成契约是否已满足。
+    pub satisfied: bool,
+    /// 稳定原因码（永不为 `None` / 空串）。
+    pub reason: String,
+}
+
+/// 一次块推进的结果。
+///
+/// `learning_moment_ids` / `fsrs_applied` 被**刻意**保留在这份返回值里，
+/// 而且恒为空 / 恒为 false：它们不是「顺便带上的字段」，而是把 D11 的
+/// 约束变成**调用方和前端都能看见**的事实 —— 每次推进都必须能回答
+/// 「这次有没有产生学习证据」，答案是「没有」，并且要能被测到。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
+pub struct BlockAdvanceOutcome {
+    pub run: TrainingRun,
+    pub block: TrainingBlockRun,
+    /// 凭什么可以往下走（未推进则为 `None`）。
+    pub progression: Option<BlockProgression>,
+    /// 稳定原因码。
+    pub reason: String,
+    /// 是否真的落库推进了。`false` = 规则未满足，**什么都没写**。
+    pub advanced: bool,
+    /// 下一个应该进入的块（没有剩余块则为 `None`）。
+    pub next_block_id: Option<i64>,
+    /// **恒为空**（D11）：块推进从不产生 LearningMoment。
+    pub learning_moment_ids: Vec<i64>,
+    /// **恒为 false**（D11 / D18）：块推进从不推进 FSRS。
+    pub fsrs_applied: bool,
+}
+
+/// 用户权威推进一个块（D12 `Finish` / D13 `Stop`）。
+#[derive(Debug, Clone)]
+pub struct AdvanceBlockParams {
+    pub profile_id: i64,
+    pub training_run_id: i64,
+    pub block_run_id: i64,
+    /// 用户权威的形态。**两种都允许往下走**，但语义后果不同（见模块头）。
+    pub intent: BlockAdvanceIntent,
+    /// 时间片规则用的已用分钟数（D17 块计时状态）。`None` = 未知。
+    pub elapsed_minutes: Option<i64>,
+}
+
+/// 纯规则推进：只有冻结完成规则被满足时才往前走。
+#[derive(Debug, Clone)]
+pub struct TryCompleteBlockParams {
+    pub profile_id: i64,
+    pub training_run_id: i64,
+    pub block_run_id: i64,
+    pub elapsed_minutes: Option<i64>,
+}
+
+/// 该块的冻结完成规则。**绝不猜测**（D19）。
+///
+/// - 休息块（§10：`protocol_id IS NULL`）没有协议 → 用时间片语义；
+/// - 学习块 → 用注册表里该协议**自己的** `completion_rule`，
+///   通用兜底也保留原 `protocol_id`，不替换成别的规则（D19）。
+fn completion_rule_for(block: &TrainingBlockRun) -> Result<CompletionRuleKind, TrainingError> {
+    match block.protocol_id {
+        Some(pid) => Ok(find_protocol(pid).completion_rule.kind),
+        None if block.is_break => Ok(CompletionRuleKind::TimeSliceOrUserStop),
+        None => Err(TrainingError::new(
+            TrainingErrorCode::BreakBlockInvariantViolated,
+            format!(
+                "块 {} 既没有 protocol_id 也不是休息块，无法判定完成（§10）",
+                block.id
+            ),
+        )),
+    }
+}
+
+/// 从**落库事实**里收集完成判定所需的全部输入（D17）。
+///
+/// 只读 `training_interactions` 与由这些交互合法产生的 `learning_moments`，
+/// 全部限定在同一 profile / 同一 run / 同一 block 内。
+fn gather_completion_facts(
+    tx: &Connection,
+    profile_id: i64,
+    block: &TrainingBlockRun,
+    elapsed_minutes: Option<i64>,
+    explicit_finish: bool,
+    user_stop: bool,
+) -> Result<CompletionFacts, TrainingError> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT id, interaction_type, result
+               FROM training_interactions
+              WHERE profile_id = ?1 AND block_run_id = ?2
+              ORDER BY id ASC",
+        )
+        .map_err(TrainingError::db)?;
+    let rows: Vec<(i64, String, Option<InteractionResult>)> = stmt
+        .query_map(params![profile_id, block.id], |r| {
+            let result_raw: Option<String> = r.get(2)?;
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                result_raw.as_deref().and_then(InteractionResult::parse),
+            ))
+        })
+        .map_err(TrainingError::db)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(TrainingError::db)?;
+
+    let interactions: Vec<BlockInteractionFact> = rows
+        .iter()
+        .map(|(_, interaction_type, result)| BlockInteractionFact {
+            interaction_type: interaction_type.clone(),
+            result: *result,
+        })
+        .collect();
+
+    Ok(CompletionFacts {
+        moment_types: load_moment_types_for_interactions(
+            tx,
+            profile_id,
+            &rows.iter().map(|(id, _, _)| *id).collect::<Vec<i64>>(),
+        )?,
+        interactions,
+        planned_minutes: block.planned_minutes,
+        elapsed_minutes,
+        explicit_finish,
+        user_stop,
+    })
+}
+
+/// 这些交互**合法产生**的 LearningMoment 类型。
+///
+/// 走的是 §18 的 `idx_learning_moments_training_source`（profile_id, source_id），
+/// 即只认 `training_interaction:<id>` 这条溯源链 —— 别的来源的 moment
+/// 不是这个块的行为，不能拿来判定这个块完成（D17）。
+fn load_moment_types_for_interactions(
+    tx: &Connection,
+    profile_id: i64,
+    interaction_ids: &[i64],
+) -> Result<Vec<LearningMomentType>, TrainingError> {
+    if interaction_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sources = interaction_ids
+        .iter()
+        .map(|id| format!("'{}'", training_source_id(*id)))
+        .collect::<Vec<String>>()
+        .join(",");
+    let sql = format!(
+        "SELECT moment_type FROM learning_moments
+          WHERE profile_id = ?1 AND source_id IN ({sources})"
+    );
+    let mut stmt = tx.prepare(&sql).map_err(TrainingError::db)?;
+    let raw: Vec<String> = stmt
+        .query_map(params![profile_id], |r| r.get(0))
+        .map_err(TrainingError::db)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(TrainingError::db)?;
+
+    // 未知 moment_type → 明确报错，而不是静默丢弃。
+    // 静默丢弃会让「其实发生过一次成功」被判成「什么都没发生」（§50）。
+    raw.iter()
+        .map(|s| {
+            LearningMomentType::parse(s).ok_or_else(|| {
+                TrainingError::new(
+                    TrainingErrorCode::Db,
+                    format!("learning_moments.moment_type 无法解析：{s}"),
+                )
+            })
+        })
+        .collect()
+}
+
+/// 推进性质 → 块终态。
+///
+/// ```text
+/// RuleSatisfied     规则被真实交互结果满足      → Completed
+/// TimeSliceElapsed  时间片确实走完了（D18）     → Completed
+/// UserFinished      用户显式「做完了」           → Completed
+/// UserStopped       用户「停下 / 跳过」          → Skipped
+/// ```
+///
+/// `UserStopped` 走 `Skipped`，这是 D13 要求的「复用既有 skip/stop 语义」；
+/// 而 §50 同时保证 `Skipped` **不是**失败 —— 它只是「这一段结束了，
+/// 且没有可核实的完成证据」。
+fn terminal_status_for(progression: BlockProgression) -> TrainingBlockStatus {
+    match progression {
+        BlockProgression::RuleSatisfied
+        | BlockProgression::TimeSliceElapsed
+        | BlockProgression::UserFinished => TrainingBlockStatus::Completed,
+        BlockProgression::UserStopped => TrainingBlockStatus::Skipped,
+    }
+}
+
+/// 写入块终态 + 推进 `current_block_ordinal`。**只写这两件事**。
+fn apply_block_terminal(
+    tx: &Connection,
+    run: &TrainingRun,
+    block: &TrainingBlockRun,
+    to: TrainingBlockStatus,
+) -> Result<(TrainingBlockRun, Option<i64>), TrainingError> {
+    transition_block_status(block.status, to)?;
+
+    tx.execute(
+        "UPDATE training_block_runs
+            SET status = ?1,
+                ended_at = datetime('now'),
+                updated_at = datetime('now')
+          WHERE id = ?2 AND profile_id = ?3",
+        params![to.as_str(), block.id, run.profile_id],
+    )
+    .map_err(TrainingError::db)?;
+
+    // 下一个待进入的块：ordinal 最小的 pending 块。**不自动激活** ——
+    // 激活是用户/前端的显式动作，而 `idx_training_blocks_one_active`
+    // 保证一次至多一个 active 块。
+    let next: Option<(i64, i64)> = match tx.query_row(
+        "SELECT id, ordinal FROM training_block_runs
+          WHERE training_run_id = ?1 AND status = 'pending'
+          ORDER BY ordinal ASC
+          LIMIT 1",
+        params![run.id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ) {
+        Ok(v) => Some(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => return Err(TrainingError::db(e)),
+    };
+
+    tx.execute(
+        "UPDATE training_runs
+            SET current_block_ordinal = ?1,
+                updated_at = datetime('now')
+          WHERE id = ?2 AND profile_id = ?3",
+        params![next.map(|(_, ordinal)| ordinal), run.id, run.profile_id],
+    )
+    .map_err(TrainingError::db)?;
+
+    let updated = load_block_run(tx, run.profile_id, block.id)?;
+    Ok((updated, next.map(|(id, _)| id)))
+}
+
+/// 激活一个块：写入 `started_at`（D17 的「块计时状态」）并把它记为当前块。
+///
+/// 为什么这条通路必须存在：时间片规则需要 `started_at` 才算得出「过了多久」。
+/// 没有它，「块计时状态」这一项 D17 允许的输入就是空的，
+/// 时间片规则将永远无法满足。
+pub fn start_training_block(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+    block_run_id: i64,
+) -> Result<TrainingBlockRun, TrainingError> {
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<TrainingBlockRun, TrainingError> {
+        let run = load_run(tx, profile_id, training_run_id)?;
+        if run.status.is_terminal() {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TerminalRunState,
+                format!("训练 {} 已处于终态，不能再激活块（§9）", run.id),
+            ));
+        }
+        let block = load_block_run(tx, profile_id, block_run_id)?;
+        if block.training_run_id != run.id {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingBlockNotFound,
+                format!(
+                    "块 {} 不属于训练 {}（跨 run 引用被拒绝）",
+                    block_run_id, training_run_id
+                ),
+            ));
+        }
+
+        // §10 `idx_training_blocks_one_active`：一次至多一个 active 块。
+        // 提前给出可读诊断，而不是让唯一索引抛一个难懂的约束错误。
+        let active_other: Option<i64> = match tx.query_row(
+            "SELECT id FROM training_block_runs
+              WHERE training_run_id = ?1 AND status = 'active' AND id <> ?2
+              LIMIT 1",
+            params![run.id, block_run_id],
+            |r| r.get(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(TrainingError::db(e)),
+        };
+        if let Some(other) = active_other {
+            return Err(TrainingError::new(
+                TrainingErrorCode::IllegalBlockTransition,
+                format!(
+                    "块 {other} 仍是 active，同一训练一次只能有一个进行中的块（§10）；\
+                     请先结束它再开始块 {block_run_id}"
+                ),
+            ));
+        }
+
+        transition_block_status(block.status, TrainingBlockStatus::Active)?;
+        tx.execute(
+            "UPDATE training_block_runs
+                SET status = 'active',
+                    started_at = COALESCE(started_at, datetime('now')),
+                    updated_at = datetime('now')
+              WHERE id = ?1 AND profile_id = ?2",
+            params![block_run_id, profile_id],
+        )
+        .map_err(TrainingError::db)?;
+        tx.execute(
+            "UPDATE training_runs
+                SET current_block_ordinal = ?1,
+                    updated_at = datetime('now')
+              WHERE id = ?2 AND profile_id = ?3",
+            params![block.ordinal, run.id, profile_id],
+        )
+        .map_err(TrainingError::db)?;
+
+        load_block_run(tx, profile_id, block_run_id)
+    })();
+    finish_immediate(conn, result)
+}
+
+/// 只读求值：这个块当前的完成契约状态（D19：前端不得自己判）。
+pub fn block_completion_state(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+    block_run_id: i64,
+    elapsed_minutes: Option<i64>,
+) -> Result<BlockCompletionState, TrainingError> {
+    let block = load_block_run(conn, profile_id, block_run_id)?;
+    if block.training_run_id != training_run_id {
+        return Err(TrainingError::new(
+            TrainingErrorCode::TrainingBlockNotFound,
+            format!("块 {block_run_id} 不属于训练 {training_run_id}"),
+        ));
+    }
+    let kind = completion_rule_for(&block)?;
+    let facts = gather_completion_facts(conn, profile_id, &block, elapsed_minutes, false, false)?;
+    let decision = evaluate_completion(kind, &facts);
+    Ok(BlockCompletionState {
+        block_run_id: block.id,
+        rule_kind: kind,
+        rule_zh: match block.protocol_id {
+            Some(pid) => find_protocol(pid)
+                .completion_rule
+                .description_zh
+                .to_string(),
+            None => "休息片刻".to_string(),
+        },
+        satisfied: decision.satisfied(),
+        reason: decision.reason,
+    })
+}
+
+/// 纯规则推进：只有冻结完成规则被满足时才落库推进。
+///
+/// 这是「用户什么都没说，只是完成了一次交互之后」该调的路径。
+/// 规则没满足 → **什么都不写**，返回 `advanced = false` 与原因码。
+///
+/// 本函数**不**产生任何学习证据（D11 / D18 / D21）。
+pub fn try_complete_training_block(
+    conn: &Connection,
+    p: TryCompleteBlockParams,
+) -> Result<BlockAdvanceOutcome, TrainingError> {
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<BlockAdvanceOutcome, TrainingError> {
+        let run = load_run(tx, p.profile_id, p.training_run_id)?;
+        if run.status.is_terminal() {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TerminalRunState,
+                format!("训练 {} 已处于终态，不再推进块（§9）", run.id),
+            ));
+        }
+        let block = load_block_run(tx, p.profile_id, p.block_run_id)?;
+        if block.training_run_id != run.id {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingBlockNotFound,
+                format!(
+                    "块 {} 不属于训练 {}（跨 run 引用被拒绝）",
+                    p.block_run_id, p.training_run_id
+                ),
+            ));
+        }
+
+        let kind = completion_rule_for(&block)?;
+        let facts =
+            gather_completion_facts(tx, p.profile_id, &block, p.elapsed_minutes, false, false)?;
+        let decision = evaluate_completion(kind, &facts);
+
+        let Some(progression) = decision.progression else {
+            return Ok(BlockAdvanceOutcome {
+                run,
+                block,
+                progression: None,
+                reason: decision.reason,
+                advanced: false,
+                next_block_id: None,
+                learning_moment_ids: Vec::new(),
+                fsrs_applied: false,
+            });
+        };
+
+        let (updated, next_block_id) =
+            apply_block_terminal(tx, &run, &block, terminal_status_for(progression))?;
+        let run = load_run(tx, p.profile_id, p.training_run_id)?;
+        Ok(BlockAdvanceOutcome {
+            run,
+            block: updated,
+            progression: Some(progression),
+            reason: decision.reason,
+            advanced: true,
+            next_block_id,
+            // D11 / D21：块推进**永远**不产生学习证据。
+            // 这两个字段不是占位符，是可供调用方与测试断言的契约。
+            learning_moment_ids: Vec::new(),
+            fsrs_applied: false,
+        })
+    })();
+    finish_immediate(conn, result)
+}
+
+/// 用户权威推进：用户说了算，**一定**可以往下走。
+///
+/// 但「可以往下走」不等于「学会了」：
+///
+/// ```text
+/// Finish  用户「做完了 / 继续」  → 块 Completed（D12 `OrExplicit`）
+///                                 但不等于 explanation / practice / recall 成功
+/// Stop    用户「停下 / 跳过」    → 块 Skipped（D13 user-stop 路径）
+///                                 但不等于 error_corrected，也不等于失败（§50）
+/// ```
+///
+/// 只有当冻结规则**已经**被真实交互结果满足时，才记 `Completed` + `RuleSatisfied`；
+/// 否则按上面的表记终态，并在两种情况下都**不**写任何学习证据。
+///
+/// 对 `ErrorCorrection` 尤其重要：用户停止 = 「训练在没有核实到修正的情况下结束」，
+/// 绝不写成「已修正」（D13）。
+pub fn advance_training_block(
+    conn: &Connection,
+    p: AdvanceBlockParams,
+) -> Result<BlockAdvanceOutcome, TrainingError> {
+    begin_immediate(conn)?;
+    let tx: &Connection = conn;
+    let result = (|| -> Result<BlockAdvanceOutcome, TrainingError> {
+        let run = load_run(tx, p.profile_id, p.training_run_id)?;
+        if run.status.is_terminal() {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TerminalRunState,
+                format!("训练 {} 已处于终态，不再推进块（§9）", run.id),
+            ));
+        }
+        let block = load_block_run(tx, p.profile_id, p.block_run_id)?;
+        if block.training_run_id != run.id {
+            return Err(TrainingError::new(
+                TrainingErrorCode::TrainingBlockNotFound,
+                format!(
+                    "块 {} 不属于训练 {}（跨 run 引用被拒绝）",
+                    p.block_run_id, p.training_run_id
+                ),
+            ));
+        }
+
+        let kind = completion_rule_for(&block)?;
+        let facts = gather_completion_facts(
+            tx,
+            p.profile_id,
+            &block,
+            p.elapsed_minutes,
+            p.intent == BlockAdvanceIntent::Finish,
+            p.intent == BlockAdvanceIntent::Stop,
+        )?;
+        let mut decision = evaluate_completion(kind, &facts);
+
+        // 用户权威：规则没给出任何推进理由时，由用户的意图兜底。
+        // 这一步**在求值器之后**，兜底只决定「凭什么往下走」这个标注，
+        // 不改变「有没有产生证据」—— 后者恒为「没有」（D11 / D21）。
+        if decision.progression.is_none() {
+            decision.progression = Some(match p.intent {
+                BlockAdvanceIntent::Finish => BlockProgression::UserFinished,
+                BlockAdvanceIntent::Stop => BlockProgression::UserStopped,
+            });
+            decision.reason = match p.intent {
+                BlockAdvanceIntent::Finish => super::completion::REASON_USER_FINISHED.to_string(),
+                BlockAdvanceIntent::Stop => super::completion::REASON_USER_STOPPED.to_string(),
+            };
+        }
+
+        let progression = decision.progression.expect("上面已确保有值");
+        let (updated, next_block_id) =
+            apply_block_terminal(tx, &run, &block, terminal_status_for(progression))?;
+        let run = load_run(tx, p.profile_id, p.training_run_id)?;
+        Ok(BlockAdvanceOutcome {
+            run,
+            block: updated,
+            progression: Some(progression),
+            reason: decision.reason,
+            advanced: true,
+            next_block_id,
+            learning_moment_ids: Vec::new(),
+            fsrs_applied: false,
+        })
+    })();
+    finish_immediate(conn, result)
+}
+
+// ============================ 读取 ============================
+
+pub fn get_training_run(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<TrainingRun, TrainingError> {
+    load_run(conn, profile_id, training_run_id)
+}
+
+pub fn list_block_runs(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<Vec<TrainingBlockRun>, TrainingError> {
+    let sql = format!(
+        "SELECT {BLOCK_COLUMNS} FROM training_block_runs
+          WHERE profile_id = ?1 AND training_run_id = ?2
+          ORDER BY ordinal ASC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(TrainingError::db)?;
+    let rows = stmt
+        .query_map(params![profile_id, training_run_id], row_to_block)
+        .map_err(TrainingError::db)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(TrainingError::db)
+}
+
+/// 列出该档案当前的未终结训练（§8 的唯一开放位，至多一个）。
+pub fn find_open_training_run(
+    conn: &Connection,
+    profile_id: i64,
+) -> Result<Option<TrainingRun>, TrainingError> {
+    let sql = format!(
+        "SELECT {RUN_COLUMNS} FROM training_runs
+          WHERE profile_id = ?1 AND status IN ('ready','active','paused')
+          ORDER BY id DESC LIMIT 1"
+    );
+    match conn.query_row(&sql, params![profile_id], row_to_run) {
+        Ok(run) => Ok(Some(run)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(TrainingError::db(e)),
+    }
+}
+
+/// 列出该训练的全部交互（按写入顺序），用于前端恢复与审计。
+pub fn list_interactions(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<Vec<TrainingInteraction>, TrainingError> {
+    let sql = format!(
+        "SELECT {INTERACTION_COLUMNS} FROM training_interactions
+          WHERE profile_id = ?1 AND training_run_id = ?2
+          ORDER BY id ASC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(TrainingError::db)?;
+    let rows = stmt
+        .query_map(params![profile_id, training_run_id], row_to_interaction)
+        .map_err(TrainingError::db)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(TrainingError::db)
+}
+
+fn load_run(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+) -> Result<TrainingRun, TrainingError> {
+    let sql = format!("SELECT {RUN_COLUMNS} FROM training_runs WHERE id = ?1 AND profile_id = ?2");
+    match conn.query_row(&sql, params![training_run_id, profile_id], row_to_run) {
+        Ok(run) => Ok(run),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Err(TrainingError::new(
+            TrainingErrorCode::TrainingRunNotFound,
+            format!("训练不存在或不属于该档案（run={training_run_id}, profile={profile_id}）"),
+        )),
+        Err(e) => Err(TrainingError::db(e)),
+    }
+}
+
+fn load_block_run(
+    conn: &Connection,
+    profile_id: i64,
+    block_run_id: i64,
+) -> Result<TrainingBlockRun, TrainingError> {
+    let sql = format!(
+        "SELECT {BLOCK_COLUMNS} FROM training_block_runs WHERE id = ?1 AND profile_id = ?2"
+    );
+    match conn.query_row(&sql, params![block_run_id, profile_id], row_to_block) {
+        Ok(block) => Ok(block),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Err(TrainingError::new(
+            TrainingErrorCode::TrainingBlockNotFound,
+            format!("训练块不存在或不属于该档案（block={block_run_id}, profile={profile_id}）"),
+        )),
+        Err(e) => Err(TrainingError::db(e)),
+    }
+}
+
+fn load_interaction(
+    conn: &Connection,
+    profile_id: i64,
+    interaction_id: i64,
+) -> Result<TrainingInteraction, TrainingError> {
+    let sql = format!(
+        "SELECT {INTERACTION_COLUMNS} FROM training_interactions WHERE id = ?1 AND profile_id = ?2"
+    );
+    conn.query_row(
+        &sql,
+        params![interaction_id, profile_id],
+        row_to_interaction,
+    )
+    .map_err(TrainingError::db)
+}
+
+fn find_interaction_by_action_id(
+    conn: &Connection,
+    profile_id: i64,
+    client_action_id: &str,
+) -> Result<Option<TrainingInteraction>, TrainingError> {
+    let sql = format!(
+        "SELECT {INTERACTION_COLUMNS} FROM training_interactions
+          WHERE profile_id = ?1 AND client_action_id = ?2
+          LIMIT 1"
+    );
+    match conn.query_row(
+        &sql,
+        params![profile_id, client_action_id],
+        row_to_interaction,
+    ) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(TrainingError::db(e)),
+    }
+}
+
+// ============================ 事务辅助 ============================
+
+/// §15 / §19 / §20 统一使用 `BEGIN IMMEDIATE`。
+///
+/// 仓库未启用 rusqlite 的 `TransactionBehavior`（见 `repository/study_profile.rs` 的说明），
+/// 因此沿用既有 `execute_batch` 写法，与仓库其余事务代码保持一致。
+///
+/// 返回 `()` 而不是某个事务句柄是刻意的：SQLite 的事务属于**连接**，不属于句柄。
+/// 开启之后，调用方继续使用同一个 `&Connection` 完成全部读写即可。
+fn begin_immediate(conn: &Connection) -> Result<(), TrainingError> {
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| {
+        TrainingError::new(
+            TrainingErrorCode::Db,
+            format!("无法开始 IMMEDIATE 事务：{e}"),
+        )
+    })
+}
+
+/// 成功 → `COMMIT`；失败 → `ROLLBACK` 后原样返回错误。
+fn finish_immediate<T>(
+    conn: &Connection,
+    result: Result<T, TrainingError>,
+) -> Result<T, TrainingError> {
+    match result {
+        Ok(value) => {
+            conn.execute_batch("COMMIT").map_err(TrainingError::db)?;
+            Ok(value)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}

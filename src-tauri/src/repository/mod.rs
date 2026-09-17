@@ -1,3 +1,4 @@
+pub mod active_learning_intent;
 pub mod adjustment;
 pub mod ai_pending_action;
 pub mod ai_provider_profile;
@@ -15,6 +16,7 @@ pub mod knowledge_canvas;
 pub mod knowledge_document;
 pub mod knowledge_workspace;
 pub mod learning_data;
+pub mod learning_domain;
 pub mod learning_item;
 pub mod mastery;
 pub mod memory;

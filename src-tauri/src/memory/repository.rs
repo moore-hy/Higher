@@ -402,6 +402,41 @@ pub fn update_unit_scheduling(
     Ok(())
 }
 
+const REVIEW_COLUMNS: &str =
+    "id, profile_id, memory_unit_id, learning_moment_id, rating, reviewed_at,
+     elapsed_days, scheduled_days, state_before_json, state_after_json, created_at";
+
+fn row_to_review(row: &rusqlite::Row<'_>) -> rusqlite::Result<super::types::MemoryReview> {
+    let rating_raw: String = row.get(4)?;
+    let before_raw: String = row.get(8)?;
+    let after_raw: String = row.get(9)?;
+    let rating = ReviewRating::parse(&rating_raw).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("未知 rating：{rating_raw}"),
+            )),
+        )
+    })?;
+    Ok(super::types::MemoryReview {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        memory_unit_id: row.get(2)?,
+        learning_moment_id: row.get(3)?,
+        rating,
+        reviewed_at: row.get(5)?,
+        elapsed_days: row.get(6)?,
+        scheduled_days: row.get(7)?,
+        state_before_json: serde_json::from_str(&before_raw)
+            .unwrap_or_else(|_| serde_json::json!({})),
+        state_after_json: serde_json::from_str(&after_raw)
+            .unwrap_or_else(|_| serde_json::json!({})),
+        created_at: row.get(10)?,
+    })
+}
+
 /// 读取某 MemoryUnit 的复习账本（新→旧）。
 pub fn list_reviews_for_unit(
     conn: &Connection,
@@ -412,48 +447,42 @@ pub fn list_reviews_for_unit(
     if limit <= 0 {
         return Ok(Vec::new());
     }
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, profile_id, memory_unit_id, learning_moment_id, rating, reviewed_at,
-                    elapsed_days, scheduled_days, state_before_json, state_after_json, created_at
-             FROM memory_reviews
-             WHERE profile_id = ?1 AND memory_unit_id = ?2
-             ORDER BY reviewed_at DESC, id DESC LIMIT ?3",
-        )
-        .map_err(|e| e.to_string())?;
+    let sql = format!(
+        "SELECT {REVIEW_COLUMNS}
+           FROM memory_reviews
+          WHERE profile_id = ?1 AND memory_unit_id = ?2
+          ORDER BY reviewed_at DESC, id DESC LIMIT ?3"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![profile_id, memory_unit_id, limit], |row| {
-            let rating_raw: String = row.get(4)?;
-            let before_raw: String = row.get(8)?;
-            let after_raw: String = row.get(9)?;
-            let rating = ReviewRating::parse(&rating_raw).ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    4,
-                    rusqlite::types::Type::Text,
-                    Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("未知 rating：{rating_raw}"),
-                    )),
-                )
-            })?;
-            Ok(super::types::MemoryReview {
-                id: row.get(0)?,
-                profile_id: row.get(1)?,
-                memory_unit_id: row.get(2)?,
-                learning_moment_id: row.get(3)?,
-                rating,
-                reviewed_at: row.get(5)?,
-                elapsed_days: row.get(6)?,
-                scheduled_days: row.get(7)?,
-                state_before_json: serde_json::from_str(&before_raw)
-                    .unwrap_or_else(|_| serde_json::json!({})),
-                state_after_json: serde_json::from_str(&after_raw)
-                    .unwrap_or_else(|_| serde_json::json!({})),
-                created_at: row.get(10)?,
-            })
-        })
+        .query_map(params![profile_id, memory_unit_id, limit], row_to_review)
         .map_err(|e| e.to_string())?;
     collect(rows)
+}
+
+/// §16 —— 按 `learning_moment_id` 查既有复习（**恰好一次**的读取侧）。
+///
+/// 返回 `None` = 该 moment 尚未推进过 FSRS，可以正常排程；
+/// 返回 `Some` = 已经推进过，调用方必须复用既有结果而**不得**再次更新 MemoryUnit。
+///
+/// 与 v041 的 `idx_memory_reviews_moment_once` 构成同一不变量的两层防线：
+/// 本函数是可读的短路路径，唯一索引是并发下仍然成立的最终保证。
+pub fn find_review_by_moment(
+    conn: &Connection,
+    profile_id: i64,
+    learning_moment_id: i64,
+) -> Result<Option<super::types::MemoryReview>, String> {
+    let sql = format!(
+        "SELECT {REVIEW_COLUMNS}
+           FROM memory_reviews
+          WHERE profile_id = ?1 AND learning_moment_id = ?2
+          LIMIT 1"
+    );
+    match conn.query_row(&sql, params![profile_id, learning_moment_id], row_to_review) {
+        Ok(review) => Ok(Some(review)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// 默认期望保留率（对外暴露，便于上层避免硬编码）。

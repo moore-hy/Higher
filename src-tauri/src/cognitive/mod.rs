@@ -14,6 +14,7 @@
 pub mod decision;
 pub mod evidence;
 pub mod learner_model;
+pub mod learning_domain;
 pub mod learning_moment;
 pub mod memory_projection;
 pub mod progress_projection;
@@ -34,6 +35,10 @@ pub use decision::{
     DecisionAlternative, DecisionCandidate, DecisionInput, DecisionItemFacts, DecisionMode,
     DecisionReasonCode, ALL_REASON_CODES, MAX_ALTERNATIVES,
 };
+// REAL LEARNING ENGINE V1 §3 / §6 — Learning Domain 词表（存储与意图侧）。
+// 与 §14 的 ProtocolDomain（协议选择侧）刻意保持两个类型，桥接见 to_protocol_domain。
+pub use learning_domain::{LearningDomain, FALLBACK_DOMAIN};
+
 // §16 / §17 — Session Composer 与两个「带」。
 pub use session_composer::{
     classify_load, classify_readiness, compose_session, select_primary_protocol, LoadBand,
@@ -55,8 +60,9 @@ pub use memory_projection::{
 // §26 — Progress 页四轴投影（**没有**跨轴聚合分）。
 pub use learner_model::{
     build_learner_item_state_v2, build_learner_item_state_v2_now, build_learner_states_v2,
+    interest_detail_for_item, project_interest, project_interest_detail,
     project_learner_item_state, summarize_memory, AcquisitionState, ApplicationState,
-    CalibrationState, FluencyState, FrictionBand, InterestBand, LearnerItemStateV2,
+    CalibrationState, FluencyState, FrictionBand, InterestBand, InterestDetail, LearnerItemStateV2,
     LearnerProjectionInput, MemoryUnitSummary, RecallState, StabilityState, TransferState,
 };
 pub use learning_moment::{

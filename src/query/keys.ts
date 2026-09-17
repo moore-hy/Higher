@@ -183,6 +183,17 @@ export const queryKeys = {
     client: ["sync", "client"] as const,
     server: ["sync", "server"] as const,
   },
+
+  /**
+   * REAL LEARNING ENGINE V1 · W4 —— TrainingExperience。
+   *
+   * 一次训练的全部状态由**一个** key 承载（run + 块 + 交互），
+   * 与后端 `get_training_session` 的「一次 IPC 返回整页」契约一致。
+   */
+  training: {
+    session: (profileId: number, trainingRunId: number) =>
+      ["training", "session", profileId, trainingRunId] as const,
+  },
 } as const;
 
 export type QueryKeys = typeof queryKeys;

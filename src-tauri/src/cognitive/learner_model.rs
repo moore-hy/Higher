@@ -550,7 +550,69 @@ pub fn project_calibration(moments: &[LearningMoment]) -> CalibrationState {
 pub const INTEREST_POLARITY_KEY: &str = "polarity";
 pub const INTEREST_BEHAVIOR_KEY: &str = "behavior";
 
-pub fn project_interest(moments: &[LearningMoment]) -> InterestBand {
+/// 兴趣信号的**明细**（REAL LEARNING ENGINE V1 · W3 兴趣接线）。
+///
+/// # 为什么需要明细而不只是 band
+///
+/// `DecisionItemFacts` 需要 `explicit_interest` 与 `repeated_interest` 两个布尔位
+/// （§25 的候选排序键 I）。只把 `InterestBand` 传下去是**信息不足**的：
+/// `High` 可能来自「一条显式 interest」，也可能来自「两条行为信号」，
+/// 而这两者对「是否算反复兴趣」的结论不同。
+///
+/// 因此这里把**同一份**计数逻辑的结果暴露出来，而不是让调用方各自重数一遍 ——
+/// 后者会立刻制造第二套兴趣真相，违背 `cognitive/mod.rs` 的「不建第二真相源」纪律。
+///
+/// # 不推断人格（§35）
+///
+/// 明细只记录**可观察信号的数量**：显式表态、行为证据、负向证据。
+/// 它不产生任何「性格」「偏好强度」「兴趣分数」之类的推断量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterestDetail {
+    /// `metadata.polarity == "interest"` 的次数。
+    pub explicit_positives: usize,
+    /// `metadata.behavior ∈ {return, followup, extension}` 的次数。
+    pub behavior_positives: usize,
+    /// `metadata.polarity == "dislike"` 或 `metadata.behavior == "skip"` 的次数。
+    pub negatives: usize,
+    /// 与 [`project_interest`] 完全一致的分档。
+    pub band: InterestBand,
+}
+
+impl InterestDetail {
+    /// 正向信号总数（显式 + 行为）。
+    ///
+    /// 注意：单个信号可以**同时**贡献显式与行为两个正向计数
+    /// （既写了 `polarity=interest` 又写了 `behavior=followup`）——
+    /// 这是既有 `project_interest` 的语义，这里逐字保留。
+    pub fn positives(&self) -> usize {
+        self.explicit_positives + self.behavior_positives
+    }
+
+    /// 显式兴趣：至少一次明确表态。行为信号**不**算显式。
+    pub fn explicit_interest(&self) -> bool {
+        self.explicit_positives > 0
+    }
+
+    /// 反复兴趣：正向信号累计 ≥ 2 次（显式或行为皆可）。
+    ///
+    /// 「反复」的门槛取 2，与 `learner_model` 中 `low_conf_successes >= 2` 等
+    /// 既有「重复即信号」的判定口径一致；单次兴趣永远不升级为反复兴趣。
+    pub fn repeated_interest(&self) -> bool {
+        self.positives() >= 2
+    }
+
+    /// 无任何兴趣信号时的明细（`band = Unknown`）。
+    pub fn absent() -> Self {
+        Self {
+            explicit_positives: 0,
+            behavior_positives: 0,
+            negatives: 0,
+            band: InterestBand::Unknown,
+        }
+    }
+}
+
+pub fn project_interest_detail(moments: &[LearningMoment]) -> InterestDetail {
     let signals: Vec<&serde_json::Value> = moments
         .iter()
         .filter(|m| m.moment_type == LearningMomentType::InterestSignal)
@@ -558,10 +620,11 @@ pub fn project_interest(moments: &[LearningMoment]) -> InterestBand {
         .collect();
 
     if signals.is_empty() {
-        return InterestBand::Unknown;
+        return InterestDetail::absent();
     }
 
-    let mut positives = 0usize;
+    let mut explicit_positives = 0usize;
+    let mut behavior_positives = 0usize;
     let mut negatives = 0usize;
 
     for s in signals {
@@ -569,25 +632,41 @@ pub fn project_interest(moments: &[LearningMoment]) -> InterestBand {
         let behavior = s.get(INTEREST_BEHAVIOR_KEY).and_then(|v| v.as_str());
 
         match polarity {
-            Some("interest") => positives += 1,
+            Some("interest") => explicit_positives += 1,
             Some("dislike") => negatives += 1,
             _ => {}
         }
         match behavior {
             // 主动回来 / 追问 / 延展 —— 行为兴趣
-            Some("return") | Some("followup") | Some("extension") => positives += 1,
+            Some("return") | Some("followup") | Some("extension") => behavior_positives += 1,
             // 反复主动跳过 —— 行为负向
             Some("skip") => negatives += 1,
             _ => {}
         }
     }
 
-    match (positives, negatives) {
+    let positives = explicit_positives + behavior_positives;
+    let band = match (positives, negatives) {
         (0, 0) => InterestBand::Neutral,
         (p, 0) if p > 0 => InterestBand::High,
         (0, n) if n > 0 => InterestBand::Low,
         _ => InterestBand::Neutral, // mixed
+    };
+
+    InterestDetail {
+        explicit_positives,
+        behavior_positives,
+        negatives,
+        band,
     }
+}
+
+/// 兴趣分档（**公共行为保持不变**）。
+///
+/// 本函数现在委托给 [`project_interest_detail`]，分档逻辑与计数口径逐字未变；
+/// 拆分的唯一目的是让「明细」与「分档」共用同一份计数，而不是各自实现一遍。
+pub fn project_interest(moments: &[LearningMoment]) -> InterestBand {
+    project_interest_detail(moments).band
 }
 
 // ============================ DB 投影入口 ============================
@@ -621,6 +700,21 @@ pub fn build_learner_item_state_v2(
         friction_band,
         now_utc: now_utc.to_string(),
     }))
+}
+
+/// 从 DB 构建某学习项的**兴趣明细**（W3 接线入口）。
+///
+/// 与 [`build_learner_item_state_v2`] 读取**同一份** moments
+/// （同一读取函数、同一 `MOMENT_READ_LIMIT`），因此兴趣明细与 Learner Model 的
+/// `interest_state` 永远同源 —— 不存在两套兴趣统计互相漂移的可能。
+pub fn interest_detail_for_item(
+    conn: &rusqlite::Connection,
+    profile_id: i64,
+    learning_item_id: i64,
+) -> Result<InterestDetail, String> {
+    let moments =
+        list_learning_moments_for_item(conn, profile_id, learning_item_id, MOMENT_READ_LIMIT)?;
+    Ok(project_interest_detail(&moments))
 }
 
 /// 把 MemoryUnit 列表归约为 Stability 轴所需的摘要。
