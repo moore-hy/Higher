@@ -2184,13 +2184,24 @@ fn audit_a26_no_frozen_taxonomy_expansion() {
 
 // ============================ AUDIT-A27 ============================
 
-/// A27 —— **不存在** v042+ 迁移。
+/// A27 —— **不存在**超出当前授权上限的迁移。
+///
+/// # 上限为何是 v042 而不是 v041（NIGHT SHIFT O2 · M1）
+///
+/// 本门在 HOTFIX-01 时期断言「最新迁移必须是 v041」，其**真实意图**是
+/// 「不得出现未被授权的迁移」。NIGHT SHIFT O2 §12 明确授权并**要求**创建
+/// `v042_document_ingestion`（REAL LEARNING ENGINE V1 早已把 v042 预留给
+/// PACK B / W5 的文档导入，见 `.higher/REAL_LEARNING_ENGINE_V1_PROGRESS.md` §2）。
+///
+/// 因此上限随授权一起上移到 v042，而本门真正要锁的东西**没有变**：
+/// `v043+` 仍然属于 PACK C / W6，本夜不得出现。O2-04 / O2-21 在
+/// `real_learning_engine_document_foundation` 里对同一上限再断言一次。
 #[test]
-fn audit_a27_no_v042_or_later_migration_exists() {
+fn audit_a27_no_migration_beyond_authorized_ceiling_exists() {
     assert_eq!(
         migrations::latest_version(),
-        41,
-        "A27：最新迁移必须是 v041（training_runtime）—— v042+ 属于 PACK B"
+        42,
+        "A27：最新迁移必须是 v042（document_ingestion）—— v043+ 属于 PACK C / W6"
     );
 
     let dir = repo_root().join("src-tauri/src/migrations");
@@ -2201,7 +2212,7 @@ fn audit_a27_no_v042_or_later_migration_exists() {
         if let Some(rest) = name.strip_prefix('v') {
             if let Some(num) = rest.get(0..3) {
                 if let Ok(n) = num.parse::<u32>() {
-                    if n >= 42 {
+                    if n >= 43 {
                         offenders.push(name);
                     }
                 }
@@ -2210,10 +2221,10 @@ fn audit_a27_no_v042_or_later_migration_exists() {
     }
     assert!(
         offenders.is_empty(),
-        "A27：发现了 v042+ 迁移文件：{offenders:?} —— HOTFIX-01 禁止新增迁移"
+        "A27：发现了 v043+ 迁移文件：{offenders:?} —— 本夜只授权 v042"
     );
 
-    // 迁移账本里也不得有 v042+ 的记录。
+    // 迁移账本里也不得有 v043+ 的记录。
     let ledger = std::fs::read_to_string(dir.join("mod.rs")).expect("迁移账本必须存在");
     assert!(
         ledger.contains("latest_version"),
@@ -2264,11 +2275,11 @@ fn audit_a28_pack_b_and_w5_remain_untouched() {
         );
     }
 
-    // ---- 3. 迁移上限仍然是 v041 ----
+    // ---- 3. 迁移上限 = v042（NIGHT SHIFT O2 §12 授权），v043+ 仍属 PACK C ----
     assert_eq!(
         migrations::latest_version(),
-        41,
-        "A28：PACK B 会新增迁移；上限仍是 41 才说明没动"
+        42,
+        "A28：本夜只授权到 v042；出现 v043+ 才说明 PACK C 被动了"
     );
 
     // ---- 4. 训练运行时只有三张表（PACK A 的边界）----

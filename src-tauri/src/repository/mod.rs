@@ -7,6 +7,7 @@ pub mod changeset;
 pub mod cleanup;
 pub mod conversation;
 pub mod daily_report;
+pub mod document_ingestion;
 pub mod evaluation;
 pub mod feedback;
 pub mod goal;

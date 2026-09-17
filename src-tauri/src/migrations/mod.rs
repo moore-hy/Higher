@@ -44,6 +44,9 @@ pub mod v038_memory_engine;
 pub mod v039_active_learning_intent;
 pub mod v040_learning_domain;
 pub mod v041_training_runtime;
+// REAL LEARNING ENGINE V1 §26：v042 Document Ingestion（PACK B / W5）。
+// NIGHT SHIFT O2 §12 授权：**只**新增 v042，不得出现 v043+。
+pub mod v042_document_ingestion;
 
 /// 单个 Migration 定义。
 ///
@@ -270,6 +273,13 @@ const MIGRATIONS: &[Migration] = &[
         version: 41,
         name: "training_runtime",
         up: v041_training_runtime::up,
+    },
+    // REAL LEARNING ENGINE V1 §26：v042 Document Ingestion。
+    // NIGHT SHIFT O2 §12：这是本夜授权的**唯一**新迁移；v043+ 仍属 PACK C / W6。
+    Migration {
+        version: 42,
+        name: "document_ingestion",
+        up: v042_document_ingestion::up,
     },
 ];
 
