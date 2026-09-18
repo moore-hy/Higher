@@ -112,7 +112,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ✅ DONE (462d4fa) |
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ✅ DONE (ea9137c) |
 | W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ✅ DONE (a6a8ce2) |
-| W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | 🔧 in_progress |
+| W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | ✅ DONE (f361aa3) |
 | W7 | Close stale progress projection | `fix(progress): derive difficulty from real training blocks` | ⏳ pending |
 | W8 | Final validation + closure | `feat(cognitive): close grounded learning bridge v1` | ⏳ pending |
 
@@ -575,7 +575,7 @@ No new migration (v043 remains the ceiling). DTO regeneration was **purely addit
 
 ## §9 — W6 IMPLEMENTATION NOTES
 
-**Commit:** `TBD` — `fix(training): resume structured learning through training runtime`
+**Commit:** `f361aa3` — `fix(training): resume structured learning through training runtime` (10 files, +1122 / −4)
 
 ### 9.1 The locked rule
 
