@@ -27,10 +27,12 @@
 use rusqlite::Connection;
 
 use crate::cognitive::decision::DecisionMode;
+use crate::cognitive::session_composer::TrainingSessionPlan;
 
+use super::grounding::{compile_grounded_material, GroundingRequest};
 use super::runtime::{
-    block_completion_state, create_training_run, get_training_run, list_block_runs,
-    list_interactions, BlockCompletionState, CreateTrainingRunParams,
+    block_completion_state, create_training_run_with_materials, get_training_run, list_block_runs,
+    list_interactions, BlockCompletionState, CreateTrainingRunParams, PreparedBlockMaterial,
 };
 use super::types::{
     TrainingBlockRun, TrainingError, TrainingErrorCode, TrainingInteraction, TrainingRun,
@@ -84,6 +86,67 @@ pub fn load_training_session(
     })
 }
 
+/// GROUNDED LEARNING BRIDGE V1 · P1.1 **PHASE A** —— 在写事务**之外**准备接地材料。
+///
+/// # 为什么必须在事务之外
+///
+/// 编译材料会走真实文档检索（FTS / 邻接 / 父上下文）。把它放进创建事务，
+/// 只会把写锁持有时间拉长到「一次检索的长度」，而收益为零：材料是**只读**产物，
+/// 不依赖任何即将被写入的行。真正必须原子的是**落库**那一步（PHASE B，
+/// 在 [`create_training_run_with_materials`] 内）。
+///
+/// # 锁定语义
+///
+/// - 材料绑定的是**计划决定的目标学习项**（`plan.target_learning_item_id`），
+///   而不是调用方口述的学习项 —— 「run 指向 A、材料来自 B」是不允许的；
+/// - 协议取**计划里那一块的协议**，本函数绝不替换协议，也绝不「就近挑一个能用的」；
+/// - `ai = None`（§P1.2）：确定性学习闭环必须在**没有云端、没有本地模型、没有
+///   provider** 的前提下完整成立。更丰富材料属于后续能力，不在今晚的闭包范围内；
+/// - 没有 Ready 来源 → 材料是**诚实的 `Unavailable`**，照常准备并落库（P1.3）：
+///   「不可用」不是失败，也不得用编造内容掩盖；
+/// - 没有目标学习项 → 不准备任何材料，快照保持 NULL；
+/// - 休息块 → 不准备材料，快照保持 NULL。
+pub(crate) fn prepare_block_materials(
+    conn: &Connection,
+    profile_id: i64,
+    plan: &TrainingSessionPlan,
+    mode: DecisionMode,
+) -> Result<Vec<PreparedBlockMaterial>, TrainingError> {
+    let Some(item_id) = plan.target_learning_item_id else {
+        // 没有目标学习项就没有「该学什么」，因此没有可接地的对象。
+        // 这里**不**退化成「全档案语料库」—— 那正是 §9.1 禁止的静默全库检索。
+        return Ok(Vec::new());
+    };
+
+    let mut prepared: Vec<PreparedBlockMaterial> = Vec::new();
+    for block in &plan.blocks {
+        if block.is_break {
+            continue;
+        }
+        let Some(protocol) = block.protocol_id else {
+            // 非休息块缺协议本身就会被 `validate_block_invariant` 在创建时拒绝。
+            // 本函数不替它编一个协议，也不假装它有材料。
+            continue;
+        };
+
+        let req = GroundingRequest {
+            profile_id,
+            learning_item_id: item_id,
+            protocol,
+            block_goal: block.goal.as_str(),
+            mode,
+        };
+        let material = compile_grounded_material(conn, &req, None).map_err(TrainingError::db)?;
+
+        prepared.push(PreparedBlockMaterial {
+            ordinal: block.ordinal,
+            protocol_id: protocol,
+            material,
+        });
+    }
+    Ok(prepared)
+}
+
 /// §19：用**与 Today Coach 完全相同的确定性路径**编排并创建一次训练。
 ///
 /// 硬约束：
@@ -94,7 +157,9 @@ pub fn load_training_session(
 /// - `learning_item_id` 取自 `plan.target_learning_item_id` —— **计划决定学什么**，
 ///   而不是调用方决定，避免「run 指向 A、计划编排的是 B」这种自相矛盾；
 /// - 模式取自 `snapshot.mode`，因此 DIRECT 意图会被 `create_training_run`
-///   在同一事务内消费（§5）。
+///   在同一事务内消费（§5）；
+/// - **接地材料先编译、后与块同事务落库**（P1.1）。生产路径**永远**不会
+///   静默跳过准备：没有 Ready 来源时落库的是一份诚实的 `Unavailable` 快照。
 pub fn start_training_for_item(
     conn: &Connection,
     profile_id: i64,
@@ -135,7 +200,12 @@ pub fn start_training_for_item(
         }
     };
 
-    create_training_run(
+    // PHASE A —— 事务外准备。
+    let prepared: Vec<PreparedBlockMaterial> =
+        prepare_block_materials(conn, profile_id, &plan, snapshot.mode)?;
+
+    // PHASE B —— 同事务落库（run + 全部块 + 接地快照 + DIRECT 意图消费）。
+    create_training_run_with_materials(
         conn,
         CreateTrainingRunParams {
             profile_id,
@@ -144,5 +214,6 @@ pub fn start_training_for_item(
             plan,
             now_utc,
         },
+        &prepared,
     )
 }

@@ -20,15 +20,19 @@
 //!
 //! # 本文件**不**声称的事（诚实边界 —— 必须读）
 //!
-//! 生产路径目前**没有**任何调用方把接地材料写进
-//! `training_block_runs.material_snapshot_json`：
-//! `compile_grounded_material` / `save_material_snapshot` 在 `src-tauri/src/` 里
-//! **只有再导出、没有调用点**，`session_composer.rs` 也从未引用材料能力
-//! （W4 账本 §7.3 决策 4 明确登记「policy only — session_composer.rs untouched」）。
+//! 本文件只证明**能力链**：真实解析 → 真实上下文 → 真实接地材料 → 快照往返。
 //!
-//! 所以本文件证明的是**能力链**（真实解析 → 真实上下文 → 真实接地材料 →
-//! 快照往返），而**不是**「生产已接线」。这个缺口登记在
-//! `.higher/GROUNDED_LEARNING_BRIDGE_V1_PROGRESS.md` 的 W8 硬阻塞一节。
+//! 它**不**证明生产接线 —— 生产接线的证明在
+//! `tests/grounded_learning_bridge_closure.rs`（OM-P1-01..19），那里走的是
+//! **生产入口** `start_training_for_item`，并且断言
+//! `training_block_runs.material_snapshot_json` 真的被写入。
+//!
+//! 历史背景（留档，勿删）：W8 交付时，`compile_grounded_material` /
+//! `save_material_snapshot` 在 `src-tauri/src/` 里**只有再导出、没有调用点**，
+//! 于是 `material_snapshot_json` 恒为 NULL，8 个专项体验永远显示「不可用」。
+//! 该缺口登记在 `.higher/GROUNDED_LEARNING_BRIDGE_V1_PROGRESS.md` 的 W8 硬阻塞一节，
+//! 并已由 HIGHER OVERNIGHT MARATHON V2 · P1.1（PHASE A 事务外编译 / PHASE B
+//! 同事务落库）闭合。
 //!
 //! 运行：
 //!   cargo test --manifest-path src-tauri/Cargo.toml --test grounded_learning_bridge_realtime

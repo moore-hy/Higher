@@ -667,6 +667,16 @@ pub enum TrainingErrorCode {
     TrainingRunHasNoBlocks,
     /// HOTFIX-01 FIX F1：还有未终结的块，训练不能算完成。
     TrainingRunHasOpenBlocks,
+    /// GROUNDED LEARNING BRIDGE V1 · P1.1：**写事务之外**准备好的接地材料与计划
+    /// 对不上（ordinal 不在计划里 / ordinal 重复 / 与块协议不一致 / 休息块带了材料）。
+    ///
+    /// 这必须在事务开始前发现并拒绝：一旦落到事务中间，「计划与材料不一致」
+    /// 只会以约束错误或静默错位的形式暴露，而事务中间的错误只能整体回滚，
+    /// 无法给出可读诊断。**不存在**「先建 run 再慢慢补材料」的路径。
+    PreparedMaterialMismatch,
+    /// GROUNDED LEARNING BRIDGE V1 · P1.1：接地材料快照在创建事务内落库失败，
+    /// 因此整个创建事务已回滚 —— **不会**留下一个 RUNNING/READY 却无接地的训练。
+    GroundedSnapshotPersistFailed,
     Db,
 }
 
@@ -695,6 +705,8 @@ impl TrainingErrorCode {
             Self::TrainingBlockOutOfOrder => "TRAINING_BLOCK_OUT_OF_ORDER",
             Self::TrainingRunHasNoBlocks => "TRAINING_RUN_HAS_NO_BLOCKS",
             Self::TrainingRunHasOpenBlocks => "TRAINING_RUN_HAS_OPEN_BLOCKS",
+            Self::PreparedMaterialMismatch => "PREPARED_MATERIAL_MISMATCH",
+            Self::GroundedSnapshotPersistFailed => "GROUNDED_SNAPSHOT_PERSIST_FAILED",
             Self::Db => "DB_ERROR",
         }
     }

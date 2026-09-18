@@ -49,6 +49,7 @@ use crate::repository::active_learning_intent::clear_active_intent_in_tx;
 use crate::repository::study_session::StudySessionRepository;
 
 use super::completion::{evaluate_completion, BlockInteractionFact, CompletionFacts};
+use super::grounded_material::{save_material_snapshot, GroundedTrainingMaterial};
 use super::types::{
     derive_moment_type, is_recall_compatible, is_recall_moment, transition_block_status,
     transition_run_status, validate_block_invariant, BlockAdvanceIntent, BlockProgression,
@@ -311,7 +312,113 @@ pub struct CreateTrainingRunParams {
     pub now_utc: String,
 }
 
-/// §19 —— **原子**创建。
+/// GROUNDED LEARNING BRIDGE V1 · P1.1 —— 一个**已在写事务之外**编译好的接地材料。
+///
+/// # 为什么材料必须在事务之外准备好
+///
+/// `create_training_run` **不接受**「先建 run、稍后再补快照」的两段式调用：
+/// run 一旦 COMMIT，它就已经是 READY/RUNNING 的真实训练；此时再写快照失败，
+/// 只会留下一个**静默无接地**的训练，而用户看到的是一个看起来正常的训练。
+/// 因此编译（可能包含真实的文档检索）放在事务外，**落库**与块的插入同事务。
+#[derive(Debug, Clone)]
+pub struct PreparedBlockMaterial {
+    /// 计划块与已插入块之间的**唯一**连接键（§11 P1.1 锁定：ordinal 即 join key）。
+    pub ordinal: i64,
+    /// 该块**计划**使用的协议。必须与已插入块的协议、以及材料自身的
+    /// `protocol_id` 完全一致 —— 不一致说明「块说一套、材料说另一套」。
+    pub protocol_id: ProtocolId,
+    pub material: GroundedTrainingMaterial,
+}
+
+/// 校验「准备好的材料」与「计划」严格一致。
+///
+/// 全部在**事务开始之前**完成（§11 P1.1）：能不进事务就发现的错误，不占写锁，
+/// 也不会以「事务中途回滚」的形式掩盖掉可读诊断。
+fn validate_prepared_materials(
+    plan: &TrainingSessionPlan,
+    prepared: &[PreparedBlockMaterial],
+) -> Result<(), TrainingError> {
+    let mut seen: Vec<i64> = Vec::with_capacity(prepared.len());
+    for pm in prepared {
+        if seen.contains(&pm.ordinal) {
+            return Err(TrainingError::new(
+                TrainingErrorCode::PreparedMaterialMismatch,
+                format!(
+                    "接地材料 ordinal {} 重复 —— ordinal 是块与材料的唯一连接键（§11 P1.1）",
+                    pm.ordinal
+                ),
+            ));
+        }
+        seen.push(pm.ordinal);
+
+        let block = plan
+            .blocks
+            .iter()
+            .find(|b| b.ordinal == pm.ordinal)
+            .ok_or_else(|| {
+                TrainingError::new(
+                    TrainingErrorCode::PreparedMaterialMismatch,
+                    format!("接地材料 ordinal {} 在计划里不存在（§11 P1.1）", pm.ordinal),
+                )
+            })?;
+
+        // 休息块**不得**带材料：break → material_snapshot_json 保持 NULL（P1.3）。
+        if block.is_break {
+            return Err(TrainingError::new(
+                TrainingErrorCode::PreparedMaterialMismatch,
+                format!(
+                    "休息块（ordinal {}）不得携带接地材料 —— break 的快照必须保持 NULL（P1.3）",
+                    pm.ordinal
+                ),
+            ));
+        }
+
+        // 协议必须**精确**一致。不「就近修正」，不静默替换。
+        match block.protocol_id {
+            Some(pid) if pid == pm.protocol_id => {}
+            other => {
+                return Err(TrainingError::new(
+                    TrainingErrorCode::PreparedMaterialMismatch,
+                    format!(
+                        "块 ordinal {} 的计划协议是 {:?}，但准备好的材料是 {} —— 协议必须精确一致（§11 P1.1）",
+                        pm.ordinal,
+                        other.map(|p| p.as_str()),
+                        pm.protocol_id.as_str()
+                    ),
+                ));
+            }
+        }
+
+        // 材料自身的 protocol_id 也必须与 join key 一致，否则快照里会写下一个
+        // 与所在块不符的协议，读侧将无法判断「这份材料是给哪个协议的」。
+        if pm.material.protocol_id != pm.protocol_id.as_str() {
+            return Err(TrainingError::new(
+                TrainingErrorCode::PreparedMaterialMismatch,
+                format!(
+                    "接地材料内部的 protocol_id（{}）与 ordinal {} 的协议（{}）不一致（§11 P1.1）",
+                    pm.material.protocol_id,
+                    pm.ordinal,
+                    pm.protocol_id.as_str()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// §19 —— **原子**创建（无接地材料的简写形式）。
+///
+/// 合成/测试路径可以显式地传入**空**材料集；生产路径
+/// （[`crate::training::start::start_training_for_item`]）**永远**先准备好材料
+/// 再调用 [`create_training_run_with_materials`]，绝不静默省略准备。
+pub fn create_training_run(
+    conn: &Connection,
+    p: CreateTrainingRunParams,
+) -> Result<(TrainingRun, Vec<TrainingBlockRun>), TrainingError> {
+    create_training_run_with_materials(conn, p, &[])
+}
+
+/// §19 —— **原子**创建，并在**同一事务内**把准备好的接地材料落成块快照。
 ///
 /// ```text
 /// BEGIN IMMEDIATE
@@ -321,14 +428,22 @@ pub struct CreateTrainingRunParams {
 ///   create / bind StudySession
 ///   insert TrainingRun
 ///   materialize every TrainingBlockRun
+///   for each inserted non-break block with prepared material:
+///       save_material_snapshot(...)     <-- EXISTING single serializer/writer
 ///   consume DIRECT intent when applicable
 /// COMMIT
 /// ```
 ///
-/// 任一失败 → 回滚，因此不会留下「只有 Session 没有 Run」「Run 没有块」这类孤儿。
-pub fn create_training_run(
+/// 任一失败 → 回滚，因此不会留下「只有 Session 没有 Run」「Run 没有块」
+/// 或「有 Run 但块静默无接地」这类孤儿。
+///
+/// 这是 §11 P1.1 允许的 shape B：**同一个**事务实现的内部入口，
+/// 不是第二套 runtime —— `create_training_run` 只是它以空材料集调用的简写。
+/// 之所以 `pub(crate)` 而不是 `pub`，是为了不给生产引入第二个公开入口。
+pub(crate) fn create_training_run_with_materials(
     conn: &Connection,
     p: CreateTrainingRunParams,
+    prepared: &[PreparedBlockMaterial],
 ) -> Result<(TrainingRun, Vec<TrainingBlockRun>), TrainingError> {
     if !p.plan.is_executable() {
         return Err(TrainingError::new(
@@ -357,6 +472,9 @@ pub fn create_training_run(
     for block in &p.plan.blocks {
         validate_block_invariant(block.is_break, block.protocol_id, None)?;
     }
+
+    // §11 P1.1：材料与计划的一致性同样在事务**之外**判定。
+    validate_prepared_materials(&p.plan, prepared)?;
 
     begin_immediate(conn)?;
     let tx: &Connection = conn;
@@ -434,6 +552,29 @@ pub fn create_training_run(
                 ],
             )
             .map_err(TrainingError::db)?;
+
+            // ---- §11 P1.1 PHASE B：接地快照与块**同事务**落库 ----
+            //
+            // 用刚插入的块的 id（ordinal 已由 `validate_prepared_materials` 保证唯一且
+            // 在计划内，因此这里按 ordinal 定位是精确的）。序列化/写入**只有**
+            // `save_material_snapshot` 一处实现 —— 本函数不引入第二个 serializer。
+            //
+            // 失败 → 直接返回 Err → `finish_immediate` 执行 ROLLBACK，
+            // 整次创建（Session 绑定 / Run / 全部块 / DIRECT 意图消费）一起撤销。
+            if let Some(pm) = prepared.iter().find(|pm| pm.ordinal == block.ordinal) {
+                let block_run_id = tx.last_insert_rowid();
+                save_material_snapshot(tx, p.profile_id, block_run_id, &pm.material).map_err(
+                    |e| {
+                        TrainingError::new(
+                            TrainingErrorCode::GroundedSnapshotPersistFailed,
+                            format!(
+                                "接地材料快照写入失败（block ordinal {}），创建事务整体回滚：{e}",
+                                block.ordinal
+                            ),
+                        )
+                    },
+                )?;
+            }
         }
 
         // ---- §5：DIRECT 意图在成功创建 TrainingRun 时**同事务**消费 ----
@@ -1995,5 +2136,315 @@ fn finish_immediate<T>(
             let _ = conn.execute_batch("ROLLBACK");
             Err(e)
         }
+    }
+}
+
+// ============================ GROUNDED LEARNING BRIDGE V1 · P1.1 事务边界证明 ============================
+
+/// 这些测试必须在**事务边界**上取证，而不是走整条 Today 管线：
+///
+/// ```text
+/// OM-P1-17  准备好的材料与计划不一致 → 在**提交真相之前**被拒绝，且不留痕
+/// OM-P1-07  休息块的快照保持 NULL；学习块拿到材料
+/// OM-P1-09  快照落库失败 → **整个**创建事务回滚
+/// OM-P1-16  同上：不允许「Run 已提交、快照却写失败」这种半成品
+/// ```
+///
+/// `create_training_run_with_materials` 是 `pub(crate)`，因此这里用同模块单元测试；
+/// 生产路径（`start_training_for_item`）的同类证明放在
+/// `tests/grounded_learning_bridge_closure.rs`，两处都不依赖另一处。
+#[cfg(test)]
+mod p1_transaction_boundary_tests {
+    use super::*;
+    use crate::cognitive::protocol::{find, CompletionRule, CompletionRuleKind};
+    use crate::cognitive::session_composer::{TrainingBlock, TrainingSessionPlan};
+    use crate::repository::learning_item::LearningItemRepository;
+    use crate::repository::study_profile::StudyProfileRepository;
+
+    fn setup() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::migrations::run_migrations(&conn).unwrap();
+        conn
+    }
+
+    fn mk_profile(conn: &Connection, name: &str) -> i64 {
+        StudyProfileRepository::new(conn)
+            .create(name, None, None, None, None, None)
+            .unwrap()
+            .id
+    }
+
+    fn mk_item(conn: &Connection, profile_id: i64, name: &str) -> i64 {
+        LearningItemRepository::new(conn)
+            .create_for_profile(profile_id, None, name, None, None)
+            .unwrap()
+            .id
+    }
+
+    /// 一块「学习块 + 休息块」的确定性计划（休息块**必须**存在，才能证明 NULL 语义）。
+    fn plan_learning_then_break(target: Option<i64>) -> TrainingSessionPlan {
+        TrainingSessionPlan {
+            target_learning_item_id: target,
+            total_minutes: 15,
+            blocks: vec![
+                TrainingBlock {
+                    ordinal: 0,
+                    protocol_id: Some(ProtocolId::FreeRecall),
+                    minutes: 10,
+                    goal: find(ProtocolId::FreeRecall).goal.to_string(),
+                    completion_rule: find(ProtocolId::FreeRecall).completion_rule,
+                    is_break: false,
+                },
+                TrainingBlock {
+                    ordinal: 1,
+                    protocol_id: None,
+                    minutes: 5,
+                    goal: "休息".to_string(),
+                    completion_rule: CompletionRule {
+                        kind: CompletionRuleKind::TimeSliceOrUserStop,
+                        description_zh: "休息不计入学习证据",
+                    },
+                    is_break: true,
+                },
+            ],
+            reason_codes: Vec::new(),
+            evidence_refs: Vec::new(),
+        }
+    }
+
+    fn material_for(protocol: ProtocolId) -> GroundedTrainingMaterial {
+        GroundedTrainingMaterial {
+            version: 1,
+            status: crate::training::grounded_material::MaterialStatus::Ready,
+            protocol_id: protocol.as_str().to_string(),
+            prompt_text: None,
+            cue_text: Some("cue".to_string()),
+            source_excerpt: Some("excerpt".to_string()),
+            reference_text: None,
+            worked_steps: Vec::new(),
+            hidden_step_index: None,
+            practice_prompt: None,
+            transfer_prompt: None,
+            generated_by: crate::training::grounded_material::GeneratedBy::Deterministic,
+            provenance: Vec::new(),
+            unavailable_reason: None,
+        }
+    }
+
+    fn prepared(ordinal: i64, protocol: ProtocolId) -> PreparedBlockMaterial {
+        PreparedBlockMaterial {
+            ordinal,
+            protocol_id: protocol,
+            material: material_for(protocol),
+        }
+    }
+
+    fn params(profile_id: i64, plan: TrainingSessionPlan) -> CreateTrainingRunParams {
+        CreateTrainingRunParams {
+            profile_id,
+            learning_item_id: plan.target_learning_item_id,
+            mode: DecisionMode::default(),
+            plan,
+            now_utc: "2026-09-19 00:00:00".to_string(),
+        }
+    }
+
+    fn counts(conn: &Connection) -> (i64, i64, i64) {
+        let runs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM training_runs", [], |r| r.get(0))
+            .unwrap();
+        let blocks: i64 = conn
+            .query_row("SELECT COUNT(*) FROM training_block_runs", [], |r| r.get(0))
+            .unwrap();
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM study_sessions", [], |r| r.get(0))
+            .unwrap();
+        (runs, blocks, sessions)
+    }
+
+    fn snapshot_of(conn: &Connection, ordinal: i64) -> Option<String> {
+        conn.query_row(
+            "SELECT material_snapshot_json FROM training_block_runs WHERE ordinal = ?1",
+            params![ordinal],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    // ---- OM-P1-17：材料与计划不一致 → 提交真相之前拒绝 ----
+
+    #[test]
+    fn p1_17_mismatched_prepared_materials_are_refused_before_any_truth_is_committed() {
+        let conn = setup();
+        let p = mk_profile(&conn, "P1.17");
+
+        // (标签, prepared 集合)
+        let cases: Vec<(&str, Vec<PreparedBlockMaterial>)> = vec![
+            (
+                "ordinal 不在计划里",
+                vec![prepared(99, ProtocolId::FreeRecall)],
+            ),
+            (
+                "ordinal 指向休息块",
+                vec![prepared(1, ProtocolId::FreeRecall)],
+            ),
+            (
+                "与块的协议不一致",
+                vec![prepared(0, ProtocolId::CuedRecall)],
+            ),
+            (
+                "ordinal 重复",
+                vec![
+                    prepared(0, ProtocolId::FreeRecall),
+                    prepared(0, ProtocolId::FreeRecall),
+                ],
+            ),
+        ];
+
+        for (label, prepared_materials) in cases {
+            let before = counts(&conn);
+            let err = create_training_run_with_materials(
+                &conn,
+                params(p, plan_learning_then_break(None)),
+                &prepared_materials,
+            )
+            .expect_err(&format!("{label} 必须被拒绝"));
+
+            assert_eq!(
+                err.code,
+                TrainingErrorCode::PreparedMaterialMismatch,
+                "{label}：必须是 typed error（{err}）"
+            );
+            assert_eq!(counts(&conn), before, "{label}：拒绝不得留下任何真相");
+            assert_eq!(
+                counts(&conn),
+                (0, 0, 0),
+                "{label}：事务前拒绝，连 Session 都不该建"
+            );
+        }
+
+        // 材料内部的 protocol_id 与 join key 不一致 → 同样拒绝。
+        let mut bad = prepared(0, ProtocolId::FreeRecall);
+        bad.material.protocol_id = ProtocolId::CuedRecall.as_str().to_string();
+        let err = create_training_run_with_materials(
+            &conn,
+            params(p, plan_learning_then_break(None)),
+            &[bad],
+        )
+        .expect_err("材料内部协议与 ordinal 协议不一致必须被拒绝");
+        assert_eq!(err.code, TrainingErrorCode::PreparedMaterialMismatch);
+        assert_eq!(counts(&conn), (0, 0, 0));
+    }
+
+    // ---- OM-P1-07 + OM-P1-01：学习块有快照，休息块保持 NULL ----
+
+    #[test]
+    fn p1_07_learning_block_gets_snapshot_and_break_block_stays_null() {
+        let conn = setup();
+        let p = mk_profile(&conn, "P1.07");
+        let item = mk_item(&conn, p, "线粒体");
+
+        let (run, blocks) = create_training_run_with_materials(
+            &conn,
+            params(p, plan_learning_then_break(Some(item))),
+            &[prepared(0, ProtocolId::FreeRecall)],
+        )
+        .unwrap();
+
+        assert_eq!(blocks.len(), 2);
+        let learning = blocks.iter().find(|b| b.ordinal == 0).unwrap();
+        let rest = blocks.iter().find(|b| b.ordinal == 1).unwrap();
+        assert!(!learning.is_break);
+        assert!(rest.is_break);
+
+        let json = snapshot_of(&conn, 0).expect("学习块必须有接地快照");
+        let parsed: GroundedTrainingMaterial = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.protocol_id, ProtocolId::FreeRecall.as_str());
+        assert_eq!(
+            parsed.status,
+            crate::training::grounded_material::MaterialStatus::Ready
+        );
+
+        assert!(
+            snapshot_of(&conn, 1).is_none(),
+            "休息块的 material_snapshot_json 必须保持 NULL（P1.3）"
+        );
+
+        // 读侧（既有唯一读取入口）必须能读回同一份东西。
+        let read_back = crate::training::load_material_snapshot(&conn, p, learning.id).unwrap();
+        assert_eq!(
+            read_back.map(|m| m.protocol_id),
+            Some("free_recall".to_string())
+        );
+
+        // 别的档案读不到（既有 profile 隔离，不是新规则）。
+        let other = mk_profile(&conn, "别的档案");
+        assert!(
+            crate::training::load_material_snapshot(&conn, other, learning.id)
+                .unwrap()
+                .is_none(),
+            "跨档案读取必须拿不到任何快照"
+        );
+        // 没被请求的块同样保持 NULL（这里 ordinal 1 已证明；再确认 run 落库）。
+        let persisted_blocks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM training_block_runs WHERE training_run_id = ?1",
+                params![run.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(persisted_blocks, 2);
+    }
+
+    // ---- OM-P1-09 / OM-P1-16：快照写失败 → 整个创建事务回滚 ----
+
+    #[test]
+    fn p1_16_snapshot_write_failure_rolls_back_the_whole_create_transaction() {
+        let conn = setup();
+        let p = mk_profile(&conn, "P1.16");
+
+        // 真实 DB 层故障注入：任何一次「把快照写成非 NULL」的 UPDATE 都被 ABORT。
+        // 这不是 mock 事务，而是让**真实的**表约束真的失败。
+        conn.execute_batch(
+            "CREATE TRIGGER p1_fault_injection
+             BEFORE UPDATE OF material_snapshot_json ON training_block_runs
+             WHEN NEW.material_snapshot_json IS NOT NULL
+             BEGIN SELECT RAISE(ABORT, 'p1.16 fault injection'); END;",
+        )
+        .unwrap();
+
+        let err = create_training_run_with_materials(
+            &conn,
+            params(p, plan_learning_then_break(None)),
+            &[prepared(0, ProtocolId::FreeRecall)],
+        )
+        .expect_err("快照写失败必须让整次创建失败");
+
+        assert_eq!(
+            err.code,
+            TrainingErrorCode::GroundedSnapshotPersistFailed,
+            "必须是可识别的快照落库失败（{err}）"
+        );
+        assert_eq!(
+            counts(&conn),
+            (0, 0, 0),
+            "OM-P1-16：不允许留下「Run 已提交但无接地」的半成品 —— Run / 块 / Session 全部回滚"
+        );
+
+        // 移除故障后，同样的调用必须成功 —— 证明失败确实来自被注入的那一步，
+        // 而不是别的原因（「失败理由必须与假设一致」）。
+        conn.execute_batch("DROP TRIGGER p1_fault_injection")
+            .unwrap();
+        let (run, blocks) = create_training_run_with_materials(
+            &conn,
+            params(p, plan_learning_then_break(None)),
+            &[prepared(0, ProtocolId::FreeRecall)],
+        )
+        .unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert!(snapshot_of(&conn, 0).is_some());
+        assert_eq!(counts(&conn), (1, 2, 1));
+        let _ = run;
     }
 }
