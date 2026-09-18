@@ -490,13 +490,13 @@ git diff --check            -> CLEAN
 STARTING SHA (task):          ab06ff081ced52535fbace3f928894cd8eae73b7
 STARTING SHA (continuation):  bf5b184969312570c8d137e1d89b246423a2fdbb
 FINAL BRANCH:                 main
-FINAL SHA:                    see §27 of the taskbook / the commit below
+FINAL SHA:                    30685346ec7530d09e0d57e9d39fde576ce34e91
 
 LOCAL COMMITS ON MAIN (this task):
   7b04bf0  fix(real-learning): narrow learning intent capture boundary            (M0)
   c2a1e7a  feat(document): add profile-safe document ingestion storage            (M1)
   bf5b184  feat(document): connect ingestion lifecycle to existing search         (M2/M3)
-  + M4/M5/M6/M8 commit, see below
+  3068534  feat(document): connect reusable document runtime and retrieval        (M4/M5/M6/M8)
 
 COMPLETED WAVES:              M0 M1 M2 M3 M4 M5 M6 M8
 SKIPPED_ALREADY_IMPLEMENTED:  none
