@@ -47,7 +47,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 use crate::repository::document_ingestion::{
     ChunkSection, DocumentIngestionError, DocumentIngestionErrorCode, DocumentIngestionRepository,
@@ -122,10 +122,197 @@ impl IngestionOutcome {
     }
 }
 
+/// 一次导入的「票据」：短锁阶段产出、无锁解析阶段仅供携带、短锁收尾阶段消费。
+///
+/// 它把「开始导入」与「解析 + 落库」解耦，使全局 `DbState` 互斥锁**不必**跨在
+/// 慢速 Docling 解析之上（W1 §6.2）。
+#[derive(Debug, Clone)]
+pub struct IngestionTicket {
+    pub job_id: i64,
+    pub source_id: i64,
+    pub profile_id: i64,
+    /// 展示名（section 缺失时的兜底标题）。
+    pub display_name: String,
+    /// 附件文件名（解析器入参）。
+    pub file_name: String,
+    /// 沙箱内相对路径（无锁阶段读字节用）。
+    pub relative_path: String,
+}
+
+/// 短锁阶段：校验 profile/来源、校验重试/起始状态、建或复用作业、标记 `Parsing`、
+/// 只读附件元数据。返回票据后**立即释放**调用方的 `DbState` 锁。
+///
+/// 并发起始正确性（W1 §6.4）：非重试起始时，若同一来源最新作业仍 `Parsing`/`Indexing`
+/// （真正进行中），直接拒绝 —— 不允许同时存在两个活动导入作业。
+pub fn begin_ingestion(
+    conn: &Connection,
+    profile_id: i64,
+    source_id: i64,
+    retry: bool,
+) -> Result<IngestionTicket, DocumentIngestionError> {
+    let repo = DocumentIngestionRepository::new(conn);
+    let source = repo.get_source(profile_id, source_id)?.ok_or_else(|| {
+        DocumentIngestionError::new(
+            DocumentIngestionErrorCode::SourceNotFound,
+            format!("来源 {source_id} 不属于档案 {profile_id}"),
+        )
+    })?;
+
+    // 只读附件元数据（带 profile 过滤）。
+    let (file_name, relative_path): (String, String) = conn
+        .query_row(
+            "SELECT file_name, relative_path FROM learning_attachments
+              WHERE id = ?1 AND profile_id = ?2",
+            params![source.attachment_id, profile_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| {
+            DocumentIngestionError::new(
+                DocumentIngestionErrorCode::AttachmentNotFound,
+                format!("来源指向的附件不存在或不属于档案 {profile_id}"),
+            )
+        })?;
+
+    // 校验重试/起始状态。
+    if let Some(job) = repo.latest_job_for_source(profile_id, source_id)? {
+        if retry {
+            if job.state != "Failed" {
+                return Err(DocumentIngestionError::new(
+                    DocumentIngestionErrorCode::InvalidJobState,
+                    format!("来源 {source_id} 的最新作业处于 {}，只有 Failed 才可重试", job.state),
+                ));
+            }
+        } else if job.state == "Parsing" || job.state == "Indexing" {
+            return Err(DocumentIngestionError::new(
+                DocumentIngestionErrorCode::InvalidJobState,
+                format!("来源 {source_id} 已有进行中的作业（{}），不可重复起始", job.state),
+            ));
+        }
+    }
+
+    // 建作业并标记 Parsing（各自独立短写）。
+    let job_id = repo.create_job(profile_id, source_id)?;
+    repo.update_job_state(profile_id, job_id, "Parsing", None, None, None)?;
+
+    Ok(IngestionTicket {
+        job_id,
+        source_id,
+        profile_id,
+        display_name: source.display_name,
+        file_name,
+        relative_path,
+    })
+}
+
+/// 短锁收尾阶段：重查作业状态后落库或失败。
+///
+/// 取消正确性（W1 §6.3）：若解析期间用户取消了作业（状态已变为 `Cancelled`），
+/// 这里**绝不会再写一份 Ready revision 盖在已取消的作业上** —— 直接返回 `Cancelled`，
+/// 不留半成品 revision、不留孤儿检索条目、不会从 `Cancelled` 复活。
+pub fn finish_ingestion(
+    conn: &mut Connection,
+    ticket: &IngestionTicket,
+    result: Result<ParsedDocument, ParseFailure>,
+) -> Result<IngestionOutcome, DocumentIngestionError> {
+    let repo = DocumentIngestionRepository::new(conn);
+
+    // 重查作业状态（短锁内）。
+    let job = repo.get_job(ticket.profile_id, ticket.job_id)?;
+    let Some(job) = job else {
+        return Err(DocumentIngestionError::new(
+            DocumentIngestionErrorCode::JobNotFound,
+            format!("作业 {} 不属于档案 {}", ticket.job_id, ticket.profile_id),
+        ));
+    };
+
+    // 取消优先：解析晚了，作业已被取消 —— 丢弃解析结果。
+    if job.state == "Cancelled" {
+        return Ok(IngestionOutcome {
+            job_id: ticket.job_id,
+            source_id: ticket.source_id,
+            state: "Cancelled".to_string(),
+            revision_id: None,
+            chunk_count: 0,
+            error_code: None,
+            error_detail: None,
+            recoverable: false,
+        });
+    }
+
+    // 只有仍处于 Parsing 的作业才允许收尾；其它终态（理论上不会到达）按失败收口。
+    if job.state != "Parsing" {
+        return Err(DocumentIngestionError::new(
+            DocumentIngestionErrorCode::InvalidJobState,
+            format!("作业 {} 处于 {}，无法收尾", ticket.job_id, job.state),
+        ));
+    }
+
+    let parsed = match result {
+        Ok(p) => p,
+        Err(failure) => {
+            repo.update_job_state(
+                ticket.profile_id,
+                ticket.job_id,
+                "Failed",
+                None,
+                Some(failure.code()),
+                Some(&failure.detail()),
+            )?;
+            return Ok(IngestionOutcome::failed(
+                ticket.job_id,
+                ticket.source_id,
+                &failure,
+            ));
+        }
+    };
+
+    // 结构写入 + 索引：一次事务。
+    let tx = conn.transaction().map_err(DocumentIngestionError::from)?;
+    match persist_revision(
+        &tx,
+        ticket.profile_id,
+        ticket.source_id,
+        ticket.job_id,
+        &ticket.display_name,
+        &parsed,
+    ) {
+        Ok((revision_id, chunk_count)) => {
+            tx.commit().map_err(DocumentIngestionError::from)?;
+            Ok(IngestionOutcome::ready(
+                ticket.job_id,
+                ticket.source_id,
+                revision_id,
+                chunk_count,
+            ))
+        }
+        Err(e) => {
+            // 回滚结构写入，然后把作业标成失败。
+            drop(tx);
+            let detail = e.to_string();
+            let repo = DocumentIngestionRepository::new(conn);
+            let _ = repo.update_job_state(
+                ticket.profile_id,
+                ticket.job_id,
+                "Failed",
+                None,
+                Some("PERSIST_FAILED"),
+                Some(&detail),
+            );
+            Ok(IngestionOutcome::failed_with(
+                ticket.job_id,
+                ticket.source_id,
+                "PERSIST_FAILED",
+                detail,
+            ))
+        }
+    }
+}
+
 /// 把一份**已经读进内存**的文件导入为可检索的文档结构。
 ///
-/// `bytes` / `file_name` 由调用方提供（文件本体住在 `learning_attachments`，
-/// 见 `document_sources.attachment_id`）。解析在写事务之外发生。
+/// 这是 `begin_ingestion` + 解析 + `finish_ingestion` 的薄顺序封装，供测试与
+/// 不需要「解析期间释放全局锁」的调用方使用。生产 IPC 路径（命令层 `run_ingestion`）
+/// 不走这里，而是显式分三段，确保全局 `DbState` 互斥锁不跨在 Docling 解析之上。
 ///
 /// 返回 `Ok` 表示**生命周期跑完了一次**（可能是 Ready，也可能是可恢复的 Failed）；
 /// 返回 `Err` 只用于「连状态机都推进不了」的情形（档案/来源不存在、SQL 不可用）。
@@ -137,70 +324,9 @@ pub fn ingest_source(
     file_name: &str,
     bytes: &[u8],
 ) -> Result<IngestionOutcome, DocumentIngestionError> {
-    let repo = DocumentIngestionRepository::new(conn);
-
-    // ---- 1. Pending ----
-    let job_id = repo.create_job(profile_id, source_id)?;
-
-    // 展示名在索引阶段作为 section 缺失时的兜底标题。
-    let display_name = repo
-        .get_source(profile_id, source_id)?
-        .map(|s| s.display_name)
-        .unwrap_or_else(|| file_name.to_string());
-
-    // ---- 2. Parsing（自己的短事务）----
-    repo.update_job_state(profile_id, job_id, "Parsing", None, None, None)?;
-
-    // ---- 3. 解析：**不持有任何 SQLite 写事务** ----
-    let parsed = match parser.parse(file_name, bytes) {
-        Ok(p) => p,
-        Err(failure) => {
-            // §13：解析失败 → job = Failed，且**没有**任何半成品结构。
-            repo.update_job_state(
-                profile_id,
-                job_id,
-                "Failed",
-                None,
-                Some(failure.code()),
-                Some(&failure.detail()),
-            )?;
-            return Ok(IngestionOutcome::failed(job_id, source_id, &failure));
-        }
-    };
-
-    // ---- 4. 结构写入 + 索引：一次事务 ----
-    let tx = conn.transaction().map_err(DocumentIngestionError::from)?;
-    match persist_revision(&tx, profile_id, source_id, job_id, &display_name, &parsed) {
-        Ok((revision_id, chunk_count)) => {
-            tx.commit().map_err(DocumentIngestionError::from)?;
-            Ok(IngestionOutcome::ready(
-                job_id,
-                source_id,
-                revision_id,
-                chunk_count,
-            ))
-        }
-        Err(e) => {
-            // 回滚结构写入，然后把作业标成失败。
-            drop(tx);
-            let detail = e.to_string();
-            let repo = DocumentIngestionRepository::new(conn);
-            let _ = repo.update_job_state(
-                profile_id,
-                job_id,
-                "Failed",
-                None,
-                Some("PERSIST_FAILED"),
-                Some(&detail),
-            );
-            Ok(IngestionOutcome::failed_with(
-                job_id,
-                source_id,
-                "PERSIST_FAILED",
-                detail,
-            ))
-        }
-    }
+    let ticket = begin_ingestion(conn, profile_id, source_id, false)?;
+    let result = parser.parse(file_name, bytes);
+    finish_ingestion(conn, &ticket, result)
 }
 
 /// 在**调用方给定的事务**里完成 revision / sections / chunks / 检索索引的写入。
@@ -328,20 +454,9 @@ pub fn retry_ingestion(
     file_name: &str,
     bytes: &[u8],
 ) -> Result<IngestionOutcome, DocumentIngestionError> {
-    let repo = DocumentIngestionRepository::new(conn);
-    if let Some(job) = repo.latest_job_for_source(profile_id, source_id)? {
-        if job.state != "Failed" {
-            return Err(DocumentIngestionError::new(
-                DocumentIngestionErrorCode::InvalidJobState,
-                format!(
-                    "来源 {source_id} 的最新作业处于 {}，只有 Failed 才可重试",
-                    job.state
-                ),
-            ));
-        }
-    }
-    drop(repo);
-    ingest_source(conn, parser, profile_id, source_id, file_name, bytes)
+    let ticket = begin_ingestion(conn, profile_id, source_id, true)?;
+    let result = parser.parse(file_name, bytes);
+    finish_ingestion(conn, &ticket, result)
 }
 
 /// 取消一个尚未终结的作业（§13 锁定状态 `Cancelled`）。

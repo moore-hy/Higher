@@ -107,7 +107,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | Wave | Scope | Commit | Status |
 |------|-------|--------|--------|
 | W0 | Baseline + reuse audit + ledger | `docs(cognitive): start grounded learning bridge execution` | ✅ DONE (this commit) |
-| W1 | O2 DB lock correctness | `fix(document): release db lock during document parsing` | ⏳ pending |
+| W1 | O2 DB lock correctness | `fix(document): release db lock during document parsing` | ✅ DONE |
 | W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ⏳ pending |
 | W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ⏳ pending |
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ⏳ pending |
@@ -127,3 +127,43 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 ## §3 — DEFERRED / SAFE-FALLBACK DECISIONS
 
 (logged per wave as they arise; none yet)
+
+---
+
+## §4 — W1 IMPLEMENTATION NOTES
+
+**Defect fixed (§6.2):** command-layer `run_ingestion` (`src-tauri/src/commands/document.rs`)
+formerly held the global `DbState(Mutex<Connection>)` guard across file-byte read + Docling parse.
+Now split into three phases that only briefly hold the lock:
+
+```text
+SHORT LOCK  begin_ingestion: validate profile/source, validate retry/start,
+            create job, mark Parsing, read attachment metadata   -> release
+NO LOCK     resolve sandbox path, read bytes, run Docling parser  (parser owns no DbState)
+SHORT LOCK  finish_ingestion: re-check job state, txn persist / mark Failed  -> release
+```
+
+**Files changed:**
+- `src-tauri/src/document_intelligence/ingestion.rs` — added `IngestionTicket`,
+  `begin_ingestion` (short lock), `finish_ingestion` (short lock + txn). Refactored
+  `ingest_source` / `retry_ingestion` to `begin → parse → finish` (kept `&mut Connection`
+  signature so existing callers/tests are unaffected). `finish_ingestion` takes `&mut Connection`
+  because `Connection::transaction` needs `&mut self`.
+- `src-tauri/src/document_intelligence/mod.rs` — re-export `begin_ingestion`, `finish_ingestion`,
+  `cancel_ingestion`, `IngestionTicket`.
+- `src-tauri/src/commands/document.rs` — rewrote `run_ingestion` to the three-phase lock split;
+  parser receives only `&[u8]` + filename, never `DbState`/`MutexGuard`.
+
+**Cancellation correctness (§6.3):** `finish_ingestion` re-reads the job; a `Cancelled` wins over a
+late parse return — no half revision, no half index, no resurrection.
+
+**Concurrent-start correctness (§6.4):** non-retry `begin_ingestion` rejects when the latest job is
+`Parsing`/`Indexing` (`InvalidJobState`); retry still requires latest `Failed`. No second job scheduler.
+
+**Tests added:** `src-tauri/tests/document_ingestion_lock.rs` — GB-DB-01..08 (all 8 pass).
+GB-DB-01/02 mirror the command's three-phase split with a real `DbState(Mutex<Connection>)` and a
+concurrent reader thread to prove the global lock is free during parse.
+
+**Regression:** existing `ingest_source`/`retry_ingestion` callers compile unchanged (signature
+unchanged). `real_learning_engine_document_foundation` + `document_intelligence` suites re-run
+green (see closure report).

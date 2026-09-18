@@ -28,6 +28,7 @@
 use crate::db;
 use crate::document_intelligence::docling_parser::{discover_runtime, DoclingRuntimeState};
 use crate::document_intelligence::ingestion::{self, IngestionOutcome};
+use crate::document_intelligence::parser::DocumentParser;
 use crate::document_intelligence::retrieval;
 use crate::document_intelligence::types::ContextPack;
 use crate::repository::document_ingestion::{
@@ -204,8 +205,7 @@ pub fn start_document_ingestion(
     profile_id: i64,
     source_id: i64,
 ) -> Result<IngestionOutcome, String> {
-    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
-    run_ingestion(&mut conn, &adir.0, profile_id, source_id, false)
+    run_ingestion(&state, &adir.0, profile_id, source_id, false)
 }
 
 /// 安全重试：只有**已终结为 `Failed`** 的最新作业才允许重试。
@@ -219,8 +219,7 @@ pub fn retry_document_ingestion(
     profile_id: i64,
     source_id: i64,
 ) -> Result<IngestionOutcome, String> {
-    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
-    run_ingestion(&mut conn, &adir.0, profile_id, source_id, true)
+    run_ingestion(&state, &adir.0, profile_id, source_id, true)
 }
 
 /// 读取某个来源的最新导入状态。
@@ -273,60 +272,52 @@ pub fn cancel_document_ingestion(
 /// 刻意不放进 ingestion 模块：读取沙箱内的文件是**平台/IO** 关注点，
 /// 而生命周期与状态机是**领域**关注点。混在一起会让生命周期无法在
 /// 没有文件系统的测试里被验证。
+///
+/// # W1 §6.2 —— 全局 `DbState` 互斥锁**不**跨在 Docling 解析之上
+///
+/// 生命周期被切成三段，只有首尾两段短暂持有全局锁：
+///
+/// ```text
+/// SHORT LOCK  校验 profile/来源 + 建/复用作业 + 标记 Parsing + 读附件元数据
+/// RELEASE
+/// NO LOCK     解析沙箱路径 + 读文件字节 + 跑 Docling 解析（解析器不持锁）
+/// RELEASE
+/// SHORT LOCK  重查作业状态（取消优先）+ 事务落库 / 标记失败
+/// ```
+///
+/// 解析器只收到 `&[u8]` + 文件名，**绝不**收到 `DbState` / `MutexGuard`。
 fn run_ingestion(
-    conn: &mut rusqlite::Connection,
+    state: &db::DbState,
     attachment_root: &std::path::Path,
     profile_id: i64,
     source_id: i64,
     retry: bool,
 ) -> Result<IngestionOutcome, String> {
-    let repo = DocumentIngestionRepository::new(conn);
-    let source = repo
-        .get_source(profile_id, source_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("来源 {source_id} 不存在或不属于档案 {profile_id}"))?;
-    drop(repo);
+    // ---- 1. SHORT DB LOCK：校验 + 建作业 + 标记 Parsing + 读附件元数据 ----
+    let ticket = {
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        ingestion::begin_ingestion(&conn, profile_id, source_id, retry)
+            .map_err(|e| e.to_string())?
+    }; // 全局 DbState 互斥锁在此释放
 
-    // 附件相对路径：**带 profile 过滤**，跨档案的附件在这里拿不到。
-    let (file_name, relative_path): (String, String) = conn
-        .query_row(
-            "SELECT file_name, relative_path FROM learning_attachments
-              WHERE id = ?1 AND profile_id = ?2",
-            rusqlite::params![source.attachment_id, profile_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .map_err(|_| "来源指向的附件不存在或不属于当前档案".to_string())?;
-
-    let full = sandbox::resolve_in_sandbox(attachment_root, &relative_path)?;
+    // ---- 2. NO DB LOCK：解析沙箱路径 + 读文件字节 ----
+    let full = sandbox::resolve_in_sandbox(attachment_root, &ticket.relative_path)
+        .map_err(|e| e.to_string())?;
     let bytes = std::fs::read(&full).map_err(|e| format!("读取附件失败：{e}"))?;
 
-    // 解析器按**自动发现**构造；运行时缺失时它自己会给出可恢复的
-    // DOCLING_UNAVAILABLE —— 命令层不需要（也不应该）在这里提前分支。
-    let parser = crate::document_intelligence::docling_parser::DoclingParser::discover();
+    // ---- 3. NO DB LOCK：发现并运行解析器（解析器不持有 DbState / MutexGuard）----
+    let result = match crate::document_intelligence::docling_parser::DoclingParser::discover() {
+        Some(p) => p.parse(&ticket.file_name, &bytes),
+        None => crate::document_intelligence::parser::UnavailableParser::new()
+            .parse(&ticket.file_name, &bytes),
+    };
 
-    match parser {
-        Some(parser) => {
-            let outcome = if retry {
-                ingestion::retry_ingestion(conn, &parser, profile_id, source_id, &file_name, &bytes)
-            } else {
-                ingestion::ingest_source(conn, &parser, profile_id, source_id, &file_name, &bytes)
-            };
-            outcome.map_err(|e| e.to_string())
-        }
-        None => {
-            // 运行时完全不在：仍然要走一遍状态机，让作业以**可恢复的 Failed**
-            // 收尾，而不是让 UI 拿到一个没有任何记录的裸错误。
-            let missing = crate::document_intelligence::parser::UnavailableParser::new();
-            let outcome = if retry {
-                ingestion::retry_ingestion(
-                    conn, &missing, profile_id, source_id, &file_name, &bytes,
-                )
-            } else {
-                ingestion::ingest_source(conn, &missing, profile_id, source_id, &file_name, &bytes)
-            };
-            outcome.map_err(|e| e.to_string())
-        }
-    }
+    // ---- 4. SHORT DB LOCK：重查 + 落库 / 失败 ----
+    let outcome = {
+        let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+        ingestion::finish_ingestion(&mut conn, &ticket, result).map_err(|e| e.to_string())?
+    };
+    Ok(outcome)
 }
 
 // ============================ 检索（M6 可达性） ============================

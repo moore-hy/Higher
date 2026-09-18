@@ -30,7 +30,10 @@ pub use docling_parser::{
     discover_runtime, runtime_adapter, DoclingParser, DoclingRuntimeState, PINNED_VERSION,
     RUNTIME_DIR_NAME,
 };
-pub use ingestion::{ingest_source, IngestionOutcome, DOCUMENT_CHUNK_ENTITY};
+pub use ingestion::{
+    begin_ingestion, cancel_ingestion, finish_ingestion, ingest_source, IngestionOutcome,
+    IngestionTicket, DOCUMENT_CHUNK_ENTITY,
+};
 pub use parser::{
     DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection, UnavailableParser,
 };
