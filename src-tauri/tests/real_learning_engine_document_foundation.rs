@@ -1776,8 +1776,10 @@ fn o2_supported_suffixes_cover_every_documented_format() {
 /// 真正送进生命周期，断言真实解析结果，把「宣称为支持」升级为「确实能解析」：
 ///
 ///   · markdown / txt / html / htm / asciidoc / docx / pptx —— Ready 且真的产出 chunk；
-///   · xlsx / csv —— Ready，但 0 chunk（已知限制：docling 把表 emit 成单个无 text 的
-///     `table` item，runner 投影丢弃它；这里锁住该行为，日后若改为告警/拒绝再改断言）。
+///   · xlsx / csv —— UNSUPPORTED_INPUT：docling 把表 emit 成单个无 text 的 `table`
+///     item，runner 投影后得到 0 可学习 chunk。按 Owner 决定，这种「能解析却学不到
+///     任何东西」的表格按 UNSUPPORTED_INPUT 拒绝，而不是静默标成 Ready(0 chunks)
+///     误导用户以为导入成功。断言锁住该行为，日后若放宽再改断言。
 ///
 /// 二进制格式（docx/pptx/xlsx）的夹具由提交的 Python 生成器产出（仅用 stdlib，
 /// 走发现的 docling 解释器），不引入任何 Rust 端 ZIP 实现。无 docling 运行时时 SKIP。
@@ -1836,62 +1838,64 @@ chloroplasts, producing glucose and oxygen.\n";
     struct Case {
         filename: &'static str,
         bytes: &'static [u8],
-        expect_chunks: bool,
         generator: Option<&'static str>,
+        // xlsx/csv：docling 把它 emit 成无 text 的 table item -> 0 可学习 chunk，
+        // 按 Owner 决定按 UNSUPPORTED_INPUT 拒绝（而非静默 Ready）。
+        expect_unsupported: bool,
     }
     let cases: &[Case] = &[
         Case {
             filename: "notes.md",
             bytes: markdown,
-            expect_chunks: true,
+            expect_unsupported: false,
             generator: None,
         },
         Case {
             filename: "notes.txt",
             bytes: text,
-            expect_chunks: true,
+            expect_unsupported: false,
             generator: None,
         },
         Case {
             filename: "page.html",
             bytes: html,
-            expect_chunks: true,
+            expect_unsupported: false,
             generator: None,
         },
         Case {
             filename: "page.htm",
             bytes: html,
-            expect_chunks: true,
+            expect_unsupported: false,
             generator: None,
         },
         Case {
             filename: "doc.asciidoc",
             bytes: asciidoc,
-            expect_chunks: true,
+            expect_unsupported: false,
             generator: None,
         },
         Case {
             filename: "data.csv",
             bytes: csv,
-            expect_chunks: false,
+            expect_unsupported: true,
             generator: None,
         },
         Case {
             filename: "doc.docx",
             bytes: &[],
-            expect_chunks: true,
+            expect_unsupported: false,
             generator: Some("make_docx.py"),
         },
         Case {
             filename: "deck.pptx",
             bytes: &[],
-            expect_chunks: true,
+            expect_unsupported: false,
             generator: Some("make_pptx.py"),
         },
         Case {
             filename: "sheet.xlsx",
             bytes: &[],
-            expect_chunks: false,
+            expect_unsupported: true,
             generator: Some("make_xlsx.py"),
         },
     ];
@@ -1924,33 +1928,44 @@ chloroplasts, producing glucose and oxygen.\n";
         let outcome = ingest_source(&mut conn, &parser, profile, source, c.filename, &fixture)
             .expect("真实运行时在场时，生命周期必须跑完");
 
-        assert!(
-            outcome.is_ready(),
-            "{}：真实解析必须成功（Ready），实际 state={} code={:?} detail={:?}",
-            c.filename,
-            outcome.state,
-            outcome.error_code,
-            outcome.error_detail
-        );
-        assert_eq!(outcome.state, "Ready", "{} 必须 Ready", c.filename);
-        if c.expect_chunks {
+        if c.expect_unsupported {
+            // Owner 决定：表格格式（xlsx/csv）解析成功却 0 个可学习 chunk 时，
+            // 按 UNSUPPORTED_INPUT 拒绝，而不是静默标成 Ready(0 chunks)。
             assert!(
-                outcome.chunk_count > 0,
-                "{}：必须真的解析出 chunk",
+                !outcome.is_ready(),
+                "{}：表格格式 0 可学习 chunk 必须按 UNSUPPORTED 拒绝，实际 state={} \
+                 code={:?} detail={:?}",
+                c.filename,
+                outcome.state,
+                outcome.error_code,
+                outcome.error_detail
+            );
+            assert_eq!(
+                outcome.error_code.as_deref(),
+                Some("UNSUPPORTED_INPUT"),
+                "{}：0 chunk 的表格格式必须表现为 UNSUPPORTED_INPUT",
                 c.filename
             );
         } else {
-            // 已知限制：xlsx/csv 摄入成功但零可学习内容。锁住该行为。
-            assert_eq!(
-                outcome.chunk_count, 0,
-                "{}：已知限制——表格格式零 chunk",
+            assert!(
+                outcome.is_ready(),
+                "{}：真实解析必须成功（Ready），实际 state={} code={:?} detail={:?}",
+                c.filename,
+                outcome.state,
+                outcome.error_code,
+                outcome.error_detail
+            );
+            assert_eq!(outcome.state, "Ready", "{} 必须 Ready", c.filename);
+            assert!(
+                outcome.chunk_count > 0,
+                "{}：必须真的解析出 chunk",
                 c.filename
             );
         }
     }
 
     println!(
-        "O2 all supported formats: 9/9 parsed Ready on real runtime \
-         (xlsx/csv = 0 chunks by design)"
+        "O2 all supported formats: 7/9 Ready with chunks on real runtime; \
+         xlsx/csv rejected as UNSUPPORTED_INPUT (0 learnable chunks by design)"
     );
 }

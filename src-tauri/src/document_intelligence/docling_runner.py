@@ -44,6 +44,12 @@ SUPPORTED_SUFFIXES = {
     ".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm", ".md", ".txt", ".asciidoc", ".csv",
 }
 
+# 表格格式（Higher 宣称为支持，但 docling 2.73.0 把它们 emit 成单个「table」item、
+# 且**没有 text**）。上面的投影会丢掉它，于是「能解析却什么都学不到」——一份对
+# Higher 没有价值的表格，若静默标成 Ready(0 chunks) 反而会让用户误以为导入成功。
+# 所以这里把「解析成功但 0 个可学习 chunk」的表格格式按 UNSUPPORTED_INPUT 处理。
+TABULAR_SUFFIXES = {".xlsx", ".csv"}
+
 
 def _distribution_version(name):
     """已安装发行版的真实版本号；拿不到就返回 None（绝不编造）。
@@ -113,6 +119,19 @@ def main():
         payload = _project(doc, version)
     except Exception as exc:  # noqa: BLE001
         _fail(EXIT_FAILED, "projection failed: %r" % (exc,))
+
+    # 表格格式的已知限制：docling 把表内容 emit 成「table」item 且无 text，投影后
+    # 0 chunk。一份「能解析但学不到任何东西」的表格对 Higher 没有价值，静默标成
+    # Ready(0 chunks) 只会误导用户以为导入成功。按 UNSUPPORTED_INPUT 处理，让调用方
+    # 拿到明确的「这份输入学不到东西」。非表格格式的 0 chunk 不在此列（例如纯图 PDF
+    # 是另一种语义，不在本决定的范围内）。
+    if suffix in TABULAR_SUFFIXES and not payload["chunks"]:
+        _fail(
+            EXIT_UNSUPPORTED,
+            "xlsx/csv parsed but yielded 0 learnable chunks: docling emits tabular "
+            "content as a `table` item with no text, so there is nothing for Higher to "
+            "learn from. Treated as UNSUPPORTED_INPUT.",
+        )
 
     json.dump(payload, sys.stdout, ensure_ascii=False)
     sys.stdout.flush()
