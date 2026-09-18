@@ -48,10 +48,8 @@ PARTS = {
 </w:document>""",
 }
 
-out = r"C:/Users/37653/Desktop/Higher/.higher/o2_fixture.docx"
+import sys as _sys
+out = _sys.argv[1] if len(_sys.argv) > 1 else r"C:/Users/37653/Desktop/Higher/.higher/o2_fixture.docx"
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     for name, body in PARTS.items():
         z.writestr(name, body)
-
-import os
-print("wrote o2_fixture.docx bytes=%d parts=%d" % (os.path.getsize(out), len(PARTS)))

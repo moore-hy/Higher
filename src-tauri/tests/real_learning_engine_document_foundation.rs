@@ -35,7 +35,7 @@
 
 use std::path::{Path, PathBuf};
 
-use app_lib::document_intelligence::docling_parser::DoclingParser;
+use app_lib::document_intelligence::docling_parser::{discover_runtime, DoclingParser};
 use app_lib::document_intelligence::ingestion::{ingest_source, retry_ingestion};
 use app_lib::document_intelligence::parser::{
     DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection, UnavailableParser,
@@ -1765,5 +1765,192 @@ fn o2_supported_suffixes_cover_every_documented_format() {
     assert!(
         !src.contains("\".ascii\""),
         "回归：asciidoc 必须用 .asciidoc 后缀（docling 的注册名），不能用 .ascii"
+    );
+}
+
+/// O2 · 全格式真实运行时解析矩阵（弥补「后缀闸门测试必要但不充分」）。
+///
+/// `o2_supported_suffixes_cover_every_documented_format` 只证明 Higher **宣称为**
+/// 支持这 10 种后缀，却没证明 docling **真能解析**它们 —— 而 `.txt` / `.ascii` 的
+/// 缺陷正是它抓不到的。本用例在 docling 运行时在场时，把每一种支持的格式的夹具
+/// 真正送进生命周期，断言真实解析结果，把「宣称为支持」升级为「确实能解析」：
+///
+///   · markdown / txt / html / htm / asciidoc / docx / pptx —— Ready 且真的产出 chunk；
+///   · xlsx / csv —— Ready，但 0 chunk（已知限制：docling 把表 emit 成单个无 text 的
+///     `table` item，runner 投影丢弃它；这里锁住该行为，日后若改为告警/拒绝再改断言）。
+///
+/// 二进制格式（docx/pptx/xlsx）的夹具由提交的 Python 生成器产出（仅用 stdlib，
+/// 走发现的 docling 解释器），不引入任何 Rust 端 ZIP 实现。无 docling 运行时时 SKIP。
+#[test]
+fn o2_all_supported_formats_parse_on_real_runtime() {
+    let state = discover_runtime();
+    let Some(interpreter) = state.interpreter() else {
+        println!(
+            "SKIP o2_all_supported_formats_parse_on_real_runtime: Docling runtime not \
+             installed (install docling==2.73.0 into %LOCALAPPDATA%\\Higher\\runtimes\\
+             docling-2.73.0-o2 to enable this test)"
+        );
+        return;
+    };
+    let interpreter = interpreter.to_path_buf();
+    let parser = DoclingParser::with_interpreter(&interpreter);
+    let root = repo_root();
+
+    let markdown = b"# Higher O2 Smoke Fixture\n\n\
+## Section One\n\n\
+The mitochondrion is the powerhouse of the cell. It produces ATP\n\
+through oxidative phosphorylation.\n\n\
+## Section Two\n\n\
+Photosynthesis converts light energy into chemical energy in\n\
+chloroplasts, producing glucose and oxygen.\n";
+    let text = b"Higher O2 Text Smoke Fixture\n\n\
+Section One\n\
+The mitochondrion is the powerhouse of the cell. It produces ATP\n\
+through oxidative phosphorylation.\n\n\
+Section Two\n\
+Photosynthesis converts light energy into chemical energy in\n\
+chloroplasts, producing glucose and oxygen.\n";
+    let html = b"<!DOCTYPE html>\n\
+<html><head><title>Higher O2 HTML Smoke Fixture</title></head>\n\
+<body>\n\
+<h1>Higher O2 HTML Smoke Fixture</h1>\n\
+<h2>Section One</h2>\n\
+<p>The mitochondrion is the powerhouse of the cell. It produces ATP\n\
+through oxidative phosphorylation.</p>\n\
+<h2>Section Two</h2>\n\
+<p>Photosynthesis converts light energy into chemical energy in\n\
+chloroplasts, producing glucose and oxygen.</p>\n\
+</body></html>\n";
+    // RFC4180：含逗号的字段必须引用，否则 docling 报「列数不一致」并产空内容。
+    let csv = b"topic,fact\n\
+Mitochondrion,\"The powerhouse of the cell, producing ATP through oxidative phosphorylation.\"\n\
+Photosynthesis,\"Converts light energy into chemical energy in chloroplasts, producing glucose.\"\n";
+    let asciidoc = b"= Higher O2 AsciiDoc Smoke Fixture\n\n\
+== Section One\n\n\
+The mitochondrion is the powerhouse of the cell. It produces ATP\n\
+through oxidative phosphorylation.\n\n\
+== Section Two\n\n\
+Photosynthesis converts light energy into chemical energy in\n\
+chloroplasts, producing glucose and oxygen.\n";
+
+    struct Case {
+        filename: &'static str,
+        bytes: &'static [u8],
+        expect_chunks: bool,
+        generator: Option<&'static str>,
+    }
+    let cases: &[Case] = &[
+        Case {
+            filename: "notes.md",
+            bytes: markdown,
+            expect_chunks: true,
+            generator: None,
+        },
+        Case {
+            filename: "notes.txt",
+            bytes: text,
+            expect_chunks: true,
+            generator: None,
+        },
+        Case {
+            filename: "page.html",
+            bytes: html,
+            expect_chunks: true,
+            generator: None,
+        },
+        Case {
+            filename: "page.htm",
+            bytes: html,
+            expect_chunks: true,
+            generator: None,
+        },
+        Case {
+            filename: "doc.asciidoc",
+            bytes: asciidoc,
+            expect_chunks: true,
+            generator: None,
+        },
+        Case {
+            filename: "data.csv",
+            bytes: csv,
+            expect_chunks: false,
+            generator: None,
+        },
+        Case {
+            filename: "doc.docx",
+            bytes: &[],
+            expect_chunks: true,
+            generator: Some("make_docx.py"),
+        },
+        Case {
+            filename: "deck.pptx",
+            bytes: &[],
+            expect_chunks: true,
+            generator: Some("make_pptx.py"),
+        },
+        Case {
+            filename: "sheet.xlsx",
+            bytes: &[],
+            expect_chunks: false,
+            generator: Some("make_xlsx.py"),
+        },
+    ];
+
+    let mut conn = setup();
+    let stamp = std::process::id();
+    for (i, c) in cases.iter().enumerate() {
+        let fixture: Vec<u8> = match c.generator {
+            Some(gen) => {
+                let out = std::env::temp_dir().join(format!("higher_o2_{stamp}_{i}.bin"));
+                let gen_path = root.join(".higher").join(gen);
+                let status = std::process::Command::new(&interpreter)
+                    .arg(&gen_path)
+                    .arg(&out)
+                    .status()
+                    .unwrap_or_else(|e| panic!("运行生成器 {gen_path:?} 失败：{e}"));
+                assert!(status.success(), "生成器 {gen_path:?} 必须成功");
+                std::fs::read(&out).unwrap_or_else(|e| panic!("读取生成的夹具 {out:?} 失败：{e}"))
+            }
+            None => c.bytes.to_vec(),
+        };
+
+        let profile = create_profile(&conn, &format!("FMT{i}"));
+        let item = create_item(&conn, profile, "材料");
+        let attachment = create_attachment(&conn, profile, item, c.filename);
+        let source = repo(&conn)
+            .create_source(profile, attachment, c.filename, None, None, "attachment")
+            .unwrap();
+
+        let outcome = ingest_source(&mut conn, &parser, profile, source, c.filename, &fixture)
+            .expect("真实运行时在场时，生命周期必须跑完");
+
+        assert!(
+            outcome.is_ready(),
+            "{}：真实解析必须成功（Ready），实际 state={} code={:?} detail={:?}",
+            c.filename,
+            outcome.state,
+            outcome.error_code,
+            outcome.error_detail
+        );
+        assert_eq!(outcome.state, "Ready", "{} 必须 Ready", c.filename);
+        if c.expect_chunks {
+            assert!(
+                outcome.chunk_count > 0,
+                "{}：必须真的解析出 chunk",
+                c.filename
+            );
+        } else {
+            // 已知限制：xlsx/csv 摄入成功但零可学习内容。锁住该行为。
+            assert_eq!(
+                outcome.chunk_count, 0,
+                "{}：已知限制——表格格式零 chunk",
+                c.filename
+            );
+        }
+    }
+
+    println!(
+        "O2 all supported formats: 9/9 parsed Ready on real runtime \
+         (xlsx/csv = 0 chunks by design)"
     );
 }
