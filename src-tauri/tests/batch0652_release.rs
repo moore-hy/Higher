@@ -281,7 +281,6 @@ fn r09_app_local_data_dir_production_usage() {
 
 #[test]
 fn r10_db_path_consistency() {
-    let lib = read_manifest("src/lib.rs");
     let storage = read_manifest("src/platform/storage.rs");
     assert!(
         storage.contains("fn runtime_db_path"),
@@ -291,14 +290,19 @@ fn r10_db_path_consistency() {
         storage.contains(".map(|d| d.join(\"higher.db\"))"),
         "R10: runtime_db_path prod 分支同根 higher.db"
     );
+    // DB 路径构造已从 lib.rs 收敛到 app/lifecycle.rs（统一经 platform::storage 派生）。
+    // 因此断言**实际**构造位置，而不是已被搬空的 lib.rs —— 契约本身未变：
+    // 单一数据根（AppLocalData）+ 文件名 higher.db，无 Roaming/Local 分裂。
+    let lifecycle = read_manifest("src/app/lifecycle.rs");
     assert!(
-        lib.contains("let db_path = db_dir.join(\"higher.db\");"),
-        "R10: DB 文件名 = higher.db"
+        lifecycle.contains("platform::storage::runtime_data_root(app.handle())")
+            && lifecycle.contains("let db_path = db_dir.join(\"higher.db\");"),
+        "R10: DB 文件名 = higher.db（app/lifecycle.rs 经 platform::storage 同根派生）"
     );
     let db = read_manifest("src/db.rs");
     assert!(
         db.contains("LOCALAPPDATA") && db.contains(".join(\"com.higher.desktop\")") && db.contains(".join(\"higher.db\")"),
-        "R10: db.rs database_path 与 lib.rs 同指 %LOCALAPPDATA%\\com.higher.desktop\\higher.db（§14 无 Roaming/Local 分裂）"
+        "R10: db.rs database_path 与 app/lifecycle.rs 同指 %LOCALAPPDATA%\\com.higher.desktop\\higher.db（§14 无 Roaming/Local 分裂）"
     );
 }
 
