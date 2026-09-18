@@ -1227,11 +1227,34 @@ pub fn record_interaction(
 
 /// §14：幂等键已存在时的判定。
 ///
-/// 这些字段全部一致 → 视为**同一个动作的重试**：原样返回既有结果，
-/// 不产生新 interaction、不产生新 LearningMoment、不产生新 Evidence、不推进 FSRS。
+/// 「同一个动作」= `training_interactions` 上承载**这次动作语义**的全部列都逐字相同。
+/// 一致 → 视为重试：原样返回既有结果，不产生新 interaction、不产生新 LearningMoment、
+/// 不产生新 Evidence、不推进 FSRS。
 ///
 /// 任何一个不一致 → 同一个键被换成了不同 payload，这是客户端 bug，
 /// 必须显式报错而**不是**覆盖原始动作。
+///
+/// # P5 真值审计：`result` 与 `prompt_text` 曾经不在比较里
+///
+/// 这不是两个可选的元数据列：
+///
+/// ```text
+/// result      -> derive_moment_type(...) 决定这次交互变成哪一种学习事实
+///                Recall 族：Success->RecallSuccess / Partial->RecallPartial
+///                           Failure->RecallFailure / 其余->RecallAttempt
+///                且只有 Recall* 会推进 FSRS（档位由 result 决定）
+/// prompt_text -> 原样落库、被读回呈现的「当时问的是什么」
+/// ```
+///
+/// 少了 `result`，同一个键把 `Success` 换成 `Failure` 会得到 `replayed: true`
+/// 与一份「当时是成功」的摘要 —— 调用方声明的结果被静默丢弃，而 API 却声称
+/// 这就是它刚才那次动作的真值（§50）。少了 `prompt_text`，换一道题重发
+/// 会拿回旧题面的回执。两者都是「把两件不同的事说成一件」。
+///
+/// 刻意**不**比较 `occurred_at`：它属于领域层的时钟（`None` = 由领域层取当前 UTC），
+/// 一次真实重试的到达时间本就不同，比较它会把所有重试都判成冲突。
+/// `verification` 也不在这里比较 —— 它由命令层决定（FIX A1），前端没有参数能改它，
+/// 且它落在 `effect_summary_json` 而不是独立列上。
 fn handle_duplicate(
     existing: TrainingInteraction,
     p: &RecordInteractionParams,
@@ -1239,16 +1262,44 @@ fn handle_duplicate(
     let same = existing.training_run_id == p.training_run_id
         && existing.block_run_id == p.block_run_id
         && existing.interaction_type == p.interaction_type
+        && existing.prompt_text == p.prompt_text
         && existing.user_response_text == p.user_response_text
-        && existing.hint_level == p.hint_level;
+        && existing.hint_level == p.hint_level
+        && existing.result == p.result;
 
     if !same {
+        // 诊断必须**点名**到底哪个字段不一致。只写 run/block/type 会让
+        // 「换了 result」这种冲突被读成「看起来哪儿都没变」——
+        // 这条错误存在的意义正是让客户端 bug 立刻可见。
+        let mut diffs: Vec<&str> = Vec::new();
+        if existing.training_run_id != p.training_run_id {
+            diffs.push("training_run_id");
+        }
+        if existing.block_run_id != p.block_run_id {
+            diffs.push("block_run_id");
+        }
+        if existing.interaction_type != p.interaction_type {
+            diffs.push("interaction_type");
+        }
+        if existing.prompt_text != p.prompt_text {
+            diffs.push("prompt_text");
+        }
+        if existing.user_response_text != p.user_response_text {
+            diffs.push("user_response_text");
+        }
+        if existing.hint_level != p.hint_level {
+            diffs.push("hint_level");
+        }
+        if existing.result != p.result {
+            diffs.push("result");
+        }
         return Err(TrainingError::new(
             TrainingErrorCode::IdempotencyKeyReusedWithDifferentPayload,
             format!(
-                "幂等键 {} 已被另一个动作使用（原 run={} block={} type={}，新 run={} block={} type={}）；\
-                 重试必须复用完全相同的 payload（§14）",
+                "幂等键 {} 已被另一个动作使用；不一致的字段：{}（原 run={} block={} type={}，\
+                 新 run={} block={} type={}）；重试必须复用完全相同的 payload（§14）",
                 p.client_action_id,
+                diffs.join(", "),
                 existing.training_run_id,
                 existing.block_run_id,
                 existing.interaction_type,

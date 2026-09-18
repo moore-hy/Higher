@@ -120,11 +120,38 @@ pub fn protocol_satisfiable(protocol: ProtocolId, availability: &MaterialAvailab
     }
 }
 
-/// §9.5 AUTOPILOT / COPILOT：Session Composer 只能从**可满足**的协议里选。
+/// §9.5 AUTOPILOT / COPILOT 的协议过滤策略。
 ///
-/// 本函数是纯策略函数（无 IO、无 LLM），供编排侧在挑选协议前调用。
-/// 若结果为空，说明当前材料**什么都撑不起** —— 调用侧应给出显式的不可用状态，
-/// 而不是硬塞一个协议。
+/// 本函数是纯策略函数（无 IO、无 LLM）：给定候选协议与当前材料能力，
+/// 返回其中**真的能成立**的那些。
+///
+/// # P5 审计结论：**故意不接线**，而且**不得**在未获 owner 授权前接线
+///
+/// 本条原先写的是「Session Composer 只能从可满足的协议里选」——那是一个
+/// **与后来锁定的 P1 相冲突**的表述。`session_composer` 至今没有调用本函数，
+/// 这是刻意的，不是漏接：
+///
+/// ```text
+/// 1) P1.2 锁定 ai = None  ->  MaterialAvailability.has_rich_material 恒为 false
+///    -> protocol_satisfiable 对 RICH_MATERIAL_PROTOCOLS（4 条）恒为 false
+///    -> 一旦接线，worked_example / faded_example / standard_practice /
+///       transfer_challenge 会被**永久排除出真实编排**
+///       —— 八个专项体验里有四个再也组合不出来（产品回归，不是修复）
+///
+/// 2) P1.3 锁定「没有 Ready 来源时，只要存在学习块就必须落一份诚实的 Unavailable」
+///    -> 有学习块但没导入文档是完全合法的状态
+///    -> 一旦接线，has_grounded_context=false 时所有协议都不可满足，
+///       编排返回空计划 -> PLAN_HAS_NO_BLOCKS
+///       —— 没导入过文档的用户将**完全无法开始训练**（产品回归）
+/// ```
+///
+/// 也就是说：接线会同时删掉 4 个专项协议与「无文档也能练」这条能力。
+/// 正确的形态是**反过来**的 —— 不可用是合法且会被如实落库的状态，
+/// 协议在能力不足时不被静默替换（见 [`compile_grounded_material`] 的 §9.5 DIRECT 分支）。
+///
+/// 若 owner 确实希望「按材料能力收窄协议池」，那是一个**新的产品决策**
+/// （要同时回答「无文档用户怎么办」与「四个 RICH 协议是否允许从编排中消失」），
+/// 不在本次审计的授权范围内。此函数保留为纯策略能力 + 测试取证，维持不接线。
 pub fn select_satisfiable_protocols(
     candidates: &[ProtocolId],
     availability: &MaterialAvailability,
@@ -524,7 +551,7 @@ pub struct GroundingRequest<'a> {
 /// | 需要丰富材料 + AI 在位且成功 | `ai_non_authoritative`，保留出处（GB-GR-07） |
 /// | 需要丰富材料 + AI 失败 | 静默保留确定性底座，不崩、不伪造（GB-GR-06） |
 /// | DIRECT + 需要丰富材料但产不出 | `unavailable`，**协议不被替换**（GB-GR-08） |
-/// | COPILOT/AUTOPILOT + 需要丰富材料但产不出 | 确定性底座可用（编排侧本该先过滤） |
+/// | COPILOT/AUTOPILOT + 需要丰富材料但产不出 | 确定性底座照常可用 —— **既不替换协议，也不过滤协议池**（P5：见 [`select_satisfiable_protocols`] 为何不得接线） |
 pub fn compile_grounded_material(
     conn: &Connection,
     req: &GroundingRequest<'_>,
@@ -576,6 +603,13 @@ pub fn compile_grounded_material(
 /// 便捷：从 DB 计算当前的材料能力（供编排侧在选协议前查询）。
 ///
 /// `AI 能力` 不由本模块臆测 —— 调用侧知道自己的 AI 栈是否真的可用，把它传进来。
+///
+/// # 当前**没有**生产调用方（P5 审计，刻意如此）
+///
+/// 它与 [`select_satisfiable_protocols`] 是同一个「选协议前先看材料能力」的接缝，
+/// 因此同样**不得**在未获 owner 授权前接进 `session_composer`：理由与后果见
+/// [`select_satisfiable_protocols`] 的注释（会同时删掉 4 个 RICH 协议、
+/// 并让没有导入文档的用户无法开始训练）。本函数保留为纯查询能力。
 pub fn material_availability(
     conn: &Connection,
     profile_id: i64,

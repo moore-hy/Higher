@@ -1634,7 +1634,11 @@ fn om_p3_rich_generation_failure_keeps_the_deterministic_base_without_faking() {
     };
 
     for protocol in RICH_FOUR {
-        // COPILOT：保留确定性底座（不是 Unavailable —— 编排侧本该先过滤）。
+        // COPILOT：保留确定性底座（不是 Unavailable）。
+        // 注意：这**不是**「编排侧本该先过滤」—— P5 审计确认过滤函数
+        // （`select_satisfiable_protocols`）刻意不接线：接线会让 4 个 RICH 协议
+        // 永久出不了编排，并让没导入文档的用户完全无法开始训练。
+        // 能力不足时协议不被替换、也不被过滤，只是如实呈现确定性底座。
         let copilot = material_for(
             &conn,
             p,

@@ -836,6 +836,172 @@ fn reusing_the_key_with_a_different_payload_is_rejected() {
     assert_eq!(stored[0].result, Some(InteractionResult::Success));
 }
 
+/// P5 · 真值审计 —— **只**改 `result`、其余一模一样时，同一个幂等键必须被拒绝。
+///
+/// # 为什么必须单独钉住这一个字段
+///
+/// `reusing_the_key_with_a_different_payload_is_rejected` 同时改了
+/// `result` **和** `user_response_text`。`user_response_text` 一直在比较里，
+/// 因此那个用例**即使 `result` 完全没被比较也照样通过** —— 它证明了「换 payload 会被拒」，
+/// 却没有证明「`result` 属于 payload」。
+///
+/// 而 `result` 恰恰是**唯一决定这条交互变成哪一种学习事实**的入参：
+///
+/// ```text
+/// derive_moment_type(protocol, interaction_type, result, verification)
+///   Recall 族： Success -> RecallSuccess
+///              Partial -> RecallPartial
+///              Failure -> RecallFailure
+///              _       -> RecallAttempt        （None / 非权威）
+///   is_recall_moment(RecallSuccess|Partial|Failure) == true
+///     -> 且只有这三个会推进 FSRS（方向/档位由 result 决定）
+/// ```
+///
+/// 也就是说：同一个键把 `result` 从 `Success` 换成 `None`，
+/// 「当时真正发生的事」会从「回忆成功 + 推进 FSRS」变成「仅仅尝试过 + 不推进」。
+/// 若这个差异不被比较，后端就会把一次**语义不同的动作**当成重放返回，
+/// 同时告诉调用方「这就是你刚才那次动作的真实结果」——调用方声明的结果被静默丢弃。
+/// 那不是幂等，那是把两件不同的事说成一件（§50）。
+#[test]
+fn reusing_the_key_with_only_a_changed_result_is_rejected() {
+    let conn = setup();
+    let profile = create_profile(&conn, "档案A");
+    let item = create_item(&conn, profile, "学习项");
+    new_memory_unit(&conn, profile, item, "k1");
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
+
+    let first = record_interaction(
+        &conn,
+        interaction_params(
+            profile,
+            run_id,
+            blocks[0],
+            "p5-result",
+            InteractionResult::Success,
+            VerificationMethod::Deterministic,
+        ),
+    )
+    .unwrap();
+    assert!(!first.replayed);
+    assert!(
+        first.effect.fsrs_applied,
+        "前置条件：权威回忆成功必须推进 FSRS"
+    );
+    let moment_type_before: String = conn
+        .query_row(
+            "SELECT moment_type FROM learning_moments WHERE profile_id = ?1",
+            params![profile],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(moment_type_before, "recall_success");
+
+    // 只改 result —— prompt / response / hint / type / run / block 全部逐字相同。
+    let changed = interaction_params(
+        profile,
+        run_id,
+        blocks[0],
+        "p5-result",
+        InteractionResult::Failure,
+        VerificationMethod::Deterministic,
+    );
+    let err = record_interaction(&conn, changed)
+        .expect_err("同一个幂等键换了 result 必须被拒绝，而不是被当成重放");
+    assert_eq!(
+        err.code,
+        TrainingErrorCode::IdempotencyKeyReusedWithDifferentPayload,
+        "P5：result 属于幂等 payload —— 改了就必须报 typed error"
+    );
+
+    // 原始事实完全未被覆盖：仍然是那一条 recall_success，FSRS 仍然只推进过一次。
+    let stored = list_interactions(&conn, profile, run_id).unwrap();
+    assert_eq!(stored.len(), 1, "拒绝后不得多出第二条交互行");
+    assert_eq!(
+        stored[0].result,
+        Some(InteractionResult::Success),
+        "原始 result 不得被覆盖成 Failure"
+    );
+    let moments = count(
+        &conn,
+        "SELECT COUNT(*) FROM learning_moments WHERE profile_id = ?1",
+        profile,
+    );
+    assert_eq!(moments, 1, "拒绝后不得多出第二条 moment");
+    let moment_type_after: String = conn
+        .query_row(
+            "SELECT moment_type FROM learning_moments WHERE profile_id = ?1",
+            params![profile],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        moment_type_after, "recall_success",
+        "已被拒绝的那次「Failure」不得改写落库的 moment 类型"
+    );
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM memory_reviews WHERE profile_id = ?1",
+            profile
+        ),
+        1,
+        "FSRS 仍然只被推进过一次"
+    );
+}
+
+/// P5 · 真值审计 —— 只改 `prompt_text` 的同一个幂等键同样必须被拒绝。
+///
+/// `prompt_text` 与 `result` 一样是 `training_interactions` 上的**载荷列**，
+/// 并且会被原样落库、被前端当作「当时问的是什么」读回。
+/// 若它不参与「是不是同一个动作」的判定，同一个键换一道题就会返回旧题的事实，
+/// 却把新题面也一起吞掉 —— 调用方拿到的是一份与自己发的请求不对应的回执。
+#[test]
+fn reusing_the_key_with_only_a_changed_prompt_is_rejected() {
+    let conn = setup();
+    let profile = create_profile(&conn, "档案A");
+    let item = create_item(&conn, profile, "学习项");
+    let (run_id, blocks) = create_active_run(&conn, profile, item);
+
+    record_interaction(
+        &conn,
+        interaction_params(
+            profile,
+            run_id,
+            blocks[0],
+            "p5-prompt",
+            InteractionResult::Success,
+            VerificationMethod::Deterministic,
+        ),
+    )
+    .unwrap();
+
+    let mut changed = interaction_params(
+        profile,
+        run_id,
+        blocks[0],
+        "p5-prompt",
+        InteractionResult::Success,
+        VerificationMethod::Deterministic,
+    );
+    changed.prompt_text = Some("换了一道完全不同的题面".to_string());
+
+    let err =
+        record_interaction(&conn, changed).expect_err("同一个幂等键换了 prompt_text 必须被拒绝");
+    assert_eq!(
+        err.code,
+        TrainingErrorCode::IdempotencyKeyReusedWithDifferentPayload,
+        "P5：prompt_text 属于幂等 payload"
+    );
+
+    let stored = list_interactions(&conn, profile, run_id).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+        stored[0].prompt_text.as_deref(),
+        Some("请回忆…"),
+        "原始题面不得被覆盖"
+    );
+}
+
 #[test]
 fn fsrs_advances_exactly_once_per_interaction() {
     // §15：一次交互 = 一条 interaction + 一条 moment + 一条 memory_review。
