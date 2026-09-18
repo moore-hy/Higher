@@ -373,6 +373,9 @@ offset in the xref table, corrupting the very file it was meant to preserve. Rat
 add repo-wide git config, the artifact stays generated-and-reproducible. The integration
 suite constructs the same fixture **in-process**, so the test needs no binary asset either.
 
+DOCX / PPTX 夹具同法：只提交生成器（`make_docx.py` / `make_pptx.py`），产物留在本地 ——
+三份夹具一律「生成器入库、产物可复现」。
+
 ```text
 $ docling-2.73.0-o2\Scripts\python.exe docling_runner.py o2_fixture.pdf
   exit 0
@@ -480,6 +483,68 @@ LOCKED    the parser-independent invariant is asserted instead: every parent sec
 Both the markdown and the PDF paths are now covered by availability-gated integration
 tests. The PDF test additionally skips unless the ML models are already cached, so a
 test run can never silently pull hundreds of megabytes.
+
+### DOCX / PPTX — also exercised (the last remaining "not exercised" gap)
+
+Both were parsed through the same runner on the real runtime. **Neither needs the ML
+machinery** — DOCX finished in 15 s and PPTX in 15 s with NO model download, because
+docling's Word/PowerPoint backends read the OOXML directly.
+
+```text
+DOCX  exit 0  docling 2.73.0
+      sections = 3   Title(root) → Section One, Section Two (both parent_index = 0)
+      chunks   = 3   all sectioned, contiguous 0..2
+PPTX  exit 0  docling 2.73.0
+      sections = 1   (no-heading fallback)
+      chunks   = 5   all sectioned, contiguous 0..4
+```
+
+The DOCX shape is exactly what the markdown path produces; the PPTX result is flat
+because slide text boxes genuinely are not headings. Both are faithful.
+
+#### A bug in MY fixture — recorded because it nearly produced a false claim
+
+```text
+Symptom  first DOCX attempt: exit 0 but 6 chunks and ZERO sections — docling labelled
+         every paragraph `text` with style=None.
+Diagnosed (not assumed): docling decides heading level from the paragraph style
+         (msword_backend.py::_get_label_and_level falls back to "Normal" when
+         `paragraph.style is None`), and python-docx reported every paragraph as
+         'Normal' — so my styles.xml was never being found at all.
+Cause    I attached the styles relationship to the PACKAGE root (_rels/.rels).
+         Real Word attaches it to word/document.xml (word/_rels/document.xml.rels).
+         With the relationship on the OWNING part, styles resolve
+         ('Title', 'Heading 2', 'Normal') and the hierarchy appears.
+Why it matters: the flat result was a defect in the test fixture. Accepting it would
+         have put a FALSE claim in this ledger — "docling does not detect DOCX
+         headings" — which is exactly the kind of error this ledger exists to prevent.
+```
+
+```text
+观察到    「模型已缓存」不等于「断网也能解析」。
+          DOCX / PPTX / markdown 完全不碰网络（15s / 15s / 瞬时）；只有 PDF 会 ——
+          docling / huggingface_hub 每次都要去 Hub 核对一次 model revision。
+          本次运行就被代理的 502 打挂过一次
+          （PARSER_FAILED + ProxyError: Tunnel connection failed: 502 Bad Gateway），
+          而材料本身毫无问题。
+  对测试  PDF 用例显式设 HF_HUB_OFFLINE=1，使其**完全离线**、可复现；
+          否则它测的是网络，不是 Higher。离线模式实测 18s 解析成功。
+  对产品  未改 Higher 的运行时行为 —— 首次使用必须能下载模型，
+          无条件设 OFFLINE 会废掉首次解析。「缓存已存在则离线」是可以做的条件化，
+          但那是**产品决策**，留给 Owner；这里只把事实记录清楚，不擅自改变语义。
+```
+
+#### What is still NOT exercised as an input
+
+```text
+xlsx / html / htm / csv / txt / ascii — not parsed as inputs.
+They share the same runner, the same suffix gate, the same exit-code contract and the
+same projection as the four verified formats. Rather than hand-build six more binary
+fixtures, the Higher-owned part is locked directly: SUPPORTED_SUFFIXES is asserted by a
+source-level test (o2_supported_suffixes_cover_every_documented_format). That gate is
+ours — a missing suffix would turn a legal format into UNSUPPORTED_INPUT, which is NOT
+recoverable, and no end-to-end fixture would have caught it cheaply.
+```
 
 ## M5 — PRODUCTION DOCUMENT IPC
 
@@ -622,6 +687,11 @@ integration  tests/real_learning_engine_document_foundation.rs
                                                            parser_version, contiguous ordinals,
                                                            no orphan chunks, lexically searchable,
                                                            zero learning facts (availability-gated)
+  O2     o2_supported_suffixes_cover_every_documented_format
+                                                           source-level: SUPPORTED_SUFFIXES
+                                                           covers all 10 documented formats
+                                                           (a missing suffix → UNSUPPORTED_INPUT,
+                                                           which is NOT recoverable)
   M4     m4_real_docling_pdf_path_end_to_end                 REAL PDF parse through the REAL
                                                            layout model: Ready, real
                                                            parser_version, contiguous ordinals,
@@ -651,7 +721,7 @@ unit  src/document_intelligence/retrieval.rs        4 tests (O2-19, O2-20, lexic
 ```text
 cargo check --lib -j 1                                        EXIT 0   (0 errors)
 cargo test --test real_learning_engine_document_foundation
-           -j 1 -- --test-threads=1                           23 passed / 0 failed
+           -j 1 -- --test-threads=1                           24 passed / 0 failed
                                                               (incl. the REAL PDF parse)
 cargo test --lib -j 1 -- --test-threads=1 document_intelligence
                                                               43 passed / 0 failed
@@ -735,15 +805,17 @@ LEXICAL RETRIEVAL:            existing SearchRepository FTS, entity_type='docume
 CONTEXT COMPILER:             existing compile() fed by retrieval.rs (unchanged pipeline)
 UI REACHABILITY:              UI_DEFERRED_PRODUCT_DECISION (no UI invented)
 
-TESTS ACTUALLY RUN:           see M8 gates above (23 + 43 + 32 = 98 passed, 0 failed)
+TESTS ACTUALLY RUN:           see M8 gates above (24 + 43 + 32 = 99 passed, 0 failed)
                               incl. m4_real_docling_end_to_end_ingestion AND
                               m4_real_docling_pdf_path_end_to_end, both on the REAL runtime
-TESTS DEFERRED:               DOCX / PPTX were not exercised as inputs. They are not a
-                              separate code path: they share the same runner, the same
-                              SUPPORTED_SUFFIXES gate, the same exit-code contract and the
-                              same ML model machinery that the PDF test now exercises.
-                              OCR was exercised as a side effect (RapidOCR models were
-                              downloaded and used by the PDF pipeline).
+TESTS DEFERRED:               xlsx / html / htm / csv / txt / ascii were not parsed as
+                              inputs. They share the same runner, suffix gate, exit-code
+                              contract and projection as the four formats that WERE
+                              exercised (markdown / PDF / DOCX / PPTX); the Higher-owned
+                              part (SUPPORTED_SUFFIXES) is locked by a source-level test
+                              instead of six more hand-built binary fixtures.
+                              Real-runtime smoke evidence for DOCX and PPTX is recorded
+                              in M4 and reproducible via the committed generators.
 
 MAX OBSERVED RAM:             89%   (early continuation; §8 gate exceeded, low-resource mode
                                     enforced for all Rust work. The PDF work then ran at

@@ -1618,6 +1618,14 @@ fn m4_real_docling_pdf_path_end_to_end() {
         .create_source(profile, attachment, "fixture.pdf", None, None, "attachment")
         .unwrap();
 
+    // 这一解析必须**完全离线**。
+    //
+    // 模型已经在缓存里（本用例的门禁就是它），但 docling / huggingface_hub 默认
+    // 每次都会去 Hub 核对一次 model revision —— 那会让本用例依赖「此刻网络可达」。
+    // 那样测的是网络，不是 Higher：实际发生过的失败就是代理返回 502，
+    // 于是 PARSER_FAILED + ProxyError，而材料本身一点问题都没有。
+    // 设了 HF_HUB_OFFLINE 之后，同一份材料 18s 解析成功且不需要网络。
+    std::env::set_var("HF_HUB_OFFLINE", "1");
     let outcome = ingest_source(
         &mut conn,
         &parser,
@@ -1627,6 +1635,7 @@ fn m4_real_docling_pdf_path_end_to_end() {
         &minimal_pdf(),
     )
     .expect("真实运行时在场时，PDF 生命周期必须跑完");
+    std::env::remove_var("HF_HUB_OFFLINE");
 
     assert!(
         outcome.is_ready(),
@@ -1707,4 +1716,30 @@ fn m4_real_docling_pdf_path_end_to_end() {
         sections.len(),
         chunks.len()
     );
+}
+
+// ============== M4 · 后缀闸门（Higher 自己写的代码边界） ==============
+
+/// O2 · runner 声明支持的后缀必须完整覆盖文档导入会送来的格式。
+///
+/// 这是**源码级**断言（与既有 `o2_18_no_custom_rich_document_parser_exists`
+/// 同一手法）：后缀闸门是 Higher 自己写的，不是 docling 的。漏掉一个后缀，
+/// 合法的 DOCX / PPTX 就会被判成 `UNSUPPORTED_INPUT`（**不可恢复**）。
+///
+/// 为什么这里只锁闸门而不为每种格式做端到端：要为 DOCX / PPTX 造二进制夹具，
+/// 就得在 Rust 里手写一个 ZIP 打包器（含 CRC32）。而它们与 markdown 走的是
+/// **同一个** runner、同一套投影 —— 差异只发生在 docling 内部，那是 docling
+/// 的责任边界。DOCX / PPTX / PDF 都已通过真实运行时烟测，证据记在账本 M4。
+#[test]
+fn o2_supported_suffixes_cover_every_documented_format() {
+    let src = read_repo("src-tauri/src/document_intelligence/docling_runner.py");
+    const EXPECTED: [&str; 10] = [
+        ".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm", ".md", ".txt", ".ascii", ".csv",
+    ];
+    for suffix in EXPECTED {
+        assert!(
+            src.contains(&format!("\"{suffix}\"")),
+            "SUPPORTED_SUFFIXES 必须包含 {suffix}；漏掉就会把合法格式判成 UNSUPPORTED_INPUT"
+        );
+    }
 }
