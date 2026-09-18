@@ -531,13 +531,18 @@ git diff --check            -> CLEAN
 STARTING SHA (task):          ab06ff081ced52535fbace3f928894cd8eae73b7
 STARTING SHA (continuation):  bf5b184969312570c8d137e1d89b246423a2fdbb
 FINAL BRANCH:                 main
-FINAL SHA:                    30685346ec7530d09e0d57e9d39fde576ce34e91
+FINAL SHA:                    2f10b0b73439ddc4716ec8972f2628c4c8d8f017
+                              (last substantive commit; a docs-only ledger
+                               finalization commit follows it — its SHA is in the
+                               STOP report)
 
 LOCAL COMMITS ON MAIN (this task):
   7b04bf0  fix(real-learning): narrow learning intent capture boundary            (M0)
   c2a1e7a  feat(document): add profile-safe document ingestion storage            (M1)
   bf5b184  feat(document): connect ingestion lifecycle to existing search         (M2/M3)
   3068534  feat(document): connect reusable document runtime and retrieval        (M4/M5/M6/M8)
+  c40096f  docs(o2): record final SHA and commit list in the O2 ledger
+  2f10b0b  feat(document): complete the real Docling runtime connection           (M4 closure)
 
 COMPLETED WAVES:              M0 M1 M2 M3 M4 M5 M6 M8
 SKIPPED_ALREADY_IMPLEMENTED:  none
