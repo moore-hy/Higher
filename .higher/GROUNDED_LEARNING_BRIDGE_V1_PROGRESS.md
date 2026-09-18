@@ -111,7 +111,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ✅ DONE (7fbe589) |
 | W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ✅ DONE (462d4fa) |
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ✅ DONE (ea9137c) |
-| W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | 🔧 in_progress |
+| W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ✅ DONE (a6a8ce2) |
 | W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | ⏳ pending |
 | W7 | Close stale progress projection | `fix(progress): derive difficulty from real training blocks` | ⏳ pending |
 | W8 | Final validation + closure | `feat(cognitive): close grounded learning bridge v1` | ⏳ pending |
@@ -459,6 +459,8 @@ limitation for W8 closure.
 ---
 
 ## §8 — W5 IMPLEMENTATION NOTES
+
+**Commit:** `a6a8ce2` — `feat(training): render grounded specialized learning experiences` (21 files, +1439 / −86)
 
 ### 8.1 Files touched
 
