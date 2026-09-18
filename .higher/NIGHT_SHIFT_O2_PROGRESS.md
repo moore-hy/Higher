@@ -669,7 +669,7 @@ git diff --check            -> CLEAN
 STARTING SHA (task):          ab06ff081ced52535fbace3f928894cd8eae73b7
 STARTING SHA (continuation):  bf5b184969312570c8d137e1d89b246423a2fdbb
 FINAL BRANCH:                 main
-FINAL SHA:                    2f10b0b73439ddc4716ec8972f2628c4c8d8f017
+FINAL SHA:                    b43a5d5e42617b6b5e962f9db0ef5faabb5472f2
                               (last substantive commit; a docs-only ledger
                                finalization commit follows it — its SHA is in the
                                STOP report)
@@ -681,8 +681,10 @@ LOCAL COMMITS ON MAIN (this task):
   3068534  feat(document): connect reusable document runtime and retrieval        (M4/M5/M6/M8)
   c40096f  docs(o2): record final SHA and commit list in the O2 ledger
   2f10b0b  feat(document): complete the real Docling runtime connection           (M4 closure)
+  e11de19  docs(o2): record M4 closure and final commit list in the O2 ledger
+  b43a5d5  feat(document): close the Docling PDF path and bound the parse         (M4 PDF closure)
 
-COMPLETED WAVES:              M0 M1 M2 M3 M4 M5 M6 M8
+COMPLETED WAVES:              M0 M1 M2 M3 M4 (incl. the real PDF path) M5 M6 M8
 SKIPPED_ALREADY_IMPLEMENTED:  none
 SKIPPED_NOT_USEFUL:           none
 DEFERRED:                     M7 UI_DEFERRED_PRODUCT_DECISION
