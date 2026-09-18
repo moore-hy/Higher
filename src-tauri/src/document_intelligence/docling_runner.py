@@ -41,7 +41,7 @@ EXIT_FAILED = 5
 # docling 官方支持且 Higher 会送去解析的后缀。
 # 不在这里的后缀直接判 Unsupported —— 让运行时去猜只会得到更差的报错。
 SUPPORTED_SUFFIXES = {
-    ".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm", ".md", ".txt", ".ascii", ".csv",
+    ".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm", ".md", ".txt", ".asciidoc", ".csv",
 }
 
 
@@ -84,6 +84,7 @@ def main():
 
     try:
         from docling.document_converter import DocumentConverter
+        from docling.datamodel.base_models import InputFormat
     except Exception as exc:  # noqa: BLE001 - 任何导入失败都等价于「运行时不可用」
         _fail(EXIT_RUNTIME_UNAVAILABLE, "docling import failed: %r" % (exc,))
 
@@ -94,7 +95,16 @@ def main():
 
     try:
         converter = DocumentConverter()
-        result = converter.convert(path)
+        if suffix == ".txt":
+            # docling 根本没有「纯文本」InputFormat —— 一份 `.txt` 会被它判成
+            # "format None does not match" 而 PARSER_FAILED。但 Markdown 后端能正确
+            # 吃下散文（没有 `#` 的行就是正文 chunk），所以这里显式按 MD 解析，
+            # 让「被 Higher 宣称为支持」的 .txt 不再悄悄失败。
+            with open(path, "r", encoding="utf-8") as _fh:
+                _text = _fh.read()
+            result = converter.convert_string(_text, InputFormat.MD)
+        else:
+            result = converter.convert(path)
         doc = result.document
     except Exception as exc:  # noqa: BLE001 - 运行时确实在，但这份输入解析不了
         _fail(EXIT_FAILED, "docling convert failed: %r" % (exc,))

@@ -1730,11 +1730,26 @@ fn m4_real_docling_pdf_path_end_to_end() {
 /// 就得在 Rust 里手写一个 ZIP 打包器（含 CRC32）。而它们与 markdown 走的是
 /// **同一个** runner、同一套投影 —— 差异只发生在 docling 内部，那是 docling
 /// 的责任边界。DOCX / PPTX / PDF 都已通过真实运行时烟测，证据记在账本 M4。
+///
+/// 除了「集合齐全」，本测试还锁住两个修复（真实运行时发现的缺陷）：
+///   · `.ascii` 必须写成 `.asciidoc` —— docling 的 asciidoc 格式注册为 `.asciidoc`，
+///     写 `.ascii` 会让 Higher 闸门放过、docling 却拒（PARSER_FAILED），两端都坏。
+///   · `.txt` 必须显式按 `InputFormat.MD` 解析 —— docling 没有纯文本格式，否则
+///     `.txt` 会 PARSER_FAILED；而同一个测试曾证实 `.txt` 改名 `.md` 即 exit 0。
 #[test]
 fn o2_supported_suffixes_cover_every_documented_format() {
     let src = read_repo("src-tauri/src/document_intelligence/docling_runner.py");
     const EXPECTED: [&str; 10] = [
-        ".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm", ".md", ".txt", ".ascii", ".csv",
+        ".pdf",
+        ".docx",
+        ".pptx",
+        ".xlsx",
+        ".html",
+        ".htm",
+        ".md",
+        ".txt",
+        ".asciidoc",
+        ".csv",
     ];
     for suffix in EXPECTED {
         assert!(
@@ -1742,4 +1757,13 @@ fn o2_supported_suffixes_cover_every_documented_format() {
             "SUPPORTED_SUFFIXES 必须包含 {suffix}；漏掉就会把合法格式判成 UNSUPPORTED_INPUT"
         );
     }
+    // 锁住修复：.txt 走 convert_string(InputFormat.MD)，且 asciidoc 用 .asciidoc 后缀。
+    assert!(
+        src.contains("convert_string") && src.contains("InputFormat.MD"),
+        "修复回归：.txt 必须显式按 Markdown 解析，否则会 PARSER_FAILED"
+    );
+    assert!(
+        !src.contains("\".ascii\""),
+        "回归：asciidoc 必须用 .asciidoc 后缀（docling 的注册名），不能用 .ascii"
+    );
 }

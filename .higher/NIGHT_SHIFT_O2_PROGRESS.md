@@ -567,32 +567,39 @@ CLASS A — SILENT EMPTY (xlsx, csv)
   no error. Whether ingestion should WARN/REJECT on empty structure is a PRODUCT
   DECISION, left to Owner. Higher runtime behaviour deliberately unchanged here.
 
-CLASS B — BROKEN ADVERTISED FORMATS (txt, ascii)
-  Higher's SUPPORTED_SUFFIXES lists BOTH `.txt` and `.ascii`, so the runner's gate lets
-  them through — but docling then cannot parse them:
+CLASS B — BROKEN ADVERTISED FORMATS (txt, ascii) — NOW FIXED
+  Higher's SUPPORTED_SUFFIXES listed BOTH `.txt` and `.ascii`, so the runner's gate let
+  them through — but docling then could not parse them:
     · `.txt`   there is NO plain-text InputFormat in docling at all.
                allowed formats: docx pptx html image pdf asciidoc md csv xlsx
                xml_uspto xml_jats mets_gbs json_docling audio vtt latex.
-               A `.txt` therefore hits "format None does not match" → exit 5 Failed.
+               A `.txt` therefore hit "format None does not match" → exit 5 Failed.
     · `.ascii` docling's asciidoc format is registered under extension `.asciidoc`
                (InputFormat.ASCIIDOC.value == 'asciidoc'), NOT `.ascii`. So `.ascii`
-               also fails docling's inference → exit 5. And the CORRECT extension
-               `.asciidoc` is NOT in SUPPORTED_SUFFIXES, so the runner's own gate
-               rejects it FIRST → exit 4 Unsupported. Either way asciidoc is broken
+               also failed docling's inference → exit 5. And the CORRECT extension
+               `.asciidoc` was NOT in SUPPORTED_SUFFIXES, so the runner's own gate
+               rejected it FIRST → exit 4 Unsupported. Either way asciidoc was broken
                end-to-end (passes Higher, fails docling — OR passes docling, blocked by
                Higher).
-  KEY PROOF that these are Higher defects, not docling limits:
-    · renaming o2_fixture.txt → .md and running the SAME runner yields
+  KEY PROOF that these were Higher defects, not docling limits:
+    · renaming o2_fixture.txt → .md and running the SAME runner yielded
       exit 0, 1 section (null-title fallback), 7 chunks. The markdown backend happily
       ingest plain prose. So `.txt` COULD work if Higher mapped it to the MD backend.
-    · docling accepts `.asciidoc` (its real extension); Higher simply lists the wrong
+    · docling accepts `.asciidoc` (its real extension); Higher simply listed the wrong
       string in SUPPORTED_SUFFIXES.
 
-  MINIMAL FIXES (proposed, NOT applied — both touch the supported-format contract):
-    txt   map `.txt` → docling InputFormat.MD in the runner (or drop it from
-          SUPPORTED_SUFFIXES so it returns a clean Unsupported=4 instead of Failed=5).
-    ascii rename `.ascii` → `.asciidoc` in SUPPORTED_SUFFIXES
-          (or map `.ascii` → InputFormat.ASCIIDOC).
+  FIXES APPLIED (this continuation — both verified on the real docling 2.73.0 runtime):
+    txt   the runner now calls convert_string(content, InputFormat.MD) for `.txt`
+          (docling has no plain-text format; the MD backend ingests prose correctly).
+          PROOF: o2_fixture.txt -> exit 0, 1 fallback section, 7 chunks.
+    ascii SUPPORTED_SUFFIXES now lists `.asciidoc` (docling's real registered
+          extension) instead of `.ascii`. A stray `.ascii` now gets a clean
+          Unsupported=4 at Higher's gate instead of a confusing PARSER_FAILED=5.
+          PROOF: o2_fixture.asciidoc -> exit 0, 3 chunks; o2_fixture.ascii -> exit 4.
+  The source-level test o2_supported_suffixes_cover_every_documented_format was extended
+  to LOCK both fixes: it asserts `.asciidoc` is present, `.ascii` is absent, and
+  convert_string + InputFormat.MD are present in the runner, so they cannot silently
+  regress. Higher's runtime behaviour for xlsx/csv (CLASS A) is deliberately unchanged.
 ```
 
 The source-level test `o2_supported_suffixes_cover_every_documented_format` is
@@ -880,16 +887,21 @@ TESTS ACTUALLY RUN:           see M8 gates above (24 + 43 + 32 = 99 passed, 0 fa
                               m4_real_docling_pdf_path_end_to_end, both on the REAL runtime
 FORMAT COVERAGE (real runtime): all 10 advertised suffixes now parsed on docling 2.73.0
                               WORK:          markdown, pdf, docx, pptx, html, htm
-                              SILENT EMPTY:  xlsx, csv  (exit 0, 0 sections / 0 chunks —
-                                             docling emits a `table` item with no text)
-                              BROKEN:        txt   (no docling plain-text format; the MD
-                                             backend accepts the same bytes → fixable)
-                                             ascii (wrong extension; docling wants
-                                             `.asciidoc`; `.asciidoc` is blocked by
-                                             Higher's own gate)
-                              Four defects recorded in M4 with evidence + proposed fixes;
-                              behaviour changes to the supported-format contract left to
-                              Owner (not applied).
+                              FIXED:         txt   (now convert_string(InputFormat.MD) ->
+                                             exit 0, 7 chunks — verified on real runtime)
+                                             ascii (now `.asciidoc` in SUPPORTED_SUFFIXES
+                                             -> exit 0, 3 chunks; stray `.ascii` -> clean
+                                             Unsupported=4 — verified on real runtime)
+                              SILENT EMPTY (PRODUCT DECISION, unchanged):
+                                             xlsx, csv  (exit 0, 0 sections / 0 chunks —
+                                             docling emits a `table` item with no text).
+                                             Whether ingestion should WARN/REJECT on empty
+                                             structure is left to the Owner; Higher runtime
+                                             behaviour deliberately unchanged.
+                              Four defects found by exercising all 10 formats on the real
+                              runtime. Two (txt/ascii) FIXED and locked by an extended
+                              source-level test; two (xlsx/csv) recorded as a product
+                              decision.
 
 MAX OBSERVED RAM:             89%   (early continuation; §8 gate exceeded, low-resource mode
                                     enforced for all Rust work. The PDF work then ran at
