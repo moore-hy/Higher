@@ -102,12 +102,67 @@ fn seed_completed_session(conn: &Connection, profile_id: i64, days_ago: i64, min
     s.id
 }
 
-fn backdate_started_at(conn: &Connection, session_id: i64, minutes: i64) {
+/// GROUNDED LEARNING BRIDGE V1 · P1.6 —— 与挂钟无关的「今天发生过一次真实学习」时间事实。
+///
+/// # 为什么原来的 `datetime('now', '-N minutes')` 会在午夜破裂
+///
+/// 学习日 = **UTC+8 日历日**。`today.actual_minutes`（`daily_report` 的
+/// `date(started_at, '+8 hours') = today_local()`）、`days_since_last_session`
+/// （`MAX(date(COALESCE(ended_at, started_at), '+8 hours'))`）以及 30 天证据窗口
+/// 全部按本地学习日分日。在 **00:00–00:25（UTC+8）** 之间，「现在往前 N 分钟」
+/// 会落到**前一个本地日**：会话真实存在、却**正确地**不属于今天。
+/// 测试因此把一个正确的产品行为报成失败 —— 这是测试对挂钟的依赖，不是产品缺陷。
+///
+/// # 做法（不改变任何生产日期语义）
+///
+/// 把时间事实锚定在**今天本地日的起点**（本地 00:00 → 本地 00:0N）：
+/// - `started_at` 与 `ended_at` **都**落在今天的本地日之内 ——
+///   这对「按 started_at 分日」和「按 ended_at 分日」两种口径同时成立；
+/// - `duration_seconds` 精确等于 `minutes * 60`（不再是「约等于」）；
+/// - `started_at` 永远不晚于当前挂钟（今天从本地 00:00 起算）。
+///
+/// `ended_at` 在「挂钟距本地午夜不足 `minutes` 分钟」时可能略晚于当前时刻。
+/// 这是安全的：本仓**没有**任何投影拿 `ended_at` 与 `now` 比大小 ——
+/// 日报告按 `date(...)` 分日、Recovery 取 `MAX(date(...))`、
+/// Evidence 按学习日聚合、`active_session` 只看 `status='active'`。
+fn seed_today_session_facts(conn: &Connection, session_id: i64, minutes: i64) {
+    let start_utc: String = conn
+        .query_row(
+            "SELECT datetime(date('now', '+8 hours') || ' 00:00:00', '-8 hours')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     conn.execute(
-        "UPDATE study_sessions SET started_at = datetime('now', ?2) WHERE id = ?1",
-        params![session_id, format!("-{} minutes", minutes)],
+        "UPDATE study_sessions
+            SET started_at       = ?2,
+                ended_at         = datetime(?2, ?3),
+                duration_seconds = ?4,
+                status           = 'completed'
+          WHERE id = ?1",
+        params![
+            session_id,
+            start_utc,
+            format!("+{} seconds", minutes * 60),
+            minutes * 60
+        ],
     )
     .unwrap();
+
+    // 夹具自检：把「锚点确实在今天、且不在未来」变成**被执行的断言**，
+    // 而不是一句注释。这样无论挂钟是 00:05 / 12:00 还是 23:55，同一次运行都会
+    // 真正验证这个性质 —— 不需要等到午夜才能发现夹具又坏了。
+    let (same_day, not_future): (i64, i64) = conn
+        .query_row(
+            "SELECT date(started_at, '+8 hours') = date('now', '+8 hours'),
+                    started_at <= datetime('now')
+               FROM study_sessions WHERE id = ?1",
+            params![session_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(same_day, 1, "P1.6：夹具锚点必须落在今天的本地学习日之内");
+    assert_eq!(not_future, 1, "P1.6：夹具锚点不得晚于当前挂钟");
 }
 
 /// 所有 `ai_*` 表的行数合计（CL012 用：LLM 调用必须留下 0 行证据）。
@@ -226,13 +281,27 @@ fn cl003_ending_session_changes_evidence() {
     let s = StudySessionRepository::new(&conn)
         .start_for_task(p, t)
         .unwrap();
-    backdate_started_at(&conn, s.id, 25);
+    // P1.6：把这次「已经开始的学习」的时间事实锚定在**今天本地日之内**，
+    // 于是「结束它」在任何挂钟时刻都产生同一个可观察结果。
+    seed_today_session_facts(&conn, s.id, 25);
     let ended = StudySessionRepository::new(&conn).end(s.id, None).unwrap();
     let dur = ended.duration_seconds.unwrap_or(0);
-    assert!(
-        (dur - 1500).abs() <= 5,
-        "CL003：结束必须落真实 duration，实际 {} 秒",
+    assert_eq!(
+        dur, 1500,
+        "CL003：结束必须落**确定**的真实 duration（原断言是 ±5 秒的约等，现为精确值），实际 {} 秒",
         dur
+    );
+    // 已落库结束的会话再次 `end()` 必须幂等：时间事实原样返回，绝不被重算
+    // （PRODUCT-2.0 §8A / §23.5 P0 DATA SAFETY）。原测试未覆盖这一条。
+    let again = StudySessionRepository::new(&conn).end(s.id, None).unwrap();
+    assert_eq!(
+        again.duration_seconds,
+        Some(1500),
+        "CL003：重复结束不得虚增时长"
+    );
+    assert_eq!(
+        again.ended_at, ended.ended_at,
+        "CL003：重复结束不得改写 ended_at"
     );
 
     let before_evidence = build_learning_state(&conn, p).unwrap().learning_evidence;
@@ -287,7 +356,8 @@ fn cl004_recomputing_state_after_real_learning_really_changes() {
     let s = StudySessionRepository::new(&conn)
         .start_for_task(p, t)
         .unwrap();
-    backdate_started_at(&conn, s.id, 20);
+    // P1.6：挂钟无关锚定（见 `seed_today_session_facts`）。
+    seed_today_session_facts(&conn, s.id, 20);
     StudySessionRepository::new(&conn).end(s.id, None).unwrap();
 
     let after = build_learning_state(&conn, p).unwrap();
@@ -551,7 +621,9 @@ fn cl008_completing_recovery_changes_recovery_priority() {
     let s = StudySessionRepository::new(&conn)
         .start_for_task(p, short)
         .unwrap();
-    backdate_started_at(&conn, s.id, 3);
+    // P1.6：挂钟无关锚定 —— CL008 断言的 `days_since_last_session == Some(0)`
+    // 同样按本地学习日计算，午夜窗口下同样会被挂钟毁掉。
+    seed_today_session_facts(&conn, s.id, 3);
     StudySessionRepository::new(&conn).end(s.id, None).unwrap();
     complete_task(&conn, short);
 
@@ -957,10 +1029,10 @@ fn ranking_continue_last_downgrades_when_linked_task_completed() {
     let s = StudySessionRepository::new(&conn)
         .start_for_task(p, t)
         .unwrap();
-    backdate_started_at(&conn, s.id, 20);
+    // P1.6：挂钟无关锚定（见 `seed_today_session_facts`）。
+    seed_today_session_facts(&conn, s.id, 20);
     StudySessionRepository::new(&conn).end(s.id, None).unwrap();
     complete_task(&conn, t);
-
     let snap = build_learning_state(&conn, p).unwrap();
     let action = build_next_learning_action(&snap, None).unwrap();
     assert_eq!(action.action_type, NextActionType::ContinueLast);
@@ -1229,5 +1301,122 @@ fn cl010_confirmed_review_changes_planning_and_next_action() {
     assert_ne!(
         before.execution_payload.task_id,
         after.execution_payload.task_id
+    );
+}
+
+// =============== P1.6 · 挂钟无关的午夜邻域回归 ===============
+
+/// P1.6 —— `end()` 的时长语义仍然由**真实流逝时间**决定（与本地学习日无关）。
+///
+/// 这一条刻意**不做任何按日断言**：它只断言「开始 25 分钟前 → 结束 → 时长 1500 秒」。
+/// 因此它在 00:05 / 12:00 / 23:55 都得到同一个结果，同时把 CL003 原先承担的
+/// 「`end()` 用真实流逝时间算 duration」这条覆盖**独立保留**下来
+/// （CL003 现在用确定锚点，见 `seed_today_session_facts`）。
+#[test]
+fn cl_end_duration_uses_real_elapsed_time_regardless_of_local_day() {
+    let conn = setup();
+    let p = mk_profile(&conn, "P1.6-时长");
+    let s = StudySessionRepository::new(&conn)
+        .start_quick(p, None)
+        .unwrap();
+    // 真实流逝：started_at = now - 1500 秒。**不做**按日断言，因此与挂钟无关。
+    conn.execute(
+        "UPDATE study_sessions SET started_at = datetime('now', '-1500 seconds') WHERE id = ?1",
+        params![s.id],
+    )
+    .unwrap();
+
+    let ended = StudySessionRepository::new(&conn).end(s.id, None).unwrap();
+    let dur = ended.duration_seconds.unwrap_or(0);
+    assert!(
+        (dur - 1500).abs() <= 5,
+        "P1.6：end() 必须用真实流逝时间算 duration，实际 {dur} 秒"
+    );
+    assert_eq!(ended.status, "completed");
+    assert!(ended.ended_at.is_some(), "P1.6：结束必须落 ended_at");
+}
+
+/// P1.6 —— **午夜邻域**的固定时钟回归：跨本地午夜开始的会话不计入「今天」。
+///
+/// 本测试把 `started_at` 精确放在「今天本地 00:00 之前 60 秒」（= 昨天本地 23:59），
+/// 这是一个**与挂钟无关**的固定时钟事实。断言的是产品正确的日期语义：
+///
+/// ```text
+/// 一次恰好跨过本地午夜开始的学习 → **不计入**今天（今天从本地 00:00 起算）
+/// ```
+///
+/// 这正是 P1.6 要证明的东西：00:00–00:25 之间 `today.actual_minutes == 0`
+/// 是**正确的产品行为**，而不是缺陷 —— 所以夹具必须锚定时间，而不是用
+/// 「现在往前 N 分钟」。
+#[test]
+fn cl_session_across_local_midnight_belongs_to_previous_local_day() {
+    let conn = setup();
+    let p = mk_profile(&conn, "P1.6-午夜");
+    let today = today_local();
+
+    let s = StudySessionRepository::new(&conn)
+        .start_quick(p, None)
+        .unwrap();
+    // 昨天本地 23:59 = 今天本地 00:00 之前 60 秒。
+    let start_utc: String = conn
+        .query_row(
+            "SELECT datetime(date('now', '+8 hours') || ' 00:00:00', '-8 hours', '-60 seconds')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let yesterday_local: String = conn
+        .query_row(
+            "SELECT date(datetime(date('now', '+8 hours') || ' 00:00:00', '-60 seconds'))",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(
+        yesterday_local, today,
+        "P1.6：夹具前提 —— 23:59 与今天必须是两个不同的本地学习日"
+    );
+    conn.execute(
+        "UPDATE study_sessions
+            SET started_at = ?2,
+                ended_at   = datetime(?2, '+1200 seconds'),
+                duration_seconds = 1200,
+                status = 'completed'
+          WHERE id = ?1",
+        params![s.id, start_utc],
+    )
+    .unwrap();
+
+    let snap = build_learning_state(&conn, p).unwrap();
+    assert_eq!(snap.local_date, today);
+    assert_eq!(
+        snap.today.actual_minutes, 0,
+        "P1.6：跨本地午夜开始的会话**不得**计入今天（学习日 = UTC+8 日历日）"
+    );
+    assert!(
+        snap.today_activities.is_empty(),
+        "P1.6：今天的活动列表不得包含属于上一个本地日的会话"
+    );
+    // 但它**真实存在**，并且落在那一天：30 天窗口与「上次学习日」都必须看见它。
+    assert_eq!(
+        snap.learning_evidence.observed_study_minutes_30d, 20,
+        "P1.6：20 分钟是真实发生的学习时长，必须出现在 30 天观测里"
+    );
+    assert_eq!(
+        snap.learning_evidence.active_study_days_30d, 1,
+        "P1.6：恰好一个本地学习日有记录"
+    );
+    // **实测**的产品语义（不是猜测）—— 两条口径在跨午夜时并不对称：
+    //
+    //   today.actual_minutes   按 `date(started_at, '+8 hours')` 分日
+    //   last_completed_day     按 `date(COALESCE(ended_at, started_at), '+8 hours')`
+    //
+    // 于是这次「23:59 开始、00:19 结束」的会话：**不计入今天的分钟数**，
+    // 却把「上次学习日」推到**今天**。这是既有产品事实，本包不授权改动日期语义，
+    // 因此测试按事实断言（不对称本身已登记在 findings.md，属后续 owner 级议题）。
+    assert_eq!(
+        snap.recovery_state.signals.days_since_last_session,
+        Some(0),
+        "P1.6：last_completed_day 用 COALESCE(ended_at, started_at)；ended_at 落在今天"
     );
 }

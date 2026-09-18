@@ -106,9 +106,17 @@ fn v039_migration_registered_and_table_exists() {
         .unwrap();
     // §47：PACK A 只拥有 v039 / v040 / v041。v042 起属于 PACK B（W5）。
     // 这里断言的是**包边界**，而不是会随 wave 前进而变化的精确值。
-    assert!(
-        latest <= 41,
-        "PACK A 不得创建 v042+（v042 document_ingestion 属于 PACK B / W5）；当前最大 v{latest}"
+    //
+    // OVERNIGHT MARATHON V2 · P1.5：本门原先写死 `latest <= 41`，在 v042 / v043
+    // 经任务书授权落地之后就已经**陈旧变红**（`latest <= 41` 恒假）。天花板
+    // 因此上移到当前授权真相，而本门真正要锁的东西**没有变**：
+    // `v044+` 仍然属于后续包，本次不得出现。
+    // 同义门 `real_learning_engine_pack_a_audit` A27/A28 与
+    // `real_learning_engine_document_foundation` O2-04 早已是 `== 43`，
+    // 三处必须一致，否则同一份授权会得到互相矛盾的判定。
+    assert_eq!(
+        latest, 43,
+        "最新迁移必须是 v043（grounded_training_material）—— v044+ 属于后续包；当前最大 v{latest}"
     );
     assert!(
         latest >= 39,
