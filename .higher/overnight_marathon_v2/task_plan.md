@@ -15,7 +15,7 @@ States: `NOT_STARTED` | `IN_PROGRESS` | `GREEN` | `VERIFIED_DONE` | `SKIPPED_ALR
 |---|---|---|---|
 | P0 | Preflight + skill bootstrap | VERIFIED_DONE | de9d6d0 |
 | P1 | Grounded Learning Bridge closure hotfix | VERIFIED_DONE | 354b1b1, eb59a16, 3210949, +closure |
-| P2 | Real production closed-loop E2E | NOT_STARTED | — |
+| P2 | Real production closed-loop E2E | VERIFIED_DONE | cf37466 |
 | P3 | Eight specialized experience hardening | NOT_STARTED | — |
 | P4 | Product reachability + recovery hardening | NOT_STARTED | — |
 | P5 | Truth / transaction / isolation audit | NOT_STARTED | — |
@@ -51,6 +51,22 @@ States: `NOT_STARTED` | `IN_PROGRESS` | `GREEN` | `VERIFIED_DONE` | `SKIPPED_ALR
 | P1.7 | Closure tests OM-P1-01..19 | VERIFIED_DONE |
 
 Evidence: `progress.md` CP-01. New findings: F-008 (CJK recall, deferred), F-009 (date asymmetry), F-012 (Docling offline, environmental).
+
+---
+
+## P2 — sub-item table
+
+| Item | Title | State |
+|---|---|---|
+| P2.1 | Golden E2E scenario A — user material to training | VERIFIED_DONE |
+| P2.2 | Golden E2E scenario B — real learner action (exactly-once) | VERIFIED_DONE |
+| P2.3 | Golden E2E scenario C — projection update | VERIFIED_DONE |
+| P2.4 | Golden E2E scenario D — no-material fallback | VERIFIED_DONE |
+| P2.5 | Golden E2E scenario E — profile isolation | VERIFIED_DONE |
+
+Evidence: `progress.md` CP-02. Suite: `src-tauri/tests/grounded_learning_bridge_e2e.rs` (6 passed / 0 failed).
+**No new production defect was found** — P2 produced no preceding repair commit.
+No new findings beyond the already-registered F-008 / F-009 / F-012.
 
 ---
 

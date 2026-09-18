@@ -97,3 +97,90 @@ F-012  Docling 走 HF API 解析 revision → 代理 502 → 两个 W8 真实运
 
 next pack   : P2
 next action : 建 tests/grounded_learning_bridge_e2e.rs —— 真实生产闭环 A/B/C/D/E
+
+---
+
+## CP-02 · P2 Real production closed-loop E2E — VERIFIED_DONE
+
+```text
+timestamp   : 2026-09-19 01:45 (+08)
+branch      : main
+HEAD before : 5451881
+HEAD after  : cf37466
+pack        : P2
+changed     : src-tauri/tests/grounded_learning_bridge_e2e.rs  (NEW, 6 tests)
+resource    : 单线程 cargo（CARGO_BUILD_JOBS=1 / RUST_TEST_THREADS=1），未并行重活
+```
+
+### 本包实测结果
+
+```text
+cargo check --lib -j 1                        : ok（Finished dev profile，无 error；34 既有 warning 未新增）
+cargo test --test grounded_learning_bridge_e2e : 6 passed / 0 failed / 0 ignored（0.44s）
+rustfmt --check（task-owned 文件）             : clean
+```
+
+回归组（P1 + P2 共同影响的全部套件，逐条实跑）：
+
+```text
+grounded_learning_bridge_closure           :  8 passed / 0 failed
+closed_loop_core                           : 25 passed / 0 failed
+real_learning_engine_start                 : 10 passed / 0 failed
+real_learning_engine_intent                : 20 passed / 0 failed
+real_learning_engine_training              : 38 passed / 0 failed
+real_learning_engine_completion            : 21 passed / 0 failed
+real_learning_engine_document_foundation   : 25 passed / 0 failed
+grounded_training_material                 :  5 passed / 0 failed
+grounded_training_grounding                :  9 passed / 0 failed
+grounded_training_routing                  :  8 passed / 0 failed
+grounded_training_progress                 : 11 passed / 0 failed
+```
+
+### P2 各场景实际断言到的内容
+
+```text
+P2-A  生产入口 start_training_for_item 造出的每个学习块都有真实快照；
+      从**原始列**解析快照 JSON 并回查 document_chunks / document_revisions：
+      出处引用的 chunk 必须存在、归属该 revision 与该档案、文本真的含检索词元；
+      生产读取入口 block_grounded_material_core 读回逐字段相同 + 可读来源标签；
+      休息块快照保持 NULL；材料生成不产生 moment / review / FSRS 变化；
+      别的档案对同一块读到 None。
+P2-B  第一个学习块确认是**回忆族协议且已绑定该学习项的记忆单元**（实测：free_recall，
+      与 session_composer 步骤 4「到期 + 非点名 → free_recall」一致）；
+      block_completion_state：回忆前不满足 / 回忆后满足；
+      未满足时 try_complete_training_block 什么都不写；
+      同一 client_action_id 重放 → replayed=true、同一行、effect 逐字段相同；
+      training_interactions==1 / learning_moments+1 / memory_reviews+1 /
+      仅绑定的那个 memory_unit 变化且 review_count 只 +1；
+      块推进（try_complete）恒不产生学习证据（D11 / D18）。
+P2-C  Memory：到期队列 1→0、总单元数恒为 1；Learner Model：evidence_count +1、
+      trusted>=1、last_recall_at 有值、recall_state 不再是 Unknown；
+      Progress：Quality 轴窗口内 recall_success 0→>=1；Today Coach 训练中可重建。
+      诚实空状态：零证据项 RecallState::Unknown + evidence_count==0；
+      零记忆单元档案 MemoryPressureStatus::Insufficient。
+P2-D  无来源档案：训练照常编排（不崩），每个学习块落库一份
+      status=Unavailable / generated_by=None / 无摘录 / 无参考 / 无提示 / 无步骤 /
+      provenance 空 / unavailable_reason 非空 的快照；读取入口同样无出处标签；
+      零新增 moment / review，FSRS 零变化。
+P2-E  先证明档案B 的独有词元真的可检索（否则隔离断言是空话）；
+      A 的每个出处只落在 A 的 source/revision；chunk 在 DB 层的 profile_id 就是 A；
+      search_scoped_by_revisions(A, B独有词元, &[A的revision]) 不返回 B 的 chunk；
+      A 的块材料 B 一律读不到（含命令层）；
+      反向：B 自己的训练只接地到 B 的来源（隔离不是「两边都空」）；
+      内容层：B 的独有字符串绝不出现在 A 的材料文本里。
+```
+
+### 本包未发现新的生产缺陷
+
+P2 没有产出一笔前置修复提交 —— 任务书 §12 允许「发现真实缺陷就先修」，但本轮
+六个场景全部一次通过（唯一改动是对新测试自身的断言收紧，未触碰生产代码）。
+
+### 备注：P2-B 的「第一个块必须是回忆族」是一条**前提断言**，不是巧合
+
+`golden_start` 实测确认：到期学习项 + 非点名 → 首个学习块 = `free_recall`
+（`session_composer::compose_primary` 步骤 4）。该断言刻意写成硬断言而非「有就测、
+没有就跳」——如果编排语义将来变了，这里必须**大声失败**，而不是悄悄降级成
+一个不再证明 FSRS 闭环的用例。
+
+next pack   : P3
+next action : 八个专项体验在**生产创建的快照**上的读取行为（不重设计体验）
