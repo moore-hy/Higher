@@ -828,9 +828,9 @@ git diff --check            -> CLEAN
 STARTING SHA (task):          ab06ff081ced52535fbace3f928894cd8eae73b7
 STARTING SHA (continuation):  bf5b184969312570c8d137e1d89b246423a2fdbb
 FINAL BRANCH:                 main
-FINAL SHA:                    3a9b737d069523593562cc918c45291fe65b1036
-                              (last substantive commit: the real-runtime format matrix
-                               test that locks all 10 formats against regressions);
+FINAL SHA:                    01843f801a48576a6ce66a2622a73e328b52a38f
+                              (last substantive commit: xlsx/csv rejected as
+                               UNSUPPORTED_INPUT per Owner decision);
                                a docs-only ledger finalization commit follows it.
 
 LOCAL COMMITS ON MAIN (this task):
@@ -852,6 +852,8 @@ LOCAL COMMITS ON MAIN (this task):
   7cd7b11  fix(document): stop advertising formats docling cannot parse (.txt, .ascii)
   03dc7be  docs(o2): finalize the O2 ledger — .txt/.ascii fixes applied and locked
   3a9b737  test(document): lock the full format matrix on the real docling runtime
+  2fb8844  docs(o2): finalize the O2 ledger — real-runtime matrix test locks all 10 formats (100 passed)
+  01843f8  fix(document): reject xlsx/csv with 0 learnable chunks as UNSUPPORTED
 
 COMPLETED WAVES:              M0 M1 M2 M3 M4 (incl. real PDF / DOCX / PPTX / html / htm
                               / xlsx / csv / txt / ascii — all 10 advertised formats now
@@ -895,7 +897,8 @@ TESTS ACTUALLY RUN:           see M8 gates above (25 + 43 + 32 = 100 passed, 0 f
                               availability-gated matrix test that parses every supported
                               format (markdown/txt/html/htm/asciidoc/docx/pptx/xlsx/csv)
                               through the REAL docling runtime and asserts the discovered
-                              matrix (9/9 Ready; xlsx/csv = 0 chunks by design)
+                              matrix (7/9 Ready with chunks; xlsx/csv rejected as
+                              UNSUPPORTED_INPUT — 0 learnable chunks by design)
 FORMAT COVERAGE (real runtime): all 10 advertised suffixes now parsed on docling 2.73.0
                               WORK:          markdown, pdf, docx, pptx, html, htm
                               FIXED:         txt   (now convert_string(InputFormat.MD) ->
@@ -903,18 +906,27 @@ FORMAT COVERAGE (real runtime): all 10 advertised suffixes now parsed on docling
                                              ascii (now `.asciidoc` in SUPPORTED_SUFFIXES
                                              -> exit 0, 3 chunks; stray `.ascii` -> clean
                                              Unsupported=4 — verified on real runtime)
-                              SILENT EMPTY (PRODUCT DECISION, unchanged):
-                                             xlsx, csv  (exit 0, 0 sections / 0 chunks —
-                                             docling emits a `table` item with no text).
-                                             Whether ingestion should WARN/REJECT on empty
-                                             structure is left to the Owner; Higher runtime
-                                             behaviour deliberately unchanged.
+                              REJECTED (Owner decision, applied):
+                                             xlsx, csv  (docling emits a `table` item with
+                                             no text -> 0 learnable chunks). The runner now
+                                             fails these with exit 4 UNSUPPORTED_INPUT
+                                             instead of silently returning Ready(0 chunks),
+                                             so a user is told the sheet yields nothing
+                                             learnable rather than thinking import succeeded.
+                                             Verified on the real runtime: both exit 4.
+                                             SCOPE: 这只影响 docling **文档学习**管线
+                                             （src/commands/document.rs 的 9 个 IPC 命令）。
+                                             既有的**规划资料**导入路径
+                                             （source_ingest::extract_xlsx_text，被
+                                             data.rs / agent.rs 的规划命令使用）仍独立抽取
+                                             xlsx 单元格文本，完全不受此改动影响 —— 两条
+                                             管线是不同的命令、不同的抽取实现。
                               Four defects found by exercising all 10 formats on the real
                               runtime. All four are now locked so they cannot silently
                               regress: txt/ascii are FIXED and asserted by BOTH the extended
                               source-level suffix test AND the new real-runtime matrix test;
                               xlsx/csv empty-structure behaviour is asserted by the matrix
-                              test (0 chunks is the expected, locked outcome). The
+                              test (UNSUPPORTED_INPUT is the expected, locked outcome). The
                               source-level suffix test alone was necessary but not
                               sufficient — the matrix test closes that gap permanently.
 
