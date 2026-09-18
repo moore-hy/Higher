@@ -108,7 +108,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 |------|-------|--------|--------|
 | W0 | Baseline + reuse audit + ledger | `docs(cognitive): start grounded learning bridge execution` | ✅ DONE (this commit) |
 | W1 | O2 DB lock correctness | `fix(document): release db lock during document parsing` | ✅ DONE |
-| W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ✅ DONE |
+| W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ✅ DONE (7fbe589) |
 | W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ⏳ pending |
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ⏳ pending |
 | W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ⏳ pending |
