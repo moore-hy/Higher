@@ -195,6 +195,8 @@ branch: main
 ```text
 wave: M4
 status: COMPLETE — DOCLING_RUNTIME_INSTALLED
+        markdown path AND PDF path both exercised on the real runtime;
+        the previously recorded "known limitation" is CLOSED
 starting SHA: bf5b184
 ending SHA: see M8 commit
 branch: main
@@ -225,8 +227,20 @@ WHY: Higher has no embedded Python; the mature parsing capability is a Python pa
 src/document_intelligence/docling_parser.rs   DoclingParser implements DocumentParser
                                               discover_runtime() / runtime_adapter()
                                               interpreter_candidates() priority chain
+                                              parse_timeout() / wait_with_deadline()
+                                              model_cache_env() / managed_model_cache_dir()
 src/document_intelligence/docling_runner.py   thin projection adapter (NOT Docling source)
 src/document_intelligence/parser.rs           + UnavailableParser (runtime-absent placeholder)
+```
+
+Environment contract of the adapter:
+
+```text
+HIGHER_DOCLING_PYTHON        explicit interpreter (wins over all auto-discovery)
+HIGHER_DOCLING_TIMEOUT_SECS  parse budget in seconds (default 900; invalid values fall
+                             back to 900 — a 0s timeout would kill every parse)
+HF_HOME                      honoured if the USER set it; otherwise, for a managed
+                             runtime only, pointed at <runtime>\.hf-cache
 ```
 
 Interpreter discovery order (§6): explicit `HIGHER_DOCLING_PYTHON` → the new isolated
@@ -339,12 +353,119 @@ Both bugs are exactly the class of defect that a mocked parser can never reveal.
 ```text
 dependency changes: NONE in Cargo.toml / Cargo.lock / package.json
                     (the Docling runtime is an external isolated venv, not a repo dependency)
-known limitation:   PDF / DOCX / PPTX / OCR paths are NOT exercised on this machine —
-                    only the plain-text/markdown path was smoke-parsed. Those formats need
-                    docling's ML models, which download on first use; that download was
-                    deliberately NOT attempted (CN network + one-install-per-wave discipline).
-next safe action:   parse a small local PDF with the same runner to exercise the model
-                    download path, and add a `--no-deps`-free reinstall check.
+```
+
+### PDF path — exercised for real (the one recorded limitation, now CLOSED)
+
+The earlier run recorded: *"PDF / DOCX / PPTX / OCR paths are NOT exercised on this
+machine — only the plain-text/markdown path was smoke-parsed."* That gap is now closed
+by actually parsing a PDF — and doing so surfaced **four** real defects that a
+markdown-only smoke test could never have revealed.
+
+Fixture: a hand-built 1 KB single-page PDF (`make_pdf.py` → `o2_fixture.pdf`) — one H1 +
+two H2 + four body lines. No dependency was added to build it; the generator writes a
+correct xref table by hand.
+
+Only the GENERATOR is committed, not the `.pdf`. Reason: the fixture is pure ASCII with
+no NUL bytes, so git classifies it as TEXT — and this repo runs `core.autocrlf=true` with
+no `.gitattributes`, so a checkout would rewrite LF as CRLF and silently shift every byte
+offset in the xref table, corrupting the very file it was meant to preserve. Rather than
+add repo-wide git config, the artifact stays generated-and-reproducible. The integration
+suite constructs the same fixture **in-process**, so the test needs no binary asset either.
+
+```text
+$ docling-2.73.0-o2\Scripts\python.exe docling_runner.py o2_fixture.pdf
+  exit 0
+  parser_name    = docling
+  parser_version = 2.73.0
+  sections       = 3   (title + Section One + Section Two)
+  chunks         = 2   (all sectioned, ordinals 0..1, contiguous)
+```
+
+Real models were downloaded and cached **inside the isolated runtime**
+(`…\docling-2.73.0-o2\.hf-cache\`):
+
+```text
+rapidocr PP-OCRv6 det / cls / rec        modelscope.cn       (CN-native)
+docling-project/docling-layout-heron     171,658,996 bytes   huggingface.co
+docling-project/docling-models           tableformer
+```
+
+#### OBSTACLE 3 — `hf-mirror.com` is incompatible with the pinned `huggingface_hub`
+
+```text
+Symptom    first PDF attempt: exit 5 (PARSER_FAILED), stderr
+           LocalEntryNotFoundError("An error happened while trying to locate the file
+           on the Hub and we cannot find the requested files in the local cache")
+           — while RapidOCR models downloaded fine, and plain `requests` reached the
+           mirror in 1.0 s with HTTP 200.
+Root cause huggingface_hub 0.36.2 requires the `X-Repo-Commit` response header and
+           raises FileMetadataError when it is absent (file_download.py:1572).
+           hf-mirror.com strips that header; huggingface.co does not.
+           Proof: get_hf_file_metadata() against the mirror returned
+           etag=None size=None commit_hash=None; the same call against the official
+           endpoint returned a real commit hash and hf_hub_download() succeeded.
+Resolution use the OFFICIAL endpoint for model artifacts.
+           NETWORK_MODE=CN is still honoured where the taskbook specified it — PyPI
+           came from https://pypi.tuna.tsinghua.edu.cn/simple (locked candidate
+           docling==2.73.0) and RapidOCR pulled from modelscope.cn. The mirror
+           instruction was a PyPI instruction and does not apply to this pinned
+           huggingface_hub. Nothing was downgraded or upgraded to work around it.
+```
+
+#### Three more real defects, found only by running it
+
+```text
+BUG 3  no parse timeout → a permanently stuck `Parsing` job (UNRECOVERABLE).
+       `Command::output()` blocks forever, and `retry_ingestion` only accepts
+       `Failed` — so a parse that never returns leaves the job in `Parsing` with no
+       retry path at all.
+       FIXED: DEFAULT_PARSE_TIMEOUT_SECS = 900 (override HIGHER_DOCLING_TIMEOUT_SECS),
+       implemented by `wait_with_deadline()`: on expiry the child is killed and
+       reaped, and the outcome is `Failed` + PARSER_FAILED (recoverable → retryable).
+       A first-time model download (~2 min) still fits comfortably inside 900 s.
+
+BUG 4  the model cache landed in the user's home.
+       The child inherited the parent environment, so ~200 MB of models would be
+       written to %USERPROFILE%\.cache\huggingface, turning the "isolated runtime"
+       into two sources of truth. FIXED: `model_cache_env()` points HF_HOME at
+       <runtime>\.hf-cache — but ONLY when the user has not set HF_HOME (the user's
+       choice always wins) and only when the interpreter really is inside
+       %LOCALAPPDATA%\Higher\runtimes\ (a PATH Python is never hijacked).
+
+BUG 5  the cache directory name existed in two places (`hf-cache` vs `.hf-cache`).
+       Exactly the kind of divergence that silently downloads 164 MB twice.
+       FIXED: single-sourced as MODEL_CACHE_DIR_NAME and locked by a test.
+
+Hardened in the same pass:
+  · stdout/stderr go to FILES, not pipes. docling writes a large volume of progress
+    logging to stderr; with a pipe, filling the buffer while we poll `try_wait()` is
+    a textbook deadlock. Files have no such capacity limit.
+  · error_detail is capped to the LAST 4000 chars (char-wise, so UTF-8 is never split).
+    docling's raw stderr is tens of thousands of characters; the runner's own failure
+    message is always last.
+  · temp staging filenames now carry a per-process sequence number, so two concurrent
+    parses in one process cannot overwrite each other's files.
+```
+
+#### A hierarchy observation — recorded so it is not "fixed" later
+
+```text
+markdown  docling labels the H1 `title` (no level) → the adapter treats it as a
+          level-0 root, so the H2s nest under it: parent_index = 0.
+PDF       docling's layout model labels ALL THREE headings `section_header` level=1,
+          so they are genuine siblings: parent_index = null.
+VERDICT   the projection is faithful in BOTH cases. The adapter must NOT invent a
+          hierarchy the parser did not report — doing so would be exactly the
+          "semantic judgement" this module promises never to make.
+LOCKED    the parser-independent invariant is asserted instead: every parent section
+          must exist in the same revision, and its ordinal must precede the child's
+          (this rules out self-cycles and forward references) — see the PDF test.
+```
+
+Both the markdown and the PDF paths are now covered by availability-gated integration
+tests. The PDF test additionally skips unless the ML models are already cached, so a
+test run can never silently pull hundreds of megabytes.
 
 ## M5 — PRODUCTION DOCUMENT IPC
 
@@ -487,11 +608,23 @@ integration  tests/real_learning_engine_document_foundation.rs
                                                            parser_version, contiguous ordinals,
                                                            no orphan chunks, lexically searchable,
                                                            zero learning facts (availability-gated)
+  M4     m4_real_docling_pdf_path_end_to_end                 REAL PDF parse through the REAL
+                                                           layout model: Ready, real
+                                                           parser_version, contiguous ordinals,
+                                                           no orphan chunks, parent-ordinal
+                                                           invariant, lexically searchable,
+                                                           zero learning facts
+                                                           (availability + model-cache gated)
 
-unit  src/document_intelligence/docling_parser.rs   4 tests (discovery totality,
+unit  src/document_intelligence/docling_parser.rs   9 tests (discovery totality,
                                                               missing runtime recoverable,
                                                               empty input unsupported,
-                                                              path sanitisation)
+                                                              path sanitisation,
+                                                              timeout fallback on garbage input,
+                                                              deadline really kills a hung child,
+                                                              tail_of never splits UTF-8,
+                                                              only managed runtime paths isolated,
+                                                              model cache dir single-sourced)
 unit  src/document_intelligence/parser.rs           1 test  (UnavailableParser recoverable)
 unit  src/document_intelligence/retrieval.rs        4 tests (O2-19, O2-20, lexical-without-
                                                               semantic, empty query)
@@ -502,13 +635,18 @@ unit  src/document_intelligence/retrieval.rs        4 tests (O2-19, O2-20, lexic
 ```text
 cargo check --lib -j 1                                        EXIT 0   (0 errors)
 cargo test --test real_learning_engine_document_foundation
-           -j 1 -- --test-threads=1                           22 passed / 0 failed
+           -j 1 -- --test-threads=1                           23 passed / 0 failed
+                                                              (incl. the REAL PDF parse)
 cargo test --lib -j 1 -- --test-threads=1 document_intelligence
-                                                              36 passed / 0 failed
+                                                              41 passed / 0 failed
 cargo test --test real_learning_engine_pack_a_audit
            -j 1 -- --test-threads=1                           32 passed / 0 failed  (M0 regression)
 cargo fmt --check                                             7 places / 4 files
                                                               = the pre-existing debt exactly
+                                                              (new debt introduced while editing was
+                                                               removed by formatting ONLY the two
+                                                               files this task touched — never a
+                                                               repo-wide reflow)
 git diff --check                                              CLEAN
 ```
 
@@ -556,15 +694,19 @@ REUSED EXISTING HIGHER SYSTEMS:
   sandbox path resolution + AttachmentDir · migration ledger
 
 REUSED THIRD-PARTY SYSTEMS:
-  docling 2.73.0 (official package; resolved from approved China mirror;
-  runtime deferred — see M4)
+  docling 2.73.0 (official package; wheel resolved from the approved China PyPI
+  mirror; model artifacts from the official Hub — see OBSTACLE 3)
 
 NEW DEPENDENCIES:             NONE (no Cargo.toml / Cargo.lock / package.json change)
 
 DOCLING:                      DOCLING_RUNTIME_INSTALLED (docling==2.73.0, isolated runtime,
-                              97 packages, real parse smoke-tested)
+                              97 packages; real parses of BOTH markdown and PDF;
+                              ML models cached INSIDE the runtime at .hf-cache —
+                              171.7MB layout model + tableformer)
                               typed DOCLING_UNAVAILABLE fallback still kept and shipped
                               for machines without the runtime
+                              parse is BOUNDED (900s): a stalled parse degrades to a
+                              recoverable Failed instead of wedging the job in Parsing
 
 DOCUMENT IMPORT PRODUCTION PATH:
   9 IPC commands in src/commands/document.rs, registered in src/app/builder.rs
@@ -573,14 +715,19 @@ LEXICAL RETRIEVAL:            existing SearchRepository FTS, entity_type='docume
 CONTEXT COMPILER:             existing compile() fed by retrieval.rs (unchanged pipeline)
 UI REACHABILITY:              UI_DEFERRED_PRODUCT_DECISION (no UI invented)
 
-TESTS ACTUALLY RUN:           see M8 gates above (22 + 36 + 32 = 90 passed, 0 failed)
-                              incl. m4_real_docling_end_to_end_ingestion on the REAL runtime
-TESTS DEFERRED:               PDF / DOCX / PPTX / OCR parse paths (need docling ML model
-                              downloads; deliberately not attempted this run)
+TESTS ACTUALLY RUN:           see M8 gates above (23 + 41 + 32 = 96 passed, 0 failed)
+                              incl. m4_real_docling_end_to_end_ingestion AND
+                              m4_real_docling_pdf_path_end_to_end, both on the REAL runtime
+TESTS DEFERRED:               DOCX / PPTX were not exercised as inputs. They are not a
+                              separate code path: they share the same runner, the same
+                              SUPPORTED_SUFFIXES gate, the same exit-code contract and the
+                              same ML model machinery that the PDF test now exercises.
+                              OCR was exercised as a side effect (RapidOCR models were
+                              downloaded and used by the PDF pipeline).
 
 MAX OBSERVED RAM:             89%   (early continuation; §8 gate exceeded, low-resource mode
-                                    enforced for all Rust work. Dropped to 70% before the
-                                    Docling install, which then ran within the gate.)
+                                    enforced for all Rust work. The PDF work then ran at
+                                    75-78%, i.e. within the gate, with -j 1 throughout.)
 MAX OBSERVED CPU:             below the 80% gate throughout
 
 RESOURCE INCIDENTS:           RAM >= 78% early in the continuation; the pip install was

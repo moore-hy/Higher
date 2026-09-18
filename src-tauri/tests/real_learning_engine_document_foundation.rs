@@ -1480,3 +1480,231 @@ chloroplasts, producing glucose and oxygen.\n";
         chunks.len()
     );
 }
+
+// ======================= M4 · PDF 路径（需 ML 模型） =======================
+
+/// 生成一份最小的、真实可解析的单页 PDF（非敏感内容）。
+///
+/// 手工构造 + 精确 xref 偏移，**不引入任何 PDF 依赖**。这与 §7.1
+/// 「不得自研富文档解析器」不冲突：这里生成的是**输入样本**，不是解析能力；
+/// 解析依旧 100% 由 docling 完成。
+fn minimal_pdf() -> Vec<u8> {
+    const LINES: &[(&str, &str)] = &[
+        ("H1", "Higher O2 PDF Smoke Fixture"),
+        ("H2", "Section One"),
+        (
+            "P",
+            "The mitochondrion is the powerhouse of the cell. It produces ATP",
+        ),
+        ("P", "through oxidative phosphorylation."),
+        ("H2", "Section Two"),
+        (
+            "P",
+            "Photosynthesis converts light energy into chemical energy in",
+        ),
+        ("P", "chloroplasts, producing glucose and oxygen."),
+    ];
+    fn size(kind: &str) -> i32 {
+        match kind {
+            "H1" => 20,
+            "H2" => 15,
+            _ => 11,
+        }
+    }
+    fn lead(kind: &str) -> i32 {
+        match kind {
+            "H1" => 30,
+            "H2" => 26,
+            _ => 17,
+        }
+    }
+
+    let mut content = String::new();
+    let mut y = 720;
+    for (kind, text) in LINES {
+        let esc = text
+            .replace('\\', "\\\\")
+            .replace('(', "\\(")
+            .replace(')', "\\)");
+        content.push_str(&format!(
+            "BT /F1 {} Tf 72 {} Td ({}) Tj ET\n",
+            size(kind),
+            y,
+            esc
+        ));
+        y -= lead(kind);
+    }
+    let content = content.into_bytes();
+
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+           /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+            .to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        [
+            format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(),
+            content.clone(),
+            b"\nendstream".to_vec(),
+        ]
+        .concat(),
+    ];
+
+    let mut out: Vec<u8> = b"%PDF-1.4\n".to_vec();
+    let mut offsets: Vec<usize> = Vec::new();
+    for (i, body) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_at = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n", objs.len() + 1).as_bytes());
+    out.extend_from_slice(b"0000000000 65535 f \n");
+    for off in &offsets {
+        out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
+            objs.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+/// M4 · PDF 路径端到端：真实运行时 + 真实 PDF + 真实 ML 版面模型。
+///
+/// 与 markdown 用例的区别在于：PDF 解析需要 docling 的 ML 版面模型（实测约 164MB，
+/// 首次使用从 Hub 下载）。所以这里**只在模型已经就位时**运行 ——
+/// 模型缓存不在就明确 SKIP，绝不让一个测试套件在后台偷偷下载几百 MB。
+///
+/// 要启用它：先用运行时解析任意一份 PDF（或设 `HIGHER_DOCLING_TIMEOUT_SECS` 放宽超时），
+/// 模型落到隔离运行时的 `hf-cache\` 之后本用例即自动参与。
+#[test]
+fn m4_real_docling_pdf_path_end_to_end() {
+    use app_lib::document_intelligence::docling_parser::managed_model_cache_dir;
+
+    let Some(parser) = DoclingParser::discover() else {
+        println!(
+            "SKIP m4_real_docling_pdf_path_end_to_end: Docling runtime not installed \
+             (install docling==2.73.0 into %LOCALAPPDATA%\\Higher\\runtimes\\docling-2.73.0-o2)"
+        );
+        return;
+    };
+
+    let models_ready = managed_model_cache_dir()
+        .map(|d| {
+            d.join("hub")
+                .join("models--docling-project--docling-layout-heron")
+                .is_dir()
+        })
+        .unwrap_or(false);
+    if !models_ready {
+        println!(
+            "SKIP m4_real_docling_pdf_path_end_to_end: PDF 版面模型尚未缓存 \
+             (解析一次 PDF 即可填充 %LOCALAPPDATA%\\Higher\\runtimes\\docling-2.73.0-o2\\hf-cache)"
+        );
+        return;
+    }
+
+    let mut conn = setup();
+    let profile = create_profile(&conn, "M4PDF");
+    let item = create_item(&conn, profile, "材料");
+    let attachment = create_attachment(&conn, profile, item, "fixture.pdf");
+    let source = repo(&conn)
+        .create_source(profile, attachment, "fixture.pdf", None, None, "attachment")
+        .unwrap();
+
+    let outcome = ingest_source(
+        &mut conn,
+        &parser,
+        profile,
+        source,
+        "fixture.pdf",
+        &minimal_pdf(),
+    )
+    .expect("真实运行时在场时，PDF 生命周期必须跑完");
+
+    assert!(
+        outcome.is_ready(),
+        "M4-PDF：真实 Docling 解析必须成功，实际 state={} code={:?} detail={:?}",
+        outcome.state,
+        outcome.error_code,
+        outcome.error_detail
+    );
+    assert!(outcome.chunk_count > 0, "M4-PDF：必须真的解析出 chunk");
+
+    let revision_id = outcome.revision_id.expect("Ready 必须带 revision");
+    let revision = repo(&conn)
+        .get_revision(profile, revision_id)
+        .unwrap()
+        .expect("revision 必须存在");
+    assert_eq!(revision.parser_name.as_deref(), Some("docling"));
+    assert_eq!(
+        revision.parser_version.as_deref(),
+        Some("2.73.0"),
+        "M4-PDF：parser_version 必须来自真实发行版元数据"
+    );
+
+    let sections = repo(&conn).list_sections(profile, revision_id).unwrap();
+    assert!(!sections.is_empty(), "M4-PDF：真实解析必须产出章节");
+
+    // 投影的硬不变量：父章节必须真实存在，且 ordinal 必须先于子章节。
+    // 这条与「docling 报了哪些层级」无关，因此对 markdown / PDF 一律成立；
+    // 它同时排除了自环与前向引用两种坏结构。
+    for s in &sections {
+        if let Some(parent_id) = s.parent_section_id {
+            let parent = sections
+                .iter()
+                .find(|p| p.id == parent_id)
+                .unwrap_or_else(|| panic!("M4-PDF：父章节 {parent_id} 必须存在于同一 revision 内"));
+            assert!(
+                parent.ordinal < s.ordinal,
+                "M4-PDF：父章节 ordinal {} 必须先于子章节 ordinal {}",
+                parent.ordinal,
+                s.ordinal
+            );
+        }
+    }
+
+    let chunks = repo(&conn).list_chunks(profile, revision_id).unwrap();
+    assert_eq!(chunks.len(), outcome.chunk_count);
+    for (i, c) in chunks.iter().enumerate() {
+        assert_eq!(
+            c.ordinal, i as i64,
+            "M4-PDF：chunk ordinal 必须是确定性的 0..n"
+        );
+    }
+    assert!(
+        chunks.iter().all(|c| c.section_id.is_some()),
+        "M4-PDF：真实解析不得产出无章节的孤儿 chunk"
+    );
+
+    // 真实内容进入了既有检索索引（复用既有 FTS，不是第二套）。
+    let hits = SearchRepository::new(&conn)
+        .search(
+            profile,
+            "mitochondrion",
+            Some(&["document_chunk".to_string()]),
+            10,
+        )
+        .unwrap();
+    assert!(
+        !hits.is_empty(),
+        "M4-PDF：真实解析出的内容必须能被既有词法检索命中"
+    );
+
+    // 导入 PDF 同样不得产生任何学习事实。
+    assert_eq!(count_where(&conn, "learning_moments", profile), 0);
+    assert_eq!(count_where(&conn, "memory_reviews", profile), 0);
+    assert_eq!(count_where(&conn, "memory_units", profile), 0);
+
+    println!(
+        "M4 real Docling PDF: revision={revision_id} sections={} chunks={} version=2.73.0",
+        sections.len(),
+        chunks.len()
+    );
+}

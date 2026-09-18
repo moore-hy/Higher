@@ -32,9 +32,29 @@
 //! `is_recoverable() == true`）。作业被标成 `Failed`，**没有任何半成品结构**，
 //! 材料本身毫发无损。用户装好运行时后重试即可 —— 这就是 O2-18。
 //! 这里**绝不**退回一个自研解析器。
+//!
+//! # 子进程必须有预算（否则会造出一条不可恢复的路）
+//!
+//! docling 首次解析 PDF / DOCX / PPTX 要从 Hub 下载版面模型（实测约 164 MB）。
+//! 没有上限时子进程可以长时间阻塞，而作业会一直停在 `Parsing`；
+//! `retry_ingestion` 只接受 `Failed`，于是「解析卡住」= 作业永久停在 `Parsing`。
+//! 所以这里用 [`DEFAULT_PARSE_TIMEOUT_SECS`] 给子进程一个硬上限，
+//! 超时即 kill 并归类为 `Failed` + `PARSER_FAILED`（**可恢复**）。
+//!
+//! # 模型缓存必须住在隔离运行时内部
+//!
+//! 子进程默认继承父进程环境，于是模型会落到用户 home 的
+//! `~/.cache/huggingface`，让「隔离运行时」变成两处真相。
+//! [`DoclingParser::model_cache_env`] 在用户**没有**自己设 `HF_HOME`、
+//! 且解释器确实来自 `%LOCALAPPDATA%\Higher\runtimes\` 时，把缓存指向
+//! 运行时内部的 `hf-cache\`。用户的选择永远优先。
 
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use super::parser::{DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection};
 
@@ -46,6 +66,35 @@ pub const PINNED_VERSION: &str = "2.73.0";
 
 /// 环境变量：显式指定解释器（优先于一切自动发现）。
 pub const PYTHON_ENV: &str = "HIGHER_DOCLING_PYTHON";
+
+/// 解析子进程的硬上限，单位秒。超过即 kill 并归类为 `Failed`。
+///
+/// 为什么必须有这个上限：docling 首次解析 PDF / DOCX / PPTX 时要从 Hub 拉
+/// 版面模型（实测约 164 MB）。网络不可达时子进程会**长时间阻塞**，而
+/// `ingest_source` 此时把作业留在 `Parsing`。`retry_ingestion` 只接受 `Failed`，
+/// 于是「解析卡死」= 作业永久停在 `Parsing`，这是一条**不可恢复**的路。
+/// 有了上限，卡死会变成 `Failed` + `PARSER_FAILED`（可恢复），用户重试即可。
+///
+/// 900 秒是刻意的宽松值：它要容纳一次真实的模型下载，只拦「真的卡住了」。
+pub const DEFAULT_PARSE_TIMEOUT_SECS: u64 = 900;
+
+/// 覆盖解析超时的环境变量（秒）。
+pub const TIMEOUT_ENV: &str = "HIGHER_DOCLING_TIMEOUT_SECS";
+
+/// 模型缓存环境变量。Docling 通过 huggingface_hub 下载版面 / 表格模型，
+/// 缓存位置由 `HF_HOME` 决定。
+pub const HF_HOME_ENV: &str = "HF_HOME";
+
+/// 隔离运行时内部的模型缓存目录名（相对运行时根目录）。
+///
+/// **只有一个定义处**：适配器与诊断/测试都读它。此前这个名字曾在两处
+/// 各写一遍（`hf-cache` / `.hf-cache`），结果是模型会被下到两个不同的目录、
+/// 白白重复下载 164MB。点号开头与 huggingface_hub 自己的隐藏缓存惯例一致，
+/// 也与 venv 根目录里既有的 `.lock` 同类。
+pub const MODEL_CACHE_DIR_NAME: &str = ".hf-cache";
+
+/// 并发解析时的临时文件唯一化计数器。
+static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 与 docling 之间唯一的契约。字段名与 `docling_runner.py` 逐字对应。
 #[derive(Debug, serde::Deserialize)]
@@ -196,6 +245,21 @@ pub fn runtime_adapter() -> crate::runtime::DoclingRuntime {
     crate::runtime::DoclingRuntime::new(endpoint, false)
 }
 
+/// 隔离运行时内部的模型缓存目录 —— 与 [`DoclingParser::model_cache_env`] 指向同一处。
+///
+/// 存在的意义是让调用方（诊断、测试）能**如实**判断「ML 模型是否已经就位」，
+/// 而不必自己再拼一遍路径，也不必真的先解析一份 PDF 才知道。
+pub fn managed_model_cache_dir() -> Option<PathBuf> {
+    let local = std::env::var("LOCALAPPDATA").ok()?;
+    Some(
+        PathBuf::from(local)
+            .join("Higher")
+            .join("runtimes")
+            .join(RUNTIME_DIR_NAME)
+            .join(MODEL_CACHE_DIR_NAME),
+    )
+}
+
 /// Docling 解析器：实现 [`DocumentParser`]，把解析委托给成熟运行时。
 ///
 /// 它**不**持有数据库连接、**不**写学习事实、**不**访问网络 ——
@@ -257,6 +321,54 @@ impl DoclingParser {
             .map_err(|e| ParseFailure::Failed(format!("cannot write docling runner: {e}")))?;
         Ok(path)
     }
+
+    /// 本次解析的超时上限。
+    ///
+    /// 环境变量给了合法值就用它，否则用 [`DEFAULT_PARSE_TIMEOUT_SECS`]。
+    fn parse_timeout(&self) -> Duration {
+        resolve_timeout(std::env::var(TIMEOUT_ENV).ok().as_deref())
+    }
+
+    /// 模型缓存应当落在哪里（`HF_HOME`）。
+    ///
+    /// 只在**两个条件同时成立**时返回 `Some`：
+    ///
+    /// 1. 用户自己没有设 `HF_HOME` —— 用户的选择永远优先，绝不覆盖；
+    /// 2. 解释器来自 Higher 自己管理的隔离运行时目录。
+    ///
+    /// 第 2 条是为了不劫持 PATH 上的系统 Python：那种情况下把缓存塞进
+    /// Python 安装目录是越界的。对隔离运行时则相反 —— 让模型缓存住在
+    /// 运行时内部，整个运行时才是**自洽可搬迁**的一个目录，而不是
+    /// 「venv 在这里、200MB 模型在用户 home」的两处真相。
+    fn model_cache_env(&self) -> Option<(String, String)> {
+        if std::env::var_os(HF_HOME_ENV).is_some() {
+            return None;
+        }
+        let dir = self.runner_dir.as_ref()?;
+        if !is_managed_runtime(&self.interpreter) {
+            return None;
+        }
+        Some((
+            HF_HOME_ENV.to_string(),
+            dir.join(MODEL_CACHE_DIR_NAME).to_string_lossy().to_string(),
+        ))
+    }
+}
+
+/// 解释器是否来自 Higher 管理的隔离运行时目录
+/// （`%LOCALAPPDATA%\Higher\runtimes\...`）。
+///
+/// 判定基于**路径事实**，不做任何猜测：要么在 runtimes 目录下，要么不是。
+fn is_managed_runtime(interpreter: &Path) -> bool {
+    match std::env::var("LOCALAPPDATA") {
+        Ok(local) => is_under_runtimes(interpreter, Path::new(&local)),
+        Err(_) => false,
+    }
+}
+
+/// [`is_managed_runtime`] 的纯判定部分（便于直接验证）。
+fn is_under_runtimes(interpreter: &Path, local_appdata: &Path) -> bool {
+    interpreter.starts_with(local_appdata.join("Higher").join("runtimes"))
 }
 
 /// runner 的退出码 → 错误分类（与 `docling_runner.py` 头部逐字对应）。
@@ -288,46 +400,95 @@ impl DocumentParser for DoclingParser {
         let runner = self.materialize_runner()?;
 
         // 源文件写进临时目录：解析器是纯函数边界，不碰附件目录。
-        let work = std::env::temp_dir().join(format!(
-            "higher_docling_{}_{}",
-            std::process::id(),
-            sanitize(file_name)
-        ));
+        // 序号参与命名，避免同一进程内并发解析互相覆盖。
+        let seq = STAGE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tag = format!("{}_{}", std::process::id(), seq);
+        let temp = std::env::temp_dir();
+        let work = temp.join(format!("higher_docling_{tag}_{}", sanitize(file_name)));
+        let out_path = temp.join(format!("higher_docling_{tag}.stdout.json"));
+        let err_path = temp.join(format!("higher_docling_{tag}.stderr.log"));
+
         std::fs::write(&work, bytes)
             .map_err(|e| ParseFailure::Failed(format!("cannot stage input file: {e}")))?;
 
-        let output = Command::new(&self.interpreter)
-            .arg(&runner)
-            .arg(&work)
-            .output();
-
-        let _ = std::fs::remove_file(&work);
-
-        let output = match output {
-            Ok(o) => o,
-            Err(e) => {
-                return Err(ParseFailure::RuntimeUnavailable(format!(
-                    "cannot launch Docling runtime {}: {e}",
-                    self.interpreter.display()
-                )))
+        // stdout / stderr 走**文件**而不是管道：docling 会往 stderr 写大量
+        // 进度日志，管道缓冲区写满会让子进程阻塞，而我们同时在轮询等待 ——
+        // 那就是教科书式的死锁。文件没有这个容量上限。
+        let (stdout_file, stderr_file) = match (File::create(&out_path), File::create(&err_path)) {
+            (Ok(o), Ok(e)) => (o, e),
+            _ => {
+                let _ = std::fs::remove_file(&work);
+                return Err(ParseFailure::Failed(
+                    "cannot create Docling runner output files".to_string(),
+                ));
             }
         };
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let detail = if stderr.is_empty() {
-                format!("docling runner exited with {:?}", output.status.code())
+        let mut command = Command::new(&self.interpreter);
+        command
+            .arg(&runner)
+            .arg(&work)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file));
+        // 让模型缓存住进隔离运行时内部（用户已设 HF_HOME 时不介入）。
+        if let Some((key, value)) = self.model_cache_env() {
+            command.env(key, value);
+        }
+
+        let mut child = match command.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                cleanup(&[&work, &out_path, &err_path]);
+                return Err(ParseFailure::RuntimeUnavailable(format!(
+                    "cannot launch Docling runtime {}: {e}",
+                    self.interpreter.display()
+                )));
+            }
+        };
+
+        let timeout = self.parse_timeout();
+        let status = match wait_with_deadline(&mut child, timeout) {
+            Ok(Some(status)) => status,
+            Ok(None) => {
+                cleanup(&[&work, &out_path, &err_path]);
+                // 超时归类为 Failed（**可恢复**）而不是 RuntimeUnavailable：
+                // 运行时是在的，只是这一次没在预算内跑完。
+                return Err(ParseFailure::Failed(format!(
+                    "docling parse timed out after {}s (raise {TIMEOUT_ENV} if this is a \
+                     first-time model download)",
+                    timeout.as_secs()
+                )));
+            }
+            Err(e) => {
+                cleanup(&[&work, &out_path, &err_path]);
+                return Err(ParseFailure::Failed(format!(
+                    "cannot wait for Docling runtime: {e}"
+                )));
+            }
+        };
+
+        let mut stdout = String::new();
+        let _ = File::open(&out_path).and_then(|mut f| f.read_to_string(&mut stdout));
+        let mut stderr = String::new();
+        let _ = File::open(&err_path).and_then(|mut f| f.read_to_string(&mut stderr));
+
+        cleanup(&[&work, &out_path, &err_path]);
+
+        if !status.success() {
+            let detail = tail_of(stderr.trim(), MAX_ERROR_DETAIL_CHARS);
+            let detail = if detail.is_empty() {
+                format!("docling runner exited with {:?}", status.code())
             } else {
-                stderr
+                detail
             };
-            return Err(match output.status.code() {
+            return Err(match status.code() {
                 Some(EXIT_RUNTIME_UNAVAILABLE) => ParseFailure::RuntimeUnavailable(detail),
                 Some(EXIT_UNSUPPORTED) => ParseFailure::Unsupported(detail),
                 _ => ParseFailure::Failed(detail),
             });
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
         let parsed: RunnerOutput = serde_json::from_str(&stdout).map_err(|e| {
             ParseFailure::Failed(format!("docling runner produced invalid JSON: {e}"))
         })?;
@@ -361,6 +522,67 @@ impl DocumentParser for DoclingParser {
                 .or_else(|| Some(PINNED_VERSION.to_string())),
         })
     }
+}
+
+/// 写进 `document_ingestion_jobs.error_detail` 的字符上限。
+///
+/// docling 会把整轮进度日志写到 stderr；一次失败的原始输出可以有几万字符。
+/// 原样入库只会把审计信息变成噪声，所以只保留**尾部** —— runner 自己的失败
+/// 说明永远在最后。
+const MAX_ERROR_DETAIL_CHARS: usize = 4000;
+
+/// 由环境变量原值解析出超时；非法值（缺失 / 非数字 / 0）一律回落到默认值。
+///
+/// 0 必须回落：一个「0 秒超时」会把每一次解析都杀掉。
+fn resolve_timeout(raw: Option<&str>) -> Duration {
+    let secs = raw
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_PARSE_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
+
+/// 等到子进程结束，或到 `timeout` 为止。
+///
+/// 返回 `Ok(Some(status))` = 正常结束；`Ok(None)` = 到点仍未结束
+/// （**已经 kill 并回收**，不留僵尸）；`Err` = 等待本身出错。
+///
+/// 单独抽成函数，是为了能直接验证「到点一定 kill」，
+/// 而不必依赖环境变量或一次真实解析。
+fn wait_with_deadline(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait()? {
+            Some(status) => return Ok(Some(status)),
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Ok(None);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+/// 逐个删除临时文件，忽略错误（清理失败不该盖过真正的解析结果）。
+fn cleanup(paths: &[&PathBuf]) {
+    for p in paths {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// 取字符串尾部至多 `max` 个字符（按字符而非字节切，避免切碎 UTF-8）。
+fn tail_of(s: &str, max: usize) -> String {
+    let count = s.chars().count();
+    if count <= max {
+        return s.to_string();
+    }
+    s.chars().skip(count - max).collect()
 }
 
 /// 只保留文件名里安全的字符，避免临时文件路径被文件名污染。
@@ -426,5 +648,102 @@ mod tests {
         assert_eq!(sanitize("../../etc/passwd"), "passwd");
         assert_eq!(sanitize("a b/c*d.pdf"), "c_d.pdf");
         assert_eq!(sanitize(""), "input");
+    }
+
+    // 非法超时值必须回落到默认值 —— 一个「0 秒超时」会杀掉每一次解析。
+    #[test]
+    fn resolve_timeout_falls_back_on_garbage() {
+        let default = Duration::from_secs(DEFAULT_PARSE_TIMEOUT_SECS);
+        assert_eq!(resolve_timeout(None), default);
+        assert_eq!(resolve_timeout(Some("")), default);
+        assert_eq!(resolve_timeout(Some("abc")), default);
+        assert_eq!(resolve_timeout(Some("0")), default);
+        assert_eq!(resolve_timeout(Some("-5")), default);
+        assert_eq!(resolve_timeout(Some(" 120 ")), Duration::from_secs(120));
+    }
+
+    // 到点必须**真的 kill**，而不是无限等下去。这条是「解析卡死不会变成
+    // 一个永久停在 Parsing 的作业」的直接保证。
+    #[test]
+    fn wait_with_deadline_kills_a_hanging_child() {
+        #[cfg(windows)]
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping -n 20 127.0.0.1 >nul"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("必须能起一个必然挂住的子进程");
+        #[cfg(not(windows))]
+        let mut child = Command::new("sleep")
+            .arg("20")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("必须能起一个必然挂住的子进程");
+
+        let started = Instant::now();
+        let outcome = wait_with_deadline(&mut child, Duration::from_millis(600)).unwrap();
+        assert!(outcome.is_none(), "到点必须返回超时，而不是一直等");
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "必须在超时后立刻返回"
+        );
+        // 已经 kill 并回收，不留僵尸子进程。
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    // 只保留尾部，且必须按字符切 —— 按字节切会切碎 UTF-8。
+    #[test]
+    fn tail_of_keeps_the_end_and_never_splits_utf8() {
+        assert_eq!(tail_of("abcdef", 3), "def");
+        assert_eq!(tail_of("abc", 10), "abc");
+        let s = "解析失败：网络不可达";
+        let t = tail_of(s, 4);
+        assert_eq!(t.chars().count(), 4);
+        assert!(s.ends_with(&t));
+    }
+
+    // 模型缓存只允许落在 Higher 管理的隔离运行时里。
+    // PATH 上的系统 Python 绝不能被当成隔离运行时，否则会把 200MB 模型
+    // 写进 Python 安装目录 —— 那是越界的。
+    #[test]
+    fn only_managed_runtime_paths_are_treated_as_isolated() {
+        let base = Path::new("C:/Users/x/AppData/Local");
+        assert!(is_under_runtimes(
+            Path::new(
+                "C:/Users/x/AppData/Local/Higher/runtimes/docling-2.73.0-o2/Scripts/python.exe"
+            ),
+            base
+        ));
+        assert!(!is_under_runtimes(
+            Path::new("C:/Python312/python.exe"),
+            base
+        ));
+        assert!(!is_under_runtimes(
+            Path::new("C:/Users/x/AppData/Local/Other/runtimes/py.exe"),
+            base
+        ));
+    }
+
+    // 模型缓存目录名只能有**一个**定义处：适配器与诊断/测试必须指向同一个目录，
+    // 否则模型会被下到两处、白白重复下载。
+    #[test]
+    fn model_cache_dir_is_single_sourced() {
+        let Some(dir) = managed_model_cache_dir() else {
+            return; // 非 Windows / 无 LOCALAPPDATA：无隔离运行时的概念
+        };
+        assert_eq!(
+            dir.file_name().and_then(|s| s.to_str()),
+            Some(MODEL_CACHE_DIR_NAME)
+        );
+        assert_eq!(
+            dir.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str()),
+            Some(RUNTIME_DIR_NAME),
+            "缓存必须住在隔离运行时内部，而不是别处"
+        );
     }
 }
