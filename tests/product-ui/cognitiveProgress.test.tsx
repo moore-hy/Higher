@@ -39,6 +39,7 @@ vi.mock("../../src/api", () => ({
 import CognitiveProgress, {
   PROGRESS_AXES,
   PROGRESS_AXIS_EXPLAIN,
+  PROGRESS_DIFFICULTY_ZH,
 } from "../../src/pages/CognitiveProgress";
 
 const SRC = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
@@ -197,14 +198,16 @@ describe("UI-13 — Progress has no global efficiency/mastery score", () => {
 // ============================================================
 
 describe("§26 — 证据不足的轴只显示「证据不足」", () => {
-  it("Difficulty 在没有协议会话时显示证据不足 + 真实原因，且没有图表", async () => {
+  it("Difficulty 在窗口内没有完成过训练块时显示证据不足 + 真实原因，且没有图表", async () => {
     renderProgress();
     await waitLoaded();
 
     const axis = page().querySelector('[data-axis="difficulty"]') as HTMLElement;
     expect(axis.dataset.available).toBe("false");
     expect(within(axis).getByText("证据不足")).toBeInTheDocument();
-    expect(within(axis).getByText(/训练协议会话还没有开始记录/)).toBeInTheDocument();
+    // W7：训练块已经会真实落库，因此这句话必须说「本窗口没有完成过训练块」，
+    // 而不能再说「协议会话还没有开始记录」（那是一句已经过期的假话）。
+    expect(within(axis).getByText(/这个窗口内还没有完成过训练块/)).toBeInTheDocument();
     expect(axis.querySelector(".hc-chart")).toBeNull();
   });
 
@@ -249,6 +252,60 @@ describe("§26 — 证据不足的轴只显示「证据不足」", () => {
     expect(within(axis).getByText("证据不足")).toBeInTheDocument();
     expect(axis.textContent).not.toContain("weird_code");
     expect(axis.querySelector(".hc-axis__missing-hint")).toBeNull();
+  });
+});
+
+// ============================================================
+// W7 §12 — Difficulty 来自**真实完成**的训练块
+// ============================================================
+
+describe("W7 §12 — Difficulty 展示真实难度分布", () => {
+  it("有合规块 → 画真实分布，且不再声称证据不足", async () => {
+    H.getCognitiveProgress.mockResolvedValue(
+      view({
+        difficulty: {
+          available: true,
+          buckets: [
+            { difficulty: "light", count: 2 },
+            { difficulty: "medium", count: 0 },
+            { difficulty: "high", count: 1 },
+          ],
+          reason_code: null,
+        },
+      })
+    );
+    renderProgress();
+    await waitLoaded();
+
+    const axis = page().querySelector('[data-axis="difficulty"]') as HTMLElement;
+    expect(axis.dataset.available).toBe("true");
+    expect(within(axis).queryByText("证据不足")).toBeNull();
+    expect(axis.querySelector(".hc-chart")).not.toBeNull();
+  });
+
+  it("三个锁定档位有人话标签，且不给未知档位编造名字", () => {
+    // §14 冻结的三档 —— 与 Rust `ProtocolDifficulty` 的 snake_case 一一对应。
+    expect(PROGRESS_DIFFICULTY_ZH).toEqual({
+      light: "轻度",
+      medium: "中度",
+      high: "重度",
+    });
+    // 后端没有声明的档位，前端**不猜**（返回 undefined → 渲染为空，
+    // 而不是临时编一个名字造出一个假档位）。
+    expect(PROGRESS_DIFFICULTY_ZH["impossible_level"]).toBeUndefined();
+  });
+
+  it("Difficulty 渲染走人话映射，绝不把 light/medium/high 原样画给用户", () => {
+    const ts = SRC("../../src/pages/CognitiveProgress.tsx");
+    // 标签必须经过映射表。
+    expect(ts).toContain("PROGRESS_DIFFICULTY_ZH[b.difficulty]");
+    // 且不允许出现旧写法（直接渲染后端 key）。
+    expect(ts).not.toContain("name: b.difficulty");
+  });
+
+  it("口径说明已更新为「真实完成的训练块」，不再说协议会话尚未记录", () => {
+    expect(PROGRESS_AXIS_EXPLAIN.difficulty).toContain("真实完成");
+    expect(PROGRESS_AXIS_EXPLAIN.difficulty).not.toContain("才会出现分布");
   });
 });
 

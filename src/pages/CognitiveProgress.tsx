@@ -61,8 +61,21 @@ export type ProgressAxisKey = (typeof PROGRESS_AXES)[number]["key"];
 export const PROGRESS_REASON_ZH: Record<CognitiveProgressReasonCode, string> = {
   no_observed_sessions: "还没有完成过学习会话，因此暂时没有学习量可以统计。",
   no_recall_moments: "还没有主动回忆的记录，因此暂时无法判断回忆质量。",
-  no_protocol_sessions: "训练协议会话还没有开始记录，因此暂时没有挑战度分布。",
+  no_protocol_sessions: "这个窗口内还没有完成过训练块，因此暂时没有挑战度分布。",
   no_historical_evidence: "还没有足够久的历史证据，因此暂时无法比较能力变化。",
+};
+
+/**
+ * 三个**锁定**难度档位的人话（§14 冻结档位）。
+ *
+ * 后端给的是稳定 key（`light` / `medium` / `high`）；把机器串直接画在坐标轴上
+ * 等于把内部标识抛给用户。映射表**不做兜底猜测**：认不出的 key 渲染为空，
+ * 因为一个后端并未声明的档位不该由前端临时编一个名字（那会造出一个假档位）。
+ */
+export const PROGRESS_DIFFICULTY_ZH: Record<string, string> = {
+  light: "轻度",
+  medium: "中度",
+  high: "重度",
 };
 
 /** 轴口径说明（Popover 披露；只说口径，不含任何数字）。 */
@@ -70,7 +83,7 @@ export const PROGRESS_AXIS_EXPLAIN: Record<ProgressAxisKey, string> = {
   volume:
     "只统计真实完成的学习会话时长（近 7 天 / 近 30 天）与有学习记录的天数。注意：近 30 天包含近 7 天，两张柱不是彼此独立的量。",
   difficulty:
-    "按训练协议的难度档位统计。协议会话被真正记录下来之后，这里才会出现分布。",
+    "只按**真实完成**的训练块统计：跳过 / 未完成 / 休息块都不计入，认不出协议的块也不会被塞进任何档位。这是分布，不是加权分，也没有总难度分。",
   quality:
     "来自主动回忆的结果（成功 / 部分 / 失败）与提示使用次数。这是过程证据，不是评分。",
   adaptation:
@@ -212,11 +225,14 @@ function QualityBody({ axis }: { axis: CognitiveQualityAxis }) {
 }
 
 function DifficultyBody({ axis }: { axis: CognitiveDifficultyAxis }) {
-  // V1 中该轴恒为证据不足（协议会话尚未持久化）；一旦有真实分布，这里也只画真实分布。
-  if (axis.buckets.length === 0) {
+  // `available` 才是后端的判据：窗口内没有任何合规块 → 证据不足（不是「难度为零」）。
+  if (!axis.available) {
     return <AxisMissing axisKey="difficulty" reason={reasonText(axis.reason_code)} />;
   }
-  const data = axis.buckets.map((b) => ({ name: b.difficulty, count: b.count }));
+  const data = axis.buckets.map((b) => ({
+    name: PROGRESS_DIFFICULTY_ZH[b.difficulty] ?? "",
+    count: b.count,
+  }));
   return (
     <section className="hc-axis" data-axis="difficulty" data-available="true">
       <AxisHead axisKey="difficulty" />

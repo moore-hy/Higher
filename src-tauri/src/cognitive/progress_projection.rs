@@ -22,10 +22,13 @@
 //!   活跃学习日复用 `learning_moment::count_distinct_local_dates_since`。
 //! - **Quality**：`learning_moment::count_moments_by_type_since` 的
 //!   recall success / partial / failure 与 hint 计数（§26 逐条点名的指标）。
-//! - **Difficulty**：**只有当协议会话被持久化之后**才有数据。V1 仓库中
-//!   协议选择是确定性决策、**没有**协议会话表（已核实），因此本轴恒为
-//!   `证据不足`（`reason_code = no_protocol_sessions`）——§26 明确要求此时
-//!   显示「证据不足」而不是编一张难度分布图。
+//! - **Difficulty**：`training_block_runs` 里**真实完成**的非休息块，按冻结
+//!   Protocol Registry 的 `base_difficulty` 分档（`light` / `medium` / `high`）。
+//!   W7 之前本轴恒为 `证据不足`，理由是「协议会话尚未被持久化」；W3/W4 之后
+//!   训练块已经真实落库，**继续声称没有数据本身就是一句假话**。窗口内确实没有
+//!   合规块时仍然如实返回 `available = false` + `no_protocol_sessions` ——
+//!   §26 要求的是「没有就说没有」，不是「永远说没有」。
+//!   本轴**不产生**任何加权分 / 总难度分 / 学习效率分。
 //! - **Adaptation**：对「在 30 天前就已有 moment」的学习项做**两次投影**
 //!   （30 天前 vs 现在），只统计**真实发生的**状态迁移
 //!   （prompted/fragile → independent、guided → independent、exposed → understood）。
@@ -36,7 +39,7 @@
 //! 本模块不引用任何 LLM provider / runtime / agent 符号；所有数字都来自 DB。
 //! `None` 与 `0` 严格区分：窗口内没有观测到学习时长是 `None`，不是 `0`。
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use super::learner_model::{
@@ -47,6 +50,7 @@ use super::learning_moment::{
     count_distinct_local_dates_since, count_moments_by_type_since, list_learning_moments_for_item,
     LearningMoment, LearningMomentType,
 };
+use super::protocol::{find, ProtocolDifficulty, ProtocolId};
 use super::today_projection::utc_now;
 use crate::learning_state::date::today_local;
 use crate::memory::types::normalize_utc;
@@ -112,8 +116,13 @@ pub struct DifficultyBucket {
 
 /// Difficulty（训练挑战度）。
 ///
-/// V1 中 `buckets` 恒为空且 `available = false`：协议会话尚未被持久化，
-/// 没有任何真实难度分布可画（§26）。
+/// `available = true` 时 `buckets` **恒为三格且顺序固定**
+/// （`light` / `medium` / `high`）—— 因为这是一个**锁定档位**上的分布，
+/// 某一档为 0 本身就是一条真实信息（「这个窗口里没做高强度训练」），
+/// 与「这一档压根不存在」是两件事，不能靠「省略」把二者混为一谈。
+///
+/// 窗口内没有任何合规块时 `available = false` + `reason_code = no_protocol_sessions`，
+/// `buckets` 为空 —— 那是「暂无证据」，**不是**「难度为零」。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 pub struct DifficultyAxis {
     pub available: bool,
@@ -176,7 +185,7 @@ pub fn build_cognitive_progress_at(
 
     let volume = build_volume(conn, profile_id, today, &since, now_utc)?;
     let quality = build_quality(conn, profile_id, &since)?;
-    let difficulty = build_difficulty();
+    let difficulty = build_difficulty(conn, profile_id, &since)?;
     let adaptation = build_adaptation(conn, profile_id, &since, now_utc)?;
 
     Ok(CognitiveProgressView {
@@ -272,13 +281,99 @@ fn build_quality(conn: &Connection, profile_id: i64, since: &str) -> Result<Qual
     })
 }
 
-/// Difficulty：V1 恒为「证据不足」——没有任何协议会话被持久化，就没有难度分布。
-fn build_difficulty() -> DifficultyAxis {
-    DifficultyAxis {
-        available: false,
-        buckets: Vec::new(),
-        reason_code: Some(REASON_NO_PROTOCOL_SESSIONS.to_string()),
+/// Difficulty：窗口内**真实完成**的协议块，按冻结注册表的 `base_difficulty` 分档。
+///
+/// # 计入条件（§12.1，四条缺一不可）
+///
+/// ```text
+/// status = 'completed'                        → 真的完成了
+/// is_break = 0                                → 不是休息块
+/// protocol_id 非空且能在冻结注册表里查到       → 认得出这一档
+/// ended_at 落在本报告窗口内                    → 属于这个窗口
+/// ```
+///
+/// # 明确**不计入**（每一条都对应一种「看起来像难度、其实不是」的假数据）
+///
+/// ```text
+/// skipped / pending / active 块   → 没完成，不产生难度证据
+/// 休息块                          → 休息不是训练挑战
+/// 注册表里没有的 protocol_id      → **不发明档位**，也不建「未知」桶
+/// ```
+///
+/// 第三条尤其重要：把认不出的协议塞进一个 `unknown` 桶，等于凭空造出一个
+/// 冻结注册表里并不存在的难度档位。宁可少一格，也不要假一格。
+///
+/// # 不产生的东西（§26 硬约束）
+///
+/// 没有加权分、没有总难度分、没有「学习效率分」。本函数只数数。
+fn build_difficulty(
+    conn: &Connection,
+    profile_id: i64,
+    since: &str,
+) -> Result<DifficultyAxis, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT protocol_id, COUNT(*)
+               FROM training_block_runs
+              WHERE profile_id = ?1
+                AND is_break = 0
+                AND status = 'completed'
+                AND protocol_id IS NOT NULL
+                AND ended_at IS NOT NULL
+                AND ended_at >= ?2
+              GROUP BY protocol_id",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(params![profile_id, since], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut light = 0i64;
+    let mut medium = 0i64;
+    let mut high = 0i64;
+    for row in rows {
+        let (raw_protocol, count) = row.map_err(|e| e.to_string())?;
+        // 认不出的协议一律跳过：不猜档，也不落到「未知」桶里。
+        let Some(pid) = ProtocolId::parse(&raw_protocol) else {
+            continue;
+        };
+        match find(pid).base_difficulty {
+            ProtocolDifficulty::Light => light += count,
+            ProtocolDifficulty::Medium => medium += count,
+            ProtocolDifficulty::High => high += count,
+        }
     }
+
+    if light + medium + high == 0 {
+        return Ok(DifficultyAxis {
+            available: false,
+            buckets: Vec::new(),
+            reason_code: Some(REASON_NO_PROTOCOL_SESSIONS.to_string()),
+        });
+    }
+
+    // 顺序固定为 Light → Medium → High（与冻结档位的声明顺序一致）。
+    Ok(DifficultyAxis {
+        available: true,
+        buckets: vec![
+            DifficultyBucket {
+                difficulty: "light".to_string(),
+                count: light,
+            },
+            DifficultyBucket {
+                difficulty: "medium".to_string(),
+                count: medium,
+            },
+            DifficultyBucket {
+                difficulty: "high".to_string(),
+                count: high,
+            },
+        ],
+        reason_code: None,
+    })
 }
 
 /// Adaptation：对「30 天前就已有 moment」的学习项做两次投影，只统计真实迁移。
