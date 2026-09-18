@@ -5,5 +5,8 @@
  *
  * 只存**指针**（source / revision / section / chunk 的既有行 id），
  * **不存整篇文档** —— 快照保持有界，复用既有的文档结构化产物（§8.2）。
+ *
+ * `section_id` 是 `Option`：`document_chunks.section_id` 在 v042 里可为 NULL，
+ * 而「没有章节」与「章节 id = 0」是两件事（项目纪律：`None` 与 `0` 严格区分）。
  */
-export type GroundedMaterialRef = { source_id: number, revision_id: number, section_id: number, chunk_id: number, };
+export type GroundedMaterialRef = { source_id: number, revision_id: number, section_id: number | null, chunk_id: number, };

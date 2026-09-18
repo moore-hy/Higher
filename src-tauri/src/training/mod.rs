@@ -28,6 +28,7 @@
 
 pub mod completion;
 pub mod grounded_material;
+pub mod grounding;
 pub mod runtime;
 pub mod start;
 pub mod types;
@@ -38,6 +39,14 @@ pub use completion::{
 pub use grounded_material::{
     load_material_snapshot, save_material_snapshot, GeneratedBy, GroundedMaterialRef,
     GroundedTrainingMaterial, MaterialStatus,
+};
+pub use grounding::{
+    compile_grounded_context, compile_grounded_material, eligible_ready_sources,
+    material_availability, material_requirement, parse_rich_material_json, protocol_satisfiable,
+    select_satisfiable_protocols, EligibleSource, GroundedContext, GroundingRequest,
+    MaterialAvailability, MaterialRequirement, RichMaterialDraft, RichMaterialGenerator,
+    GROUNDED_CONTEXT_PROTOCOLS, GROUNDED_MATERIAL_VERSION, MAX_EXCERPT_CHARS, MAX_REFERENCE_CHARS,
+    RICH_MATERIAL_PROTOCOLS,
 };
 pub use runtime::{
     abandon_training_run, advance_training_block, block_is_current_active, complete_training_run,

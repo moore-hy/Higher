@@ -15,11 +15,14 @@ use ts_rs::TS;
 ///
 /// 只存**指针**（source / revision / section / chunk 的既有行 id），
 /// **不存整篇文档** —— 快照保持有界，复用既有的文档结构化产物（§8.2）。
+///
+/// `section_id` 是 `Option`：`document_chunks.section_id` 在 v042 里可为 NULL，
+/// 而「没有章节」与「章节 id = 0」是两件事（项目纪律：`None` 与 `0` 严格区分）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct GroundedMaterialRef {
     pub source_id: i64,
     pub revision_id: i64,
-    pub section_id: i64,
+    pub section_id: Option<i64>,
     pub chunk_id: i64,
 }
 

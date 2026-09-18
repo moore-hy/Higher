@@ -117,7 +117,7 @@ fn sample_material() -> GroundedTrainingMaterial {
         provenance: vec![GroundedMaterialRef {
             source_id: 11,
             revision_id: 22,
-            section_id: 33,
+            section_id: Some(33),
             chunk_id: 44,
         }],
         unavailable_reason: None,

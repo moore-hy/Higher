@@ -110,7 +110,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | W1 | O2 DB lock correctness | `fix(document): release db lock during document parsing` | ✅ DONE |
 | W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ✅ DONE (7fbe589) |
 | W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ✅ DONE (462d4fa) |
-| W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ⏳ pending |
+| W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | 🔧 in_progress |
 | W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ⏳ pending |
 | W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | ⏳ pending |
 | W7 | Close stale progress projection | `fix(progress): derive difficulty from real training blocks` | ⏳ pending |
@@ -361,6 +361,102 @@ none changed. W3 only adds a column + a new module; no ID renames, no v044+.
 `MaterialStatus.ts`, `GeneratedBy.ts`. Also committed here (deliberately deferred from the W2
 commit as training-domain DTOs): `BlockAdvanceIntent.ts`, `BlockAdvanceOutcome.ts`,
 `BlockProgression.ts`, `BlockCompletionState.ts`, `CompletionRuleKind.ts`.
+
+---
+
+## §7 — W4 IMPLEMENTATION NOTES
+
+**Scope (taskbook §9):** a *thin* orchestration layer that turns "the Ready document sources bound
+to this Learning Item" into the W3-locked `GroundedTrainingMaterial`. Reuse-first: **no** second
+retrieval engine, **no** second protocol registry, **no** new HTTP client.
+
+### 7.1 Files
+
+| File | Change |
+|---|---|
+| `src-tauri/src/training/grounding.rs` | **NEW** — the whole W4 layer (§9.1–§9.5) |
+| `src-tauri/src/training/mod.rs` | `pub mod grounding;` + re-exports |
+| `src-tauri/src/training/grounded_material.rs` | `GroundedMaterialRef.section_id: i64 → Option<i64>` (see 7.3) |
+| `src-tauri/tests/grounded_training_grounding.rs` | **NEW** — GB-GR-01..09 |
+| `src/generated/GroundedMaterialRef.ts` | regenerated |
+
+### 7.2 What was reused (nothing re-implemented)
+
+| Need | Reused |
+|---|---|
+| Source ownership / profile isolation | `DocumentIngestionRepository::list_sources_for_learning_item` (W2) |
+| "Ready" determination | `latest_job_for_source` + `state == "Ready"` — **same rule** as `commands/document.rs::source_view` |
+| Retrieval + ranking + neighbour + parent context + all caps | `document_intelligence::retrieval::compile_document_context` → existing Context Compiler |
+| Item facts for the query | `LearningItemRepository::get` |
+| Protocol registry | 22-entry registry **untouched** |
+
+### 7.3 Decisions (logged)
+
+1. **`GroundedMaterialRef.section_id` refined `i64 → Option<i64>`.** `document_chunks.section_id`
+   is nullable in v042. A sectionless chunk cannot be truthfully represented with a `0` sentinel,
+   and the standing project rule is "`None` 与 `0` 严格区分". The taskbook's §8.2 field list
+   (`source_id / revision_id / section_id / chunk_id`) does not mandate non-optional, so this is a
+   *truthfulness* refinement, not a contract change. `src-tauri/src/training/` is inside the §18
+   change budget. W3's GB-MAT-02 fixture was updated accordingly.
+2. **§9.4 AI is an injected trait, not a wired provider.** `RichMaterialGenerator` receives the
+   bounded `ContextPack` + protocol + block goal and returns strictly-structured JSON. Default is
+   `None` (= no AI, deterministic base still fully functional). This honours "MAY call the EXISTING
+   AI stack only when a real allowed runtime/provider exists" and "do NOT write a new HTTP client"
+   without inventing an untestable provider integration inside this wave. Real wiring belongs to the
+   caller (existing Model Role Router / Resource Governor stack).
+3. **§9.1 never silently widens to the whole corpus.** `compile_document_context` treats an *empty*
+   `source_ids` as "all sources in the profile" — which would be exactly the forbidden silent
+   corpus search. So when no item-bound Ready source exists, the layer **does not call the retrieval
+   layer at all** and returns an explicit `unavailable`. `source_ids` is always the explicit
+   whitelist of this item's Ready sources.
+4. **§9.5 DIRECT is honoured literally.** For a `RichStructured` protocol in `Direct` mode with no
+   rich material produced, the result is `unavailable` with `protocol_id` still equal to the
+   requested protocol (never substituted) and an explicit reason. In `Copilot`/`Autopilot` the
+   deterministic grounded base stays usable, and `select_satisfiable_protocols` gives the composer
+   the filter it needs (policy only — `session_composer.rs` untouched).
+5. **Conservative default for unnamed protocols.** Only the four protocols §9.4 names as needing
+   richer material are classified `RichStructured`; every other protocol defaults to
+   `GroundedContext` so the policy cannot silently block legitimate protocols.
+
+### 7.4 Known limitation of the reused engine (registered, NOT fixed)
+
+The lexical layer searches **profile-wide** with a 20-hit window
+(`DEFAULT_DOCUMENT_RETRIEVAL_LIMIT`), and the per-item source filter is applied **after** that
+window. Consequence: if another item/source in the same profile produces better-ranked hits, a
+given item's own chunks can be crowded out of the top-20, and grounding then honestly degrades to
+`unavailable` ("bound sources produced no matching grounded context") rather than returning wrong
+content.
+
+Observed directly while writing GB-GR-04: with 41 matching chunks in one profile, the single
+20000-char chunk lost its window slot (`sources=1, candidates=0, chunks=41`); moving it to its own
+profile made it retrievable. **Not fixed** because §9.2 forbids a second ranker/index and forbids
+changing the existing caps, and the degradation is honest (no fake context). Registered as a
+limitation for W8 closure.
+
+### 7.5 Frozen contracts untouched
+
+22-entry Protocol Registry unchanged; `ProtocolId` = 22; `CompletionRuleKind` = 15;
+`LearningMomentType` = 20; the 8 TrainingExperience types unchanged. `session_composer.rs` and
+`progress_projection.rs` not touched in W4. No new migration (v043 remains the ceiling).
+
+### 7.6 W4 closure — validation (all green)
+
+| Gate | Command | Result |
+|---|---|---|
+| lib compile | `cargo check --lib --manifest-path src-tauri/Cargo.toml -j 1` | ✅ 0 errors (34 baseline warnings) |
+| **GB-GR-01..09** | `cargo test --test grounded_training_grounding` | ✅ **9/9 pass** |
+| W3 regression | `cargo test --test grounded_training_material` | ✅ 5/5 pass (after the `section_id` refinement) |
+| Training regression | `cargo test --test real_learning_engine_training` | ✅ 38/38 pass |
+| W2 regression | `cargo test --test document_knowledge_surface` | ✅ 9/9 pass |
+| W1 regression | `cargo test --test document_intelligence` | ✅ 27/27 pass |
+| O2 regression | `cargo test --test real_learning_engine_document_foundation` | ✅ 25/25 pass |
+| Frontend types | `npx tsc --noEmit` | ✅ 0 errors |
+| Product UI | `npm run test:product-ui` | ✅ 158/158 pass (9 files) |
+| DTO currency | `npm run generate:types` → only `GroundedMaterialRef.ts` changed | ✅ committed with this wave |
+
+**Totals:** 113/113 targeted Rust tests green; 158/158 product-UI tests green.
+
+
 
 
 
