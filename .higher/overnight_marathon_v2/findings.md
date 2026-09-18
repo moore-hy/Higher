@@ -294,3 +294,79 @@ material      <- compile_grounded_material（= prepare_block_materials 在生产
 一个**新的产品能力**（需要在 intent / IPC 层加协议选择），不属于本包授权范围。
 
 **Status.** 已登记为边界说明；无代码变更。
+
+---
+
+## F-015 · P4 的真实缺口是「没有取证」，不是「行为不对」
+
+P4 先把四条路都读成生产实现，再决定要不要动代码。结论：**没有一处需要修**。
+缺的全是**证据**。逐条如下，便于后来者分辨「已证明」与「看起来对」。
+
+### 缺口 1 · `LearningMaterialPanel` 此前零测试覆盖
+
+「Knowledge Item → 已有附件 → 用于 Higher 学习 → 五个生命周期」这条 UI 路径
+在 P4 之前**没有任何**用例。后端有 GB-DOC-01..09（真实 SQLite），
+但「界面确实接在生产入口上」这件事只靠读代码相信。
+
+补：`tests/product-ui/groundedKnowledgeMaterial.test.tsx`（13 例）。
+其中最容易被忽略的一条是 **P4-1b**：`import_document_source` 返回的 source id
+必须**被用作** `start_document_ingestion` 的参数。两个函数都调用过 ≠ 接对了；
+用 `invocationCallOrder` 钉住顺序，用 `toHaveBeenCalledWith(PROFILE_ID, 55)`
+钉住「start 落在 import 返回的那个来源上」。
+
+另一条值得记住的产品语义：**Failed 有两种，界面必须区分**。
+`error_code === "DOCLING_UNAVAILABLE"` 才加「（可恢复）」；
+`PERSIST_FAILED` 是真实结构写入失败，标成「可恢复」会骗用户。
+但两者都是 `Failed`，所以**重试入口都必须在**（GB-DOC-12 允许）。
+
+### 缺口 2 · 没有任何页面级 `TrainingExperience` 用例
+
+`tests/product-ui/` 里此前没有任何文件 import `pages/TrainingExperience`，
+全仓也没有任何用例碰过 `getBlockGroundedMaterial`。于是 P4.4 的原话
+（No recomputation of grounded material for an already-created block /
+The snapshot is historical truth）完全没有取证。
+
+补：`tests/product-ui/groundedTrainingReopen.test.tsx`（5 例）。
+
+「模拟应用重开」的做法值得复用：**每次 mount 都新建一个空 `QueryClient`**。
+桌面应用重启 = 进程内存里的缓存全没了，所以这是对「重开」最忠实的模拟 ——
+比 `queryClient.clear()` 或 remount 更接近真实，因为它连默认选项都不继承。
+
+一条具体的诚实性断言：重开之后 free/cued recall 的**完整答案仍然必须隐藏**。
+`hc-train-revealed-excerpt` / `hc-train-revealed-reference` 这两个 testid
+在重开后的初始 DOM 里必须不存在。这条防的是「重开时顺手揭晓一次，好让用户
+看到自己上次学到哪」——那会让「先自己想起来」这条纪律在重开后失效。
+
+### 缺口 3 · 「只有 Failed 可重试」这道闸门全仓无断言
+
+`begin_ingestion(..., retry = true)` 在 `job.state != "Failed"` 时返回
+`InvalidJobState`。源码注释写得很清楚，但**全仓没有任何测试断言过
+`INVALID_JOB_STATE`**（`grep` 只命中一行注释）。
+
+这不是「行为不对」，而是**承诺未被钉住**：任何人把这道闸门改宽松，
+不会有任何东西变红，而后果是双击一次就可能并发写同一份结构。
+补：GB-DOC-12，同时覆盖 `Ready`（不许被「重试」偷跑成替换）与
+`Parsing`（不许再起始第二个作业，也不许被当作可重试）。
+
+### 缺口 4 · 持久化失败后的重试路径完全未覆盖
+
+GB-DOC-05 的失败点是**解析失败**（压根没进写事务）；O2-11 覆盖了持久化失败
+的回滚，但没有覆盖「回滚之后再重试」这个**组合**。而任务书 P4.5 要排除的
+「duplicate structural revision corruption / orphan search entries」
+恰恰只在组合路径上才会出现。
+
+补：GB-DOC-11。失败点用**真实的唯一索引冲突**触发（同一 revision 内两个 chunk
+争 ordinal 0），不注入假失败点 —— 这样它证明的是真实事务边界，而不是一个
+我编出来的错误分支。
+
+### 顺带记下的一条产品事实
+
+GB-DOC-10 断言了**失败作业必须留档**：重试之后作业表里必须是
+`["Failed", "Ready"]` 两条，而不是只剩一条 `Ready`。
+「让失败记录看起来干净」是一种数据说谎 —— 用户排查「为什么导入了两次」
+时，第一条 Failed 就是答案。`document_sources` 的幂等（GB-DOC-03）与
+「历史 revision 不删」（§7.4）是同一条纪律的三个面。
+
+**Status.** 已补齐全部证据并提交（`80c0c47`）；**无生产代码变更**。
+因此任务书 §14 的 `fix(product): harden grounded learning entry and recovery`
+**未使用** —— 没有需要修的东西，用一个 `fix` 标题会谎报「修了 bug」。

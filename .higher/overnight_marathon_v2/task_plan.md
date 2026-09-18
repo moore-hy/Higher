@@ -95,6 +95,40 @@ as product facts, not defects).
 
 ---
 
+## P4 — sub-item table
+
+| Item | Title | State |
+|---|---|---|
+| P4.1 | Knowledge material flow — UI 可达性（item-bound / 幂等可见性 / import→start / 生命周期 / Docling 可恢复） | VERIFIED_DONE |
+| P4.2 | Today start flow — 既有覆盖（cognitiveToday FIX G） | SKIPPED_ALREADY_SATISFIED |
+| P4.3 | Today continue flow — 既有覆盖（groundedTrainingRouting GB-ROUTE） | SKIPPED_ALREADY_SATISFIED |
+| P4.4 | Restart/reopen recovery — 页面级纯读取证（新增） | VERIFIED_DONE |
+| P4.5 | Failed ingestion recovery — 重试干净 + 重试闸门（新增 GB-DOC-10/11/12） | VERIFIED_DONE |
+
+Evidence: `progress.md` CP-04. Commit `80c0c47`.
+
+**No production code changed** — P4 的原话是「only if changes were required」。
+四路探索（Knowledge 面板 / Today / 重开 / 导入重试）全部读到了生产实现，
+没有任何一处需要修；缺的是**证据**，补齐即可。因此**未**使用
+`fix(product): harden grounded learning entry and recovery` 这个提交标题，
+改用如实的 `test(product): ...`。
+
+新增用例：
+
+```text
+tests/product-ui/groundedKnowledgeMaterial.test.tsx   13 passed（P4.1）
+tests/product-ui/groundedTrainingReopen.test.tsx       5 passed（P4.4）
+src-tauri/tests/document_knowledge_surface.rs         12 passed（GB-DOC-01..12，+3 = P4.5）
+```
+
+门禁：`npx tsc --noEmit` clean；`npm run check:types` clean（`src/generated` 零 diff）；
+`rustfmt --edition 2021 --check` 本文件 clean；
+`npx vitest run tests/product-ui` 204 passed / 0 failed（13 files）。
+
+New findings: **F-015**（P4 的真实缺口清单：三处无取证、一处只有注释承诺；无产品缺陷）。
+
+---
+
 ## Locked decisions taken (ordinary ambiguity → safest option, recorded, continue)
 
 | # | Decision | Rationale |

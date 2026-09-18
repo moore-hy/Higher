@@ -259,3 +259,130 @@ F-014   协议选择是测试驱动的（生产无协议参数、intent 表无�
 
 next pack   : P4
 next action : 产品可达性 + 恢复加固（真实用户能不能走到这条闭环）
+
+---
+
+## CP-04 · P4 产品可达性 + 恢复加固
+
+```text
+timestamp   : 2026-09-19 02:18 (+08)
+branch      : main
+HEAD before : 39ca56e
+HEAD after  : 80c0c47  test(product): prove grounded material flow and reopen recovery
+pack        : P4
+changed     : src-tauri/tests/document_knowledge_surface.rs          (M, +439/-4)
+              tests/product-ui/groundedKnowledgeMaterial.test.tsx    (A, +398)
+              tests/product-ui/groundedTrainingReopen.test.tsx       (A, +362)
+              —— 生产代码 0 行改动
+tests run   : cargo test --test document_knowledge_surface            12 / 12
+              npx vitest run tests/product-ui                          204 / 204 (13 files)
+              npx tsc --noEmit                                        clean
+              npm run check:types                                     clean (src/generated 零 diff)
+              rustfmt --edition 2021 --check <本文件>                  clean
+passed      : 216
+failed      : 0
+resource    : cargo 单线程；vitest 21.9s；无 OOM、无超时、无后台残留
+next pack   : P5
+next action : 真值 / 事务 / 隔离审计（Truth / transaction / isolation audit）
+```
+
+### 逐项对照任务书
+
+```text
+P4.1 Knowledge material flow     -> 新增 13 例 UI 用例（生产面板，未新增第二个文件选择器）
+P4.2 Today start flow            -> 既有覆盖，未新增
+P4.3 Today continue flow         -> 既有覆盖，未新增
+P4.4 Restart/reopen recovery     -> 新增 5 例页面级用例
+P4.5 Failed ingestion recovery   -> 新增 3 例真实 SQLite 用例（GB-DOC-10/11/12）
+```
+
+### 为什么 P4.2 / P4.3 是本包**没有**新增的那两项
+
+任务书说「Use existing product UI tests where possible. Do not create a large new UI
+test framework.」这两条正是「已经存在」的那一类，且证据强度已经精确到路由目标：
+
+```text
+P4.2  cognitiveToday.test.tsx「FIX G」×3 已断言：
+      主 CTA → createTrainingRunForItem(1, 25) → /train/:trainingRunId，
+      并显式断言 **不** 先建 legacy StudySession、**不** 走 /learn；
+      另两例断言无真实时长 / 无计划时**不创建任何东西**（不编时长）。
+P4.3  groundedTrainingRouting.test.tsx GB-ROUTE-01/02/03/03b/04 已断言：
+      owning run 存在 → /train；无 owning run → /learn；
+      快照部分失败时仍按后端给的 training_run_id 回训练（不逃回 legacy）；
+      「继续」只是导航 —— startQuickSession / startSession / startTaskSession
+      一律不得被调用（这就是任务书要的「No second StudySession」）。
+```
+
+补写同一件事只会增加维护面、不增加信息量，因此如实记为 `SKIPPED_ALREADY_SATISFIED`。
+
+### 本包真实补上的缺口（反向可证伪）
+
+```text
+P4.1  此前**没有任何**测试覆盖 LearningMaterialPanel —— 「Knowledge Item →
+      已有附件 → 用于 Higher 学习 → 五个生命周期」这条 UI 路径从未被钉住。
+      后端侧（GB-DOC-01..09）是有的，缺的正是「界面确实接在生产入口上」。
+      新增用例钉住：只按当前 item 取来源、候选只来自真实 file 附件、
+      import→start 同 id 且顺序不可反、start 失败必须显式报错、
+      Ready 原样呈现后端计数、不可恢复的失败不谎称可恢复、
+      无 detail 时回退稳定错误码、Docling 缺失界面不解体。
+
+P4.4  此前**没有任何**页面级 TrainingExperience 用例，也没有任何用例碰过
+      getBlockGroundedMaterial。P4.4 的原话（No recomputation of grounded
+      material for an already-created block / The snapshot is historical truth）
+      于是完全没有取证。新增用例用「换一个空 QueryClient」精确模拟进程重开，
+      钉住：只读 URL 那条 run + **当前块**（ordinal 2，不是第一块）的落库快照、
+      六个写入口零调用、已完成块的材料不被重算、连续两次重开渲染逐字相同、
+      进度不被重置、提交控件仍可用。
+
+P4.5  GB-DOC-05 只证明了「Failed 能重试」。任务书 P4.5 要排除的三条里，
+      前两条**没有任何用例**：
+        - 重试后 revision 数、检索条目与 chunk 的一一对应、孤儿条目 —— 未断言
+        - **持久化阶段**失败（而不是解析失败）后的重试路径完全未覆盖
+        - 「只有 Failed 可重试」这道闸门在源码里存在，但全仓**没有任何**
+          测试断言过 INVALID_JOB_STATE（只有一行注释说「不应报」）
+      新增 GB-DOC-10/11/12 补齐，并保留 Failed→Ready 的作业历史
+      （不得为「看起来干净」而删历史）。
+```
+
+### 关键取证（真实路径，不假造失败点）
+
+```text
+GB-DOC-11  失败点用**真实数据库约束**触发（同一 revision 内两个 chunk 争
+           ordinal 0 → 唯一索引 idx_document_chunks_revision_ordinal），
+           不是注入假失败点。因此它同时证明了：revision 已插入、section 已插入、
+           chunk 写到一半炸掉时，整个事务确实回滚得干净。
+GB-DOC-12  先造出**真实**的 Ready（一次完整导入）、**真实**的 Parsing
+           （begin_ingestion 后不收口），再确认被拒；最后把 Parsing 正常收口，
+           证明闸门的拒绝没有把状态机弄坏。
+P4-1b      import → start 的顺序用 invocationCallOrder 断言，而不是「都调用过」。
+P4-1d2     不可恢复失败（PERSIST_FAILED）**不**出现「（可恢复）」；
+           但它仍然是 Failed，所以「重试」入口必须还在。
+P4-4c      两次重开分别读并列渲染结果，逐字（含块列表 textContent）比较。
+P4-4a      重开断言六个写入口零调用：startTrainingRun / startTrainingBlock /
+           recordTrainingInteraction / advanceTrainingBlock /
+           completeTrainingRun / abandonTrainingRun。
+```
+
+### 门禁原文（本包未跑全量，P6 负责）
+
+```text
+npx tsc --noEmit                              -> clean，无输出
+npm run check:types                           -> 仅 CRLF 警告，src/generated 零 diff
+rustfmt --edition 2021 --check <本文件>        -> RUSTFMT_CLEAN
+cargo test --test document_knowledge_surface  -> ok. 12 passed; 0 failed
+npx vitest run tests/product-ui               -> Test Files 13 passed (13)
+                                                 Tests 204 passed (204)
+```
+
+### 基线瑕疵（非本包引入，如实登记）
+
+```text
+gb_doc_01 / gb_doc_02 / gb_doc_03 的 `let mut conn` 是 unused_mut（编译警告 3 条）。
+基线实测：`git show 39ca56e:src-tauri/tests/document_knowledge_surface.rs` 里
+8 处 `let mut conn`，其中 3 处本就不需要 mut —— 警告在基线就存在，非本次引入。
+按纪律未顺手改基线代码。
+```
+
+next pack   : P5
+next action : 真值 / 事务 / 隔离审计（Truth / transaction / isolation audit）
+
