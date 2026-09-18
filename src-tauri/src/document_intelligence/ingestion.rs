@@ -63,7 +63,7 @@ use super::parser::{DocumentParser, ParseFailure, ParsedDocument};
 pub const DOCUMENT_CHUNK_ENTITY: &str = "document_chunk";
 
 /// 一次导入的结果投影。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct IngestionOutcome {
     pub job_id: i64,
     pub source_id: i64,

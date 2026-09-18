@@ -108,7 +108,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 |------|-------|--------|--------|
 | W0 | Baseline + reuse audit + ledger | `docs(cognitive): start grounded learning bridge execution` | ✅ DONE (this commit) |
 | W1 | O2 DB lock correctness | `fix(document): release db lock during document parsing` | ✅ DONE |
-| W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ⏳ pending |
+| W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ✅ DONE |
 | W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ⏳ pending |
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ⏳ pending |
 | W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ⏳ pending |
@@ -167,3 +167,88 @@ concurrent reader thread to prove the global lock is free during parse.
 **Regression:** existing `ingest_source`/`retry_ingestion` callers compile unchanged (signature
 unchanged). `real_learning_engine_document_foundation` + `document_intelligence` suites re-run
 green (see closure report).
+
+---
+
+## §5 — W2 IMPLEMENTATION NOTES
+
+**Scope (§7):** make the O2 document-intelligence backend reachable from the product UI, scoped to
+the existing Knowledge workflow (no new top-level nav, no new document dashboard).
+
+**Files changed:**
+
+- `src-tauri/src/repository/document_ingestion.rs`
+  - `create_source` is now **idempotent** on `(profile_id, attachment_id)`: a second registration
+    returns the existing source id and never inserts a second row, never deletes historical
+    revisions (satisfies §7.4). Owner / domain / source-kind checks still run first.
+  - Added `list_sources_for_learning_item(profile_id, learning_item_id)` — the §7.2 ownership chain
+    in one profile-scoped SQL JOIN:
+    `document_sources.attachment_id = learning_attachments.id AND learning_attachments.learning_item_id = ?`
+    OR `learning_attachments.session_id = study_sessions.id AND study_sessions.learning_item_id = ?`.
+    Cross-profile sources are excluded by the `WHERE profile_id = ?` filter, not by in-memory filtering.
+- `src-tauri/src/commands/document.rs`
+  - Extracted `source_view(repo, source) -> DocumentSourceView` helper; `list_document_sources`
+    and the new `list_document_sources_for_item` both use it (no duplicated projection — matches the
+    project's "single IPC aggregation, no N+1" discipline).
+  - New command `list_document_sources_for_item(profile_id, learning_item_id)` — the only data entry
+    point for the "学习资料" panel (§7.2 requires showing only this item's sources).
+    **Decision logged:** §7.1 enumerates the required product operations but does not forbid a
+    read-only helper; adding an item-scoped read command is the cleanest way to honor §7.2's
+    "show only sources belonging to that current LearningItem" without N+1, and it makes
+    GB-DOC-01/02 directly testable. This is not a contract-breaking change (frozen contracts are
+    ProtocolId / CompletionRuleKind / LearningMomentType / TrainingExperience, untouched here).
+- `src-tauri/src/app/builder.rs` — registered `list_document_sources_for_item` in `generate_handler!`.
+- `src-tauri/src/document_intelligence/ingestion.rs` — `IngestionOutcome` gained `ts_rs::TS` so the
+  DTO can be generated for the frontend.
+- `src-tauri/src/ipc/dto.rs` — registered document DTOs (`DocumentSourceView`,
+  `DocumentStructureView`, `DocumentRuntimeStatus`, `IngestionOutcome`, `DocumentSourceRow`,
+  `DocumentSectionRow`, `DocumentChunkRow`, `IngestionJobRow`, `ContextPack`) in the export registry;
+  `npm run generate:types` regenerates `src/generated/*.ts`.
+- `src/types.ts` — hand-mirrored the document DTO interfaces (single source of truth = Rust structs;
+  `generate:types` is the cross-check / gate).
+- `src/api.ts` — added wrappers: `getDocumentRuntimeStatus`, `listDocumentSources`,
+  `listDocumentSourcesForItem`, `importDocumentSource`, `startDocumentIngestion`,
+  `retryDocumentIngestion`, `getDocumentIngestionStatus`, `getDocumentStructure`,
+  `cancelDocumentIngestion`, `searchDocumentContext`.
+- `src/components/LearningMaterialPanel.tsx` (NEW) — the "学习资料" compact section. Shows real
+  lifecycle (Pending/Parsing/Indexing/Ready/Failed/Cancelled), Ready counts, recoverable Failed
+  reason + Retry (only when legal), Cancel (while active), Docling-missing remedy banner (no crash),
+  bounded 2s polling while a source is active. "用于 Higher 学习" registers + starts ingestion for
+  `file` attachments not yet sourced (idempotent via backend).
+- `src/pages/Knowledge.tsx` — mounted `LearningMaterialPanel` inside the item workspace, fed by
+  `activeProfile.id` / `selectedId` / `workspace.legacy_attachments`.
+- `src-tauri/tests/document_knowledge_surface.rs` (NEW) — GB-DOC-01..09.
+
+**Product-discipline adherence (§7.5):** no fake progress %, no new sidebar item, no giant dashboard,
+bounded polling, Docling-missing is a recoverable state that does not mark learning as failed.
+
+**Note on §7.1 wording:** "compile/retrieve document context if already exposed" — `search_document_context`
+is exposed via `searchDocumentContext` for future W4 grounding; not surfaced in the W2 panel UI.
+
+**W2 closure — validation (all green):**
+- `cargo check --lib --manifest-path src-tauri/Cargo.toml` — compiles, only pre-existing baseline
+  warnings (34), 0 errors.
+- `npx tsc --noEmit` — 0 type errors.
+- `cargo test --test document_knowledge_surface` — GB-DOC-01..09 **9/9 pass**.
+- `cargo test --test real_learning_engine_document_foundation --test document_intelligence`
+  (W1 regression) — **52/52 pass** (incl. `o2_15_16_17_ingestion_creates_zero_learning_evidence`,
+  reinforcing GB-DOC-07/08/09).
+- `git diff --exit-code src/generated` — clean after this commit (all W2-generated DTOs committed).
+
+**Two testability adjustments during W2 (logged for audit):**
+1. Tauri v2 has no `State::from` / `State::from_ref` test constructor; the
+   `list_document_sources_for_item` command delegates to a new `pub fn
+   list_document_sources_for_item_core(repo, profile_id, learning_item_id)` free function, and
+   GB-DOC-01/02/04 exercise the core directly (no `tauri::State` needed). The command body is a
+   one-line lock + delegate, so the IPC path is unchanged.
+2. The v042 schema has **no `evidence` table** (only `learning_moments` v037 + `memory_reviews`
+   v038). GB-DOC-08 is therefore table-existence-tolerant: if `evidence` exists it asserts
+   `COUNT = 0`; if absent the import-≠-Evidence invariant holds trivially. GB-DOC-07/09 assert
+   `COUNT = 0` on the tables that do exist.
+
+**Generated-file scope discipline:** only the W2 document DTOs + the regenerated tracked
+`TrainingSessionView.ts` are committed here. Training-domain DTOs generated by the same
+`generate:types` run (`BlockAdvanceIntent/Outcome`, `BlockProgression`, `BlockCompletionState`,
+`CompletionRuleKind`) are **left untracked** — they belong to W3 (training material) and must not
+be mixed into the W2 commit.
+

@@ -28,6 +28,19 @@ use crate::repository::study_profile::StudyProfile;
 use crate::repository::study_session::StudySession;
 #[allow(unused_imports)]
 use crate::repository::task::Task;
+// GROUNDED LEARNING BRIDGE V1 · W2 — 文档智能 IPC 面（§7.1 暴露给产品 UI）。
+#[allow(unused_imports)]
+use crate::commands::document::{
+    DocumentRuntimeStatus, DocumentSourceView, DocumentStructureView,
+};
+#[allow(unused_imports)]
+use crate::document_intelligence::ingestion::IngestionOutcome;
+#[allow(unused_imports)]
+use crate::document_intelligence::types::ContextPack;
+#[allow(unused_imports)]
+use crate::repository::document_ingestion::{
+    DocumentChunkRow, DocumentSectionRow, DocumentSourceRow, IngestionJobRow,
+};
 #[allow(unused_imports)]
 use crate::sync::client::ClientStatus;
 #[allow(unused_imports)]
@@ -132,6 +145,20 @@ mod tests {
         BlockAdvanceOutcome::export_all(&cfg).unwrap();
         BlockAdvanceIntent::export_all(&cfg).unwrap();
         BlockProgression::export_all(&cfg).unwrap();
+
+        // GROUNDED LEARNING BRIDGE V1 · W2 —— 文档智能 IPC 面（§7.1）。
+        // `DocumentSourceView` 会带出 `DocumentSourceRow` / `IngestionJobRow`，
+        // `DocumentStructureView` 会带出 `DocumentSectionRow` / `DocumentChunkRow`，
+        // `ContextPack` 会带出 `ContextCandidate`。
+        DocumentSourceView::export_all(&cfg).unwrap();
+        DocumentStructureView::export_all(&cfg).unwrap();
+        DocumentRuntimeStatus::export_all(&cfg).unwrap();
+        IngestionOutcome::export_all(&cfg).unwrap();
+        DocumentSourceRow::export_all(&cfg).unwrap();
+        DocumentSectionRow::export_all(&cfg).unwrap();
+        DocumentChunkRow::export_all(&cfg).unwrap();
+        IngestionJobRow::export_all(&cfg).unwrap();
+        ContextPack::export_all(&cfg).unwrap();
     }
 
     /// §7: "对 i64 ID 明确使用 TS number，并加入 safe-integer assertion/test".

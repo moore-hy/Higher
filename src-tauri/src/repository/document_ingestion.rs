@@ -336,6 +336,20 @@ impl<'a> DocumentIngestionRepository<'a> {
             Some(_) => {}
         }
 
+        // 幂等（W2 §7.4）：同一 profile + attachment 已登记过来源 → 返回既有 id，
+        // 不新建第二份、不触碰历史 revision（§7.4 明令禁止为幂等而删历史）。
+        if let Some(existing) = self
+            .conn
+            .query_row(
+                "SELECT id FROM document_sources WHERE profile_id = ?1 AND attachment_id = ?2 LIMIT 1",
+                params![profile_id, attachment_id],
+                |r| r.get(0),
+            )
+            .ok()
+        {
+            return Ok(existing);
+        }
+
         self.conn.execute(
             "INSERT INTO document_sources
                 (profile_id, attachment_id, source_kind, display_name, origin, domain)
@@ -387,6 +401,54 @@ impl<'a> DocumentIngestionRepository<'a> {
               ORDER BY id DESC",
         )?;
         let rows = stmt.query_map(params![profile_id], |r| {
+            Ok(DocumentSourceRow {
+                id: r.get(0)?,
+                profile_id: r.get(1)?,
+                attachment_id: r.get(2)?,
+                source_kind: r.get(3)?,
+                display_name: r.get(4)?,
+                origin: r.get(5)?,
+                domain: r.get(6)?,
+                created_at: r.get(7)?,
+                updated_at: r.get(8)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// 列出**仅属于某个 Learning Item** 的来源（W2 §7.2 归属链）。
+    ///
+    /// 归属链（同一 profile 内，先 `WHERE profile_id` 过滤再 JOIN）：
+    ///
+    /// ```text
+    /// 直接：document_sources.attachment_id = learning_attachments.id
+    ///       AND learning_attachments.learning_item_id = ?2
+    /// 会话绑定：learning_attachments.session_id = study_sessions.id
+    ///       AND study_sessions.learning_item_id = ?2
+    /// ```
+    ///
+    /// 跨档案来源在这里**根本查不到**（SQL 层 profile 过滤），
+    /// 不是「查回来再在内存里筛掉」。
+    pub fn list_sources_for_learning_item(
+        &self,
+        profile_id: i64,
+        learning_item_id: i64,
+    ) -> Result<Vec<DocumentSourceRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ds.id, ds.profile_id, ds.attachment_id, ds.source_kind, ds.display_name,
+                    ds.origin, ds.domain, ds.created_at, ds.updated_at
+               FROM document_sources ds
+               JOIN learning_attachments la ON la.id = ds.attachment_id
+               LEFT JOIN study_sessions ss ON ss.id = la.session_id
+              WHERE ds.profile_id = ?1
+                AND (la.learning_item_id = ?2 OR ss.learning_item_id = ?2)
+              ORDER BY ds.id DESC",
+        )?;
+        let rows = stmt.query_map(params![profile_id, learning_item_id], |r| {
             Ok(DocumentSourceRow {
                 id: r.get(0)?,
                 profile_id: r.get(1)?,

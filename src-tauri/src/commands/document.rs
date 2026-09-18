@@ -100,6 +100,44 @@ fn runtime_status() -> DocumentRuntimeStatus {
 
 // ============================ 来源 ============================
 
+/// 组装单个来源的完整可读视图（来源 + 最新作业 + 已就绪结构规模）。
+///
+/// `list_document_sources` 与 `list_document_sources_for_item` 共用，
+/// 避免两套投影逻辑（§7.2 纪律：单 IPC 聚合，不 N+1）。
+fn source_view(
+    repo: &DocumentIngestionRepository,
+    source: DocumentSourceRow,
+) -> Result<DocumentSourceView, String> {
+    let latest_job = repo
+        .latest_job_for_source(source.profile_id, source.id)
+        .map_err(|e| e.to_string())?;
+    let ready_revision_id = latest_job.as_ref().and_then(|j| {
+        if j.state == "Ready" {
+            j.revision_id
+        } else {
+            None
+        }
+    });
+    let (section_count, chunk_count) = match ready_revision_id {
+        Some(rev) => (
+            repo.list_sections(source.profile_id, rev)
+                .map_err(|e| e.to_string())?
+                .len() as i64,
+            repo.list_chunks(source.profile_id, rev)
+                .map_err(|e| e.to_string())?
+                .len() as i64,
+        ),
+        None => (0, 0),
+    };
+    Ok(DocumentSourceView {
+        source,
+        latest_job,
+        ready_revision_id,
+        section_count,
+        chunk_count,
+    })
+}
+
 /// 列出该档案的全部文档来源（含最新作业状态与结构规模）。
 #[tauri::command]
 pub fn list_document_sources(
@@ -112,36 +150,50 @@ pub fn list_document_sources(
 
     let mut out = Vec::with_capacity(sources.len());
     for source in sources {
-        let latest_job = repo
-            .latest_job_for_source(profile_id, source.id)
-            .map_err(|e| e.to_string())?;
-        let ready_revision_id = latest_job.as_ref().and_then(|j| {
-            if j.state == "Ready" {
-                j.revision_id
-            } else {
-                None
-            }
-        });
-        let (section_count, chunk_count) = match ready_revision_id {
-            Some(rev) => (
-                repo.list_sections(profile_id, rev)
-                    .map_err(|e| e.to_string())?
-                    .len() as i64,
-                repo.list_chunks(profile_id, rev)
-                    .map_err(|e| e.to_string())?
-                    .len() as i64,
-            ),
-            None => (0, 0),
-        };
-        out.push(DocumentSourceView {
-            source,
-            latest_job,
-            ready_revision_id,
-            section_count,
-            chunk_count,
-        });
+        out.push(source_view(&repo, source)?);
     }
     Ok(out)
+}
+
+/// W2 §7.2 —— 列出**仅属于某个 Learning Item** 的文档来源（核心逻辑）。
+///
+/// 通过既有归属链在 SQL 内完成过滤（profile 先过滤、再 JOIN），
+/// 跨档案 / 无关档案的来源根本查不到：
+///
+/// ```text
+/// 直接：document_sources.attachment_id = learning_attachments.id
+///       AND learning_attachments.learning_item_id = ?2
+/// 会话绑定：learning_attachments.session_id = study_sessions.id
+///       AND study_sessions.learning_item_id = ?2
+/// ```
+///
+/// 这是「学习资料」唯一的数据入口（一次 IPC 聚合，不 N+1）。
+/// 抽成核心自由函数，便于在不构造 `tauri::State` 的情况下做集成测试。
+pub fn list_document_sources_for_item_core(
+    repo: &DocumentIngestionRepository,
+    profile_id: i64,
+    learning_item_id: i64,
+) -> Result<Vec<DocumentSourceView>, String> {
+    let sources = repo
+        .list_sources_for_learning_item(profile_id, learning_item_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::with_capacity(sources.len());
+    for source in sources {
+        out.push(source_view(repo, source)?);
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn list_document_sources_for_item(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    learning_item_id: i64,
+) -> Result<Vec<DocumentSourceView>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let repo = DocumentIngestionRepository::new(&conn);
+    list_document_sources_for_item_core(&repo, profile_id, learning_item_id)
 }
 
 /// 从**既有学习附件**创建一个文档来源。

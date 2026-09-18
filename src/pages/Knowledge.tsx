@@ -40,6 +40,7 @@ import {
   updateSessionTitle,
 } from "../api";
 import AttachmentList from "../components/AttachmentList";
+import LearningMaterialPanel from "../components/LearningMaterialPanel";
 import ActiveSessionConflictModal, {
   useActiveSessionConflict,
 } from "../components/ActiveSessionConflictModal";
@@ -1716,6 +1717,15 @@ function Knowledge() {
                   }
                 />
               </div>
+            )}
+
+            {/* 学习资料（W2）：把文档导入接入 Knowledge 工作区，仅显示本知识项来源 */}
+            {workspace != null && selectedId != null && activeProfile != null && (
+              <LearningMaterialPanel
+                profileId={activeProfile.id}
+                learningItemId={selectedId}
+                attachments={workspace.legacy_attachments}
+              />
             )}
 
             {/* 学习证据（DEV-0028 §89：最近验证 + 问题，默认折叠，不抢主区） */}

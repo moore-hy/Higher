@@ -434,6 +434,120 @@ export interface KnowledgeWorkspaceData {
   evaluation_count: number;
 }
 
+// ======================= GROUNDED LEARNING BRIDGE V1 · W2 — 文档智能 DTO =======================
+// 这些接口是 `src-tauri` 侧文档导入 DTO 的 TS 镜像（由 `npm run generate:types`
+// 从 Rust 结构生成 `src/generated/*.ts`；此处保留手维护镜像，与方法层约定逐字一致）。
+
+/** Docling 运行时状态（只读诊断）。 */
+export interface DocumentRuntimeStatus {
+  available: boolean;
+  detail: string;
+  /** 运行时缺失时，这是用户唯一需要看到的可恢复指引。 */
+  remedy: string | null;
+}
+
+/** 文档来源行（attachment 是文件本体唯一真相源）。 */
+export interface DocumentSourceRow {
+  id: number;
+  profile_id: number;
+  attachment_id: number;
+  source_kind: string;
+  display_name: string;
+  origin: string | null;
+  domain: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 章节行。 */
+export interface DocumentSectionRow {
+  id: number;
+  revision_id: number;
+  profile_id: number;
+  parent_section_id: number | null;
+  title: string | null;
+  ordinal: number;
+  created_at: string;
+}
+
+/** chunk 行（检索索引的实体来源）。 */
+export interface DocumentChunkRow {
+  id: number;
+  revision_id: number;
+  profile_id: number;
+  section_id: number | null;
+  ordinal: number;
+  text: string;
+  created_at: string;
+}
+
+/** 导入作业行（§13 锁定状态词表）。 */
+export interface IngestionJobRow {
+  id: number;
+  source_id: number;
+  profile_id: number;
+  state: string;
+  revision_id: number | null;
+  error_code: string | null;
+  error_detail: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 一个来源的完整可读视图（来源 + 最新作业 + 已就绪结构规模）。 */
+export interface DocumentSourceView {
+  source: DocumentSourceRow;
+  latest_job: IngestionJobRow | null;
+  ready_revision_id: number | null;
+  section_count: number;
+  chunk_count: number;
+}
+
+/** 一个已就绪 revision 的完整结构投影。 */
+export interface DocumentStructureView {
+  profile_id: number;
+  revision_id: number;
+  sections: DocumentSectionRow[];
+  chunks: DocumentChunkRow[];
+}
+
+/** 一次导入的结果投影。 */
+export interface IngestionOutcome {
+  job_id: number;
+  source_id: number;
+  state: string;
+  revision_id: number | null;
+  chunk_count: number;
+  error_code: string | null;
+  error_detail: string | null;
+  /** 该失败是否值得重试（运行时缺失等可恢复情形 = true）。 */
+  recoverable: boolean;
+}
+
+/** 编译后的文档上下文候选（M6 可达性入口产物）。 */
+export interface ContextCandidate {
+  source_id: string;
+  revision_id: string;
+  section_id: string | null;
+  chunk_id: string;
+  text: string;
+  parent_context: string | null;
+  retrieval_method: string;
+  lexical_score: number | null;
+  semantic_score: number | null;
+  rerank_score: number | null;
+  include_reason: string;
+}
+
+/** 有界文档上下文包。 */
+export interface ContextPack {
+  profile_id: number;
+  query: string;
+  candidates: ContextCandidate[];
+  total_text_chars: number;
+  truncated: boolean;
+}
+
 export interface LearningItem {
   id: number;
   /** v013 起 Profile 直挂 */

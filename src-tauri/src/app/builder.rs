@@ -408,6 +408,7 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             // NIGHT SHIFT O2 · M5 — 文档导入生产路径（v042 + 既有 SearchRepository）
             get_document_runtime_status,
             list_document_sources,
+            list_document_sources_for_item,
             import_document_source,
             start_document_ingestion,
             retry_document_ingestion,

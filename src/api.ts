@@ -96,6 +96,13 @@ import type {
   TrainingSessionView,
   // HOTFIX-01 FIX H —— Command Bar 确定性意图捕获
   IntentCaptureOutcome,
+  // GROUNDED LEARNING BRIDGE V1 · W2 — 文档智能 DTO
+  ContextPack,
+  DocumentRuntimeStatus,
+  DocumentSourceView,
+  DocumentStructureView,
+  IngestionJobRow,
+  IngestionOutcome,
 } from "./types";
 
 // ---- DB ----
@@ -363,6 +370,79 @@ export const saveDocumentDrawing = (
 
 export const listAttachmentsByDocument = (profileId: number, documentId: number) =>
   invoke<LearningAttachment[]>("list_attachments_by_document", { profileId, documentId });
+
+// =============== GROUNDED LEARNING BRIDGE V1 · W2 — 文档智能 / 学习资料 ===============
+//
+// 暴露 O2 文档导入能力，使其接入 Knowledge 工作区（§7.1 必需产品操作）。
+// 不暴露任何 section / chunk 变更命令（前端不得编写文档结构真相）。
+
+/** Docling 运行时是否在位（缺运行时是一条正常状态，不崩溃）。 */
+export const getDocumentRuntimeStatus = () =>
+  invoke<DocumentRuntimeStatus>("get_document_runtime_status");
+
+/** 列出该档案的全部文档来源。 */
+export const listDocumentSources = (profileId: number) =>
+  invoke<DocumentSourceView[]>("list_document_sources", { profileId });
+
+/** W2 §7.2 —— 仅列出属于某个 Learning Item 的文档来源（一次 IPC 聚合）。 */
+export const listDocumentSourcesForItem = (profileId: number, learningItemId: number) =>
+  invoke<DocumentSourceView[]>("list_document_sources_for_item", {
+    profileId,
+    learningItemId,
+  });
+
+/** 从既有学习附件登记一个文档来源（幂等：同 profile + attachment 不重复建）。 */
+export const importDocumentSource = (args: {
+  profileId: number;
+  attachmentId: number;
+  displayName?: string | null;
+  origin?: string | null;
+  domain?: string | null;
+}) =>
+  invoke<number>("import_document_source", {
+    profileId: args.profileId,
+    attachmentId: args.attachmentId,
+    displayName: args.displayName ?? null,
+    origin: args.origin ?? null,
+    domain: args.domain ?? null,
+  });
+
+/** 启动一次导入（幂等推进状态机；运行时缺失 → 可恢复的 Failed）。 */
+export const startDocumentIngestion = (profileId: number, sourceId: number) =>
+  invoke<IngestionOutcome>("start_document_ingestion", { profileId, sourceId });
+
+/** 仅已终结为 Failed 的最新作业才允许重试。 */
+export const retryDocumentIngestion = (profileId: number, sourceId: number) =>
+  invoke<IngestionOutcome>("retry_document_ingestion", { profileId, sourceId });
+
+/** 读取某个来源的最新导入状态。 */
+export const getDocumentIngestionStatus = (profileId: number, sourceId: number) =>
+  invoke<IngestionJobRow | null>("get_document_ingestion_status", {
+    profileId,
+    sourceId,
+  });
+
+/** 读取一个已就绪 revision 的完整结构（章节 + chunk）。 */
+export const getDocumentStructure = (profileId: number, revisionId: number) =>
+  invoke<DocumentStructureView>("get_document_structure", { profileId, revisionId });
+
+/** 取消一个尚未终结的导入（Pending / Parsing → Cancelled）。 */
+export const cancelDocumentIngestion = (profileId: number, jobId: number) =>
+  invoke<IngestionOutcome>("cancel_document_ingestion", { profileId, jobId });
+
+/** M6 可达性：用既有词法检索 + Context Compiler 编译有界文档上下文。 */
+export const searchDocumentContext = (args: {
+  profileId: number;
+  query: string;
+  sourceIds?: string[] | null;
+  semanticEnabled?: boolean | null;
+}) =>
+  invoke<ContextPack>("search_document_context", {
+    profileId: args.profileId,
+    query: args.query,
+    sourceIds: args.sourceIds ?? null,
+    semanticEnabled: args.semanticEnabled ?? null,
+  });
 
 export const listGoals = () => invoke<Goal[]>("list_goals");
 
