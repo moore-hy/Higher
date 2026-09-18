@@ -13,8 +13,8 @@ States: `NOT_STARTED` | `IN_PROGRESS` | `GREEN` | `VERIFIED_DONE` | `SKIPPED_ALR
 
 | Pack | Title | State | Commit |
 |---|---|---|---|
-| P0 | Preflight + skill bootstrap | VERIFIED_DONE | (pending) |
-| P1 | Grounded Learning Bridge closure hotfix | NOT_STARTED | — |
+| P0 | Preflight + skill bootstrap | VERIFIED_DONE | de9d6d0 |
+| P1 | Grounded Learning Bridge closure hotfix | VERIFIED_DONE | 354b1b1, eb59a16, 3210949, +closure |
 | P2 | Real production closed-loop E2E | NOT_STARTED | — |
 | P3 | Eight specialized experience hardening | NOT_STARTED | — |
 | P4 | Product reachability + recovery hardening | NOT_STARTED | — |
@@ -42,13 +42,15 @@ States: `NOT_STARTED` | `IN_PROGRESS` | `GREEN` | `VERIFIED_DONE` | `SKIPPED_ALR
 
 | Item | Title | State |
 |---|---|---|
-| P1.1 | Production grounding writer (atomic API shape) | NOT_STARTED |
-| P1.2 | Deterministic material first (`ai = None`) | NOT_STARTED |
-| P1.3 | Break / no-target semantics | NOT_STARTED |
-| P1.4 | Source scope before lexical top-k | NOT_STARTED |
-| P1.5 | Stale migration test `latest <= 41` → `== 43` | NOT_STARTED |
-| P1.6 | Midnight clock test determinism | NOT_STARTED |
-| P1.7 | Closure tests OM-P1-01..19 | NOT_STARTED |
+| P1.1 | Production grounding writer (atomic API shape) | VERIFIED_DONE |
+| P1.2 | Deterministic material first (`ai = None`) | VERIFIED_DONE |
+| P1.3 | Break / no-target semantics | VERIFIED_DONE |
+| P1.4 | Source scope before lexical top-k | VERIFIED_DONE |
+| P1.5 | Stale migration test `latest <= 41` → `== 43` | VERIFIED_DONE |
+| P1.6 | Midnight clock test determinism | VERIFIED_DONE |
+| P1.7 | Closure tests OM-P1-01..19 | VERIFIED_DONE |
+
+Evidence: `progress.md` CP-01. New findings: F-008 (CJK recall, deferred), F-009 (date asymmetry), F-012 (Docling offline, environmental).
 
 ---
 
