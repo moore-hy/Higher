@@ -192,7 +192,9 @@ fn t4_latest_schema_v023() {
     // DAILY EXPERIENCE V1 §PHASE 4 追加 v032（micro_learning_events）
     // M4 追加 v033（companion_skill）
     // M7 / P0-01 追加 v034（readiness_consumption）；POST-M7 追加 v035/v036（auth_mode / secret_ref）
-    assert_eq!(v, 36, "T4: 最新 Schema = v036");
+    // v037–v043（学习闭环收口）已追加 → 天花板搬到当前授权真相 43
+    // （OVERNIGHT MARATHON V2 · P1.5 明文授权；v044+ 仍属后续包）。
+    assert_eq!(v, 43, "T4: 最新 Schema = v043");
     let name: String = conn
         .query_row(
             "SELECT name FROM schema_migrations WHERE version=23",

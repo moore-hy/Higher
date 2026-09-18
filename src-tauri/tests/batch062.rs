@@ -136,8 +136,10 @@ fn t01_latest_schema_v024() {
     // DEV-SYNC-001：v028（local_sync_foundation）已追加
     // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）+ v033（companion_skill）已追加
     // POST-M7 AI FOUNDATION：v035（ai_provider_auth_mode）已追加
-    assert_eq!(v, 35, "T01: schema = v035");
-    assert_eq!(app_lib::migrations::latest_version(), 36);
+    // v037–v043（学习闭环收口）已追加 → 天花板搬到当前授权真相 43
+    // （OVERNIGHT MARATHON V2 · P1.5 明文授权；v044+ 仍属后续包）。
+    assert_eq!(v, 43, "T01: schema = v043");
+    assert_eq!(app_lib::migrations::latest_version(), 43);
     // 新表存在
     assert_eq!(
         count(&conn, "ai_provider_profiles"),

@@ -60,7 +60,7 @@ fn test_migration_v009_applied_and_idempotent() {
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43
         ]
     );
 
@@ -97,7 +97,7 @@ fn test_migration_v009_applied_and_idempotent() {
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
     // DAILY EXPERIENCE V1 §PHASE 4：v033（companion_skill）追加后 33 条
-    assert_eq!(count, 36);
+    assert_eq!(count, 43);
 }
 
 #[test]
@@ -161,7 +161,9 @@ fn test_v008_to_v009_upgrade_preserves_old_data() {
     // DEV-0076 §四：最新 = v027
     // DEV-SYNC-001：最新 = v028
     // DAILY EXPERIENCE V1 §PHASE 4：最新 = v033
-    assert_eq!(versions.last(), Some(&36));
+    // v034–v043（学习闭环收口）已追加 → 天花板 = 当前授权真相 43
+    // （OVERNIGHT MARATHON V2 · P1.5 明文授权；v044+ 仍属后续包）。
+    assert_eq!(versions.last(), Some(&43));
 }
 
 #[test]

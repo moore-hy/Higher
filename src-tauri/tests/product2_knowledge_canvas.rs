@@ -65,7 +65,9 @@ fn migration_v031_creates_canvas_tables() {
         assert_eq!(n, 1, "v031 应创建 {t}");
     }
     // DAILY EXPERIENCE V1 §PHASE 4：v032（micro_learning_events）+ v033（companion_skill）已追加
-    assert_eq!(app_lib::migrations::latest_version(), 36);
+    // v034–v043（学习闭环收口）已追加 → 天花板 = 当前授权真相 43
+    // （OVERNIGHT MARATHON V2 · P1.5 明文授权；v044+ 仍属后续包）。
+    assert_eq!(app_lib::migrations::latest_version(), 43);
 }
 
 #[test]

@@ -886,7 +886,9 @@ fn rw09_watermark_above_today_clamps_to_zero() {
 #[test]
 fn mig01_v034_is_registered_and_applied() {
     let conn = setup(); // setup 已 run_migrations（含 v034）
-    assert_eq!(latest_version(), 36, "最新迁移版本应为 36");
+                        // 天花板搬到当前授权真相 43（OVERNIGHT MARATHON V2 · P1.5 明文授权；
+                        // v044+ 仍属后续包）。v034 本身是否注册仍由下面的 COUNT 断言。
+    assert_eq!(latest_version(), 43, "最新迁移版本应为 43");
     let applied: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 34",

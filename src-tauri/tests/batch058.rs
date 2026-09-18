@@ -47,14 +47,19 @@ fn test_migration_latest_is_v021_and_idempotent() {
     // DEV-0076 §四：新增 v027（memory_confirmation_lifecycle）后最新版本为 27
     // DAILY EXPERIENCE V1 §PHASE 4：新增 v032（micro_learning_events）后最新版本为 32
     // M4：新增 v033（companion_skill）后最新版本为 33
-    assert_eq!(latest_version(), 36);
+    // v034–v043（学习闭环收口）已追加 → 当前授权真相为 43
+    // （OVERNIGHT MARATHON V2 · P1.5 明文授权；v044+ 仍属后续包）。
+    assert_eq!(latest_version(), 43);
     // 幂等：重复执行不报错、不重复应用
     app_lib::migrations::run_migrations(&conn).unwrap();
     let n: i64 = conn
         .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
     // POST-M7 AI FOUNDATION：v035（auth_mode）+ v036（secret_ref）追加后 36 条
-    assert_eq!(n, 36);
+    // v037–v043（学习闭环收口）追加后 43 条
+    // （OVERNIGHT MARATHON V2 · P1.5：天花板 = 授权真相 43；v044+ 仍属后续包。）
+    // 注意：本测试内**还有一处**同义天花板（上面的 latest_version()），必须同步维护。
+    assert_eq!(n, 43);
 }
 
 #[test]

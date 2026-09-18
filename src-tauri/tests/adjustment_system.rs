@@ -68,11 +68,16 @@ fn test_migration_v008_applied_and_idempotent() {
     // v028（local_sync_foundation，DEV-SYNC-001）已追加
     // v029-v031（sync backfill / planning intake / knowledge canvas）已追加
     // v032（micro_learning_events，DAILY EXPERIENCE V1 §PHASE 4）已追加
+    // v033–v036（companion_skill / readiness_consumption / auth_mode / secret_ref）已追加
+    // v037–v043（学习闭环：learning_moments → memory_engine → active_intent → domain
+    //   → training_runtime → document_ingestion → grounded_training_material）已追加。
+    // 天花板搬到当前授权真相 43（HIGHER OVERNIGHT MARATHON V2 · P1.5 明文授权
+    // 「latest_version() == 43」，v044+ 仍属后续包）。断言意图不变：**必须精确相等**。
     assert_eq!(
         versions,
         vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43
         ]
     );
 
@@ -114,7 +119,10 @@ fn test_migration_v008_applied_and_idempotent() {
     // DEV-0076 §四：v027 追加后 27 条
     // DEV-SYNC-001：v028 追加后 28 条
     // DAILY EXPERIENCE V1 §PHASE 4：v033（companion_skill）追加后 33 条
-    assert_eq!(count, 36);
+    // v034–v043（学习闭环收口）追加后 43 条
+    // （OVERNIGHT MARATHON V2 · P1.5：天花板 = 授权真相 43；v044+ 仍属后续包。）
+    // 注意：本测试内**还有一处**同义天花板（上面的版本 vec），必须同步维护。
+    assert_eq!(count, 43);
 }
 
 #[test]
