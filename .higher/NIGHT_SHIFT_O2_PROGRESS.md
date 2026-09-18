@@ -603,6 +603,7 @@ each fixture through the real runtime and asserts non-empty + correct format —
 as a RECOMMENDATION, not applied here (scope: this wave exercises and records; behaviour
 changes to the supported-format contract are an Owner decision).
 
+```text
 Generators committed (fixtures stay local, per the M4 PDF rule — generated-and-reproducible):
   make_xlsx.py         OOXML xlsx, inline strings, relationships on the owning part
   make_text_formats.py csv / txt / ascii / html / htm
