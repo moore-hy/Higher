@@ -1,0 +1,61 @@
+# HIGHER OVERNIGHT MARATHON V2 — task_plan.md
+
+**Repository:** `moore-hy/Higher` · **Branch:** `main` (must not change)
+**Locked start SHA:** `082c78bee2a47cfb169cc88bab49086f45caba65`
+**Push:** FORBIDDEN (owner pushes manually in the morning)
+**GitHub skill:** DISABLED
+
+States: `NOT_STARTED` | `IN_PROGRESS` | `GREEN` | `VERIFIED_DONE` | `SKIPPED_ALREADY_SATISFIED` | `BLOCKED`
+
+---
+
+## Pack table
+
+| Pack | Title | State | Commit |
+|---|---|---|---|
+| P0 | Preflight + skill bootstrap | VERIFIED_DONE | (pending) |
+| P1 | Grounded Learning Bridge closure hotfix | NOT_STARTED | — |
+| P2 | Real production closed-loop E2E | NOT_STARTED | — |
+| P3 | Eight specialized experience hardening | NOT_STARTED | — |
+| P4 | Product reachability + recovery hardening | NOT_STARTED | — |
+| P5 | Truth / transaction / isolation audit | NOT_STARTED | — |
+| P6 | Broad sequential regression + build | NOT_STARTED | — |
+| P6R | Reserve evidence lanes R1..R7 | NOT_STARTED | — |
+| P7 | Morning closure | NOT_STARTED | — |
+
+---
+
+## P0 — details
+
+- [x] `git branch --show-current` → `main`
+- [x] `git rev-parse HEAD` → `082c78bee2a47cfb169cc88bab49086f45caba65` (matches locked start)
+- [x] `git status --short` → only untracked protected dirs (`.git_broken3/`, `.git_pack_rescue/`, `.w9_check/`, `.workbuddy-ai/`)
+- [x] `git diff --check` → clean
+- [x] `git log -5 --oneline`
+- [x] `.higher/overnight_marathon_v2/` created
+- [x] Symbol / caller audit written to `findings.md`
+- [ ] P0 commit `docs(higher): start overnight closed-loop marathon`
+
+---
+
+## P1 — sub-item table
+
+| Item | Title | State |
+|---|---|---|
+| P1.1 | Production grounding writer (atomic API shape) | NOT_STARTED |
+| P1.2 | Deterministic material first (`ai = None`) | NOT_STARTED |
+| P1.3 | Break / no-target semantics | NOT_STARTED |
+| P1.4 | Source scope before lexical top-k | NOT_STARTED |
+| P1.5 | Stale migration test `latest <= 41` → `== 43` | NOT_STARTED |
+| P1.6 | Midnight clock test determinism | NOT_STARTED |
+| P1.7 | Closure tests OM-P1-01..19 | NOT_STARTED |
+
+---
+
+## Locked decisions taken (ordinary ambiguity → safest option, recorded, continue)
+
+| # | Decision | Rationale |
+|---|---|---|
+| D-01 | Use taskbook §11 P1.1 **shape B** (`create_training_run_with_materials` helper, `pub(crate)`), not shape A (extend `CreateTrainingRunParams`) | Shape A would break 26 struct-literal call sites across 8 test files for no behavioural gain. `create_training_run` has exactly **one** production caller (`training/start.rs:138`), so the helper is a smaller coherent diff with unchanged public semantics. |
+| D-02 | Transaction-level invariants OM-P1-16 / OM-P1-17 proved via `#[cfg(test)] mod tests` inside `src/training/runtime.rs` | `pub(crate)` helper is not reachable from `tests/`, and the repo already accepts in-module `#[cfg(test)]` (see `document_intelligence/retrieval.rs`). Avoids adding a second public runtime surface. |
+| D-03 | (`recorded as needed`) | |
