@@ -536,3 +536,545 @@ verification  由命令层决定（FIX A1，前端无参数可改），且落在
 
 > 注：`6effc9a` 的提交消息里「逐条分类见 finding F-016」指的是可达性分类表；
 > 本节（F-017）是那条修复本身的完整记录。
+
+---
+
+## F-018 — R1 生产可达性普查（P6R / 词法级，全量扫描）
+
+### 方法
+
+`src/cognitive/`、`src/training/`、`src/document_intelligence/`、`src/repository/` 内
+所有 `pub fn` 逐一统计「非定义行的 `src/` 引用数」与「`tests/` 引用数」，输出
+`PROD_REACHED / TEST_ONLY / DEAD_OR_EXPORT_ONLY`。
+
+判据是**词法**的（`\bsymbol\b` 行匹配），**不是调用图**：看不见 trait 分发、
+宏展开、`serde` derive、以及内部薄包装。此限制在下文分类中直接决定了结论强度。
+
+### 结果
+
+| 切片 | pub fn 总数 | 非 PROD_REACHED | 说明 |
+|---|---|---|---|
+| `src/training/` | 少量 | **3**（`deterministic_only`、`is_open`、`is_deterministic`） | 切片本身极干净 |
+| `src/document_intelligence/` | 少量 | **1**（`is_ready`） | 同上 |
+| `src/cognitive/` | 约 130 | ~19 | 见下 |
+| `src/repository/` | 大量 | ~40（含大量 legacy 兼容包装） | 见下 |
+
+### 逐条抽查结论：**没有一条是 Category C**
+
+抽查了三个「零生产调用」的代表，全部是**有文档注释、有意保留的兼容层**，
+不是漏接线：
+
+```text
+src/repository/task.rs:470   pub fn list_all_by_profile(...)
+   /// 兼容：全部任务（活跃）。
+   生产实际走 list_all_by_profile_ext（planning.rs:354 调用），
+   本函数仅由 _ext 变体内部委托 —— 词法扫描看不见这次委托。
+
+src/repository/task.rs:474   pub fn list_today(&self)
+   /// 兼容：全库今天（无 Profile 过滤；旧测试用）。
+   —— 注释已经明写「旧测试用」。
+
+src/repository/personalization.rs:247  pub fn save_draft(...)
+   生产只调用 save_draft_with_sources（commands/agent.rs:1334）；
+   save_draft 是它被取代前的旧变体。
+```
+
+`src/cognitive/` 侧的 19 条集中在两类，同样不是缺陷：
+
+```text
+查询构造器    learning_moment.rs 的 for_item / with_hint / with_confidence /
+              with_metadata / recent_of_types
+              —— 测试驱动的查询 DSL，生产通过更高层入口使用同一张表。
+枚举显示      decision.rs:149 display_zh / *_zh 系列
+              —— 给人看的字符串，落点在前端 DTO 或快照 JSON，不在 Rust 调用图里。
+```
+
+唯一「连测试都不引用」的一条：
+
+```text
+src/cognitive/evidence.rs:133  pub fn classify_evaluation_quality(...)
+   src/ 与 tests/ 双向零引用。属死代码，但删除属重构、非本次授权范围。
+```
+
+### 判定
+
+**R1 = SKIPPED_ALREADY_SATISFIED（并入 F-016）**，无人接线。
+
+理由（对应 P5.3 规则）：「re-exported but never production-called」与
+「shadowed by a second legacy flow」两类在 `repository/` 里**是设计意图**
+（§37 未删除任何生产能力），且注释已自证。R1 只授权「proven Category C +
+owner 契约明确」才动手，本切片**一条都不满足**。
+
+### ⚠️ 给后人的警告
+
+本普查的 `DEAD_OR_EXPORT_ONLY` **不等于「可以删」**。判据是词法级：
+`list_all_by_profile` 看上去零调用，实际被 `_ext` 变体委托。
+任何基于此表做删除的决定都必须先补一次真正的调用图分析。
+
+---
+
+## F-019 — P6.2 首个红灯：陈旧迁移天花板断言（R5 授权修复，**入场前既有**）
+
+### 现象
+
+`cargo test -j 1 -- --test-threads=1` 在**第三个测试目标**就中断了：
+
+```text
+Running unittests src/lib.rs        → test result: ok. 167 passed; 0 failed
+Running unittests src/main.rs       → test result: ok.   0 passed
+Running tests/adjustment_system.rs  → test result: FAILED. 7 passed; 1 failed
+error: test failed, to rerun pass `--test adjustment_system`
+```
+
+`cargo test` 默认 **fail-fast**：第一个红灯目标之后**不再继续**，
+因此 P6.2 这个强制门禁**拿不到任何有效全量证据**。
+
+### 根因（已证明）
+
+`tests/adjustment_system.rs:71` 把 `schema_migrations` 的版本集合断言成 `1..=36`，
+而数据库当时已经是 `43`：
+
+```text
+left:  [1, 2, ..., 43]     ← 真实迁移集合
+right: [1, 2, ..., 36]     ← 断言里写死的旧天花板
+```
+
+把 `--no-fail-fast` 打开后一次性枚举，**同一类断言共有 9 处**（8 个文件）：
+
+| 文件 | 行 | 旧断言 | 真实 |
+|---|---|---|---|
+| `tests/adjustment_system.rs` | 71 | vec `1..=36` | `1..=43` |
+| `tests/batch049.rs` | 291 | `ver == 36` / `latest_version() == 36` | 43 |
+| `tests/batch058.rs` | 50 | `latest_version() == 36` | 43 |
+| `tests/batch0601.rs` | 195 | `v == 36` | 43 |
+| `tests/batch062.rs` | 139 | `v == 35` / `latest_version() == 36` | 43 |
+| `tests/companion_world.rs` | 889 | `latest_version() == 36` | 43 |
+| `tests/product2_knowledge_canvas.rs` | 68 | `latest_version() == 36` | 43 |
+| `tests/product2_planning_intake.rs` | 47 | `latest_version() == 36` | 43 |
+
+### 归属取证：**不是本次任务引入**
+
+```text
+git show de9d6d0:src-tauri/tests/batch049.rs        → assert_eq!(latest_version(), 36)
+git show de9d6d0:src-tauri/tests/batch058.rs        → assert_eq!(latest_version(), 36)
+git show de9d6d0:src-tauri/tests/batch0601.rs       → assert_eq!(v, 36)
+git show de9d6d0:src-tauri/tests/batch062.rs        → assert_eq!(v, 35) / (…, 36)
+git show de9d6d0:src-tauri/tests/companion_world.rs → assert_eq!(latest_version(), 36)
+git show de9d6d0:src-tauri/tests/product2_*.rs      → assert_eq!(latest_version(), 36)
+git show 39ca56e:src-tauri/tests/adjustment_system.rs → vec![1, 2, ..., 36]
+```
+
+`de9d6d0` 是**本次马拉松自己的起点提交**（`docs(higher): start overnight closed-loop
+marathon`），而它当时的 `migrations/mod.rs` **已经**注册到 v043。
+因此这 9 处在**本次插旗之前就已经恒假**——属入场既有基线债。
+
+### 为什么之前没被发现
+
+P1.5（`3210949`）**确实**修过天花板，但只修了 `latest_version()` 的**三种**写法：
+
+```text
+tests/real_learning_engine_intent.rs        `latest <= 41`   → `== 43`
+tests/real_learning_engine_pack_a_audit.rs  A27 / A28        → `== 43`
+tests/real_learning_engine_document_foundation.rs  O2-04     → `== 43`
+```
+
+而该提交的**消息本身**就写着：
+
+> 「这正是 v042/v043 两轮都出现过的『只改了同义门的一部分』类漏改。」
+
+—— 然后**它自己又漏了一次**：散落在 8 个 legacy 文件里的 `== 36`、
+以及 `adjustment_system.rs` 里**用 vec 逐项枚举**这种更隐蔽的同义写法，
+都不在它扫描到的范围内。这三轮（v042 / v043 / 本次）漏的是**同一件事**。
+
+### 处置：按 R5 五条件逐条核验后修复
+
+| # | R5 条件 | 判定 |
+|---|---|---|
+| 1 | 根因已证明 | ✅ 断言写死 35/36，真相 43 |
+| 2 | 修复确定 | ✅ 只把常量搬到授权真相 |
+| 3 | 契约已授权 | ✅ **本任务书 P1.5 原文**：「Update stale test ceiling … to the authorized truth: `latest_version() == 43`」 |
+| 4 | 不削弱断言 | ✅ 保持**精确相等**，未退化成 `>=`；vec 形态逐项枚举到 43 |
+| 5 | 与学习闭环切片相邻 | ✅ 被断言的量**就是**学习闭环的迁移天花板（v037–v043） |
+
+5/5 成立 → 修复。改动**仅限天花板常量**，并加一行注释说明授权来源，
+让下一个加迁移的人在同一位置就能看到该改什么。
+
+### 明确**不**修的两类（登记，不触碰）
+
+```text
+tests/batch062.rs  t19 / t21 / t22 / t54 / t55 / t57
+    AI provider / streaming / model_router 层，panic 消息就是测试标题本身
+    （未实现标记）。与学习闭环切片**不相邻**，R5 条件 5 不成立。
+
+tests/companion_world.rs  rw09_watermark_above_today_clamps_to_zero
+    断言 left: ReadyShort / right: NotReady —— 就绪度与水位语义，
+    与迁移天花板无关，根因未证明。
+
+tests/daily_experience.rs  de024 / de025
+    真实报错 `duplicate column name: auth_mode`：
+    测试本地 `rollback_to_v031()` 只删 schema_migrations 行、不撤销 DDL，
+    重新前向迁移时 v035 的 `ALTER TABLE … ADD COLUMN auth_mode` 冲突。
+    属「测试夹具宣称了一个它做不到的回滚」这一**新的**既有问题类；
+    根因需与生产迁移的**可重入性**一并判断，非本切片授权范围 → 只登记。
+```
+
+### 待办（交给 owner）
+
+`de024/de025` 暴露的问题值得单独立项：**生产的 `run_migrations` 对
+「schema_migrations 被回退、但 DDL 仍在」的半回退状态并不安全**。
+这既可能是测试夹具缺陷，也可能是生产迁移链缺少 `IF NOT EXISTS` /
+列存在性守卫。两种结论的修法完全不同，不能在夜里猜。
+
+**Status.** 天花板 9 处已修（8 文件），R3 新增 1 例（`OM-R3-01`）。见 `progress.md` CP-06。
+
+### F-019 附记二 —— 走完「no-fail-fast」之后才看见真实规模：**20 处 / 11 文件**
+
+F-019 附记一修完 11 处的短名单（`adjustment_system` / `batch049/058/0601/062` /
+`companion_world` / `product2_*`）后，`--no-fail-fast` 的**全量**日志又暴露出
+**另一批从未跑到过的红目标**（`attachments`、`batch03`、`evaluation_system`、
+`feedback_system`、`insight_review`、`knowledge_workspace`、`learning_hierarchy`、
+`learning_loop`、`profile_system`、`stage_b_core`）。
+
+教训：**短名单是用「猜哪些文件可能有」得到的，不是用扫描得到的。**
+真正枚举完整类的办法是写一个三形态扫描器（direct / rowcount / vec）跑全仓，见下。
+扫描结果：**20 处 / 11 文件**（含 1 处已排除的误报 `batch058.rs:89`，
+那是 `SELECT COUNT(*) FROM sqlite_type='view'`，与迁移无关）。
+
+### ⚠️ 批量改写工具自己犯的错（已自查并修正，必须记录）
+
+用脚本批量搬 vec 形态时，替换式写成了
+
+```text
+... 34, 35, 36   →   ... 34, 35, 37, 38, 39, 40, 41, 42, 43
+                        ↑ 36 被吃掉
+```
+
+—— 即 `EXTRA` 从 37 起编，**把 36 丢了**。后果是断言变成一份**缺项却仍然「看起来更长」**的
+列表：它会红，但看起来像「已经改过了」，比原状更危险。
+
+**修法**：不回退（仓库纪律禁用 restore 类操作），前向精确修复 13 行
+（`35, 37,` → `35, 36, 37,`），随后用 `git diff -U0` **逐行审计**
+全部 19 个改动文件，确认每一处都恰好是预期的天花板搬迁、无副作用。
+
+**由此固化的纪律**：
+
+```text
+任何「批量改写断言常量」的脚本，必须在写盘后用 git diff -U0 逐行审一遍。
+规模越大越要审 —— 恰恰是这次脚本「改对了 12 个文件、改坏了 13 行」，
+只有 diff 能同时看见这两件事。
+```
+
+### 三种形态的扫描器（可复用）
+
+```text
+(a) direct   assert_eq!(latest_version(), N) / assert_eq!(ver, N) / assert_eq!(v, N)
+(b) rowcount assert_eq!(<name>, N) 且前 12 行内出现 schema_migrations + COUNT(*)
+(c) vec      vec![1, 2, …, N] 的逐项枚举行
+```
+
+扫描器已在本轮使用；判定「是否陈旧」= 该常量 **< 43**。
+**注意 (b) 必须加 `schema_migrations` 邻近性守卫**，否则会把
+「视图/表存在性计数」等无关断言误判成天花板（本轮就遇到 1 处）。
+
+
+### F-019 附记 —— **第一轮修复后仍有第二处同义断言**（同类缺陷的第 4 次复发）
+
+第一轮修完 9 处后复跑，**同样的两个测试再次变红**，但行号变了：
+
+```text
+adjustment_system.rs  71:5  → 已修 →  122:5  assert_eq!(count, 36)
+batch058.rs           50:5  → 已修 →   59:5  assert_eq!(n, 36)
+```
+
+原因：**同一个 `#[test]` 函数体内有两处天花板**——一处断言
+「版本集合 `vec![1..=N]`」，另一处断言「`schema_migrations` 行数 == N」。
+`cargo test` 在测试函数内**遇到第一个 panic 就停**，
+所以只用跑一次测试的方式**永远只能看到每处测试的第一处断言**。
+
+这也是为什么 `--no-fail-fast` 只解决了一半问题：它让 cargo 不再跳过后续
+**测试目标**，但不能让单个测试函数继续跑完。
+
+**教训（已写入 MEMORY.md）**：
+
+```text
+修复天花板类断言时，「全仓 grep」必须扫两种形状：
+  (a) assert_eq!(latest_version(), N) / assert_eq!(ver, N)      —— 直接形状
+  (b) assert_eq!(COUNT(*) FROM schema_migrations … , N)          —— 行数形状
+  (c) vec![1, 2, …, N]                                          —— 逐项枚举形状
+并在改动后**必须复跑**：修复成功率不能靠推理确认，
+只能靠「同一目标再次执行」暴露同一函数里的下一处。
+```
+
+本轮共修 **11 处**（9 + 2），全部保持精确相等，未削弱。
+
+---
+
+## F-020 — P6R 车道明细（R2 / R3 / R4 / R7）
+
+### R2 — Crash / restart / retry matrix → **SKIPPED_ALREADY_SATISFIED**
+
+任务书要求「exercise and record」六个场景。逐条映射到**已有**证据
+（本轮先做覆盖映射，只在真有缺口处新增 —— 见下）：
+
+| 场景 | 现有证据 | 层 |
+|---|---|---|
+| restart before first block | `grounded_learning_bridge_realtime.rs::rt_gr_02` —— 新块的快照读取必须是 `None`（「尚未落库」≠「加载失败」） | DB |
+| restart mid-block | `tests/product-ui/groundedTrainingReopen.test.tsx`（P4.4）—— **每次重新挂载用全新的空 `QueryClient`**（最接近进程重启）；断言只读 URL 里的 run 与**当前块**快照，六个写入 API 零调用 | 页面 |
+| retry same `client_action_id` | `real_learning_engine_training.rs`：`retrying_the_same_action_creates_no_second_fact`、`reusing_the_key_with_a_different_payload_is_rejected`、`reusing_the_key_with_only_a_changed_result_is_rejected`、`reusing_the_key_with_only_a_changed_prompt_is_rejected`；DB 层 `the_database_itself_refuses_a_reused_client_action_id` | DB + 服务 |
+| retry document ingestion after Failed | `document_knowledge_surface.rs`：`gb_doc_10_retry_after_parse_failure_is_clean`、`gb_doc_11_retry_after_persist_failure_leaves_no_duplicate_structure`、`gb_doc_12`（重试门禁）；`document_ingestion_lock.rs::gb_db_05_retry_from_failed_works` | DB |
+| snapshot already persisted on reopen | `groundedTrainingReopen.test.tsx`（两次重开逐字节一致 ⇒ 快照是历史真相，**不重算**）；`grounded_training_material.rs::gb_mat_02`（往返确定性）、`gb_mat_05`（写入后不可覆盖） | 页面 + DB |
+| complete / abandon and reopen | `real_learning_engine_training.rs`：`completion_ends_the_session_and_the_run_together`、`terminal_states_have_no_outgoing_transition`、`a_terminal_run_refuses_further_interactions`；`grounded_learning_bridge_e2e.rs::p2_b`（冻结完成规则） | 服务 |
+
+**「历史快照绝不重算」这一硬要求**有两处独立证据：
+`gb_mat_05`（写入后拒绝覆盖）+ P4.4（两次重开逐字节一致）。
+**「不出现重复事实」**由 `UNIQUE(profile_id, client_action_id)` +
+`gb_doc_11`（无重复 section/chunk/revision/孤儿索引）双向保证。
+
+→ 无缺口，不新增。**若不新增就收口，是遵循 R7「不为已穷尽证明的行为再造用例」。**
+
+### R3 — Isolation adversarial matrix → **VERIFIED_DONE（补 1 例）**
+
+六个子场景，五个已被逐字覆盖（**且都是「前提先行」的强写法**）：
+
+```text
+two profiles, same item names            p2_e_profile_isolation_is_enforced_at_the_query_boundary
+                                         （先证明 B 的语料**真的**可检索，再断言隔离 —— 否则隔离断言是空话）
+30+ unrelated chunks crowding top-k      om_p1_11_and_18（同档案 30 条高命中噪声）
+CJK fallback with competing sources      om_p1_12_and_19（先证明无范围检索**确实**被噪声占满 top-20）
+stale search_index orphan                gb_doc_10 / gb_doc_11（orphan_index_count：索引指向不存在的 chunk）
+wrong-profile block/material read        gb_mat_03（跨档案写被拒 + 跨档案读返回 None）
+                                         gb_prog_05c_other_profile_blocks_do_not_leak
+```
+
+**唯一缺口**：`two sources, identical text`（同一学习项、两条合法来源、正文逐字节相同）。
+新增 **`OM-R3-01`**（`grounded_learning_bridge_closure.rs`）。
+
+它断言的是这条形状**独有**的两件事，不是重复已有结论：
+
+```text
+1) 平分不得吃掉任何一条合法 revision
+   —— 范围过滤必须对**每一条**授权 revision 生效，而不是「只留得分最高的那条」；
+2) 平分时排序必须稳定（候选顺序也要稳定）
+   —— 顺序会固化进不可变快照的 provenance，抖动一旦落库就永久固化。
+```
+
+首跑即失败（`memory_reviews` 期望 0、实际 1），原因是**我的断言写错了**：
+夹具 `make_due_item` 为了造出「真实逾期」本身就会留下 moment 与 review。
+改为**编译前后比对**（断言「不增」，而不是「等于 0」）—— 这比原写法更严格也更正确。
+复跑 **9 passed / 0 failed**。
+
+### R4 — Product smoke through real routes → **VERIFIED_DONE（降级为集成测试映射）**
+
+**浏览器自动化可用性：不可用（已取证）。**
+
+```text
+package.json            : 无 playwright / puppeteer / cypress / selenium
+node_modules            : 无同名包
+```
+
+任务书 R4 原文允许降级：「If UI automation is not available, record that and
+use production integration tests instead.」且 §7 资源治理器禁止并行重活。
+故按 R4 的八个步骤逐条映射到**仓库既有的路由级集成测试**：
+
+| R4 步骤 | 证据 |
+|---|---|
+| Today | `tests/product-ui/todayGuidance.test.tsx`、`cognitiveToday.test.tsx` |
+| → arrange | `tests/product-ui/groundedTrainingRouting.test.tsx`（GB-ROUTE-01/02/03/03b/04） |
+| → `/train/:runId` | 同上（真实 MemoryRouter 路由） |
+| → material visible | `groundedKnowledgeMaterial.test.tsx`（13 例）、`groundedTrainingExperience.test.tsx` |
+| → learner interaction | Rust `grounded_learning_bridge_e2e.rs::p2_b`（真实 learner action，exactly-once） |
+| → leave / reload | `groundedTrainingReopen.test.tsx` |
+| → same run / same block / same snapshot | `groundedTrainingReopen.test.tsx`（P4.4：ordinal 2 的当前块、逐字节一致） |
+| → Memory / Progress projection reachable | `memoryPage.test.tsx`、`cognitiveProgress.test.tsx`；Rust `grounded_learning_bridge_e2e.rs::p2_c` |
+
+全量：`tests/product-ui` **13 文件 / 204 passed / 0 failed**。
+
+**诚实边界**：这**不是**真实视口取证（无像素/布局断言），只是功能烟测。
+P4.4 的「模拟重开 = 全新空 `QueryClient`」是本仓库能做到的、最接近进程重启的近似。
+
+### R5 — Deterministic baseline-debt closure → **VERIFIED_DONE（部分修复，部分登记）**
+
+见 F-019。修复 11 处天花板；`batch062`（6 例 AI provider 层）、
+`companion_world::rw09`（就绪度/水位）、`daily_experience::de024/de025`
+（半回退后迁移不可重入）**全部只登记不修**，理由逐条写在 F-019。
+
+### R7 — Stop condition → **REACHED**
+
+按 §1.5 三值检验逐条排除「剩余可做的事」：
+
+```text
+重跑未变的绿灯套件                → 不做（除修复后必须的复跑）
+为口味重构                        → 不做
+加推测性架构                      → 不做
+像素打磨                          → 不做（R6 明确「不执行重设计」）
+加新功能                          → 不做（任务书 §9 明令夜间只做验证）
+为已穷尽证明的行为再造用例         → 不做（R2 六个场景全部已有逐条证据）
+```
+
+**剩余可做的事里，没有任何一件通过三值检验。** 预留队列已耗尽 → 进入 P7。
+
+---
+
+## F-021 — `grounded_learning_bridge_realtime` 在**本机环境**下红灯（网络/缓存，非代码）
+
+### 现象
+
+P6.2 基线全量跑中，**本切片自己的**真运行时验收目标也红了：
+
+```text
+running 2 tests
+test rt_gr_01_real_pdf_reaches_real_grounded_material ... FAILED
+test rt_gr_02_real_grounded_material_round_trips_on_a_real_training_run ... FAILED
+
+panicked at tests\grounded_learning_bridge_realtime.rs:269:5:
+RT-01：真实 Docling 解析必须成功，实际 state=Failed code=Some("PARSER_FAILED")
+detail=Some("... docling convert failed: ProxyError(MaxRetryError(
+   HTTPSConnectionPool(host='huggingface.co', port=443):
+   Max retries exceeded with url: /api/models/docling-project/docling-layout-heron/revision/main
+   (Caused by ProxyError('Unable to connect to proxy', OSError('Tunnel connection failed: 502 Bad Gateway'))) ...)")
+```
+
+### 根因（已证明）
+
+Docling 2.73 需要 **`docling-project/docling-layout-heron`** 布局模型；
+本机 HF 缓存里**没有**该模型，于是 Docling 尝试联网下载 →
+境外直连不可用（代理 502）→ `PARSER_FAILED`。
+
+**它不是「没有运行时」。** `%LOCALAPPDATA%\Higher\runtimes\` 下
+`docling-2.73.0-o2` **存在且可用**（OCR 模型 `PP-OCRv6_*` 都已缓存、加载成功），
+缺的只是**那一个**布局模型。所以测试没有走「打印 SKIP」的分支，而是
+**如实走了真实路径并如实失败** —— 这正是 NO-FAKE-DATA 想要的行为。
+
+### 归属：**不是本任务引入**
+
+```text
+本任务对 src/document_intelligence/ 的工作区改动          → 空
+eb59a16（P1.4）对 document_intelligence/mod.rs 的改动     → 只加了一行再导出
+                                                            （compile_document_context_scoped），
+                                                            不触碰 Docling 调用或模型解析
+```
+
+### 处置：**不修，且不得修**
+
+任务书 §3 NETWORK MODE 原文：
+
+> Do **NOT** reinstall the already-working isolated Docling runtime.
+
+本机境外网络不可靠（§3 已声明这是已知条件）。因此：
+
+```text
+× 不重装隔离运行时（§3 明令）
+× 不预下载模型（等于替 owner 改运行时内容；且 docling/ 目录只读复用）
+× 不把测试改成「缺模型就 SKIP」（那会把一个真实的环境条件伪装成通过）
+√ 如实登记为「环境条件导致的基线红」，并保留测试**拒绝假装通过**的行为
+```
+
+### 对 P1.7 证据完整性的影响（必须如实说明）
+
+这条红**削弱**了「真实运行时端到端」这一条证据的**本轮可复现性**：
+
+```text
+能力链本身仍被证明 —— 见 grounded_learning_bridge_closure.rs（真实 SQLite +
+  真实 ingestion 服务 + 真实索引 + 真实检索，解析器用测试替身替代外部 Docling）
+真实外部运行时这一环，本轮**无法**在本机复现（模型缺失 + 境外网络不可靠）。
+```
+
+即：**确定性证据充分，真实 HTTP 运行时证据在本机缺席。**
+若 owner 需要这条证据，应在有可用境外网络时重跑
+`cargo test --test grounded_learning_bridge_realtime`（不改任何代码）。
+
+---
+
+## F-022 · P7 终扫：全仓迁移天花板已闭合（CLEAN）+ 全量证据自洽化
+
+**类型**：verification-before-completion（非缺陷）
+**日期**：2026-09-19（P7）
+
+### 1. 为什么要再扫一次
+
+F-019 记录了这个类的**两次漏改**（v042 / v043 各一次：「只改了同义门的一部分，
+漏了另一份」）。P7 是最后一关，必须回答一个问题：
+
+> 仓库里**还有没有**任何一处硬编码的迁移天花板仍停在 43 以下？
+
+如果答案是「有」，那么 P6 的「天花板类已闭合」就是一句没有证据的话。
+
+### 2. 扫描方法（可复现）
+
+`C:\Users\37653\AppData\Local\Temp\p7_ceiling_scan.py`
+
+```text
+扫描范围：src-tauri/tests/  +  src-tauri/src/（后者覆盖 #[cfg(test)] 内嵌测试）
+命中条件：同一行同时满足
+          (a) 处在 assert!/assert_eq!/assert_ne!/matches!/expect( 语境
+          (b) 该行或其前 2 行出现迁移版本词汇
+              （latest_version|schema_migrations|migrations::|version|ver|v|count|n…）
+          (c) 该行含 30..=42 的**独立整数字面量**（两侧不得相邻 0-9/字母/下划线）
+```
+
+这个条件是**刻意收窄**的：它只抓「裸字面量」，不抓 `latest_version()` 这种动态形态
+（动态形态天然不会陈旧）。代价是需要人工定性少量误报；收益是不会漏。
+
+### 3. 结果：6 个候选，**全部定性为合法**
+
+```text
+src-tauri/tests/real_learning_engine_domain.rs:148    assert_eq!(version, 40);
+        → WHERE name = 'learning_domain'        「该迁移自身的版本号 = 40」，非天花板
+src-tauri/tests/real_learning_engine_training.rs:273  assert_eq!(version, 41);
+        → WHERE name = 'training_runtime'       同理（v041）
+src-tauri/tests/real_learning_engine_intent.rs:100    assert_eq!(version, 39);
+        → WHERE name = 'active_learning_intent' 同理（v039）
+src-tauri/tests/batch0601.rs:490                      assert!(count(&conn,"tasks") >= 31)
+        → Rolling Horizon 30 天物化任务计数，与迁移无关
+src-tauri/tests/batch0601.rs:547                      assert!(after_apply >= 31)
+        → 同上
+src-tauri/tests/dev0077_u1_proposal_tests.rs:560      assert_eq!(est_of(...), 30)
+        → estimated_minutes，与迁移无关
+```
+
+判定依据：前三条查的是 `schema_migrations WHERE name = '<单个迁移名>'`，
+**问的是「这一条迁移登记成几号」，不是「最大版本是几号」**。天花板类管的是后者。
+两者同名 `version` 变量，但语义正交 —— 这是本类容易被误判的边界，故在此显式记下。
+
+```text
+RESULT: CLEAN — 全仓再无低于 43 的硬编码迁移天花板
+```
+
+### 4. 附带核实的 3 个「本轮未触碰但含 latest_version()」文件
+
+扫描顺带暴露 3 个**不在 P6 改动清单**里、却含 `latest_version()` 的文件，逐一核实：
+
+```text
+real_learning_engine_document_foundation.rs  O2-04 → == 43   已由早期包（W3/P1）收口
+real_learning_engine_pack_a_audit.rs     A27/A28 → == 43     已由早期包（P1.5）收口，注释自述
+                                                             「W3 遗漏的收口」
+real_learning_engine_intent.rs:118           → 43            已由早期包（P1.5）收口
+daily_experience.rs:1171 / 1328              → 动态比较（== latest_version() / 1..=latest_version()）
+batch0601.rs:174                             → 动态比较（latest_version() as i64）
+grounded_learning_bridge_closure.rs:774      → 43（本任务自建 OM-P1-14）
+```
+
+结论：**都不是漏改**。这也再次印证 F-019 的教训 —— 这类「同义门散落多处」的债务，
+只有在**最后**做一次全仓普查才能确认闭合。
+
+### 5. 全量证据自洽化（一次如实的数据对账）
+
+P6.2 的全量日志 `p6_broad_rust3.log` 完成于 **03:07:07**，而对
+`learning_loop.rs` / `migration_v025_upgrade.rs` 的最后编辑发生在 **03:06:32–33**。
+即：那三个目标（`attachments` / `learning_loop` / `migration_v025_upgrade`）
+在该轮里被跑的是**编辑前**的二进制，于是日志仍把它们列为红。
+
+**这不是代码问题，是一份日志与工作区不同步。** 处置：
+
+```text
+不修改历史日志（保留原始事实）
+不声称「那一轮是绿的」（那是它当时真实的输出）
+冻结态另跑一次全量（p7_broad_final.log），以冻结态结果作为 §21 报告的唯一口径
+```
+
+三个目标在冻结态由 `p6_ceiling_final.log`（03:09:26，晚于全部编辑）复跑证实为绿。
+
+```text
+教训：日志的 mtime 只说明「最后一次写入」，不说明「它编译的是哪一版」。
+      结论要与文件 mtime 对账后再引用；跨不过去就重跑，而不是就近取用。
+```

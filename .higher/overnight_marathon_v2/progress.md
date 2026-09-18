@@ -538,3 +538,352 @@ rustfmt --edition 2021 --check          全部 4 个改动文件 clean
 next pack   : P6
 next action : 全量顺序回归 + 构建（含 P6R 预留取证车道 R1..R7）
 
+---
+
+# CP-06 — P6 全量顺序回归 + 构建（+ P6R）
+
+## P6.1 Rust targeted groups
+
+按任务书 §16 P6.1 列出的分组顺序跑通；受影响套件在修复后**复跑**。
+（全量证据见 P6.2。）
+
+## P6.2 Rust broad suite —— 本包的核心工作量
+
+### 命令（含一处**刻意的偏离**）
+
+```text
+任务书 §16 P6.2 给的是            cargo test -j 1 -- --test-threads=1
+实际使用                          cargo test -j 1 --no-fail-fast -- --test-threads=1
+```
+
+理由（记入 D-06）：`cargo test` 默认 **fail-fast** —— 第一个红灯测试目标之后
+**不再继续**。第一次按原命令跑的结果是：
+
+```text
+Running unittests src/lib.rs        → ok. 167 passed
+Running unittests src/main.rs       → ok.   0 passed
+Running tests/adjustment_system.rs  → FAILED. 7 passed; 1 failed
+error: test failed, to rerun pass `--test adjustment_system`
+```
+
+**3 个目标之后整个 P6.2 门禁就作废了**。加 `--no-fail-fast` 才拿到完整视图。
+
+### 结果对比
+
+| | 绿目标 | 红目标 |
+|---|---|---|
+| 基线（修复前，全量 `--no-fail-fast`） | **98** | **27** |
+| 修复后（同上，改动已编译进去） | **106** | **19** |
+| 其中「陈旧迁移天花板」类 | — | **8 → 0**（`batch03` / `evaluation_system` / `feedback_system` / `insight_review` / `knowledge_workspace` / `learning_hierarchy` / `profile_system` / `stage_b_core`） |
+
+### 天花板类**最终**闭合验证（专项 20 目标）
+
+```text
+cargo test -j 1 --no-fail-fast \
+  --test adjustment_system --test attachments --test batch03 --test batch049 \
+  --test batch058 --test batch0601 --test batch062 --test companion_world \
+  --test evaluation_system --test feedback_system --test insight_review \
+  --test knowledge_workspace --test learning_hierarchy --test learning_loop \
+  --test migration_v025_upgrade --test product2_knowledge_canvas \
+  --test product2_planning_intake --test profile_system --test stage_b_core \
+  --test grounded_learning_bridge_closure -- --test-threads=1
+
+结果   18 目标 ok / 2 目标红
+       237 passed
+       剩余 2 红与天花板**无关**，且已登记：
+         batch062        t19/t21/t22/t54/t55/t57（AI provider / streaming 层，未实现标记）
+         companion_world rw09_watermark_above_today_clamps_to_zero（就绪度/水位语义）
+```
+
+即：**19 个天花板文件里没有一个再因天花板而红。**
+
+### 改动规模（`git diff --numstat`，tests/ 共 20 文件）
+
+```text
+19 个天花板文件 + grounded_learning_bridge_closure.rs（新增 OM-R3-01）
+35 处天花板断言搬迁（本轮累计：12 + 19 + 4）
+全部保持**精确相等**，未退化成 >=；逐项枚举形态补全到 43
+```
+
+### 残留 19 个红目标（全部为**非本切片**既有基线，登记不修）
+
+```text
+android_startup_tests        boot_tc001_db_ready_before_webview（源码/启动顺序断言）
+batch056                     test_runtime_db_path_no_hardcoded_manifest_dir_only
+batch061r / batch062 / batch062r   AI provider / model_router / streaming 层（panic 即未实现标记）
+batch063_ui / batch064_ui / batch0651_ui   源码扫描式 UI 治理断言（含 !important 计数 13 vs 基线 5）
+companion_world              rw09_watermark_above_today_clamps_to_zero
+daily_experience             de024 / de025（半回退后 run_migrations 不安全，见 F-019）
+dev0076_f1 / dev0076_f2 / dev0077_3 / dev0077_4_a1_f1   源码字符串扫描式治理断言
+grounded_learning_bridge_realtime  Docling 布局模型缺失 + 境外网络不可靠（见 F-021）
+mobile_tc_contract_tests     tc016_ai_runtime_semantics_frozen（源码扫描）
+```
+
+每一条都逐类核过 R5 五条件，**条件 5（与学习闭环切片相邻）均不成立**，
+仅 `grounded_learning_bridge_realtime` 属本切片但**环境条件**导致（§3 明令不得重装运行时）。
+
+## P6.3 `cargo check --lib -j 1`
+
+```text
+0 errors / 34 既有 warning（未新增）
+```
+
+## P6.4 `npx tsc --noEmit`
+
+```text
+exit 0，输出 0 行
+```
+
+## P6.5 Product UI
+
+```text
+npx vitest run tests/product-ui
+  Test Files  13 passed (13)
+  Tests       204 passed (204)
+```
+
+## P6.6 `npx vite build`
+
+```text
+✓ built in 45.57s（5148 modules transformed）
+dist/assets/index-*.js   827.26 kB │ gzip: 242.51 kB
+```
+
+## P6.7 `cargo fmt --check`
+
+```text
+仅 3 个既有基线文件红（4 个 hunk），与入场时逐字一致：
+  src/ai/secret_migration.rs:179
+  src/commands/agent.rs:249
+  tests/secret_store_cutover.rs:567 / :825
+本次任务拥有的 20 个文件（19 天花板 + 1 新增用例）**全部 clean**。
+```
+
+## P6.8 Git safety
+
+```text
+git diff --check           exit 0（无空白错误）
+git branch --show-current  main
+git status --short         （未跟踪：2 个新账本文件 + 4 个既有救援目录）
+push                       未执行（纪律：owner 早上自己推）
+```
+
+---
+
+## P6R 车道汇总
+
+| Lane | 结论 | 证据 |
+|---|---|---|
+| R1 | SKIPPED_ALREADY_SATISFIED | F-016 / F-018（词法普查 40+ 命中，抽查全为有注释的兼容包装） |
+| R2 | SKIPPED_ALREADY_SATISFIED | F-020（六场景逐条映射到已有证据） |
+| R3 | VERIFIED_DONE（+1 例） | `OM-R3-01` 同文本双来源；`grounded_learning_bridge_closure` 9 passed |
+| R4 | VERIFIED_DONE（降级） | F-020（无浏览器自动化；8 步映射到路由级集成测试） |
+| R5 | VERIFIED_DONE | F-019（天花板 35 处修复；三类登记不修） |
+| R6 | VERIFIED_DONE | `production_path_map.md` + `ui_convergence_backlog.md` |
+| R7 | REACHED | F-020（三值检验无一通过） |
+
+---
+
+next pack   : P7
+next action : 早晨收尾（不 push）
+
+---
+
+## CP-07 · P6 + P6R + P7 合并收尾 —— VERIFIED_DONE
+
+```text
+timestamp   : 2026-09-19 03:35 (+08)
+branch      : main
+HEAD before : f8e8495  docs(higher): record P5 truth-audit checkpoint
+HEAD after  : 3ae7b39  test(cognitive): align stale migration ceilings with v043
+              a2206bf  test(cognitive): prove source-scope isolation across identical-text sources
+              （本提交）docs(higher): record overnight closed-loop marathon verification
+pack        : P6 + P6R + P7
+changed     : 19 个天花板测试文件（M，35 处断言）
+              src-tauri/tests/grounded_learning_bridge_closure.rs（M，+186 −1，新增 OM-R3-01）
+              .higher/overnight_marathon_v2/ × 5（task_plan / progress / findings /
+                production_path_map[新] / ui_convergence_backlog[新]）
+tests run   : cargo test --no-fail-fast -j 1 -- --test-threads=1   109 目标通过 / 16 失败
+                                                                   1830 用例通过 / 29 失败
+              npx vitest run tests/product-ui                      13 files / 204 passed / 0 failed
+              npx tsc --noEmit                                     exit 0，零输出
+              npx vite build                                       5148 modules，✓ built in 48.57s
+              cargo check --lib -j 1                               0 error / 34 warning（与 P6.3 持平）
+              cargo fmt --check                                    仅 3 个既有基线文件红
+              git diff --check                                     0（修掉 findings.md 末尾多余空行后）
+passed      : 1830（Rust 用例）+ 204（前端用例）
+failed      : 29（Rust 用例；**全部为既有基线红**，无一属于学习闭环切片）
+resource    : cargo 单线程；冻结态全量回归 12m26s；无 OOM、无超时、无后台残留
+next pack   : —（P7 是任务书终点）
+next action : STOP —— owner 晨间自行 push
+```
+
+### 修复净效果（同一把尺子的前后对照）
+
+```text
+              失败目标数      失败用例数
+P6 开工基线        27             —
+P7 冻结态          16            29
+                 ─────
+净绿               11 个目标，**零新增回归**（16 ⊂ 27，严格子集）
+```
+
+净绿的 11 个目标：
+
+```text
+attachments   batch03   evaluation_system   feedback_system   insight_review
+knowledge_workspace   learning_hierarchy   learning_loop
+migration_v025_upgrade   profile_system   stage_b_core
+```
+
+### P7.2 final diff review（逐文件）
+
+```text
+19 个天花板文件   35 处断言 3x -> 43；逐行核对删除行，形态分布
+                  vec 14 / count 8 / latest_version 6 / ver 2 / n 2 / v 2 / last 1
+                  断言意图**未变**：仍是精确相等，未出现 >= 或弱化
+grounded_learning_bridge_closure.rs  +183 行（OM-R3-01）+ 导入展开
+账本 5 份          无占位符残留（TODO/TBD/PLACEHOLDER 扫描 = 0 命中）
+```
+
+### 全仓终扫：天花板类已闭合（详见 F-022）
+
+```text
+方法：src-tauri/{tests,src} 内「assert 语境 + 迁移版本词汇 + 30..=42 裸字面量」
+命中 6 个候选 -> 逐条定性：3 个是单条迁移自身版本号（WHERE name='...'），
+               2 个 Rolling-Horizon 任务计数，1 个 estimated_minutes
+RESULT: CLEAN —— 全仓再无低于 43 的硬编码迁移天花板
+```
+
+### 冻结态全量回归：16 个失败目标的归属（无一属于本切片）
+
+```text
+android_startup_tests   boot_tc001_db_ready_before_webview       单块 lib.rs 断言（基线）
+batch056                test_runtime_db_path_no_hardcoded_...     同上
+batch061r               r21 r23 r25 r41 r42                       同上
+batch062                t19 t21 t22 t54 t55 t57                   AI provider 层未实现标记（基线）
+batch062r               r26                                       AI provider 层（基线）
+batch063_ui / batch064_ui / batch0651_ui  t12 t14 u12 u21 u26     源码契约 + !important 上限 5 vs 基线 13
+companion_world         rw09_watermark_above_today_clamps_to_zero  watermark（基线）
+daily_experience        de024 de025                               已登记 owner 级延期项（D-10）
+dev0076_f1 / dev0076_f2 f1_tc004 / f2_tc005                       单块 lib.rs 断言（基线）
+dev0077_3 / dev0077_4   runtime_tc015 / governance_production_... 同上
+grounded_learning_bridge_realtime  rt_gr_01 / rt_gr_02            环境条件（F-021：Docling 布局模型缺失 + 境外网络 502）
+mobile_tc_contract_tests                                         基线
+```
+
+---
+
+# MORNING REPORT（任务书 §21 口径）
+
+```text
+START SHA:
+082c78bee2a47cfb169cc88bab49086f45caba65
+
+FINAL BRANCH:
+main
+
+FINAL SHA:
+见 §21 报告正文（P7 收尾提交）
+
+PACK STATUS:
+P0 VERIFIED_DONE   P1 VERIFIED_DONE   P2 VERIFIED_DONE   P3 VERIFIED_DONE
+P4 VERIFIED_DONE   P5 VERIFIED_DONE   P6 VERIFIED_DONE   P6R VERIFIED_DONE
+P7 VERIFIED_DONE
+
+REAL PRODUCTION E2E:
+grounded_learning_bridge_e2e.rs 6/6（场景 A–E，含 exactly-once 与 profile 隔离）；
+closure 套件 9/9。全部打在真实 SQLite + 全套迁移 + 真实服务上，零 LLM。
+
+GROUNDING WRITER:
+**已闭合**（本轮核心目标）。start_training_for_item → build_today_coach_snapshot
+→ prepare_block_materials（事务外）→ compile_grounded_material(ai=None)
+→ create_training_run_with_materials → 事务内 save_material_snapshot。
+即 training_block_runs.material_snapshot_json 不再恒为 NULL。
+
+SOURCE-SCOPED RETRIEVAL:
+在词法 top-k **之前**先按 profile + learning_item 过滤来源（P1.4）；
+OM-R3-01 追加证明「同 item 双来源、文本逐字节相同」时作用域与排序仍稳定。
+
+DOCUMENT FLOW:
+import → ingest → Ready（revision/section/chunk + 同事务进 search_index）；
+Failed 可重试且重试干净（GB-DOC-10/11/12），Ready/Parsing 上的重试被显式拒绝。
+
+TRAINING FLOW:
+Today / Knowledge 两条入口均产品可达；重开只读已落库快照，不重算、不重置进度。
+
+EVIDENCE LOOP:
+interaction → LearningMoment → MemoryReview → FSRS；skip/break/Unavailable
+一律不产生成功或失败证据（八条不变量逐条取证，见 CP-05）。
+
+PROFILE ISOLATION:
+跨 profile 来源无法被消费（A25 / P2-E / GB-DOC-02 / O2-20）＋ OM-R3-01 细粒度补充。
+
+IDEMPOTENCY:
+同一 client_action_id 只落一条事实；P5 修复了「payload 判定漏 result/prompt_text」
+的真值缺陷，并新增两条单字段变体用例先红后绿。
+
+SPECIALIZED EXPERIENCE STATUS:
+8 个专项体验语义正确（Rust 12 例 + 前端 19 例）；渲染/查看零证据；
+RICH_MATERIAL 4 协议因 P1.2（ai=None）按契约锁定不参与真实编排。
+
+RUST TESTS:
+cargo test --no-fail-fast -j 1 -- --test-threads=1
+109 目标通过 / 16 失败；1830 用例通过 / 29 失败
+16 个失败全部为既有基线红（清单见上方归属表），零新增回归。
+
+TYPESCRIPT:
+npx tsc --noEmit → 零输出，exit 0。
+
+UI TESTS:
+npx vitest run tests/product-ui → 13 files / 204 passed / 0 failed。
+
+VITE BUILD:
+npx vite build → ✓ 5148 modules transformed，built in 48.57s
+（并核实 recharts 仍在 route-level lazy chunk，主 bundle 命中数 = 0）。
+
+CARGO CHECK:
+cargo check --lib -j 1 → 0 error / 34 warning（与 P6.3 完全持平，无新增）。
+
+CARGO FMT:
+cargo fmt --check → 仅 3 个既有基线文件红：
+  src/ai/secret_migration.rs:179
+  src/commands/agent.rs:249
+  tests/secret_store_cutover.rs:567, 825
+本次任务自有文件全部 clean，未越权改动基线文件。
+
+GIT DIFF --CHECK:
+0（收尾时修掉 findings.md 的末尾多余空行）。
+
+GIT STATUS --SHORT:
+仅 .higher/overnight_marathon_v2/ 的账本变更；4 个保护目录保持 untracked
+（.git_broken3/ .git_pack_rescue/ .w9_check/ .workbuddy-ai/），未纳入任何提交。
+
+KNOWN BASELINE DEBT:
+16 个失败目标 / 29 个失败用例，全部为既有基线红，归属见上表。
+其中 grounded_learning_bridge_realtime 为**环境条件**（F-021），非代码缺陷。
+天花板类债务已在本轮**清零**（35 处修复 + 全仓终扫 CLEAN）。
+
+DEFERRED OWNER-LEVEL ITEMS:
+1. daily_experience de024/de025 —— 「半回退后 run_migrations 不安全」，
+   既可能是夹具谎报回滚能力、也可能是生产迁移链缺列存在性守卫，修法互斥，
+   须由 owner 决策（D-10）。
+2. grounded_learning_bridge_realtime 的真实 HTTP 运行时证据 ——
+   需要在有可用境外网络时重跑，**不改任何代码**（F-021）。
+3. CJK 词法召回（F-008）与日期不对称（F-009）—— 已登记，未越权修。
+4. UI 新旧视觉共存收敛 —— 仅登记于 ui_convergence_backlog.md，未施工。
+
+PROTECTED DIRS:
+UNTOUCHED
+
+PUSH:
+NOT PERFORMED
+```
+
+**最终判定**
+
+```text
+OVERNIGHT MARATHON V2 = VERIFIED_DONE
+```
+
+
