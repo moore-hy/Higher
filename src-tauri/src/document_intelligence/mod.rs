@@ -38,7 +38,8 @@ pub use parser::{
     DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection, UnavailableParser,
 };
 pub use retrieval::{
-    compile_document_context, retrieve_lexical_document_chunks, DEFAULT_DOCUMENT_RETRIEVAL_LIMIT,
+    compile_document_context, compile_document_context_scoped, retrieve_lexical_document_chunks,
+    retrieve_lexical_document_chunks_scoped, DEFAULT_DOCUMENT_RETRIEVAL_LIMIT,
 };
 pub use types::{
     ContextCandidate, ContextPack, ContextRequest, DocumentChunk, DocumentGlossaryEntry,

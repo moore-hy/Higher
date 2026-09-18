@@ -105,6 +105,57 @@ pub fn retrieve_lexical_document_chunks(
     Ok(out)
 }
 
+/// GROUNDED LEARNING BRIDGE V1 · P1.4 —— **授权 revision 范围内**的词法检索。
+///
+/// 与 [`retrieve_lexical_document_chunks`] 的唯一区别：授权范围被下推到 SQL 的
+/// `WHERE`，因此在 `ORDER BY bm25 … LIMIT` **之前**生效。回表补全（`hydrate`）
+/// 仍是同一份实现，profile 隔离仍然由每一条 SQL 自己保证。
+///
+/// `revision_ids` 为空 → 空集（fail closed，绝不退化成全库检索）。
+pub fn retrieve_lexical_document_chunks_scoped(
+    conn: &Connection,
+    profile_id: i64,
+    query: &str,
+    revision_ids: &[i64],
+    limit: i64,
+) -> Result<Vec<RetrievedChunk>, String> {
+    if query.trim().is_empty() || revision_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let hits = SearchRepository::new(conn).search_scoped_by_revisions(
+        profile_id,
+        DOCUMENT_CHUNK_ENTITY,
+        query,
+        revision_ids,
+        limit.max(1),
+    )?;
+
+    if hits.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut out: Vec<RetrievedChunk> = Vec::with_capacity(hits.len());
+    for hit in &hits {
+        let Some(row) = hydrate(conn, profile_id, hit.entity_id)? else {
+            // 索引里有、结构表里没有 → 孤儿条目。跳过而不是伪造一条空 chunk。
+            continue;
+        };
+        out.push(RetrievedChunk {
+            chunk_id: row.chunk_id.to_string(),
+            source_id: row.source_id.to_string(),
+            revision_id: row.revision_id.to_string(),
+            section_id: row.section_id.map(|s| s.to_string()),
+            ordinal: row.ordinal,
+            text: row.text,
+            lexical_score: Some(-hit.rank),
+            semantic_score: None,
+            retrieval_method: "lexical".to_string(),
+        });
+    }
+    Ok(out)
+}
+
 fn hydrate(
     conn: &Connection,
     profile_id: i64,
@@ -231,7 +282,58 @@ pub fn compile_document_context(
         query,
         DEFAULT_DOCUMENT_RETRIEVAL_LIMIT,
     )?;
+    assemble_pack(
+        conn,
+        profile_id,
+        query,
+        source_ids,
+        semantic_enabled,
+        lexical,
+    )
+}
 
+/// GROUNDED LEARNING BRIDGE V1 · P1.4 —— **授权范围先于 top-k** 的文档上下文编译。
+///
+/// 与 [`compile_document_context`] 共用同一份汇编（邻接、父上下文、`compile()`、
+/// 全部 cap），唯一的差别是候选集来自 [`retrieve_lexical_document_chunks_scoped`] ——
+/// 授权 revision 范围被下推到 FTS / LIKE 的 `WHERE`，先于 `LIMIT` 生效。
+///
+/// `source_ids` 仍然照常传给既有 `ContextRequest`：那是**同一授权范围**的第二道网
+/// （防御 `search_index` 与结构表之间的脏数据），不是唯一的过滤点。
+pub fn compile_document_context_scoped(
+    conn: &Connection,
+    profile_id: i64,
+    query: &str,
+    source_ids: &[String],
+    revision_ids: &[i64],
+    semantic_enabled: bool,
+) -> Result<ContextPack, String> {
+    let lexical = retrieve_lexical_document_chunks_scoped(
+        conn,
+        profile_id,
+        query,
+        revision_ids,
+        DEFAULT_DOCUMENT_RETRIEVAL_LIMIT,
+    )?;
+    assemble_pack(
+        conn,
+        profile_id,
+        query,
+        source_ids,
+        semantic_enabled,
+        lexical,
+    )
+}
+
+/// 两条入口共用的汇编步骤（邻接扩展、已存在父上下文、既有 Context Compiler）。
+fn assemble_pack(
+    conn: &Connection,
+    profile_id: i64,
+    query: &str,
+    source_ids: &[String],
+    semantic_enabled: bool,
+    lexical: Vec<RetrievedChunk>,
+) -> Result<ContextPack, String> {
     // 邻接与父上下文只为**已被检索到**的章节准备 —— 不为整库预取。
     let mut section_ids: Vec<i64> = lexical
         .iter()

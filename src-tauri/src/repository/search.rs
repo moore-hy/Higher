@@ -22,6 +22,82 @@ pub struct SearchRepository<'a> {
     conn: &'a Connection,
 }
 
+/// FTS5 匹配表达式：逐词短语 OR（中文无空格时整句作为一个词；多词时任一命中即召回）。
+///
+/// 抽成纯函数是因为它现在有**两个**调用点（通用检索 / 受限检索），
+/// 而两者必须共享**逐字相同**的匹配语义 —— 否则受限检索会悄悄变成另一个引擎。
+fn build_match_expr(q: &str) -> String {
+    let words: Vec<String> = q
+        .split_whitespace()
+        .filter(|w| !w.is_empty())
+        .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
+        .collect();
+    let match_words: Vec<String> = if words.is_empty() {
+        vec![format!("\"{}\"", q.replace('"', "\"\""))]
+    } else {
+        words
+    };
+    match_words.join(" OR ")
+}
+
+/// 实体类型过滤的两种形态：FTS 路径带表别名，LIKE 回退路径不带。
+fn type_filter_sql(entity_types: Option<&[String]>) -> (String, String) {
+    match entity_types {
+        Some(ts) if !ts.is_empty() => {
+            let quoted: Vec<String> = ts
+                .iter()
+                .map(|t| format!("'{}'", t.replace('\'', "")))
+                .collect();
+            let list = quoted.join(",");
+            (
+                format!(" AND si.entity_type IN ({list})"),
+                format!(" AND entity_type IN ({list})"),
+            )
+        }
+        _ => (String::new(), String::new()),
+    }
+}
+
+/// 授权 revision 范围的 SQL 片段（FTS 路径用 `EXISTS` 关联到既有文档结构表）。
+///
+/// `?base+0 … ?base+n-1` 是**占位符**，值由调用方绑定 —— 绝不把 id 拼进字符串。
+///
+/// 关键点：这个片段进的是 `WHERE`，因此在 `ORDER BY … LIMIT` **之前**生效。
+/// 这正是「来源作用域必须先于 top-k」的落地方式。
+fn revision_scope_fts(base_param: usize, revision_ids: &[i64]) -> String {
+    let placeholders: Vec<String> = (0..revision_ids.len())
+        .map(|i| format!("?{}", base_param + i))
+        .collect();
+    format!(
+        " AND EXISTS (SELECT 1 FROM document_chunks c \
+           JOIN document_revisions r ON r.id = c.revision_id \
+          WHERE c.id = si.entity_id \
+            AND c.profile_id = si.profile_id \
+            AND r.profile_id = si.profile_id \
+            AND r.id IN ({}))",
+        placeholders.join(",")
+    )
+}
+
+/// 同一个授权范围的 LIKE 回退形态。
+///
+/// CJK 回退**必须**应用**完全相同**的范围（P1.4 / OM-P1-12 / OM-P1-19），
+/// 否则「FTS 路径被限制、回退路径没被限制」会成为一个静默的全库检索后门。
+fn revision_scope_plain(prefix: &str, base_param: usize, revision_ids: &[i64]) -> String {
+    let placeholders: Vec<String> = (0..revision_ids.len())
+        .map(|i| format!("?{}", base_param + i))
+        .collect();
+    format!(
+        " AND EXISTS (SELECT 1 FROM document_chunks c \
+           JOIN document_revisions r ON r.id = c.revision_id \
+          WHERE c.id = {prefix}.entity_id \
+            AND c.profile_id = {prefix}.profile_id \
+            AND r.profile_id = {prefix}.profile_id \
+            AND r.id IN ({}))",
+        placeholders.join(",")
+    )
+}
+
 impl<'a> SearchRepository<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
@@ -75,31 +151,8 @@ impl<'a> SearchRepository<'a> {
             return Ok(Vec::new());
         }
         // FTS5 匹配：逐词短语 OR（中文无空格时整句作为一个词；多词时任一命中即召回）
-        let words: Vec<String> = q
-            .split_whitespace()
-            .filter(|w| !w.is_empty())
-            .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
-            .collect();
-        let match_words: Vec<String> = if words.is_empty() {
-            vec![format!("\"{}\"", q.replace('"', "\"\""))]
-        } else {
-            words
-        };
-        let match_expr = match_words.join(" OR ");
-        let (type_filter, type_filter_plain) = match entity_types {
-            Some(ts) if !ts.is_empty() => {
-                let quoted: Vec<String> = ts
-                    .iter()
-                    .map(|t| format!("'{}'", t.replace('\'', "")))
-                    .collect();
-                let list = quoted.join(",");
-                (
-                    format!(" AND si.entity_type IN ({list})"),
-                    format!(" AND entity_type IN ({list})"),
-                )
-            }
-            _ => (String::new(), String::new()),
-        };
+        let match_expr = build_match_expr(q);
+        let (type_filter, type_filter_plain) = type_filter_sql(entity_types);
         let sql = format!(
             "SELECT si.entity_type, si.entity_id, si.title, si.timestamp,
                     snippet(search_fts, 1, '«', '»', '…', 24) AS snip,
@@ -175,6 +228,154 @@ impl<'a> SearchRepository<'a> {
             });
         }
         // CJK fallback 同样过 memory 授权门（两路一致，§三）
+        out = self.filter_memory_hits(out, profile_id)?;
+        Ok(out)
+    }
+
+    /// GROUNDED LEARNING BRIDGE V1 · P1.4 —— 在**授权 revision 范围**内检索实体，
+    /// 把范围写进 `WHERE`，即在 `ORDER BY … LIMIT` **之前**收敛候选集。
+    ///
+    /// # 为什么必须有这个入口
+    ///
+    /// [`Self::search`] 的契约是「先取 top-k，由调用方按来源过滤」。当同一 profile 内
+    /// 存在 ≥k 条来自**别的来源**的高分命中时，目标来源的行根本进不了 top-k ——
+    /// 「按来源过滤」这一步于是永远看不到它。过滤发生在截断之后，等于没有过滤。
+    ///
+    /// # 为什么这不是第二个引擎
+    ///
+    /// 同一张 `search_fts` / `search_index`、同一个 `bm25(search_fts)` 排名函数、
+    /// 同一份 `build_match_expr` 匹配表达式、同一套 CJK `LIKE` 回退顺序。
+    /// 唯一的差别是 `WHERE` 里多了一个由既有 v042 结构表派生的授权范围。
+    /// 没有新表、没有新排名、没有内存重排。
+    ///
+    /// # fail closed
+    ///
+    /// `revision_ids` 为空 = **没有任何**授权 chunk，返回空集。
+    /// 这里**绝不**退化成「无范围检索」—— 那正是调用方试图避免的全库检索。
+    pub fn search_scoped_by_revisions(
+        &self,
+        profile_id: i64,
+        entity_type: &str,
+        query: &str,
+        revision_ids: &[i64],
+        limit: i64,
+    ) -> Result<Vec<SearchHit>, String> {
+        let q = query.trim();
+        if q.is_empty() || revision_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let match_expr = build_match_expr(q);
+        let limit = limit.clamp(1, 100);
+        // ?1 = MATCH / ?2 = profile / ?3 = entity_type，之后是授权范围，最后是 LIMIT。
+        const SCOPE_BASE: usize = 4;
+        let limit_idx = SCOPE_BASE + revision_ids.len();
+
+        let mut out: Vec<SearchHit> = Vec::new();
+
+        // ---- 1) FTS5 路径：范围先于 top-k ----
+        let sql = format!(
+            "SELECT si.entity_type, si.entity_id, si.title, si.timestamp,
+                    snippet(search_fts, 1, '«', '»', '…', 24) AS snip,
+                    bm25(search_fts) AS rank
+             FROM search_fts fts
+             JOIN search_index si ON si.rowid = fts.rowid
+             WHERE search_fts MATCH ?1 AND si.profile_id = ?2 AND si.entity_type = ?3{}
+             ORDER BY rank
+             LIMIT ?{limit_idx}",
+            revision_scope_fts(SCOPE_BASE, revision_ids)
+        );
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(match_expr),
+            Box::new(profile_id),
+            Box::new(entity_type.to_string()),
+        ];
+        for id in revision_ids {
+            binds.push(Box::new(*id));
+        }
+        binds.push(Box::new(limit));
+
+        {
+            let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(binds.iter().map(|b| b.as_ref())),
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                            r.get::<_, String>(4)?,
+                            r.get::<_, f64>(5)?,
+                        ))
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let (etype, eid, title, ts, snip, rank) = row.map_err(|e| e.to_string())?;
+                out.push(SearchHit {
+                    deep_link: deep_link_of(&etype, eid),
+                    entity_type: etype,
+                    entity_id: eid,
+                    title,
+                    snippet: snip,
+                    rank,
+                    timestamp: ts,
+                });
+            }
+        }
+
+        if !out.is_empty() {
+            out = self.filter_memory_hits(out, profile_id)?;
+            return Ok(out);
+        }
+
+        // ---- 2) CJK 回退：**同一个**授权范围，同样先于 ORDER BY / LIMIT ----
+        let like = format!("%{}%", q.replace('%', " ").replace('_', " "));
+        let sql2 = format!(
+            "SELECT si.entity_type, si.entity_id, si.title, si.timestamp FROM search_index si
+             WHERE si.profile_id = ?1 AND (si.title LIKE ?2 OR si.content LIKE ?2)
+               AND si.entity_type = ?3{}
+             ORDER BY si.entity_id DESC LIMIT ?{limit_idx}",
+            revision_scope_plain("si", SCOPE_BASE, revision_ids)
+        );
+        let mut binds2: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(profile_id),
+            Box::new(like),
+            Box::new(entity_type.to_string()),
+        ];
+        for id in revision_ids {
+            binds2.push(Box::new(*id));
+        }
+        binds2.push(Box::new(limit));
+
+        let mut stmt2 = self.conn.prepare(&sql2).map_err(|e| e.to_string())?;
+        let rows2 = stmt2
+            .query_map(
+                rusqlite::params_from_iter(binds2.iter().map(|b| b.as_ref())),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        for row in rows2 {
+            let (etype, eid, title, ts) = row.map_err(|e| e.to_string())?;
+            out.push(SearchHit {
+                snippet: title.chars().take(80).collect(),
+                rank: 100.0,
+                deep_link: deep_link_of(&etype, eid),
+                entity_type: etype,
+                entity_id: eid,
+                title,
+                timestamp: ts,
+            });
+        }
         out = self.filter_memory_hits(out, profile_id)?;
         Ok(out)
     }

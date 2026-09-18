@@ -247,9 +247,22 @@ fn build_query(
 
 /// §9.2 —— 调用**既有** Context Compiler，全部 cap 原样生效。
 ///
-/// 关键纪律：`source_ids` 被**显式限定**为「该 item 的 Ready 来源」。
+/// 关键纪律：检索的**授权范围先于 top-k**（§P1.4）。
+///
+/// `compile_document_context` 把 `source_ids` 交给既有 `ContextRequest`，
+/// 而 `compile()` 的 `filter_scope` 发生在 `take_top_k` 之前 —— 看起来是「先过滤」，
+/// 但它拿到手时 top-k **已经在检索层取完了**：当同一档案里存在 ≥20 条来自别的来源
+/// 的高分命中时，目标来源的 chunk 根本进不了那 20 条，于是「按来源过滤」永远
+/// 看不到它。过滤发生在截断之后，等于没有过滤。
+///
+/// 因此这里改用 [`retrieval::compile_document_context_scoped`]，把
+/// 「该 item 的 Ready revision 集合」下推到 `search_fts` / CJK `LIKE` 的 `WHERE`，
+/// 在 `LIMIT` 之前收敛候选集；同时**照旧**把 `source_ids` 传给既有
+/// `ContextRequest` 作为同一范围的第二道网。检索仍是既有 `SearchRepository`
+/// 的同一张表与同一个 `bm25()`，没有第二个引擎。
+///
 /// 当没有任何合格来源时，我们**不调用**检索层 —— 因为
-/// `compile_document_context` 把「空 `source_ids`」解释为「该档案内全部来源」，
+/// `compile_document_context` 系列把「空 `source_ids`」解释为「该档案内全部来源」，
 /// 那正是 §9.1 禁止的静默全库检索。
 pub fn compile_grounded_context(
     conn: &Connection,
@@ -275,8 +288,19 @@ pub fn compile_grounded_context(
     }
 
     let source_ids: Vec<String> = sources.iter().map(|s| s.source_id.to_string()).collect();
+    // 授权范围以 **Ready revision** 表达：同一来源可能存在更早（已废弃 / Deep 失败）
+    // 的 revision，它的 chunk 仍在索引里。按 revision 收敛可以保证接地材料
+    // 只来自**当前就绪**的那一版，而不是「这个来源历史上的任何一版」。
+    let revision_ids: Vec<i64> = sources.iter().map(|s| s.revision_id).collect();
     // semantic_enabled = false：词法路径完整可用，且**不引入**第二个向量库/ranker。
-    let pack = retrieval::compile_document_context(conn, profile_id, &query, &source_ids, false)?;
+    let pack = retrieval::compile_document_context_scoped(
+        conn,
+        profile_id,
+        &query,
+        &source_ids,
+        &revision_ids,
+        false,
+    )?;
     Ok(GroundedContext { sources, pack })
 }
 
