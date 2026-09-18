@@ -929,7 +929,7 @@ scoped fix are in §2.0. **STOP** — no further code was written beyond validat
 | Starting SHA (taskbook §0 pin) | `6ada2bdd…` — ancestor of the pack start, see §0.1 |
 | Starting SHA used (this pack) | `4b58dc8` `fix(release): unblock the release gate — point R10 at app/lifecycle.rs` |
 | Final **code** SHA | **`dbf7f6f`** `test(cognitive): add real-runtime grounding acceptance, repair stale ceiling gates` |
-| Final **ledger** commit | the commit carrying this §11 section — i.e. the true HEAD of `main` after it is written. It is committed immediately after `dbf7f6f`, so §20's "final local SHA" is that ledger commit; `dbf7f6f` is the last commit that changed product/test code. |
+| Final **ledger** commit | **`21680dd`** `docs(cognitive): record the grounded learning bridge closure report` — this is the true HEAD of `main` that §20's "final local SHA" refers to. `dbf7f6f` is the last commit that changed product/test code. A ledger commit cannot name its own SHA, so the exact value is recorded here by the follow-up commit (the same one-commit-later convention used for every wave's `docs(ledger): record WN commit sha …`). |
 | Pack commits | **16** |
 | Commits on `main` | yes — 16/16 on `main`, no branch created, history not squashed |
 | Push | **NOT PERFORMED** |
