@@ -114,21 +114,123 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ✅ DONE (a6a8ce2) |
 | W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | ✅ DONE (f361aa3) |
 | W7 | Close stale progress projection | `fix(progress): derive difficulty from real training blocks` | ✅ DONE (9531d58) |
-| W8 | Final validation + closure | `feat(cognitive): close grounded learning bridge v1` | ⏳ pending |
+| W8 | Final validation + closure | `feat(cognitive): close grounded learning bridge v1` | ⛔ **BLOCKED** — see §11 |
 
 ---
 
 ## §2 — HARD BLOCKERS ENCOUNTERED
 
-**None.** Every wave completed without hitting a hard blocker.
+**ONE hard blocker, found by W8's final validation.**
+
+### 2.0 HB-1 — the grounded-material WRITE path has no production caller
+
+The whole read side of the bridge exists and is wired; the **write** side exists only as an
+API and is **never called by the application**. Therefore the Owner scenario in §16 and the
+required proof chain in §15 cannot be satisfied by the product — only by tests.
+
+| Symbol | Where it lives | Production callers |
+|---|---|---|
+| `compile_grounded_material` | `training/grounding.rs:511` | **NONE** (only re-export `training/mod.rs:44`) |
+| `compile_grounded_context` | `training/grounding.rs:254` | **NONE** (only re-export) |
+| `eligible_ready_sources` | `training/grounding.rs:157` | **NONE** (only re-export) |
+| `material_availability` | `training/grounding.rs:562` | **NONE** (only re-export) |
+| `protocol_satisfiable` / `select_satisfiable_protocols` | `training/grounding.rs:116/128` | **NONE** (only re-export) |
+| `save_material_snapshot` | `training/grounded_material.rs:72` | **NONE** (only re-export `training/mod.rs:40`) |
+| `save_material_snapshot` — only writer of | `training_block_runs.material_snapshot_json` | **NONE** |
+| `load_material_snapshot` | `training/grounded_material.rs:120` | ✅ `commands/training.rs:311` |
+
+Reproduce (evidence, not opinion):
+
+```bash
+# 1) the only writer has no caller
+grep -rn "save_material_snapshot" src-tauri/src/
+#    → training/mod.rs:40 (re-export)   training/grounded_material.rs (definition)
+#    → nothing else. No command, no orchestrator, no composer.
+
+# 2) the compiler has no caller
+grep -rn "compile_grounded_material" src-tauri/src/ | grep -v "grounding.rs:"
+#    → training/mod.rs:44 (re-export)  ... and nothing else.
+
+# 3) the Session Composer never consults material capability
+grep -n "material\|grounded" src-tauri/src/cognitive/session_composer.rs
+#    → (no output)
+
+# 4) the production entry for "按我的状态安排" does not ground
+grep -n "material" src-tauri/src/training/runtime.rs src-tauri/src/training/start.rs
+#    → runtime.rs:323 is the word "materialize" in a comment. Nothing else.
+```
+
+`create_training_run_for_item` → `start_training_for_item` → `create_training_run`:
+no grounding step, no snapshot write. So every block run ships with
+`material_snapshot_json = NULL`, `get_block_grounded_material` always returns
+`material: null`, and all 8 grounded experiences render their honest "unavailable" state.
+
+**What this breaks, quoted from the taskbook:**
+
+- §15 required proof chain — `→ grounded material snapshot → TrainingRun → TrainingExperience reads that snapshot` cannot be produced by the app.
+- §16 step 9 — "At least the grounded-safe training protocols receive real source context" is not satisfied.
+- §16 closing sentence — "Higher can actually learn from the user's own material" is not reached end-to-end.
+- §9.5 — "Session Composer may choose only protocols whose required material can be satisfied": the policy is built and unit-tested but never consulted.
+- §13 — this pack's stated closures `grounded material bridge` and `real-material training experiences` are therefore **not** closed.
+
+**Why W8 did not simply implement it.** The missing piece is not a bug fix; it is a
+*deferred integration decision that earlier waves logged on purpose* — W4 §7.3 decision 4
+records "policy only — `session_composer.rs` untouched", and W5 §8.3 records that an
+ungrounded block renders unavailable. Wiring it now would add a new capability
+(grounding + snapshot persistence at run creation) and change protocol selection at
+`start_training_for_item` — i.e. new product behaviour authored inside the *validation*
+wave, without an explicit instruction, and with no wave-level test mandate. Per the standing
+discipline ("failure immediately blocks scope expansion"; do not author code to hide a gap)
+that is the Owner's call, not W8's. It is reported here with the exact fix scoped below.
+
+**Suggested minimal fix for the Owner to authorize (not performed):**
+
+```text
+1. training/start.rs  — after create_training_run succeeds, for each non-break block run:
+     a. compile_grounded_material(conn, &GroundingRequest{ profile_id, learning_item_id,
+        protocol, block_goal: &block.goal, mode }, ai_provider_or_None)
+     b. save_material_snapshot(conn, profile_id, block_run.id, &material)
+   …and only then commit / return. Must stay atomic: a snapshot failure must not leave
+   RUNNING-but-ungrounded blocks silently (or must be an explicit, honest unavailable snapshot).
+2. cognitive/session_composer.rs — consult material_availability() +
+   select_satisfiable_protocols() for AUTOPILOT/COPILOT so §9.5 stops being dead policy.
+3. tests — extend grounded_training_grounding / groundedTrainingExperience with a
+   "production entry grounds the blocks" assertion, and add the same assertion to
+   grounded_learning_bridge_realtime.rs (currently it proves the capability, not the wiring).
+```
+
+Until (1) lands, `GROUNDING BRIDGE V1` cannot be declared COMPLETE: the bridge is built on
+both sides but not joined.
 
 ### 2.1 Non-blocking baseline findings (NOT introduced by this task)
 
-**(a) Stale historical `latest_version()` assertions in 6 legacy test binaries.**
-These files were last touched in the v034 era and assert a frozen historical migration ceiling;
-they were already false before this task began (at the W2 baseline `latest_version()` was 42, not
-36/35). Registered, **not fixed** — they are outside the taskbook's named regression groups
-(document / training / PACK A / O2), and editing 6 unrelated legacy files would be scope creep.
+**(a) Stale historical `latest_version()` assertions — 6 legacy binaries + 1 PACK A gate (found by W8).**
+These files assert a frozen historical migration ceiling; they were already false before this task
+began. For the 6 legacy files: they were last touched in the v034 era (at the W2 baseline
+`latest_version()` was 42, not 36/35). Registered, **not fixed** — they are outside the taskbook's
+named regression groups (document / training / PACK A / O2), and editing 6 unrelated legacy files
+would be scope creep.
+
+The 7th entry (`real_learning_engine_intent`) is **different in kind and is called out
+deliberately**: it *is* inside a §14-named regression group, so the "outside the named groups"
+rationale does not cover it. It is still **not fixed**, for two reasons: (i) it was already red at
+this pack's baseline, so this pack introduces no regression there, and the standing rule is to
+register — not silently repair — pre-existing baseline breakage; (ii) repairing it is a 3-line edit
+that the Owner should authorize explicitly. Proven pre-existing:
+
+```bash
+git show 398f3cd:src-tauri/src/migrations/mod.rs | grep -n v042_document_ingestion
+#   → 49: pub mod v042_document_ingestion;     282: up: v042_document_ingestion::up
+git show 398f3cd:src-tauri/tests/real_learning_engine_intent.rs | sed -n '100,117p'
+#   → assert!(latest <= 41, "PACK A 不得创建 v042+ …")
+#   i.e. at the pack's own starting commit the gate already read <=41 while latest was 42.
+```
+
+Exact observed failure (W8): `panicked at tests\real_learning_engine_intent.rs:109:5:
+PACK A 不得创建 v042+（v042 document_ingestion 属于 PACK B / W5）；当前最大 v43`.
+Note that `<= 41` would already reject `42`, so **W3's v043 did not cause this** — it was red before
+W3 existed. The suggested (unauthorized, not performed) repair is the same ceiling move already
+sanctioned by D1 for the identical assertion: `<= 41` → `== 43` with the "no v044+" wording.
 
 | Test fn | File | Asserts | Actual now | Verdict |
 |---|---|---|---|---|
@@ -138,6 +240,7 @@ they were already false before this task began (at the W2 baseline `latest_versi
 | `mig01_v034_is_registered_and_applied` | `companion_world.rs:889` | 36 | 43 | pre-existing failure |
 | `migration_v031_creates_canvas_tables` | `product2_knowledge_canvas.rs:68` | 36 | 43 | pre-existing failure |
 | `migration_v030_creates_intake_table` | `product2_planning_intake.rs:47` | 36 | 43 | pre-existing failure |
+| `v039_migration_registered_and_table_exists` | `real_learning_engine_intent.rs:109` | ≤ 41 | 43 | **pre-existing failure** (in a §14-named group — flagged for Owner) |
 
 Empirical evidence (captured 2026-09-18): each fails with `left: 43, right: 36` (or `35`) — the
 mismatch is against the *historical* pin, and `43` is only reachable *after* W3. The failure cause
@@ -801,6 +904,234 @@ of relative to `now` — that is a test-harness change and should be its own exp
 
 **Totals:** 155/157 targeted Rust tests green (2 = the §10.6 pre-existing time-of-day flake);
 183/183 product-UI tests green (179 after W6 + 4 new).
+
+---
+
+## §11 — W8 FINAL VALIDATION + CLOSURE (taskbook §13 / §14 / §15 / §16 / §19 / §20)
+
+### VERDICT
+
+```text
+GROUNDING BRIDGE V1 = BLOCKED
+```
+
+One hard blocker: **§2.0 HB-1** — the grounded-material **write** path has no production
+caller, so the §15 required proof chain and §16 step 9 cannot be satisfied by the product.
+Everything else in this pack validates green. Exact blocker, evidence commands, and the
+scoped fix are in §2.0. **STOP** — no further code was written beyond validation (§21).
+
+### 11.1 Repository state
+
+| Item | Value |
+|---|---|
+| Required branch | `main` |
+| Actual branch | `main` ✅ |
+| Starting SHA (taskbook §0 pin) | `6ada2bdd…` — ancestor of the pack start, see §0.1 |
+| Starting SHA used (this pack) | `4b58dc8` `fix(release): unblock the release gate — point R10 at app/lifecycle.rs` |
+| Final **code** SHA | **`dbf7f6f`** `test(cognitive): add real-runtime grounding acceptance, repair stale ceiling gates` |
+| Final **ledger** commit | the commit carrying this §11 section — i.e. the true HEAD of `main` after it is written. It is committed immediately after `dbf7f6f`, so §20's "final local SHA" is that ledger commit; `dbf7f6f` is the last commit that changed product/test code. |
+| Pack commits | **16** |
+| Commits on `main` | yes — 16/16 on `main`, no branch created, history not squashed |
+| Push | **NOT PERFORMED** |
+
+### 11.2 All commits (oldest → newest, `4b58dc8..dbf7f6f`)
+
+| # | SHA | Subject |
+|---|---|---|
+| 1 | `398f3cd` | `docs(cognitive): start grounded learning bridge execution` |
+| 2 | `27bd036` | `fix(document): release db lock during document parsing` (W1) |
+| 3 | `7fbe589` | `feat(document): expose learning material ingestion in knowledge` (W2) |
+| 4 | `680a19e` | `docs(ledger): record W2 commit sha 7fbe589` |
+| 5 | `462d4fa` | `feat(training): persist grounded material snapshots` (W3) |
+| 6 | `25d9488` | `docs(ledger): record W3 commit sha 462d4fa` |
+| 7 | `ea9137c` | `feat(training): ground training blocks in real learning material` (W4) |
+| 8 | `710dc50` | `docs(ledger): record W4 commit sha ea9137c` |
+| 9 | `a6a8ce2` | `feat(training): render grounded specialized learning experiences` (W5) |
+| 10 | `4049dcd` | `docs(ledger): record W5 commit sha a6a8ce2` |
+| 11 | `f361aa3` | `fix(training): resume structured learning through training runtime` (W6) |
+| 12 | `43490d3` | `docs(ledger): record W6 commit sha f361aa3` |
+| 13 | `9531d58` | `fix(progress): derive difficulty from real training blocks` (W7) |
+| 14 | `708286d` | `docs(ledger): record W7 commit sha 9531d58` |
+| 15 | `dbf7f6f` | `test(cognitive): add real-runtime grounding acceptance, repair stale ceiling gates` (W8) |
+
+**Not created, on purpose:** the taskbook §19 checkpoint
+`feat(cognitive): close grounded learning bridge v1`. Committing a "close" message while
+the pack is BLOCKED would be an overclaim; §19's checkpoint list is "recommended", and §20
+prescribes the BLOCKED path instead. Nothing was squashed.
+
+### 11.3 All changed files
+
+**72 files — 35 added, 37 modified (+8286 / −279)** across `4b58dc8..dbf7f6f`.
+
+`src-tauri/src/` — **M** `app/builder.rs`, `cognitive/progress_projection.rs`,
+`commands/document.rs`, `commands/training.rs`, `document_intelligence/ingestion.rs`,
+`document_intelligence/mod.rs`, `ipc/dto.rs`, `learning_state/{next_action,pack,state,types}.rs`,
+`migrations/mod.rs`, `repository/document_ingestion.rs`, `training/{mod,runtime}.rs`;
+**A** `migrations/v043_grounded_training_material.rs`, `training/grounded_material.rs`,
+`training/grounding.rs`.
+
+`src-tauri/tests/` — **A** `document_ingestion_lock.rs`, `document_knowledge_surface.rs`,
+`grounded_learning_bridge_realtime.rs`, `grounded_training_grounding.rs`,
+`grounded_training_material.rs`, `grounded_training_progress.rs`, `grounded_training_routing.rs`;
+**M** `document_intelligence.rs`, `real_learning_engine_document_foundation.rs`,
+`real_learning_engine_pack_a_audit.rs`.
+
+Frontend — **A** `src/components/LearningMaterialPanel.tsx`,
+`src/generated/{BlockAdvanceIntent,BlockAdvanceOutcome,BlockCompletionState,BlockProgression,CompletionRuleKind,ContextCandidate,ContextPack,DocumentChunkRow,DocumentRuntimeStatus,DocumentSectionRow,DocumentSourceRow,DocumentSourceView,DocumentStructureView,GeneratedBy,GroundedMaterialRef,GroundedMaterialView,GroundedProvenanceLabel,GroundedTrainingMaterial,IngestionJobRow,IngestionOutcome,MaterialStatus}.ts`,
+`tests/product-ui/groundedTrainingExperience.test.tsx`, `tests/product-ui/groundedTrainingRouting.test.tsx`;
+**M** `src/api.ts`, `src/types.ts`, `src/query/keys.ts`, `src/pages/{CognitiveProgress,Knowledge,Today,TrainingExperience}.tsx`,
+`src/generated/TrainingSessionView.ts`, 8 × `src/components/training/*Experience.tsx`,
+`src/components/training/ExperienceParts.tsx`, `src/components/training/experienceTypes.ts`,
+`tests/product-ui/cognitiveProgress.test.tsx`.
+
+Ledger — **A** `.higher/GROUNDED_LEARNING_BRIDGE_V1_PROGRESS.md`.
+
+`dist/` **untouched** (no bundle rebuild in this pack).
+
+### 11.4 Migration
+
+| Item | Value |
+|---|---|
+| v043 status | **registered and applied** — `migrations/mod.rs` `Migration { version: 43, name: "grounded_training_material" }` |
+| v043 effect | `ALTER TABLE training_block_runs ADD COLUMN material_snapshot_json TEXT NULL` — nothing else; no ID renames, no historical row rewritten |
+| `latest_version()` | **43** (`MIGRATIONS.last()`) |
+| Unauthorized ceiling | none — no `v044+` file and no `v044+` ledger entry (A27 / O2-21) |
+| Old rows | backfilled naturally as **NULL** (GB-MAT-01) |
+
+### 11.5 W0..W8 status
+
+| Wave | Subject | Commit | Status |
+|---|---|---|---|
+| W0 | Baseline + reuse audit + ledger | `398f3cd` | ✅ DONE |
+| W1 | O2 DB lock correctness | `27bd036` | ✅ DONE |
+| W2 | Document intelligence product-reachable | `7fbe589` | ✅ DONE |
+| W3 | Grounded material snapshot (V043) | `462d4fa` | ✅ DONE |
+| W4 | Grounding compiler | `ea9137c` | ✅ DONE *(compiler built + unit-proven; **not wired** — HB-1)* |
+| W5 | 8 specialized experiences use real material | `a6a8ce2` | ✅ DONE *(read side only — HB-1)* |
+| W6 | Unify training continuation routing | `f361aa3` | ✅ DONE |
+| W7 | Close stale progress projection | `9531d58` | ✅ DONE |
+| W8 | Final validation + closure | `dbf7f6f` | ⛔ **BLOCKED** (HB-1) |
+
+### 11.6 §14 required final test matrix — results
+
+Run sequentially with `CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1`, `--no-fail-fast`,
+never in parallel with the Node suites.
+
+| §14 required group | Suite | Result |
+|---|---|---|
+| document ingestion lifecycle | `document_ingestion_lock` | ✅ 8/8 |
+| document ingestion lifecycle | `real_learning_engine_document_foundation` | ✅ **25/25** (real Docling, 158–227 s) |
+| document runtime / parser | `document_intelligence` | ✅ 27/27 |
+| document retrieval / context compiler | `document_knowledge_surface` | ✅ 9/9 |
+| training runtime | `real_learning_engine_training` | ✅ 38/38 |
+| training runtime | `real_learning_engine_start` | ✅ 10/10 |
+| training runtime | `real_learning_engine_completion` | ✅ 21/21 |
+| training runtime | `real_learning_engine_v041_conflict` | ✅ 3/3 |
+| **PACK A audit / regression** | `real_learning_engine_pack_a_audit` | ✅ **32/32** (after the W8 A27/A28 repair) |
+| PACK A regression | `real_learning_engine_domain` | ✅ 17/17 |
+| PACK A regression | `real_learning_engine_intent` | ⚠️ 19/20 — pre-existing stale ceiling gate, §2.1(a) |
+| PACK A regression | `learner_model_v2` | ✅ 9/9 |
+| PACK A regression | `today_coach_v1` | ✅ 6/6 |
+| grounding | `grounded_training_grounding` | ✅ 9/9 |
+| grounding | `grounded_training_material` | ✅ 5/5 |
+| grounding | `grounded_training_routing` | ✅ 8/8 |
+| progress projection | `grounded_training_progress` | ✅ 11/11 |
+| progress projection | `review_progress` | ✅ 6/6 |
+| learner model | `learner_model_v2` | ✅ (see above) |
+| memory engine | `memory_engine_v1` | ✅ 11/11 |
+| Today coach | `today_coach_v1` | ✅ (see above) |
+| decision | `cognitive_decision_v2` | ✅ 16/16 |
+| friction | `learning_friction` | ✅ 9/9 |
+| closed loop | `closed_loop_core` | ✅ **23/23** (re-run at `00:25:31` UTC+8 — inside-window run is 21/23, §10.6) |
+| **§15 acceptance (NEW)** | `grounded_learning_bridge_realtime` | ✅ **2/2** (real Docling, 44.6 s) |
+
+**Totals:** 23 suites, **325 tests → 324 passed / 1 failed**. The only failure is the
+pre-existing `real_learning_engine_intent` ceiling gate (§2.1(a)), which was already red at
+this pack's starting commit.
+
+`closed_loop_core` deserves the explicit time note: run at `00:16` (inside the documented
+`00:00–00:25` UTC+8 window) it reports 21/23; run at `00:25:31` it reports **23/23**. That is
+the §10.6 pre-existing fixture defect (a backdated `started_at` that lands on the previous
+local day), unrelated to any wave.
+
+### 11.7 §15 real runtime acceptance
+
+**Runtime status:** installed and found.
+`%LOCALAPPDATA%\Higher\runtimes\docling-2.73.0-o2\Scripts\python.exe` (~1.1 GB,
+`docling==2.73.0`), with its Hugging Face cache populated
+(`.hf-cache/hub/`: `models--docling-project--docling-layout-heron`,
+`models--docling-project--docling-models`) — so the run is offline and reproducible.
+The pre-existing `runtimes\docling\` was left **completely untouched** (read-only reuse).
+
+**Real fixture used:** a real single-page **PDF**, built in-test with the same hand-constructed
+xref recipe as `.higher/make_pdf.py` (non-sensitive biology text: "…the mitochondrion is the
+powerhouse of the cell…"). Format = PDF, i.e. the format §16 step 2 names first.
+
+| §15 required proof step | Real observed result |
+|---|---|
+| attachment → document source | real `learning_attachments` row → `create_source(...)` |
+| ingestion **Ready** | ✅ `state=Ready` |
+| sections / chunks > 0 | ✅ `chunks=2`, `sections=3` (both > 0; parser identity `Some("docling")`) |
+| ContextPack | ✅ `sources=1`, `candidates>0`, `total_text_chars>0` |
+| grounded material snapshot | ✅ `status=Ready`, `generated_by=deterministic`, `provenance=1`, `source_excerpt` non-empty — every provenance pointer re-verified against real `document_chunks` / `document_sources` rows |
+| TrainingRun | ✅ real run created (`run=1`, `block=1`), snapshot written, **read back byte-identical**, and cross-profile reads return `None` |
+| TrainingExperience reads that snapshot | ✅ the read command chain is wired and returns the snapshot **for a run the test grounded itself** |
+| **…via the production entry point** | ❌ **NOT REPEATABLE** — `start_training_for_item` never grounds; see §2.0 HB-1 |
+
+Evidence line (verbatim from the passing run):
+
+```text
+RT-01 real parse: state=Ready chunks=2 sections=3 parser=Some("docling")
+RT-02 ok: run=1 block=1 status=Ready provenance=1 vs the real parse
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.55s
+```
+
+Also asserted: ingestion and grounding produce **zero** `learning_moments` and **zero**
+`memory_reviews` (§8.3 evidence boundary) — a document is never "learning".
+
+**AI-rich material:** none was used and none was needed. §9.4 is a MAY; with no provider
+configured the deterministic grounded base is fully functional (that is what RT-01 exercises).
+
+### 11.8 Hygiene gates
+
+| Gate | Command | Result |
+|---|---|---|
+| lib compile | `CARGO_BUILD_JOBS=1 cargo check --lib -j 1` | ✅ **0 errors**, 34 warnings (baseline count, unchanged) |
+| TypeScript | `npx tsc --noEmit` | ✅ **0 errors** |
+| product UI | `npm run test:product-ui` | ✅ **183/183** (11 files) |
+| `cargo fmt --check` baseline comparison | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | ✅ **exactly the 3 known baseline reds** — `src/ai/secret_migration.rs`, `src/commands/agent.rs`, `tests/secret_store_cutover.rs`. **This pack had left 6 further files red and W8 discharged them** (all six were fmt-clean at the pack's baseline, so the debt was this pack's own). |
+| `git diff --check` | `git diff --check` | ✅ clean |
+| `git status --short` | — | ✅ only the 4 protected untracked dirs (below); working tree otherwise clean |
+
+`cargo fmt` debt discharged in `dbf7f6f` (formatting only, no behaviour change, all affected
+suites re-run green afterwards): `src/document_intelligence/ingestion.rs`, `src/ipc/dto.rs`,
+`src/training/grounding.rs`, `tests/document_ingestion_lock.rs`, `tests/document_intelligence.rs`,
+`tests/grounded_training_grounding.rs`.
+
+### 11.9 Protected directories — untouched
+
+```text
+.git_broken3/  .git_pack_rescue/  .w9_check/  .workbuddy-ai/
+```
+
+All four remain untracked and unmodified; nothing was written, moved, or deleted inside them.
+No `git reset` / `restore` / `clean` / `stash` / `checkout` / `rebase` was executed at any
+point in this pack.
+
+### 11.10 What W8 did NOT do (§21 compliance)
+
+No Companion ambient redesign, no Knowledge growth visualization, no manual mastery migration,
+no llama.cpp process manager, no model marketplace, no new pages, no gamification, no follow-on
+PACK. The HB-1 wiring was **scoped and documented, not implemented** (§2.0) — it needs an
+explicit Owner decision, and the pack STOPS here.
+
+### 11.11 Required next action
+
+HB-1 is the single thing standing between this pack and COMPLETE. The minimal, already-scoped
+fix is §2.0. The Owner also has one small decision queued from §2.1(a): whether to extend the
+D1 ceiling repair to `real_learning_engine_intent.rs` (3 lines) so that every §14-named
+regression group can be green.
+
 
 
 
