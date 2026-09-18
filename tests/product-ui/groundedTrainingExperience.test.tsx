@@ -519,3 +519,133 @@ describe("§10.9 通用兜底", () => {
     expect(componentNameForProtocol(null)).toBe("GenericGuidedExperience");
   });
 });
+
+// ============================ P3 · OM-P3-10（UI 半边） ============================
+
+/**
+ * GROUNDED LEARNING BRIDGE V1 · P3 —— 八个专项体验的**渲染零副作用**。
+ *
+ * Rust 侧已经用生产入口证明了「渲染 / 查看不产生学习证据」
+ * （`src-tauri/tests/grounded_specialized_experiences.rs` 的 OM-P3-10）：
+ * 零 LearningMoment、零 MemoryReview、零 FSRS 推进。
+ *
+ * 这一节补上 UI 侧**唯一可被验证**的那一半，也是唯一能在这层证伪的一半：
+ *
+ * ```text
+ * 渲染本身**一次提交都不能发**。
+ * 任何「看一眼就写了一条事实」的实现，都会在这里当场失败 ——
+ * 因为提交是这个客户端唯一能产生学习事实的出口。
+ * ```
+ *
+ * 之所以要按**八个协议**各测一次：`TrainingExperienceDispatch` 的分发表是
+ * 八条独立分支，只测其中一条等于只测了那一条。
+ */
+describe("§13 P3 —— 八个专项的渲染零副作用", () => {
+  /** 生产写出的 Unavailable 快照的**精确形态**（见 Rust 侧 OM-P3/OM-P1-08）。 */
+  const unavailableMaterial = (protocolId: string): GroundedTrainingMaterial => ({
+    version: 1,
+    status: "unavailable",
+    protocol_id: protocolId,
+    prompt_text: null,
+    cue_text: null,
+    source_excerpt: null,
+    reference_text: null,
+    worked_steps: [],
+    hidden_step_index: null,
+    practice_prompt: null,
+    transfer_prompt: null,
+    generated_by: "none",
+    provenance: [],
+    unavailable_reason: "no ready document source is bound to this learning item",
+  });
+
+  /** 任何「真实材料内容」的呈现面。Unavailable 时**一个都不该出现**。 */
+  const MATERIAL_SURFACES = [
+    "hc-train-reveal-reference",
+    "hc-train-revealed-excerpt",
+    "hc-train-revealed-reference",
+    "hc-train-worked-prompt",
+    "hc-train-worked-steps",
+    "hc-train-hidden-step",
+    "hc-train-cue",
+    "hc-train-practice-prompt",
+    "hc-train-transfer-scenario",
+    "hc-train-transfer-concept-source",
+    "hc-train-error-reference",
+    "hc-train-prior-error",
+    "hc-train-material-origin",
+    "hc-train-provenance",
+  ];
+
+  it("OM-P3-10：八个专项渲染时都不产生任何提交", () => {
+    for (const protocol of SPECIALIZED_PROTOCOLS) {
+      const submit = vi.fn();
+      const { unmount } = render(
+        <TrainingExperienceDispatch
+          {...props({
+            block: makeBlock({ protocol_id: protocol }),
+            material: makeMaterial({ protocol_id: protocol }),
+            provenanceLabels: LABELS,
+            submit,
+          })}
+        />,
+      );
+
+      expect(
+        submit,
+        `${protocol}：渲染一次就发出了提交 —— 渲染不得产生任何学习事实`,
+      ).not.toHaveBeenCalled();
+
+      unmount();
+    }
+  });
+
+  it("OM-P3-10b：生产形态的 Unavailable 快照在八个专项里都如实呈现，且不伪造内容", () => {
+    for (const protocol of SPECIALIZED_PROTOCOLS) {
+      const submit = vi.fn();
+      const { unmount } = render(
+        <TrainingExperienceDispatch
+          {...props({
+            block: makeBlock({ protocol_id: protocol }),
+            material: unavailableMaterial(protocol),
+            provenanceLabels: [],
+            submit,
+          })}
+        />,
+      );
+
+      for (const testId of MATERIAL_SURFACES) {
+        expect(
+          screen.queryByTestId(testId),
+          `${protocol}：材料不可用时不得出现 ${testId}（不伪造任何内容面）`,
+        ).toBeNull();
+      }
+      expect(submit, `${protocol}：不可用状态下的渲染同样不得提交`).not.toHaveBeenCalled();
+
+      unmount();
+    }
+  });
+
+  it("OM-P3-10c：材料不可用时也不许「编造一份」—— DOM 里不得出现材料正文", () => {
+    // 用真实正文当探针：任何一条被渲染出来都说明有人在拿别的来源凑内容。
+    const probes = [EXCERPT, REFERENCE];
+    for (const protocol of SPECIALIZED_PROTOCOLS) {
+      const { unmount } = render(
+        <TrainingExperienceDispatch
+          {...props({
+            block: makeBlock({ protocol_id: protocol }),
+            material: unavailableMaterial(protocol),
+          })}
+        />,
+      );
+      const text = document.body.textContent ?? "";
+      for (const probe of probes) {
+        expect(
+          text,
+          `${protocol}：材料不可用时 DOM 里出现了材料正文，说明内容被凭空补上了`,
+        ).not.toContain(probe);
+      }
+      unmount();
+    }
+  });
+});
