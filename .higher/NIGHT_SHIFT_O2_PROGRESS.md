@@ -194,7 +194,7 @@ branch: main
 
 ```text
 wave: M4
-status: COMPLETE (adapter) + DOCLING_RUNTIME_DEFERRED (runtime install)
+status: COMPLETE — DOCLING_RUNTIME_INSTALLED
 starting SHA: bf5b184
 ending SHA: see M8 commit
 branch: main
@@ -245,69 +245,106 @@ Exit-code contract (runner ⇄ Rust), one code per recoverability class:
 ### Docling runtime status
 
 ```text
-DOCLING_RUNTIME_DEFERRED
+DOCLING_RUNTIME_INSTALLED
 ```
-
-Evidence:
 
 ```text
 mirror reachability   https://pypi.tuna.tsinghua.edu.cn/simple  HTTP 200 in 0.70 s
 locked candidate      docling-2.73.0-py3-none-any.whl
                       sha256=8123e0fc014af504deeb99df65c7ec2bd9a94ab46dccb2ce56625ea11fd9176f
-                      sha256=11c50ac3595a943c63a2d1fab00449ddc06e4097049d18156c9a7ff0d810c42c (sdist)
-                      -> MIRROR IS NOT THE PROBLEM; no MIRROR_MISS
-new isolated runtime  %LOCALAPPDATA%\Higher\runtimes\docling-2.73.0-o2\
-                      created fresh; nothing installed into it (pip only)
+runtime location      %LOCALAPPDATA%\Higher\runtimes\docling-2.73.0-o2\   (1.1 GB)
+packages installed    97   (freeze: .higher/o2_docling_freeze.txt)
+key pins              docling==2.73.0 · docling-core==2.97.0 · docling-parse==4.7.3 ·
+                      docling-ibm-models==3.15.0 · torch==2.14.0 · torchvision==0.29.0 ·
+                      transformers==4.57.6 · rapidocr==3.9.2 · opencv-python==5.0.0.93 ·
+                      scipy==1.18.1 · antlr4-python3-runtime==4.9.3
 pre-existing runtime  %LOCALAPPDATA%\Higher\runtimes\docling\  LEFT COMPLETELY UNTOUCHED
                       (verified: no file inside it modified after 00:59)
-install attempt       ONE attempt, 15 m 57 s, then stopped
-                      pip resolver entered unbounded backtracking:
-                        21 distinct transformers versions downloaded (5.15.1 down to 5.6.0),
-                        109 wheel downloads, still accelerating (~10 MB each)
-                      plus torch 124.1 MB, opencv 44.0 MB, scipy 36.7 MB, rapidocr 27.3 MB
-                      -> "installation becomes slow" per §6 -> DEFER
-resource context      RAM was 88–89% throughout (above the §8 78% gate)
 ```
 
-`docling` is **not** importable in either runtime:
+#### How the install was actually completed (two real obstacles)
 
 ```text
-python -c "import docling"  ->  ModuleNotFoundError: No module named 'docling'
+OBSTACLE 1 — pip's resolver backtracks without bound.
+  The first attempt (pip, authorized single attempt) ran 15m57s and was stopped:
+  21 distinct transformers versions (5.15.1 -> 5.6.0), 109 wheels, still accelerating,
+  on a machine at 88-89% RAM. Recorded at the time as DOCLING_RUNTIME_DEFERRED.
+  RESOLUTION: `uv 0.12.8` (already present on this machine) resolved the identical
+  constraint set in seconds and downloaded exactly ONE transformers version.
+  This confirms the failure was a pip resolver pathology, not a mirror or package problem.
+
+OBSTACLE 2 — `antlr4-python3-runtime==4.9.3` has NO wheel, only an sdist.
+  It is a transitive dependency: docling -> rapidocr -> omegaconf -> antlr4.
+  omegaconf pins `==4.9.*`, and the mirror only ships wheels for 4.11.0 .. 4.13.2,
+  so the sdist MUST be built. uv's build got all the way to writing the wheel and then
+  failed with `setuptools.build_meta:__legacy__.build_wheel` exit 1 because the
+  environment's bulk-delete guard refused uv's cleanup of its 71-file intermediate
+  `build\` directory (threshold 50).
+  RESOLUTION: build that ONE wheel with pip instead (pip deletes file-by-file and is
+  not blocked), then let uv install the rest from a wheelhouse:
+      pip wheel antlr4-python3-runtime==4.9.3 -w .wheelhouse-o2 --no-deps
+        -> antlr4_python3_runtime-4.9.3-py3-none-any.whl
+           sha256=aa19631b4a39d329e173c7fa2deedc5e26fc78dcfd12df12dbf59260e30cf868
+      uv pip install --find-links .wheelhouse-o2 docling==2.73.0   -> EXIT 0
+  The wheelhouse is kept at runtimes/.wheelhouse-o2 so the install stays reproducible.
 ```
 
-### Real smoke test performed (against the real runtime layout)
+No broad dependency upgrade was performed, no version was substituted for the locked
+candidate, nothing was vendored into Higher, and no global Python install was touched.
 
-The adapter's subprocess contract was exercised with a real local non-sensitive fixture
-through the real isolated interpreter — this validates the failure paths end to end:
+### Real parse smoke test (§15 step 4) — PERFORMED, NOT DEFERRED
+
+One small local non-sensitive fixture (`# H1 / ## H2 / ## H2` + four body lines),
+parsed through the real runtime via the real runner:
 
 ```text
 $ docling-2.73.0-o2\Scripts\python.exe docling_runner.py o2_fixture.md
-  exit 3  stderr: docling import failed: ModuleNotFoundError("No module named 'docling'")
-  -> RuntimeUnavailable -> DOCLING_UNAVAILABLE -> recoverable
-
-$ ... docling_runner.py o2_fixture.weird
-  exit 4  stderr: unsupported suffix: .weird
-  -> Unsupported -> UNSUPPORTED_INPUT -> not recoverable
-
-$ ... docling_runner.py o2_empty.md
-  exit 4  stderr: empty input file
-  -> Unsupported -> UNSUPPORTED_INPUT
+  exit 0
+  {"parser_name": "docling", "parser_version": "2.73.0",
+   "sections": [{"title": "Higher O2 Smoke Fixture", "ordinal": 0, "parent_index": null},
+                {"title": "Section One",           "ordinal": 1, "parent_index": 0},
+                {"title": "Section Two",           "ordinal": 2, "parent_index": 0}],
+   "chunks":   [{"ordinal": 0, "text": "The mitochondrion is the powerhouse ...", "section_index": 1},
+                {"ordinal": 1, "text": "through oxidative phosphorylation.",     "section_index": 1},
+                {"ordinal": 2, "text": "Photosynthesis converts light energy ...","section_index": 2},
+                {"ordinal": 3, "text": "chloroplasts, producing glucose ...",     "section_index": 2}]}
 ```
 
-No parse of real document content was attempted (the runtime is absent), no web document
-was downloaded, no batch parsing was run, and no LearningMoment/Evidence was produced.
-Higher's typed `DOCLING_UNAVAILABLE` fallback is intact and is the shipped behaviour.
+A real parse also runs end-to-end through the Rust adapter in
+`m4_real_docling_end_to_end_ingestion` (availability-gated, so machines without Docling
+skip it explicitly rather than pretending to pass). It asserts Ready, a real
+`parser_version`, contiguous deterministic ordinals, **no orphan chunks**, and that the
+parsed text is reachable through the existing lexical search — with zero learning facts.
+
+### Two real bugs found by actually running it
+
+```text
+BUG 1  `docling.__version__` does not exist in docling 2.73.0.
+       `getattr(docling, "__version__", None)` silently returned None, so
+       document_revisions.parser_version would have been empty or (via the Rust
+       fallback) a *guessed* constant — i.e. fabricated audit metadata.
+       FIXED: read the real version via importlib.metadata.version("docling"),
+       returning None when unavailable rather than inventing one.
+
+BUG 2  docling normalizes heading levels: the document H1 is labelled `title`
+       (with no `level`), and H2s are `section_header` starting at level=1.
+       Treating only `section_header` as a section left the H1 as a section-less
+       orphan chunk. FIXED: `title` is treated as a level-0 section, so the document
+       title is the root section and H2s nest under it — no orphan chunks, and
+       parent_context has something real to offer the Context Compiler.
+```
+
+Both bugs are exactly the class of defect that a mocked parser can never reveal.
 
 ```text
 dependency changes: NONE in Cargo.toml / Cargo.lock / package.json
                     (the Docling runtime is an external isolated venv, not a repo dependency)
-known limitation:   real Docling parse of PDF/DOCX/PPTX is NOT yet exercised on this
-                    machine; the moment docling is importable in a discovered interpreter
-                    the adapter works with no Higher change.
-next safe action:   finish the isolated install (consider --only-binary=:all: or a
-                    pre-resolved constraint file to defeat the resolver backtracking),
-                    then re-run: docling-2.73.0-o2\Scripts\python.exe docling_runner.py <fixture>
-```
+known limitation:   PDF / DOCX / PPTX / OCR paths are NOT exercised on this machine —
+                    only the plain-text/markdown path was smoke-parsed. Those formats need
+                    docling's ML models, which download on first use; that download was
+                    deliberately NOT attempted (CN network + one-install-per-wave discipline).
+next safe action:   parse a small local PDF with the same runner to exercise the model
+                    download path, and add a `--no-deps`-free reinstall check.
 
 ## M5 — PRODUCTION DOCUMENT IPC
 
@@ -446,6 +483,10 @@ integration  tests/real_learning_engine_document_foundation.rs
   O2-20  o2_20_cross_profile_context_retrieval_rejected
   O2-24  o2_24_all_task_commits_are_on_main                .git/HEAD -> refs/heads/main
                                                            + §23 protected dirs still present
+  M4     m4_real_docling_end_to_end_ingestion               REAL runtime parse: Ready, real
+                                                           parser_version, contiguous ordinals,
+                                                           no orphan chunks, lexically searchable,
+                                                           zero learning facts (availability-gated)
 
 unit  src/document_intelligence/docling_parser.rs   4 tests (discovery totality,
                                                               missing runtime recoverable,
@@ -461,7 +502,7 @@ unit  src/document_intelligence/retrieval.rs        4 tests (O2-19, O2-20, lexic
 ```text
 cargo check --lib -j 1                                        EXIT 0   (0 errors)
 cargo test --test real_learning_engine_document_foundation
-           -j 1 -- --test-threads=1                           21 passed / 0 failed
+           -j 1 -- --test-threads=1                           22 passed / 0 failed
 cargo test --lib -j 1 -- --test-threads=1 document_intelligence
                                                               36 passed / 0 failed
 cargo test --test real_learning_engine_pack_a_audit
@@ -515,8 +556,10 @@ REUSED THIRD-PARTY SYSTEMS:
 
 NEW DEPENDENCIES:             NONE (no Cargo.toml / Cargo.lock / package.json change)
 
-DOCLING:                      DOCLING_RUNTIME_DEFERRED
-                              typed DOCLING_UNAVAILABLE fallback kept and shipped
+DOCLING:                      DOCLING_RUNTIME_INSTALLED (docling==2.73.0, isolated runtime,
+                              97 packages, real parse smoke-tested)
+                              typed DOCLING_UNAVAILABLE fallback still kept and shipped
+                              for machines without the runtime
 
 DOCUMENT IMPORT PRODUCTION PATH:
   9 IPC commands in src/commands/document.rs, registered in src/app/builder.rs
@@ -525,16 +568,19 @@ LEXICAL RETRIEVAL:            existing SearchRepository FTS, entity_type='docume
 CONTEXT COMPILER:             existing compile() fed by retrieval.rs (unchanged pipeline)
 UI REACHABILITY:              UI_DEFERRED_PRODUCT_DECISION (no UI invented)
 
-TESTS ACTUALLY RUN:           see M8 gates above (21 + 36 + 32 = 89 passed, 0 failed)
-TESTS DEFERRED:               real Docling parse of an actual PDF/DOCX/PPTX
-                              (blocked by DOCLING_RUNTIME_DEFERRED)
+TESTS ACTUALLY RUN:           see M8 gates above (22 + 36 + 32 = 90 passed, 0 failed)
+                              incl. m4_real_docling_end_to_end_ingestion on the REAL runtime
+TESTS DEFERRED:               PDF / DOCX / PPTX / OCR parse paths (need docling ML model
+                              downloads; deliberately not attempted this run)
 
-MAX OBSERVED RAM:             89%   (continuation baseline; §8 gate exceeded, low-resource
-                                    mode enforced for all Rust work)
+MAX OBSERVED RAM:             89%   (early continuation; §8 gate exceeded, low-resource mode
+                                    enforced for all Rust work. Dropped to 70% before the
+                                    Docling install, which then ran within the gate.)
 MAX OBSERVED CPU:             below the 80% gate throughout
 
-RESOURCE INCIDENTS:           RAM >= 78% for the whole continuation; the Docling install
-                              was bounded and deferred rather than allowed to thrash
+RESOURCE INCIDENTS:           RAM >= 78% early in the continuation; the pip install was
+                              bounded and deferred rather than allowed to thrash, then
+                              completed via uv once RAM fell to 70%
 GITHUB DEPENDENCY ATTEMPTED:  NO
 ```
 

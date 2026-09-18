@@ -45,6 +45,22 @@ SUPPORTED_SUFFIXES = {
 }
 
 
+def _distribution_version(name):
+    """已安装发行版的真实版本号；拿不到就返回 None（绝不编造）。
+
+    注意 `docling` 2.73.0 不暴露 `__version__`，所以只能用 importlib.metadata。
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _fail(code, message):
     """把失败写到 stderr 并以对应退出码结束（stdout 保持干净）。"""
     sys.stderr.write(message)
@@ -68,11 +84,13 @@ def main():
 
     try:
         from docling.document_converter import DocumentConverter
-        import docling
     except Exception as exc:  # noqa: BLE001 - 任何导入失败都等价于「运行时不可用」
         _fail(EXIT_RUNTIME_UNAVAILABLE, "docling import failed: %r" % (exc,))
 
-    version = getattr(docling, "__version__", None)
+    # 版本必须走 importlib.metadata：docling 2.73.0 **没有** `__version__` 属性，
+    # 用 getattr(docling, "__version__") 会永远拿到 None，于是审计信息里
+    # document_revisions.parser_version 就成了一句谎话（或干脆是空的）。
+    version = _distribution_version("docling")
 
     try:
         converter = DocumentConverter()
@@ -112,9 +130,15 @@ def _project(doc, version):
         label = _label_of(item)
         text = (getattr(item, "text", "") or "").strip()
 
-        if label == "section_header":
+        if label == "section_header" or label == "title":
             # 新章节：按自身标题层级决定父级。
-            level = int(getattr(item, "level", 1) or 1)
+            #
+            # docling 会把文档标题标成 `title`（**没有** level），而把 H2 及以下
+            # 标成 `section_header` 并从 level=1 开始 —— 也就是说它已经替我们
+            # 压平了一层。把 `title` 当作 level 0 的章节，层级才是忠实的：
+            # 文档标题成为根章节，H2 挂在它下面，于是**没有**任何 chunk 会
+            # 落进「无章节」的孤儿状态，parent_context 也才有东西可用。
+            level = 0 if label == "title" else int(getattr(item, "level", 1) or 1)
             while heading_stack and heading_stack[-1][0] >= level:
                 heading_stack.pop()
             parent_index = heading_stack[-1][1] if heading_stack else None

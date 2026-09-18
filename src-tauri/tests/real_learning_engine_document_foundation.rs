@@ -1376,3 +1376,107 @@ fn o2_24_all_task_commits_are_on_main() {
         );
     }
 }
+
+// ============================ M4 — REAL DOCLING SMOKE (availability-gated) ============================
+
+/// M4 —— 真实 Docling 运行时上的**端到端**导入。
+///
+/// 与 O2-18 的区别：O2-18 断言「运行时不在时干净失败」，这条断言
+/// 「运行时在时**真的**解析成功」—— 两者合起来才是完整的解析边界契约。
+///
+/// 运行时是可选的（Higher 必须在没有 Docling 的机器上照常工作），
+/// 所以运行时缺席时本用例**明确跳过并打印原因**，而不是假装通过。
+/// 这不是隐藏失败：真实解析的结果会断言结构、版本与零学习事实。
+#[test]
+fn m4_real_docling_end_to_end_ingestion() {
+    let Some(parser) = DoclingParser::discover() else {
+        println!(
+            "SKIP m4_real_docling_end_to_end_ingestion: Docling runtime not installed \
+             (expected on a machine without it; install docling==2.73.0 into \
+             %LOCALAPPDATA%\\Higher\\runtimes\\docling-2.73.0-o2 to enable this test)"
+        );
+        return;
+    };
+
+    let mut conn = setup();
+    let (profile, _, source) = scaffold(&conn, "M4");
+
+    // 一份非敏感的最小本地材料：两个 H2 章节，四行正文。
+    let fixture = b"# Higher O2 Smoke Fixture\n\n\
+## Section One\n\n\
+The mitochondrion is the powerhouse of the cell. It produces ATP\n\
+through oxidative phosphorylation.\n\n\
+## Section Two\n\n\
+Photosynthesis converts light energy into chemical energy in\n\
+chloroplasts, producing glucose and oxygen.\n";
+
+    let outcome = ingest_source(&mut conn, &parser, profile, source, "notes.md", fixture)
+        .expect("真实运行时在场时，生命周期必须跑完");
+
+    assert!(
+        outcome.is_ready(),
+        "M4：真实 Docling 解析必须成功，实际 state={} code={:?} detail={:?}",
+        outcome.state,
+        outcome.error_code,
+        outcome.error_detail
+    );
+    assert_eq!(outcome.state, "Ready");
+    assert!(outcome.chunk_count > 0, "M4：必须真的解析出 chunk");
+
+    let revision_id = outcome.revision_id.expect("Ready 必须带 revision");
+
+    // 解析器身份是**真实**的审计信息，不是编造的。
+    let revision = repo(&conn)
+        .get_revision(profile, revision_id)
+        .unwrap()
+        .expect("revision 必须存在");
+    assert_eq!(revision.parser_name.as_deref(), Some("docling"));
+    assert_eq!(
+        revision.parser_version.as_deref(),
+        Some("2.73.0"),
+        "M4：parser_version 必须来自真实发行版元数据（docling 没有 __version__）"
+    );
+
+    // 结构真的落了库：章节树 + 有序 chunk。
+    let sections = repo(&conn).list_sections(profile, revision_id).unwrap();
+    assert!(
+        !sections.is_empty(),
+        "M4：真实解析必须产出章节（文档标题为根章节，H2 挂在它下面）"
+    );
+    let chunks = repo(&conn).list_chunks(profile, revision_id).unwrap();
+    assert_eq!(chunks.len(), outcome.chunk_count);
+    // ordinal 必须是从 0 开始的连续确定性序号。
+    for (i, c) in chunks.iter().enumerate() {
+        assert_eq!(c.ordinal, i as i64, "M4：chunk ordinal 必须是确定性的 0..n");
+    }
+    // 每个 chunk 都归属于某个章节 —— 真实解析不得产出孤儿 chunk。
+    assert!(
+        chunks.iter().all(|c| c.section_id.is_some()),
+        "M4：真实解析不得产出无章节的孤儿 chunk"
+    );
+
+    // 真实内容进入了既有检索索引。
+    let hits = SearchRepository::new(&conn)
+        .search(
+            profile,
+            "mitochondrion",
+            Some(&["document_chunk".to_string()]),
+            10,
+        )
+        .unwrap();
+    assert!(
+        !hits.is_empty(),
+        "M4：真实解析出的内容必须能被既有词法检索命中"
+    );
+
+    // 真实解析同样不得产生任何学习事实。
+    assert_eq!(count_where(&conn, "learning_moments", profile), 0);
+    assert_eq!(count_where(&conn, "memory_reviews", profile), 0);
+    assert_eq!(count_where(&conn, "memory_units", profile), 0);
+
+    println!(
+        "M4 real Docling: revision={revision_id} sections={} chunks={} version=2.73.0",
+        sections.len(),
+        chunks.len()
+    );
+}
