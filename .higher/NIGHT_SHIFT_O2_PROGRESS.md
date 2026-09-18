@@ -534,16 +534,78 @@ Why it matters: the flat result was a defect in the test fixture. Accepting it w
           但那是**产品决策**，留给 Owner；这里只把事实记录清楚，不擅自改变语义。
 ```
 
-#### What is still NOT exercised as an input
+#### The remaining six formats — now ALL exercised on the real runtime
+
+`xlsx / html / htm / csv / txt / ascii` were the last formats never parsed as inputs.
+All six were now run through the **same runner** on the **real docling 2.73.0** runtime.
+The result is NOT uniform — it surfaced **four genuine Higher defects**.
 
 ```text
-xlsx / html / htm / csv / txt / ascii — not parsed as inputs.
-They share the same runner, the same suffix gate, the same exit-code contract and the
-same projection as the four verified formats. Rather than hand-build six more binary
-fixtures, the Higher-owned part is locked directly: SUPPORTED_SUFFIXES is asserted by a
-source-level test (o2_supported_suffixes_cover_every_documented_format). That gate is
-ours — a missing suffix would turn a legal format into UNSUPPORTED_INPUT, which is NOT
-recoverable, and no end-to-end fixture would have caught it cheaply.
+html   exit 0   sections=3 (Title→Section One→Section Two)  chunks=4   WORK  — same shape as markdown
+htm    exit 0   sections=3  chunks=4                                 WORK  — docling maps .htm to HTML too
+xlsx   exit 0   sections=0  chunks=0                                 SILENT EMPTY (docling yields 1 `table` item, no text)
+csv    exit 0   sections=0  chunks=0                                 SILENT EMPTY (same — 1 `table` item, no text)
+txt    exit 5   PARSER_FAILED — "format None does not match any allowed format"   BROKEN
+ascii  exit 5   PARSER_FAILED — same                                                  BROKEN
+```
+
+Two distinct failure classes:
+
+```text
+CLASS A — SILENT EMPTY (xlsx, csv)
+  docling's spreadsheet backends emit the sheet as a single `table` item whose `.text`
+  is empty. The runner's projection only emits a chunk when an item has non-empty text,
+  so a spreadsheet/csv ingests "successfully" (exit 0) but produces ZERO learnable
+  sections/chunks.
+  PROVEN to be docling's nature, not a fixture defect: I first generated a malformed CSV
+  (unescaped comma inside the fact field → 3 fields vs the 2-column header), which gave
+  a "Inconsistent column lengths" warning. Fixing it to VALID CSV (fields quoted via the
+  csv module) changed nothing — still 0 sections / 0 chunks, no warning. A direct probe
+  of iterate_items() confirms exactly 1 item, label='table', has_text_attr=False for
+  BOTH xlsx and csv.
+  CONSEQUENCE: a user importing a .xlsx/.csv gets a Ready revision with no content and
+  no error. Whether ingestion should WARN/REJECT on empty structure is a PRODUCT
+  DECISION, left to Owner. Higher runtime behaviour deliberately unchanged here.
+
+CLASS B — BROKEN ADVERTISED FORMATS (txt, ascii)
+  Higher's SUPPORTED_SUFFIXES lists BOTH `.txt` and `.ascii`, so the runner's gate lets
+  them through — but docling then cannot parse them:
+    · `.txt`   there is NO plain-text InputFormat in docling at all.
+               allowed formats: docx pptx html image pdf asciidoc md csv xlsx
+               xml_uspto xml_jats mets_gbs json_docling audio vtt latex.
+               A `.txt` therefore hits "format None does not match" → exit 5 Failed.
+    · `.ascii` docling's asciidoc format is registered under extension `.asciidoc`
+               (InputFormat.ASCIIDOC.value == 'asciidoc'), NOT `.ascii`. So `.ascii`
+               also fails docling's inference → exit 5. And the CORRECT extension
+               `.asciidoc` is NOT in SUPPORTED_SUFFIXES, so the runner's own gate
+               rejects it FIRST → exit 4 Unsupported. Either way asciidoc is broken
+               end-to-end (passes Higher, fails docling — OR passes docling, blocked by
+               Higher).
+  KEY PROOF that these are Higher defects, not docling limits:
+    · renaming o2_fixture.txt → .md and running the SAME runner yields
+      exit 0, 1 section (null-title fallback), 7 chunks. The markdown backend happily
+      ingest plain prose. So `.txt` COULD work if Higher mapped it to the MD backend.
+    · docling accepts `.asciidoc` (its real extension); Higher simply lists the wrong
+      string in SUPPORTED_SUFFIXES.
+
+  MINIMAL FIXES (proposed, NOT applied — both touch the supported-format contract):
+    txt   map `.txt` → docling InputFormat.MD in the runner (or drop it from
+          SUPPORTED_SUFFIXES so it returns a clean Unsupported=4 instead of Failed=5).
+    ascii rename `.ascii` → `.asciidoc` in SUPPORTED_SUFFIXES
+          (or map `.ascii` → InputFormat.ASCIIDOC).
+```
+
+The source-level test `o2_supported_suffixes_cover_every_documented_format` is
+**NECESSARY but NOT SUFFICIENT**: it proves Higher advertises the 10 suffixes, but it
+does NOT prove docling can parse them. These four defects are exactly what it could not
+catch. A permanent guard would be an availability-gated integration test that parses
+each fixture through the real runtime and asserts non-empty + correct format — recorded
+as a RECOMMENDATION, not applied here (scope: this wave exercises and records; behaviour
+changes to the supported-format contract are an Owner decision).
+
+Generators committed (fixtures stay local, per the M4 PDF rule — generated-and-reproducible):
+  make_xlsx.py         OOXML xlsx, inline strings, relationships on the owning part
+  make_text_formats.py csv / txt / ascii / html / htm
 ```
 
 ## M5 — PRODUCTION DOCUMENT IPC
@@ -774,7 +836,9 @@ LOCAL COMMITS ON MAIN (this task):
   828f523  docs(o2): finalize the O2 ledger with the M4 PDF closure and commit list
   a339aed  test(document): exercise DOCX/PPTX and make the PDF test hermetic      (M4 formats)
 
-COMPLETED WAVES:              M0 M1 M2 M3 M4 (incl. real PDF / DOCX / PPTX) M5 M6 M8
+COMPLETED WAVES:              M0 M1 M2 M3 M4 (incl. real PDF / DOCX / PPTX / html / htm
+                              / xlsx / csv / txt / ascii — all 10 advertised formats now
+                              exercised on the real runtime) M5 M6 M8
 SKIPPED_ALREADY_IMPLEMENTED:  none
 SKIPPED_NOT_USEFUL:           none
 DEFERRED:                     M7 UI_DEFERRED_PRODUCT_DECISION
@@ -810,14 +874,18 @@ UI REACHABILITY:              UI_DEFERRED_PRODUCT_DECISION (no UI invented)
 TESTS ACTUALLY RUN:           see M8 gates above (24 + 43 + 32 = 99 passed, 0 failed)
                               incl. m4_real_docling_end_to_end_ingestion AND
                               m4_real_docling_pdf_path_end_to_end, both on the REAL runtime
-TESTS DEFERRED:               xlsx / html / htm / csv / txt / ascii were not parsed as
-                              inputs. They share the same runner, suffix gate, exit-code
-                              contract and projection as the four formats that WERE
-                              exercised (markdown / PDF / DOCX / PPTX); the Higher-owned
-                              part (SUPPORTED_SUFFIXES) is locked by a source-level test
-                              instead of six more hand-built binary fixtures.
-                              Real-runtime smoke evidence for DOCX and PPTX is recorded
-                              in M4 and reproducible via the committed generators.
+FORMAT COVERAGE (real runtime): all 10 advertised suffixes now parsed on docling 2.73.0
+                              WORK:          markdown, pdf, docx, pptx, html, htm
+                              SILENT EMPTY:  xlsx, csv  (exit 0, 0 sections / 0 chunks —
+                                             docling emits a `table` item with no text)
+                              BROKEN:        txt   (no docling plain-text format; the MD
+                                             backend accepts the same bytes → fixable)
+                                             ascii (wrong extension; docling wants
+                                             `.asciidoc`; `.asciidoc` is blocked by
+                                             Higher's own gate)
+                              Four defects recorded in M4 with evidence + proposed fixes;
+                              behaviour changes to the supported-format contract left to
+                              Owner (not applied).
 
 MAX OBSERVED RAM:             89%   (early continuation; §8 gate exceeded, low-resource mode
                                     enforced for all Rust work. The PDF work then ran at
