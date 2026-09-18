@@ -57,6 +57,11 @@ use crate::training::types::{
     BlockAdvanceIntent, BlockProgression, EffectSummary, InteractionResult, TrainingBlockRun,
     TrainingBlockStatus, TrainingInteraction, TrainingRun, TrainingRunStatus, VerificationMethod,
 };
+// GROUNDED LEARNING BRIDGE V1 · W3 — Grounded Training Material 的 IPC 面（§8）。
+#[allow(unused_imports)]
+use crate::training::grounded_material::{
+    GeneratedBy, GroundedMaterialRef, GroundedTrainingMaterial, MaterialStatus,
+};
 
 /// §7 "LearningItem light DTO": the flat projection served by
 /// `list_learning_items_light` (tree/list rendering without full content).
@@ -159,6 +164,13 @@ mod tests {
         DocumentChunkRow::export_all(&cfg).unwrap();
         IngestionJobRow::export_all(&cfg).unwrap();
         ContextPack::export_all(&cfg).unwrap();
+
+        // GROUNDED LEARNING BRIDGE V1 · W3 —— 接地训练材料快照 IPC 面（§8）。
+        // `GroundedTrainingMaterial` 会带出 `GroundedMaterialRef` / `MaterialStatus` / `GeneratedBy`。
+        GroundedTrainingMaterial::export_all(&cfg).unwrap();
+        GroundedMaterialRef::export_all(&cfg).unwrap();
+        MaterialStatus::export_all(&cfg).unwrap();
+        GeneratedBy::export_all(&cfg).unwrap();
     }
 
     /// §7: "对 i64 ID 明确使用 TS number，并加入 safe-integer assertion/test".

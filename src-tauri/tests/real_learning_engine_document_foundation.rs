@@ -238,11 +238,15 @@ fn o2_03_v042_creates_exactly_five_document_tables() {
 
 /// O2-04 —— 最大迁移**恰好** v042。
 #[test]
-fn o2_04_max_migration_is_exactly_v042() {
+fn o2_04_max_migration_is_exactly_v043() {
+    // GROUNDED LEARNING BRIDGE V1 · W3 显式授权新增 v043（任务书 §8 / §610「only wave
+    // authorized to introduce V043」），并预期 `latest_version()` 反映它（§20 闭环报告）。
+    // 因此本断言的上限由 v042 抬升到 v043；断言**意图不变**：仍然守住「迁移账本不得
+    // 出现未经授权的更高版本」，只是当前授权的天花板变成了 v043。
     assert_eq!(
         migrations::latest_version(),
-        42,
-        "O2-04：最大迁移必须是 v042（document_ingestion）"
+        43,
+        "O2-04：最大迁移必须是 v043（grounded_training_material）"
     );
 
     let conn = setup();
@@ -253,13 +257,13 @@ fn o2_04_max_migration_is_exactly_v042() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!(version, 42, "O2-04：最后落账的迁移必须是 v042");
-    assert_eq!(name, "document_ingestion", "O2-04：v042 的名称");
+    assert_eq!(version, 43, "O2-04：最后落账的迁移必须是 v043");
+    assert_eq!(name, "grounded_training_material", "O2-04：v043 的名称");
 }
 
-/// O2-21 —— **不存在** v043+。
+/// O2-21 —— **不存在** v044+（天花板随 W3 授权由 v042 抬升到 v043）。
 #[test]
-fn o2_21_no_v043_or_later_migration_exists() {
+fn o2_21_no_v044_or_later_migration_exists() {
     let dir = repo_root().join("src-tauri/src/migrations");
     let mut offenders: Vec<String> = Vec::new();
     for entry in std::fs::read_dir(&dir).expect("迁移目录必须存在") {
@@ -267,7 +271,7 @@ fn o2_21_no_v043_or_later_migration_exists() {
         if let Some(rest) = name.strip_prefix('v') {
             if let Some(num) = rest.get(0..3) {
                 if let Ok(n) = num.parse::<u32>() {
-                    if n >= 43 {
+                    if n >= 44 {
                         offenders.push(name);
                     }
                 }
@@ -276,13 +280,13 @@ fn o2_21_no_v043_or_later_migration_exists() {
     }
     assert!(
         offenders.is_empty(),
-        "O2-21：发现了 v043+ 迁移文件：{offenders:?}"
+        "O2-21：发现了 v044+ 迁移文件：{offenders:?}"
     );
 
     let ledger = read_repo("src-tauri/src/migrations/mod.rs");
     assert!(
-        !ledger.contains("version: 43"),
-        "O2-21：迁移账本里出现了 version 43"
+        !ledger.contains("version: 44"),
+        "O2-21：迁移账本里出现了 version 44"
     );
 }
 

@@ -27,12 +27,17 @@
 //! - [`start`]：把「今天该做什么」编排成一份计划并创建训练 —— 前端不参与编排。
 
 pub mod completion;
+pub mod grounded_material;
 pub mod runtime;
 pub mod start;
 pub mod types;
 
 pub use completion::{
     evaluate_completion, CompletionDecision, CompletionFacts, ALL_COMPLETION_RULE_KINDS,
+};
+pub use grounded_material::{
+    load_material_snapshot, save_material_snapshot, GeneratedBy, GroundedMaterialRef,
+    GroundedTrainingMaterial, MaterialStatus,
 };
 pub use runtime::{
     abandon_training_run, advance_training_block, block_is_current_active, complete_training_run,

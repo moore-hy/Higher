@@ -47,6 +47,9 @@ pub mod v041_training_runtime;
 // REAL LEARNING ENGINE V1 §26：v042 Document Ingestion（PACK B / W5）。
 // NIGHT SHIFT O2 §12 授权：**只**新增 v042，不得出现 v043+。
 pub mod v042_document_ingestion;
+// GROUNDED LEARNING BRIDGE V1 · W3：v043 Grounded Training Material Snapshot。
+// 本任务（MAIN-ONLY · NIGHT EXECUTION · FINAL LOCKED）授权新增的唯一迁移；v044+ 不在范围。
+pub mod v043_grounded_training_material;
 
 /// 单个 Migration 定义。
 ///
@@ -280,6 +283,14 @@ const MIGRATIONS: &[Migration] = &[
         version: 42,
         name: "document_ingestion",
         up: v042_document_ingestion::up,
+    },
+    // GROUNDED LEARNING BRIDGE V1 · W3：v043 Grounded Training Material Snapshot。
+    // 仅给 training_block_runs 增加 material_snapshot_json TEXT NULL（既有行自然回填 NULL），
+    // 不做任何 ID 重命名、不伪造历史行。
+    Migration {
+        version: 43,
+        name: "grounded_training_material",
+        up: v043_grounded_training_material::up,
     },
 ];
 

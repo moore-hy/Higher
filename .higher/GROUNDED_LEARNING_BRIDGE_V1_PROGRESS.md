@@ -109,7 +109,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | W0 | Baseline + reuse audit + ledger | `docs(cognitive): start grounded learning bridge execution` | ✅ DONE (this commit) |
 | W1 | O2 DB lock correctness | `fix(document): release db lock during document parsing` | ✅ DONE |
 | W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ✅ DONE (7fbe589) |
-| W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ⏳ pending |
+| W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | 🔧 in_progress |
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ⏳ pending |
 | W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ⏳ pending |
 | W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | ⏳ pending |
@@ -120,13 +120,54 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 
 ## §2 — HARD BLOCKERS ENCOUNTERED
 
-(none so far)
+**None.** Every wave completed without hitting a hard blocker.
+
+### 2.1 Non-blocking baseline findings (NOT introduced by this task)
+
+**(a) Stale historical `latest_version()` assertions in 6 legacy test binaries.**
+These files were last touched in the v034 era and assert a frozen historical migration ceiling;
+they were already false before this task began (at the W2 baseline `latest_version()` was 42, not
+36/35). Registered, **not fixed** — they are outside the taskbook's named regression groups
+(document / training / PACK A / O2), and editing 6 unrelated legacy files would be scope creep.
+
+| Test fn | File | Asserts | Actual now | Verdict |
+|---|---|---|---|---|
+| `test_fresh_db_reaches_v014` | `batch049.rs:291` | 36 | 43 | pre-existing failure |
+| `test_migration_latest_is_v021_and_idempotent` | `batch058.rs:50` | 36 | 43 | pre-existing failure |
+| `t01_latest_schema_v024` | `batch062.rs:139` | 35 | 43 | pre-existing failure |
+| `mig01_v034_is_registered_and_applied` | `companion_world.rs:889` | 36 | 43 | pre-existing failure |
+| `migration_v031_creates_canvas_tables` | `product2_knowledge_canvas.rs:68` | 36 | 43 | pre-existing failure |
+| `migration_v030_creates_intake_table` | `product2_planning_intake.rs:47` | 36 | 43 | pre-existing failure |
+
+Empirical evidence (captured 2026-09-18): each fails with `left: 43, right: 36` (or `35`) — the
+mismatch is against the *historical* pin, and `43` is only reachable *after* W3. The failure cause
+(the stale `36`) predates this task; W3 merely moved `latest_version()` from 42 → 43, which the
+`36`-pin would have rejected at 42 as well.
+
+**(b) `cargo fmt --check` baseline reds** — the 3 known baseline files
+(`ai/secret_migration.rs`, `commands/agent.rs`, `tests/secret_store_cutover.rs`) remain untouched
+by this task (see project MEMORY.md). Only task-owned files are formatted.
 
 ---
 
 ## §3 — DEFERRED / SAFE-FALLBACK DECISIONS
 
-(logged per wave as they arise; none yet)
+**(D1 · W3) Two O2 migration-ceiling assertions updated (intent preserved).**
+`real_learning_engine_document_foundation.rs` contained two assertions that hard-code the **old**
+authorization ceiling:
+- `o2_04_max_migration_is_exactly_v042` → asserted `latest_version() == 42`, last `schema_migrations`
+  name `"document_ingestion"`.
+- `o2_21_no_v043_or_later_migration_exists` → asserted no `v043+` file and no `version: 43` in
+  `migrations/mod.rs`.
+
+Both are **structurally incompatible** with the current taskbook, which explicitly authorizes v043
+(§8 / line 610 "This is the only wave authorized to introduce V043"; §20 closure report requires
+`v043 status` and `latest_version()`). Decision: update both to the new authorized ceiling
+(`v043` / `grounded_training_material`, and "no `v044+`"), **preserving their original intent**
+(guard the ledger against unauthorized migration sprawl and cosmetic ID renames). This is a
+test-contract update forced by an authorized schema change — **not** a weakening-to-hide-a-bug.
+Renamed to `o2_04_max_migration_is_exactly_v043` / `o2_21_no_v044_or_later_migration_exists`.
+
 
 ---
 
@@ -251,4 +292,75 @@ is exposed via `searchDocumentContext` for future W4 grounding; not surfaced in 
 `generate:types` run (`BlockAdvanceIntent/Outcome`, `BlockProgression`, `BlockCompletionState`,
 `CompletionRuleKind`) are **left untracked** — they belong to W3 (training material) and must not
 be mixed into the W2 commit.
+
+---
+
+## §6 — W3 IMPLEMENTATION NOTES
+
+**Scope (taskbook §8):** a created training block must record *the real learning material it was
+built from*, so that re-importing a PDF later cannot silently change an already-created block's
+meaning. Snapshot = **content**, not learning truth.
+
+### 6.1 Files
+
+| File | Change | Why |
+|---|---|---|
+| `src-tauri/src/migrations/v043_grounded_training_material.rs` | **NEW** — `ALTER TABLE training_block_runs ADD COLUMN material_snapshot_json TEXT NULL` | The one authorized new migration; contiguous after v042 |
+| `src-tauri/src/migrations/mod.rs` | register `pub mod v043_grounded_training_material;` + `Migration { version: 43, ... }` | registry entry |
+| `src-tauri/src/training/grounded_material.rs` | **NEW** — `GroundedTrainingMaterial` / `GroundedMaterialRef` / `MaterialStatus` / `GeneratedBy` DTOs + `save_material_snapshot` / `load_material_snapshot` | §8.2 locked shape + persistence |
+| `src-tauri/src/training/mod.rs` | `pub mod grounded_material;` + `pub use` re-exports | expose the module |
+| `src-tauri/src/ipc/dto.rs` | import + `export_all` for the 4 grounded types | sanctioned DTO export registry |
+| `src-tauri/src/tests/grounded_training_material.rs` | **NEW** — GB-MAT-01..05 | §8 acceptance |
+
+### 6.2 Design decisions (logged)
+
+1. **Add a column, not a table.** §8.2 says the snapshot hangs off the block. A second table would
+   create a *second truth source* for training state, violating the `training` module's standing
+   discipline. One nullable column on `training_block_runs` is the minimal correct shape.
+2. **No backfill, no fake material.** The column has no `NOT NULL` constraint, so all pre-existing
+   `training_block_runs` rows become NULL automatically. No historical row is rewritten with
+   fabricated content (GB-MAT-01 asserts this).
+3. **Profile isolation is enforced at the block, not at the refs.** `provenance` stores only row
+   ids (`source_id/revision_id/section_id/chunk_id`) — pointers, not document text. Since the
+   block row itself carries `profile_id`, gating read/write on block ownership is sufficient to
+   prevent provenance crossing profiles (GB-MAT-03).
+4. **Immutability (§8 "must not silently change").** `save_material_snapshot` refuses to overwrite
+   a non-NULL snapshot (GB-MAT-05). The DB column stays a plain writable column (not a trigger)
+   because the invariant is a *product* rule applied at the single sanctioned write path.
+5. **Zero learning truth.** Neither function touches `learning_moments` / `evidence` /
+   `memory_reviews` / `memory_units` and neither drives FSRS (GB-MAT-04).
+
+### 6.3 Fix during implementation
+
+`load_material_snapshot` uses `Result::optional()`, which requires `rusqlite::OptionalExtension`
+in scope — added `use rusqlite::{Connection, OptionalExtension};` so the pattern compiles.
+
+### 6.4 Frozen contracts untouched
+
+ProtocolId = 22, CompletionRuleKind = 15, LearningMomentType = 20, the 8 TrainingExperience types —
+none changed. W3 only adds a column + a new module; no ID renames, no v044+.
+
+### 6.5 W3 closure — validation (all green)
+
+| Gate | Command | Result |
+|---|---|---|
+| lib compile | `cargo check --lib --manifest-path src-tauri/Cargo.toml -j 1` | ✅ 0 errors (34 pre-existing baseline warnings) |
+| **GB-MAT-01..05** | `cargo test --test grounded_training_material` | ✅ **5/5 pass** |
+| O2 regression | `cargo test --test real_learning_engine_document_foundation` | ✅ **25/25 pass** (after D1 ceiling update) |
+| W1 regression | `cargo test --test document_intelligence` | ✅ 27/27 pass |
+| W2 regression | `cargo test --test document_knowledge_surface` | ✅ 9/9 pass |
+| Training regression | `cargo test --test real_learning_engine_training` | ✅ 38/38 pass |
+| Frontend types | `npx tsc --noEmit` | ✅ 0 errors |
+| Product UI | `npm run test:product-ui` | ✅ 158/158 pass (9 files) |
+| DTO currency | `npm run generate:types` then `git diff --exit-code src/generated` | ✅ regenerated; new bindings committed with this wave |
+
+**Migration state after W3:** `latest_version() == 43`, last `schema_migrations` row =
+`(43, "grounded_training_material")`.
+
+**New generated DTOs (committed here):** `GroundedTrainingMaterial.ts`, `GroundedMaterialRef.ts`,
+`MaterialStatus.ts`, `GeneratedBy.ts`. Also committed here (deliberately deferred from the W2
+commit as training-domain DTOs): `BlockAdvanceIntent.ts`, `BlockAdvanceOutcome.ts`,
+`BlockProgression.ts`, `BlockCompletionState.ts`, `CompletionRuleKind.ts`.
+
+
 
