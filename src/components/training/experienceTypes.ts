@@ -1,5 +1,7 @@
 import type {
   BlockCompletionState,
+  GroundedProvenanceLabel,
+  GroundedTrainingMaterial,
   InteractionResult,
   TrainingBlockRun,
   TrainingInteraction,
@@ -93,5 +95,19 @@ export interface ExperienceProps {
    * 而通用协议必须**沿用后端冻结规则**给它的那个类型，不能自己发明一个。
    */
   defaultInteractionType: string;
+  /**
+   * GROUNDED LEARNING BRIDGE V1 · W5 §10 —— 这个块**落库**的接地材料快照。
+   *
+   * `null` 表示「这个块没有快照」（旧块 / 尚未接地）—— 是**没有**，不是加载失败。
+   * 快照是**内容**，不是学习真相：渲染它永远不产生掌握度证据。
+   */
+  material: GroundedTrainingMaterial | null;
+  /**
+   * §10.9 —— 已由后端解析好的**可读**出处标签。
+   *
+   * UI 只渲染 `display_name` / `section_title`，**绝不**把 `source_id` 这类
+   * 内部行号展示给普通用户。
+   */
+  provenanceLabels: GroundedProvenanceLabel[];
   submit: (args: ExperienceSubmit) => void;
 }

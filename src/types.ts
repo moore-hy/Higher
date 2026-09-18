@@ -548,6 +548,68 @@ export interface ContextPack {
   truncated: boolean;
 }
 
+// ===================== GROUNDED LEARNING BRIDGE V1 · W3/W4/W5 =====================
+
+/**
+ * 快照里对一份真实材料的具体落点（只存指针，不存整篇文档）。
+ *
+ * `section_id` 可为 `null`：`document_chunks.section_id` 本来就可空，
+ * 「没有章节」与「章节 id = 0」是两件事。
+ */
+export interface GroundedMaterialRef {
+  source_id: number;
+  revision_id: number;
+  section_id: number | null;
+  chunk_id: number;
+}
+
+/** 快照状态：材料可用 / 不可用（不可用时不带内容，只带原因）。 */
+export type MaterialStatus = "ready" | "unavailable";
+
+/** 快照内容的生成来源：确定性 / AI（非权威）/ 无。 */
+export type GeneratedBy = "deterministic" | "ai_non_authoritative" | "none";
+
+/**
+ * 一个训练块真正用到的接地材料快照（W3 落库，W4 编译，W5 渲染）。
+ *
+ * 这是**内容**，不是学习真相：它不构成任何掌握度证据。
+ */
+export interface GroundedTrainingMaterial {
+  version: number;
+  status: MaterialStatus;
+  protocol_id: string;
+  prompt_text: string | null;
+  cue_text: string | null;
+  source_excerpt: string | null;
+  reference_text: string | null;
+  worked_steps: string[];
+  hidden_step_index: number | null;
+  practice_prompt: string | null;
+  transfer_prompt: string | null;
+  generated_by: GeneratedBy;
+  provenance: GroundedMaterialRef[];
+  unavailable_reason: string | null;
+}
+
+/** §10.9 —— 一条人类可读的出处标签（UI 不显示内部 id）。 */
+export interface GroundedProvenanceLabel {
+  source_id: number;
+  display_name: string;
+  section_id: number | null;
+  section_title: string | null;
+}
+
+/**
+ * 某个训练块的接地材料视图。
+ *
+ * `material = null` 表示这个块**没有**快照（旧块 / 尚未接地）——
+ * 那是「没有」，不是「加载失败」。
+ */
+export interface GroundedMaterialView {
+  material: GroundedTrainingMaterial | null;
+  provenance_labels: GroundedProvenanceLabel[];
+}
+
 export interface LearningItem {
   id: number;
   /** v013 起 Profile 直挂 */

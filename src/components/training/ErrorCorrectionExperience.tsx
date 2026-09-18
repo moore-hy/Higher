@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import type { InteractionResult } from "../../types";
 import {
+  GroundedExcerpt,
   InteractionHistory,
+  ProvenanceLine,
   ResponseArea,
   ResultChoices,
   SubmitRow,
@@ -10,18 +12,22 @@ import {
 import { IT_ERROR_CORRECTED, IT_ERROR_DETECTED, type ExperienceProps } from "./experienceTypes";
 
 /**
- * FIX J6 —— `error_correction` 专项体验。
+ * FIX J6 / GROUNDED LEARNING BRIDGE V1 §10.6 —— `error_correction` 专项体验。
  *
  * ```text
  * 只在**存在真实的上一次错误**时：
  *   展示那次错误 → 学习者指出错在哪 → 修正 → （有真实核对器时）真实核对
  * ```
  *
- * # 「上一次错误」不是猜出来的
+ * # §10.6：「上一次错误」才是主角，材料只是参考
  *
- * 它必须是一条**已经落库的事实**：这个块上曾有一次 `result = failure` 的作答，
- * 或者一次 `error_detected`。因此这里直接读 `interactions` ——
+ * 纠错的对象必须是一条**已经落库的事实**：这个块上曾有一次 `result = failure`
+ * 的作答，或者一次 `error_detected`。因此这里直接读 `interactions` ——
  * 没有这样一条事实时，**绝不编造一个错误**（FIX J6）。
+ *
+ * 接地材料在这里的角色被严格限制为**参考上下文**，而且会显式标注
+ * 「这不是你的错误」：把文档里的一段话摆到「上一次的错误」下面，会被读成
+ * 「这就是你写错的原文」—— 那是一条凭空造出来的学习者错误。
  *
  * # 「修正」与「已修正」是两件事（FIX B5 / FIX M / AUDIT-A08）
  *
@@ -31,10 +37,12 @@ import { IT_ERROR_CORRECTED, IT_ERROR_DETECTED, type ExperienceProps } from "./e
  * 用户停下 / 显式完成       → 什么都不是，尤其**不是**「已修正」
  * ```
  *
- * PACK A 没有为这个块接核对器，所以这里只能走第一条。界面必须说清楚：
- * 这一段可以结束，但**没有**核实到修正。
+ * 这个块没有接核对器，所以只能走第一条。界面必须说清楚：这一段可以结束，
+ * 但**没有**核实到修正。
  */
 export default function ErrorCorrectionExperience({
+  material,
+  provenanceLabels,
   interactions,
   response,
   onResponseChange,
@@ -66,6 +74,9 @@ export default function ErrorCorrectionExperience({
 
   const alreadyDetected = interactions.some((i) => i.interaction_type === IT_ERROR_DETECTED);
 
+  const ready = material?.status === "ready" ? material : null;
+  const hasReference = Boolean(ready?.source_excerpt || ready?.reference_text);
+
   if (!priorError) {
     return (
       <>
@@ -83,13 +94,30 @@ export default function ErrorCorrectionExperience({
   return (
     <>
       <div className="hc-train__effect">
-        <p className="hc-train__effect-title">上一次的错误</p>
-        <p className="hc-train__effect-line">
+        <p className="hc-train__effect-title">上一次的错误（这是纠错对象）</p>
+        <p className="hc-train__effect-line" data-testid="hc-train-prior-error">
           {priorError.text && priorError.text.trim().length > 0
             ? priorError.text
             : `（交互 #${priorError.interactionId} 被记为「没做对」，当时没有留下文字）`}
         </p>
       </div>
+
+      {/* §10.6：材料只作参考上下文，且必须显式说明它不是用户犯的错。 */}
+      {hasReference && ready && (
+        <>
+          {ready.source_excerpt && (
+            <GroundedExcerpt
+              title="参考材料（这是文档原文，不是你的错误）"
+              text={ready.source_excerpt}
+              testId="hc-train-error-reference"
+            />
+          )}
+          {ready.reference_text && (
+            <GroundedExcerpt title="参考上下文" text={ready.reference_text} />
+          )}
+          <ProvenanceLine labels={provenanceLabels} />
+        </>
+      )}
 
       <ResponseArea
         id="hc-train-error-correction"

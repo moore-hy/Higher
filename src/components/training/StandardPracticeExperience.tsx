@@ -1,8 +1,11 @@
 import { useState } from "react";
 import type { InteractionResult } from "../../types";
 import {
+  GroundedExcerpt,
   HintRequest,
   InteractionHistory,
+  MaterialOriginNote,
+  ProvenanceLine,
   ResponseArea,
   ResultChoices,
   SubmitRow,
@@ -11,10 +14,10 @@ import {
 import { IT_PRACTICE, type ExperienceProps } from "./experienceTypes";
 
 /**
- * FIX J5 —— `standard_practice` 专项体验。
+ * FIX J5 / GROUNDED LEARNING BRIDGE V1 §10.5 —— `standard_practice` 专项体验。
  *
  * ```text
- * 题面 → 作答 → 结果 → 自检 / 真实反馈
+ * 真实题面 → 作答 → 结果 → 自检 / 真实反馈
  * ```
  *
  * # 练习成功不是回忆成功（FIX B2）
@@ -23,13 +26,20 @@ import { IT_PRACTICE, type ExperienceProps } from "./experienceTypes";
  * **绝不会**变成 `RecallSuccess`。界面上也不允许出现「你记住了」这类措辞：
  * 那是回忆族的结论，拿过来用就是在宣称一次没有发生的回忆。
  *
+ * # §10.5：题面来自真实材料
+ *
+ * 题面取材料快照的 `practice_prompt`。没有可用题面时**不凭空生成一道题**，
+ * 只显示诚实的不可用状态，并让用户用手上的真实材料作答。
+ *
  * # 真实反馈从哪来
  *
- * 只有**真实执行过的核对器**才能给出 `Deterministic` / `Structured`。
- * PACK A 没有为这个块接核对器，所以这里的「结果」是自检（`SelfCheck`）：
- * 会被如实记录，但**不会**推进记忆排程。界面必须提前说清楚，而不是等用户猜。
+ * 只有**真实执行过的核对器**才能给出 `Deterministic` / `Structured`。这个块没有接
+ * 核对器，所以「结果」是自检（`SelfCheck`）：会被如实记录，但**不会**推进记忆排程。
+ * 界面必须提前说清楚，而不是等用户猜。
  */
 export default function StandardPracticeExperience({
+  material,
+  provenanceLabels,
   interactions,
   response,
   onResponseChange,
@@ -42,13 +52,24 @@ export default function StandardPracticeExperience({
   const [hintLevel, setHintLevel] = useState(0);
   const locked = !canSubmit || blockTerminal;
 
+  const ready = material?.status === "ready" ? material : null;
+  const promptText = ready?.practice_prompt?.trim() ? ready.practice_prompt : null;
+
   return (
     <>
-      <UnavailableNotice
-        what="题面"
-        why="练习需要一个真实的题目或任务描述，而 PACK A 还没有素材管线，这个块上没有绑定题面。"
-        thenWhat="所以这里不会凭空生成一道题。请按这个块的目标，用你手上的真实材料作答。"
-      />
+      {promptText ? (
+        <>
+          <GroundedExcerpt title="题面" text={promptText} testId="hc-train-practice-prompt" />
+          <ProvenanceLine labels={provenanceLabels} />
+          <MaterialOriginNote material={ready} />
+        </>
+      ) : (
+        <UnavailableNotice
+          what="题面"
+          why="练习需要一个真实的题目或任务描述，而这个块上没有接地材料（没有绑定来源，或来源里没有可用的练习措辞）。"
+          thenWhat="所以这里不会凭空生成一道题。请按这个块的目标，用你手上的真实材料作答。"
+        />
+      )}
 
       <ResponseArea
         id="hc-train-standard-practice"
@@ -69,7 +90,8 @@ export default function StandardPracticeExperience({
       <ResultChoices value={result} onChange={setResult} disabled={busy || blockTerminal} />
       <p className="hc-train__note">
         这个块没有接上真实核对器，所以这一次的判定来自你自己（自检）——
-        它会作为**练习**被如实记录，但不会推进记忆排程。
+        它会作为**练习**被如实记录（`PracticeSuccess`），但不会推进记忆排程，
+        也**不会**被算成一次回忆。
       </p>
 
       <SubmitRow

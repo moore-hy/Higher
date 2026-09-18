@@ -47,7 +47,9 @@ use crate::sync::client::ClientStatus;
 use crate::sync::server::{PeerCard, PeerStatus, ServerStatus, WorkspaceStatus};
 // REAL LEARNING ENGINE V1 · W4 — TrainingExperience 的 IPC 面（§7–§22）。
 #[allow(unused_imports)]
-use crate::commands::training::StartTrainingResponse;
+use crate::commands::training::{
+    GroundedMaterialView, GroundedProvenanceLabel, StartTrainingResponse,
+};
 #[allow(unused_imports)]
 use crate::training::runtime::{BlockAdvanceOutcome, BlockCompletionState, InteractionOutcome};
 #[allow(unused_imports)]
@@ -171,6 +173,11 @@ mod tests {
         GroundedMaterialRef::export_all(&cfg).unwrap();
         MaterialStatus::export_all(&cfg).unwrap();
         GeneratedBy::export_all(&cfg).unwrap();
+
+        // GROUNDED LEARNING BRIDGE V1 · W5 —— 块材料视图 IPC 面（§10）。
+        // `GroundedMaterialView` 会带出 `GroundedProvenanceLabel`。
+        GroundedMaterialView::export_all(&cfg).unwrap();
+        GroundedProvenanceLabel::export_all(&cfg).unwrap();
     }
 
     /// §7: "对 i64 ID 明确使用 TS number，并加入 safe-integer assertion/test".

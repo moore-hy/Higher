@@ -193,6 +193,14 @@ export const queryKeys = {
   training: {
     session: (profileId: number, trainingRunId: number) =>
       ["training", "session", profileId, trainingRunId] as const,
+    /**
+     * GROUNDED LEARNING BRIDGE V1 · W5 §10 —— 某个训练块的接地材料快照。
+     *
+     * 按块 id 建键：切块时各自独立缓存，不会把上一段的材料带进下一段。
+     * 快照在落库后是不可变的，因此这个键天然稳定（无需失效策略）。
+     */
+    blockMaterial: (profileId: number, blockRunId: number) =>
+      ["training", "block-material", profileId, blockRunId] as const,
   },
 } as const;
 

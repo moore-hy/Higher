@@ -111,7 +111,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | W2 | Document intelligence product-reachable | `feat(document): expose learning material ingestion in knowledge` | ✅ DONE (7fbe589) |
 | W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ✅ DONE (462d4fa) |
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ✅ DONE (ea9137c) |
-| W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ⏳ pending |
+| W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | 🔧 in_progress |
 | W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | ⏳ pending |
 | W7 | Close stale progress projection | `fix(progress): derive difficulty from real training blocks` | ⏳ pending |
 | W8 | Final validation + closure | `feat(cognitive): close grounded learning bridge v1` | ⏳ pending |
@@ -455,6 +455,119 @@ limitation for W8 closure.
 | DTO currency | `npm run generate:types` → only `GroundedMaterialRef.ts` changed | ✅ committed with this wave |
 
 **Totals:** 113/113 targeted Rust tests green; 158/158 product-UI tests green.
+
+---
+
+## §8 — W5 IMPLEMENTATION NOTES
+
+### 8.1 Files touched
+
+| File | Nature |
+|---|---|
+| `src-tauri/src/commands/training.rs` | `GroundedMaterialView` + `GroundedProvenanceLabel` DTOs; `get_block_grounded_material(profile_id, block_run_id)` — profile-scoped read of the W3 snapshot, resolves human-readable labels (`document_sources.display_name` + `document_sections.title`) |
+| `src-tauri/src/app/builder.rs` | registered `get_block_grounded_material` in the PACK A invoke handler |
+| `src-tauri/src/ipc/dto.rs` | ts-rs export of the 2 new DTOs |
+| `src/generated/GroundedMaterialView.ts`, `src/generated/GroundedProvenanceLabel.ts` | **NEW** (generated; purely additive) |
+| `src/types.ts` | hand-mirrored `GroundedTrainingMaterial` / `GroundedMaterialRef` / `MaterialStatus` / `GeneratedBy` / `GroundedProvenanceLabel` / `GroundedMaterialView` |
+| `src/api.ts` | `getBlockGroundedMaterial` wrapper |
+| `src/query/keys.ts` | `training.blockMaterial(profileId, blockRunId)` |
+| `src/components/training/experienceTypes.ts` | `ExperienceProps` gains `material: GroundedTrainingMaterial \| null` + `provenanceLabels` |
+| `src/components/training/ExperienceParts.tsx` | + `ProvenanceLine` / `GroundedExcerpt` / `WorkedSteps` / `MaterialOriginNote` |
+| 8 × experience components | rewritten on the persisted snapshot (see §8.2) |
+| `src/pages/TrainingExperience.tsx` | loads the block snapshot, passes it through `TrainingExperienceDispatch` |
+| `tests/product-ui/groundedTrainingExperience.test.tsx` | **NEW** — GB-UX-01..10 (16 cases) |
+
+Not touched: `session_composer.rs`, `progress_projection.rs`, the Protocol Registry, any migration.
+
+### 8.2 §10 conformance
+
+```text
+§10.1 free_recall        reference_text / source_excerpt are NOT RENDERED before the first real
+                         attempt (absence, not CSS overlay).  Prompt comes from block.goal only.
+                         Reveal + self-check open only after a real attempt (typed text OR an
+                         already-persisted interaction on this block).  No attempt => the block
+                         submits result = null (unknown), never failure.  No fake reveal button
+                         when the snapshot has no usable reference.
+§10.2 cued_recall        renders the persisted cue_text verbatim; full reference stays hidden until
+                         an attempt.  Missing cue => honest notice + block goal; NEVER invented.
+§10.3 worked_example     renders real prompt_text + worked_steps + provenance.  Viewing submits
+                         `example_view` with result = null; assembly asserts it is NOT one of
+                         recall/practice/transfer/explanation.  No material => unavailable allowed.
+§10.4 faded_example      hides exactly the persisted hidden_step_index — index comes from the
+                         snapshot, out-of-range/null hides nothing (no invented gap).  The hidden
+                         step's text is absent from the DOM.
+§10.5 standard_practice  renders the persisted practice_prompt; submit stays `practice`
+                         (PracticeSuccess).  No prompt => never generates one on the fly.
+§10.6 error_correction   correction target is the real persisted prior error (earliest failure
+                         interaction, else error_detected).  Grounded material is labelled
+                         explicitly as "document text, NOT your error".  No prior error => the
+                         answer area is not even rendered (no fabricated learner error).
+§10.7 explain_back       prompt from the real block goal; after the attempt the grounded excerpt
+                         may be revealed and is labelled "not a reference answer"; copy states
+                         Higher did NOT semantically judge the explanation.  No fake
+                         "AI graded" / "system confirmed" wording anywhere.
+§10.8 transfer_challenge persisted transfer_prompt is the scenario, rendered as its own block,
+                         SEPARATE from the concept source excerpt (scenario != source quote).
+                         ai_non_authoritative is surfaced via MaterialOriginNote while provenance
+                         still points at the concept source.  Missing scenario => never reuses the
+                         original prompt reworded.
+§10.9 provenance         ProvenanceLine renders "来源：<display_name> · <section>" only; raw
+                         source_id / chunk_id are never rendered.  No labels => renders nothing
+                         (not "来源：未知").
+```
+
+### 8.3 Semantics deliberately preserved
+
+- The 8 components remain 8 separate components mapped 1:1 from `SPECIALIZED_PROTOCOLS`;
+  the generic fallback is used only for non-specialized protocol ids and preserves the original
+  `ProtocolId` in its rendering (GB-UX-10).
+- `material === null` (no snapshot: legacy / not-yet-grounded block) is rendered as an honest
+  unavailable state per experience — it is **"there is none"**, not "loading" and not "failed".
+- UI-side "viewing creates no mastery evidence" is expressed as **submit-type correctness**:
+  `example_view` for viewing, `practice` for practice, `explanation` for explain-back,
+  `transfer` for transfer.  No UI action claims RecallSuccess for a non-recall block.
+- No decision-layer LLM: the material is a W3 snapshot, not a live generation.
+
+### 8.4 Frozen contracts untouched
+
+22-entry Protocol Registry unchanged; `ProtocolId` = 22; `CompletionRuleKind` = 15;
+`LearningMomentType` = 20; the 8 TrainingExperience types unchanged.
+No new migration (v043 remains the ceiling). DTO regeneration was **purely additive**
+(2 new files; zero modified generated files).
+
+### 8.5 Deviation / residue registry (honest)
+
+- **`cargo fmt --check` baseline is dirtier than §0 records.** §0 listed 3 drifting files; the
+  current full-workspace run reports **9**:
+  `src/ai/secret_migration.rs`, `src/commands/agent.rs`, `tests/secret_store_cutover.rs` (all
+  recorded at baseline) **plus** `src/document_intelligence/ingestion.rs`, `src/ipc/dto.rs`,
+  `src/training/grounding.rs`, `tests/document_ingestion_lock.rs`, `tests/document_intelligence.rs`,
+  `tests/grounded_training_grounding.rs` (taskbook-era files, not recorded at W0).
+  **W5 added no fmt drift**: the two W5-owned Rust files that appear in this list are not in it
+  (`src/commands/training.rs`, `src/app/builder.rs` are clean), and the one `dto.rs` hunk W5
+  touched was normalized to rustfmt's preferred form — `dto.rs` still reports exactly the same
+  **single** pre-existing hunk (line 30, W2-era) as it does at `HEAD`. The remaining 8 files are
+  outside W5 scope and were intentionally left untouched rather than silently reformatted.
+- No other deviations. No ambiguous case required a self-chosen conservative fallback in W5.
+
+### 8.6 W5 closure — validation (all green)
+
+| Gate | Command | Result |
+|---|---|---|
+| lib compile | `cargo check --lib --manifest-path src-tauri/Cargo.toml -j 1` | ✅ 0 errors |
+| **GB-UX-01..10** | `npx vitest run tests/product-ui/groundedTrainingExperience.test.tsx` | ✅ **16/16 pass** |
+| Product UI (full) | `npm run test:product-ui` | ✅ **174/174 pass** (10 files) |
+| Frontend types | `npx tsc --noEmit` | ✅ 0 errors |
+| DTO currency | `npm run check:types` | ✅ exit 0 (additive: 2 new generated files) |
+| W3 regression | `cargo test --test grounded_training_material` | ✅ 5/5 pass |
+| W4 regression | `cargo test --test grounded_training_grounding` | ✅ 9/9 pass |
+| Training regression | `cargo test --test real_learning_engine_training` | ✅ 38/38 pass |
+| W2 regression | `cargo test --test document_knowledge_surface` | ✅ 9/9 pass |
+| W1 regression | `cargo test --test document_intelligence` | ✅ 27/27 pass |
+| O2 regression | `cargo test --test real_learning_engine_document_foundation` | ✅ 25/25 pass |
+| fmt (W5-owned files) | `rustfmt --edition 2021 --check src/commands/training.rs src/app/builder.rs src/ipc/dto.rs` | ✅ no new drift (see §8.5) |
+
+**Totals:** 113/113 targeted Rust tests green; 174/174 product-UI tests green (158 baseline + 16 new).
 
 
 

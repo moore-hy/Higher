@@ -306,6 +306,8 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             start_training_block,
             advance_training_block,
             try_complete_training_block,
+            // GROUNDED LEARNING BRIDGE V1 · W5 —— 块接地材料读取（§10）
+            get_block_grounded_material,
             // PACK A POST-PUSH AUDIT HOTFIX-01 —— 启动与提前结束（FIX D / FIX F2）
             start_training_run,
             abandon_training_run,

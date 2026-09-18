@@ -1,5 +1,10 @@
 import { useState } from "react";
-import type { InteractionResult, TrainingInteraction } from "../../types";
+import type {
+  GroundedProvenanceLabel,
+  GroundedTrainingMaterial,
+  InteractionResult,
+  TrainingInteraction,
+} from "../../types";
 import { RESULT_OPTIONS } from "./experienceTypes";
 
 /**
@@ -216,4 +221,105 @@ export function useReveal() {
     reveal: () => setRevealed(true),
     reset: () => setRevealed(false),
   };
+}
+
+// ============================ GROUNDED LEARNING BRIDGE V1 · W5 (§10) ============================
+
+/**
+ * §10.9 产品呈现 —— **紧凑**的出处行。
+ *
+ * ```text
+ * 来源：<document display name> · <section if available>
+ * ```
+ *
+ * 只渲染后端解析好的可读标签：**绝不**把 `source_id` / `chunk_id` 这类
+ * 内部行号摆给普通用户看。没有标签时什么都不渲染（不写「来源：未知」）。
+ */
+export function ProvenanceLine({ labels }: { labels: GroundedProvenanceLabel[] }) {
+  if (labels.length === 0) return null;
+  const parts = labels.map((l) =>
+    l.section_title ? `${l.display_name} · ${l.section_title}` : l.display_name,
+  );
+  const unique = Array.from(new Set(parts));
+  return (
+    <p className="hc-train__provenance" data-testid="hc-train-provenance">
+      来源：{unique.join("；")}
+    </p>
+  );
+}
+
+/** 一段材料引文。`title` 说明这是什么（摘录 / 参考 / 题面 / 线索）。 */
+export function GroundedExcerpt({
+  title,
+  text,
+  testId,
+}: {
+  title: string;
+  text: string;
+  testId?: string;
+}) {
+  return (
+    <div className="hc-train__material" data-testid={testId}>
+      <p className="hc-train__effect-title">{title}</p>
+      <p className="hc-train__material-text">{text}</p>
+    </div>
+  );
+}
+
+/**
+ * §10.3 / §10.4 —— 例题步骤。
+ *
+ * `hiddenIndex` 非空时，**只**遮住材料快照里落库的那一步；遮哪一步来自快照，
+ * 不是渲染时临时决定的。索引落在范围外时不做任何遮蔽（不编造一个缺步）。
+ */
+export function WorkedSteps({
+  steps,
+  hiddenIndex = null,
+}: {
+  steps: string[];
+  hiddenIndex?: number | null;
+}) {
+  const hidden =
+    hiddenIndex !== null && hiddenIndex >= 0 && hiddenIndex < steps.length ? hiddenIndex : null;
+  return (
+    <ol className="hc-train__steps" data-testid="hc-train-worked-steps">
+      {steps.map((s, i) => (
+        <li key={i} data-hidden={i === hidden ? "true" : undefined}>
+          {i === hidden ? (
+            <span className="hc-train__step-hidden" data-testid="hc-train-hidden-step">
+              （这一步被遮住了 —— 由你补上）
+            </span>
+          ) : (
+            s
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/**
+ * 材料来源行 —— 说明这份材料是**确定性**来自真实文档，还是由 AI 生成。
+ *
+ * §10.8：AI 生成的情境**不等于**来源引文，因此这里必须把「生成」这件事说出来，
+ * 而不是让用户以为它是一段原文。
+ */
+export function MaterialOriginNote({
+  material,
+}: {
+  material: GroundedTrainingMaterial | null;
+}) {
+  if (!material || material.status !== "ready") return null;
+  if (material.generated_by === "ai_non_authoritative") {
+    return (
+      <p className="hc-train__note" data-testid="hc-train-material-origin">
+        以上结构由 AI 依据右侧来源生成，**不是**来源原文，也不构成权威判定。
+      </p>
+    );
+  }
+  return (
+    <p className="hc-train__note" data-testid="hc-train-material-origin">
+      以上内容直接取自你导入的真实材料。
+    </p>
+  );
 }

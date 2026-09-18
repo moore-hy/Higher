@@ -103,6 +103,8 @@ import type {
   DocumentStructureView,
   IngestionJobRow,
   IngestionOutcome,
+  // GROUNDED LEARNING BRIDGE V1 · W5 — 接地训练材料视图
+  GroundedMaterialView,
 } from "./types";
 
 // ---- DB ----
@@ -443,6 +445,15 @@ export const searchDocumentContext = (args: {
     sourceIds: args.sourceIds ?? null,
     semanticEnabled: args.semanticEnabled ?? null,
   });
+
+/**
+ * GROUNDED LEARNING BRIDGE V1 · W5 §10 —— 读取某个训练块落库的接地材料快照。
+ *
+ * 只读：不产生任何学习事实。`material = null` 表示这个块**没有**快照
+ * （旧块 / 尚未接地）—— 那是「没有」，不是「加载失败」。
+ */
+export const getBlockGroundedMaterial = (profileId: number, blockRunId: number) =>
+  invoke<GroundedMaterialView>("get_block_grounded_material", { profileId, blockRunId });
 
 export const listGoals = () => invoke<Goal[]>("list_goals");
 

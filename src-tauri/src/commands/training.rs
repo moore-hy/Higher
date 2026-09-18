@@ -23,7 +23,9 @@
 
 use crate::db;
 use crate::training;
+use crate::training::grounded_material::GroundedTrainingMaterial;
 use crate::training::types::{BlockAdvanceIntent, InteractionResult, VerificationMethod};
+use rusqlite::OptionalExtension;
 
 /// §19 创建训练的结果：新 run + 被物化出来的块。
 ///
@@ -259,4 +261,113 @@ pub fn complete_training_run(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     crate::training::complete_training_run(&conn, profile_id, training_run_id)
         .map_err(|e| e.to_string())
+}
+
+// ============================ GROUNDED LEARNING BRIDGE V1 · W5 ============================
+
+/// §10.9 —— 一条**人类可读**的出处标签。
+///
+/// UI 只渲染 `display_name`（+ 有则 `section_title`），**绝不**把 `source_id` /
+/// `section_id` 这类内部行号展示给普通用户。id 保留在这里只是为了让前端能把
+/// 标签与快照里的 provenance 对上，不是给人看的。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+pub struct GroundedProvenanceLabel {
+    pub source_id: i64,
+    pub display_name: String,
+    pub section_id: Option<i64>,
+    pub section_title: Option<String>,
+}
+
+/// 某个训练块的接地材料视图：快照本身 + 已解析好的出处标签。
+///
+/// `material = None` 表示这个块**没有**快照（旧块 / 尚未接地）—— 那是「没有」，
+/// 不是「加载失败」。八个专项体验据此显示各自诚实的不可用状态。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
+pub struct GroundedMaterialView {
+    pub material: Option<GroundedTrainingMaterial>,
+    pub provenance_labels: Vec<GroundedProvenanceLabel>,
+}
+
+/// 读取某个训练块落库的材料快照，并把出处解析成可读标签。
+///
+/// # 为什么放在 `commands/training.rs`
+///
+/// 它是训练块的**读取**入口，和 `get_training_session` 同层：命令层只做
+/// 「加锁 + 调下层」，没有任何编排逻辑。
+///
+/// # 边界
+///
+/// - **profile 隔离**：快照与标签都先按 `profile_id` 过滤，跨档案一律拿不到。
+/// - **只读**：不产生 `LearningMoment` / `Evidence` / `MemoryReview`，不推进 FSRS。
+///   `example_view` 之类的「看一眼」动作永远不等于掌握度。
+/// - 快照不存在 → `material = None`（**不是**错误，也不编造一份材料）。
+///
+/// 命令与测试共用同一个 core 实现，避免出现第二套投影逻辑。
+pub fn block_grounded_material_core(
+    conn: &rusqlite::Connection,
+    profile_id: i64,
+    block_run_id: i64,
+) -> Result<GroundedMaterialView, String> {
+    let material = crate::training::load_material_snapshot(conn, profile_id, block_run_id)?;
+    let Some(material) = material else {
+        return Ok(GroundedMaterialView {
+            material: None,
+            provenance_labels: Vec::new(),
+        });
+    };
+
+    let mut provenance_labels: Vec<GroundedProvenanceLabel> = Vec::new();
+    for r in &material.provenance {
+        // 来源必须在同一档案内；查不到就跳过这一条（不编造标签）。
+        let display_name: Option<String> = conn
+            .query_row(
+                "SELECT display_name FROM document_sources WHERE id = ?1 AND profile_id = ?2",
+                rusqlite::params![r.source_id, profile_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(display_name) = display_name else {
+            continue;
+        };
+
+        let section_title: Option<String> = match r.section_id {
+            Some(section_id) => conn
+                .query_row(
+                    "SELECT title FROM document_sections WHERE id = ?1 AND profile_id = ?2",
+                    rusqlite::params![section_id, profile_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+                .flatten(),
+            None => None,
+        };
+
+        let label = GroundedProvenanceLabel {
+            source_id: r.source_id,
+            display_name,
+            section_id: r.section_id,
+            section_title,
+        };
+        if !provenance_labels.contains(&label) {
+            provenance_labels.push(label);
+        }
+    }
+
+    Ok(GroundedMaterialView {
+        material: Some(material),
+        provenance_labels,
+    })
+}
+
+/// 读取块材料快照的 IPC 入口（§10.4 / §10.9）。
+#[tauri::command]
+pub fn get_block_grounded_material(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    block_run_id: i64,
+) -> Result<GroundedMaterialView, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    block_grounded_material_core(&conn, profile_id, block_run_id)
 }

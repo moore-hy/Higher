@@ -5,6 +5,7 @@ import {
   abandonTrainingRun,
   advanceTrainingBlock,
   completeTrainingRun,
+  getBlockGroundedMaterial,
   getTrainingSession,
   recordTrainingInteraction,
   startTrainingBlock,
@@ -19,10 +20,14 @@ import type {
   BlockCompletionState,
   CompletionRuleKind,
   EffectSummary,
+  GroundedProvenanceLabel,
   TrainingBlockRun,
   TrainingSessionView,
   VerificationMethod,
 } from "../types";
+
+/** 稳定的空标签数组 —— 避免每次渲染都产生新引用。 */
+const EMPTY_LABELS: GroundedProvenanceLabel[] = [];
 
 /**
  * REAL LEARNING ENGINE V1 · W4 —— TrainingExperience。
@@ -244,6 +249,24 @@ export default function TrainingExperience() {
     () => (session?.interactions ?? []).filter((i) => i.block_run_id === selectedBlockId),
     [session?.interactions, selectedBlockId],
   );
+
+  /**
+   * GROUNDED LEARNING BRIDGE V1 · W5 §10 —— 当前块**落库**的接地材料快照。
+   *
+   * - 只读：读快照不产生任何学习事实（`example_view` 之类也一样）。
+   * - `material = null` 是「这个块没有快照」（旧块 / 尚未接地）—— **不是**错误。
+   *   查询失败时同样降级为 `null`：八个专项体验各自会显示诚实的不可用状态，
+   *   而不是把整页打成错误页。
+   * - 快照落库后不可变，因此这里不设失效策略；按块 id 分键，切块各自独立。
+   */
+  const materialQuery = useQuery({
+    queryKey: queryKeys.training.blockMaterial(profileId ?? -1, selectedBlockId ?? -1),
+    queryFn: () => getBlockGroundedMaterial(profileId as number, selectedBlockId as number),
+    enabled: profileId !== null && selectedBlockId !== null,
+  });
+
+  const blockMaterial = materialQuery.data?.material ?? null;
+  const provenanceLabels = materialQuery.data?.provenance_labels ?? EMPTY_LABELS;
 
   const run = session?.run ?? null;
 
@@ -677,6 +700,8 @@ export default function TrainingExperience() {
                 blockTerminal={isBlockTerminal(selectedBlock.status)}
                 busy={busy}
                 defaultInteractionType={defaultInteractionType}
+                material={blockMaterial}
+                provenanceLabels={provenanceLabels}
                 submit={onSubmit}
               />
 
