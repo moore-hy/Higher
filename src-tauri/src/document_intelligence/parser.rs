@@ -116,3 +116,51 @@ pub trait DocumentParser {
     /// 解析一份文件。
     fn parse(&self, file_name: &str, bytes: &[u8]) -> Result<ParsedDocument, ParseFailure>;
 }
+
+/// 运行时缺失时的**占位解析器**。
+///
+/// 存在的唯一目的：让导入生命周期在**没有 Docling 的机器上照常跑完一遍**，
+/// 留下一条 `Failed` + `DOCLING_UNAVAILABLE` + 可重试的作业记录，
+/// 而不是让调用方拿到一个没有任何事实痕迹的裸错误。
+///
+/// 它**不是**解析器实现，也永远不会「退化成」一个自研解析器 ——
+/// 它只会失败，且失败得可恢复（O2-18）。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UnavailableParser;
+
+impl UnavailableParser {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl DocumentParser for UnavailableParser {
+    fn name(&self) -> String {
+        "docling".to_string()
+    }
+
+    fn version(&self) -> Option<String> {
+        None
+    }
+
+    fn parse(&self, _file_name: &str, _bytes: &[u8]) -> Result<ParsedDocument, ParseFailure> {
+        Err(ParseFailure::RuntimeUnavailable(
+            "Docling runtime is not installed; install it and retry the ingestion".to_string(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // O2-18 的纯函数侧：运行时缺失必须是**可恢复**的稳定错误码。
+    #[test]
+    fn unavailable_parser_is_recoverable_docling_unavailable() {
+        let p = UnavailableParser::new();
+        let err = p.parse("x.pdf", b"whatever").unwrap_err();
+        assert_eq!(err.code(), "DOCLING_UNAVAILABLE");
+        assert!(err.is_recoverable());
+        assert_eq!(p.name(), "docling");
+    }
+}

@@ -155,7 +155,7 @@ pub type Result<T> = std::result::Result<T, DocumentIngestionError>;
 
 // ============================ 行类型 ============================
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct DocumentSourceRow {
     pub id: i64,
     pub profile_id: i64,
@@ -168,7 +168,7 @@ pub struct DocumentSourceRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct DocumentRevisionRow {
     pub id: i64,
     pub source_id: i64,
@@ -179,7 +179,7 @@ pub struct DocumentRevisionRow {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct DocumentSectionRow {
     pub id: i64,
     pub revision_id: i64,
@@ -190,7 +190,7 @@ pub struct DocumentSectionRow {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct DocumentChunkRow {
     pub id: i64,
     pub revision_id: i64,
@@ -201,7 +201,7 @@ pub struct DocumentChunkRow {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 pub struct IngestionJobRow {
     pub id: i64,
     pub source_id: i64,

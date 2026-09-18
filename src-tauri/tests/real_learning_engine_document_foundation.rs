@@ -35,10 +35,12 @@
 
 use std::path::{Path, PathBuf};
 
-use app_lib::document_intelligence::ingestion::ingest_source;
+use app_lib::document_intelligence::docling_parser::DoclingParser;
+use app_lib::document_intelligence::ingestion::{ingest_source, retry_ingestion};
 use app_lib::document_intelligence::parser::{
-    DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection,
+    DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection, UnavailableParser,
 };
+use app_lib::document_intelligence::retrieval::compile_document_context;
 use app_lib::migrations;
 use app_lib::repository::document_ingestion::{
     ChunkSection, DocumentIngestionErrorCode, DocumentIngestionRepository, NewChunk, NewSection,
@@ -1154,6 +1156,223 @@ fn o2_15_16_17_ingestion_creates_zero_learning_evidence() {
         assert!(
             !ingestion_src.contains(forbidden),
             "O2-15/16/17：导入模块的代码里出现了 `{forbidden}`"
+        );
+    }
+}
+
+// ============================ O2-18 ============================
+
+/// O2-18 —— Docling 不可用时是**可恢复**状态，且不留半成品。
+///
+/// 「可恢复」在这里有三个可验证的含义，缺一不可：
+/// ```text
+/// 1. 作业以 Failed 收尾，并带上稳定错误码 DOCLING_UNAVAILABLE
+/// 2. 结构表全零 —— 没有 revision / section / chunk 的残骸
+/// 3. 材料本身毫发无损 —— 来源与附件都还在，装好运行时重试即可
+/// ```
+#[test]
+fn o2_18_docling_unavailable_is_recoverable() {
+    let mut conn = setup();
+    let (profile, _, source) = scaffold(&conn, "A");
+
+    // 指向一个**确定不存在**的解释器：这就是「运行时不在」的真实形态。
+    let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("no-such-docling-python.exe");
+    let parser = DoclingParser::with_interpreter(&missing);
+
+    let outcome = ingest_source(&mut conn, &parser, profile, source, "notes.md", b"# hello")
+        .expect("运行时缺失不是致命错误，生命周期必须照常收尾");
+    assert_eq!(outcome.state, "Failed");
+    assert_eq!(outcome.error_code.as_deref(), Some("DOCLING_UNAVAILABLE"));
+    assert!(
+        outcome.recoverable,
+        "O2-18：DOCLING_UNAVAILABLE 必须是可恢复的，否则 UI 无法给出重试路径"
+    );
+
+    // 2. 没有半成品结构。
+    assert_eq!(count_where(&conn, "document_revisions", profile), 0);
+    assert_eq!(count_where(&conn, "document_sections", profile), 0);
+    assert_eq!(count_where(&conn, "document_chunks", profile), 0);
+    assert_eq!(count_where(&conn, "search_index", profile), 0);
+
+    // 3. 材料完好：来源与附件都还在。
+    assert_eq!(count_where(&conn, "document_sources", profile), 1);
+    assert_eq!(count_where(&conn, "learning_attachments", profile), 1);
+
+    // 作业留下了一条可审计的失败记录。
+    let job = repo(&conn)
+        .latest_job_for_source(profile, source)
+        .unwrap()
+        .expect("失败也必须留下作业记录");
+    assert_eq!(job.state, "Failed");
+    assert_eq!(job.error_code.as_deref(), Some("DOCLING_UNAVAILABLE"));
+
+    // 重试闸门：Failed 允许重试，且重试后仍然是同一条可恢复路径。
+    let retried = retry_ingestion(&mut conn, &parser, profile, source, "notes.md", b"# hello")
+        .expect("Failed 状态必须允许重试");
+    assert_eq!(retried.state, "Failed");
+    assert!(retried.recoverable);
+
+    // 占位解析器（命令层在运行时完全缺席时使用）给出同样的分类。
+    let placeholder = UnavailableParser::new();
+    let outcome2 = ingest_source(
+        &mut conn,
+        &placeholder,
+        profile,
+        source,
+        "notes.md",
+        b"# hello",
+    )
+    .unwrap();
+    assert_eq!(outcome2.error_code.as_deref(), Some("DOCLING_UNAVAILABLE"));
+    assert!(outcome2.recoverable);
+}
+
+/// O2-18（源码级）—— **没有**自研富文档解析器被写进 Higher。
+///
+/// 这是 §7.1 的硬边界：Docling 不在时，唯一允许的行为是**干净地失败**，
+/// 而不是「先凑合解析一下」。因此解析模块的代码里不得出现任何
+/// PDF / DOCX / PPTX / OCR 库的名字。
+#[test]
+fn o2_18_no_custom_rich_document_parser_exists() {
+    let parser_src = strip_rust_comments(&read_repo(
+        "src-tauri/src/document_intelligence/docling_parser.rs",
+    ));
+    for forbidden in [
+        "pdf_extract",
+        "lopdf",
+        "pdfium",
+        "docx_rs",
+        "zip::",
+        "tesseract",
+        "poppler",
+    ] {
+        assert!(
+            !parser_src.contains(forbidden),
+            "O2-18：解析边界里出现了自研解析依赖 `{forbidden}`"
+        );
+    }
+}
+
+// ============================ O2-19 / O2-20 ============================
+
+/// O2-19 —— 既有 Context Compiler 能消费词法文档候选。
+///
+/// 这条测试是 M6 的**端到端证据**：真的导入一份材料，真的走既有 FTS 检索，
+/// 真的产出既有 `ContextPack`。不是「把 chunk 写进索引就宣布完成」。
+#[test]
+fn o2_19_context_compiler_consumes_lexical_document_candidate() {
+    let mut conn = setup();
+    let (profile, _, source) = scaffold(&conn, "A");
+
+    let parser = ScriptedParser {
+        doc: sample_doc(&["photosynthesis chlorophyll", "mitochondria atp"]),
+    };
+    let outcome = ingest_source(&mut conn, &parser, profile, source, "notes.md", b"x").unwrap();
+    assert!(outcome.is_ready(), "前置条件：导入必须成功");
+
+    // 语义与重排都缺席 —— 词法路径必须依然完整可用。
+    let pack = compile_document_context(&conn, profile, "photosynthesis", &[], false)
+        .expect("编译必须成功");
+    assert!(
+        !pack.candidates.is_empty(),
+        "O2-19：既有 Context Compiler 必须能消费 document_chunk 词法候选"
+    );
+
+    let c = &pack.candidates[0];
+    // 身份来自 v042 结构表，而不是索引里的扁平行。
+    let chunk_id: i64 = conn
+        .query_row(
+            "SELECT id FROM document_chunks WHERE profile_id = ?1 AND text LIKE '%photosynthesis%'",
+            params![profile],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(c.chunk_id, chunk_id.to_string());
+    assert_eq!(c.source_id, source.to_string());
+    assert!(c.retrieval_method.contains("lexical"));
+    assert!(c.semantic_score.is_none());
+    // 已存在的章节标题成为 parent_context —— 不是生成的摘要。
+    assert_eq!(c.parent_context.as_deref(), Some("第一章"));
+    // 预算约束依然生效。
+    assert!(pack.total_text_chars <= 16000);
+    assert!(pack.candidates.len() <= 12);
+
+    // 检索不得产生任何学习事实。
+    assert_eq!(count_where(&conn, "learning_moments", profile), 0);
+    assert_eq!(count_where(&conn, "memory_reviews", profile), 0);
+}
+
+/// O2-20 —— 跨档案上下文检索被拒。
+///
+/// 「被拒」的准确含义是**查不出来**，而不是「取回来再筛掉」：
+/// 两条完全相同的文本分别属于两个档案，各自只应看到自己那一条。
+#[test]
+fn o2_20_cross_profile_context_retrieval_rejected() {
+    let mut conn = setup();
+
+    let (p1, ids1) = ingest_and_compile(&mut conn, "P1");
+    let (p2, ids2) = ingest_and_compile(&mut conn, "P2");
+
+    assert_eq!(ids1.len(), 1, "O2-20：档案 1 只应看到自己的 chunk");
+    assert_eq!(ids2.len(), 1, "O2-20：档案 2 只应看到自己的 chunk");
+    assert_ne!(ids1[0], ids2[0], "两个档案的 chunk 必须是不同的行");
+
+    // 档案 1 的候选里绝不含档案 2 的 chunk。
+    assert!(!ids1.contains(&ids2[0]));
+    assert!(!ids2.contains(&ids1[0]));
+
+    // 反向验证：把档案 2 的 chunk id 直接喂给档案 1 的编译，也取不到。
+    let foreign: i64 = conn
+        .query_row(
+            "SELECT id FROM document_chunks WHERE profile_id = ?1",
+            params![p2],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let pack1 = compile_document_context(&conn, p1, "shared", &[], false).unwrap();
+    assert!(!pack1
+        .candidates
+        .iter()
+        .any(|c| c.chunk_id == foreign.to_string()));
+}
+
+/// 导入一份**文本完全相同**的材料并编译上下文，返回 (profile_id, 候选 chunk id)。
+///
+/// 抽成普通函数而不是闭包：闭包会一直持有 `&mut Connection`，
+/// 后续的只读查询就没法再借用同一个连接。
+fn ingest_and_compile(conn: &mut Connection, name: &str) -> (i64, Vec<String>) {
+    let (profile, _, source) = scaffold(conn, name);
+    let parser = ScriptedParser {
+        doc: sample_doc(&["shared keyword material"]),
+    };
+    let outcome = ingest_source(conn, &parser, profile, source, "notes.md", b"x").unwrap();
+    assert!(outcome.is_ready());
+    let pack = compile_document_context(conn, profile, "shared", &[], false).unwrap();
+    let ids = pack.candidates.iter().map(|c| c.chunk_id.clone()).collect();
+    (profile, ids)
+}
+
+// ============================ O2-24 ============================
+
+/// O2-24 —— 本任务的全部提交都在 `main` 上。
+///
+/// 读 `.git/HEAD`（只读，不执行任何 git 写操作）：它必须指向 `refs/heads/main`。
+/// 只要 HEAD 还在 main 上，本任务的所有提交就都在 main 上 ——
+/// 因为任务书禁止创建分支、禁止切换分支、禁止合并。
+#[test]
+fn o2_24_all_task_commits_are_on_main() {
+    let head = read_repo(".git/HEAD");
+    assert_eq!(
+        head.trim(),
+        "ref: refs/heads/main",
+        "O2-24：HEAD 必须指向 refs/heads/main，实际是 {head:?}"
+    );
+
+    // 任务书 §23 禁止删除的四个目录必须仍然存在。
+    for dir in [".git_broken3", ".git_pack_rescue", ".w9_check"] {
+        assert!(
+            repo_root().join(dir).exists(),
+            "O2-24：§23 禁止删除的目录 `{dir}` 不得被移除"
         );
     }
 }

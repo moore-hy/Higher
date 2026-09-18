@@ -814,7 +814,9 @@ mod tests {
             Some(0.9),
             None,
         ));
-        input.parent_context.insert("sec1".to_string(), "XY");
+        input
+            .parent_context
+            .insert("sec1".to_string(), "XY".to_string());
         let pack = compile(&input);
         let expected: usize = "abcdef".chars().count() + "XY".chars().count();
         assert_eq!(pack.total_text_chars, expected);
@@ -897,7 +899,9 @@ mod tests {
             Some(0.9),
             None,
         ));
-        input.parent_context.insert("sec1".to_string(), "PAR");
+        input
+            .parent_context
+            .insert("sec1".to_string(), "PAR".to_string());
         let pack = compile(&input);
         assert_eq!(
             pack.total_text_chars,

@@ -3,6 +3,7 @@
 // setup hook and the generate_handler! command list are unchanged.
 use crate::commands::agent::*;
 use crate::commands::data::*;
+use crate::commands::document::*;
 use crate::commands::knowledge::*;
 use crate::commands::learning_state::*;
 use crate::commands::planning::*;
@@ -404,5 +405,16 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             sync_qr_session_start,
             sync_pair_via_qr,
             sync_unpair,
+            // NIGHT SHIFT O2 · M5 — 文档导入生产路径（v042 + 既有 SearchRepository）
+            get_document_runtime_status,
+            list_document_sources,
+            import_document_source,
+            start_document_ingestion,
+            retry_document_ingestion,
+            get_document_ingestion_status,
+            get_document_structure,
+            cancel_document_ingestion,
+            // NIGHT SHIFT O2 · M6 — 文档 chunk 进入既有 Context Compiler
+            search_document_context,
         ])
 }

@@ -309,6 +309,41 @@ fn persist_revision(
     Ok((revision_id, rows.len()))
 }
 
+/// 安全重试：**只有已终结为 `Failed` 的作业**才允许重新导入。
+///
+/// 为什么需要这道闸门：`ingest_source` 每次都会开一个新作业，所以「重试」在
+/// 数据层看起来和「首次导入」一模一样。如果前端可以在 `Parsing` / `Indexing`
+/// 期间再点一次，就会得到两个并发写同一份结构的作业 —— 第二个必然撞上
+/// `CHUNK_ORDINAL_CONFLICT`，用户看到的是一个本不该出现的错误。
+///
+/// `Ready` 也**不允许**走重试：重新导入是一个**替换**语义，必须由用户显式
+/// 选择（重新导入），而不是被「重试」这个动作悄悄触发。
+///
+/// 没有任何作业时返回 `Ok`：那是首次导入，不是重试。
+pub fn retry_ingestion(
+    conn: &mut Connection,
+    parser: &dyn DocumentParser,
+    profile_id: i64,
+    source_id: i64,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<IngestionOutcome, DocumentIngestionError> {
+    let repo = DocumentIngestionRepository::new(conn);
+    if let Some(job) = repo.latest_job_for_source(profile_id, source_id)? {
+        if job.state != "Failed" {
+            return Err(DocumentIngestionError::new(
+                DocumentIngestionErrorCode::InvalidJobState,
+                format!(
+                    "来源 {source_id} 的最新作业处于 {}，只有 Failed 才可重试",
+                    job.state
+                ),
+            ));
+        }
+    }
+    drop(repo);
+    ingest_source(conn, parser, profile_id, source_id, file_name, bytes)
+}
+
 /// 取消一个尚未终结的作业（§13 锁定状态 `Cancelled`）。
 ///
 /// 只有 `Pending` / `Parsing` 可以被取消：`Ready` 已经是事实，

@@ -7,6 +7,7 @@
 pub mod agent;
 pub mod companion;
 pub mod data;
+pub mod document;
 pub mod intake;
 pub mod knowledge;
 pub mod learning_intent;
