@@ -11,7 +11,9 @@ use app_lib::db::DbState;
 use app_lib::document_intelligence::ingestion::{
     begin_ingestion, cancel_ingestion, finish_ingestion, IngestionOutcome,
 };
-use app_lib::document_intelligence::parser::{ParseFailure, ParsedChunk, ParsedDocument, ParsedSection};
+use app_lib::document_intelligence::parser::{
+    ParseFailure, ParsedChunk, ParsedDocument, ParsedSection,
+};
 use app_lib::migrations;
 use app_lib::repository::document_ingestion::{
     DocumentIngestionErrorCode, DocumentIngestionRepository,
@@ -192,21 +194,32 @@ fn gb_db_03_parser_failure_ends_failed_no_partial() {
     let mut conn = setup();
     let (profile, _att, source) = scaffold(&conn, "gb-db-03");
     let ticket = begin_ingestion(&conn, profile, source, false).unwrap();
-    let out = finish_ingestion(&mut conn, &ticket, Err(ParseFailure::Failed("boom".into()))).unwrap();
+    let out =
+        finish_ingestion(&mut conn, &ticket, Err(ParseFailure::Failed("boom".into()))).unwrap();
 
     assert_eq!(out.state, "Failed");
     assert_eq!(out.revision_id, None);
     // 无半成品 revision / chunk。
     assert!(
-        repo(&conn).revision_ids_for_source(profile, source).unwrap().is_empty(),
+        repo(&conn)
+            .revision_ids_for_source(profile, source)
+            .unwrap()
+            .is_empty(),
         "GB-DB-03：失败不应留下 revision"
     );
     assert!(
-        repo(&conn).chunk_ids_for_source(profile, source).unwrap().is_empty(),
+        repo(&conn)
+            .chunk_ids_for_source(profile, source)
+            .unwrap()
+            .is_empty(),
         "GB-DB-03：失败不应留下 chunk"
     );
     assert_eq!(
-        repo(&conn).get_job(profile, ticket.job_id).unwrap().unwrap().state,
+        repo(&conn)
+            .get_job(profile, ticket.job_id)
+            .unwrap()
+            .unwrap()
+            .state,
         "Failed"
     );
 }
@@ -230,15 +243,25 @@ fn gb_db_04_cancel_during_parse_remains_cancelled() {
         "GB-DB-04：被取消的作业不能被晚归的解析覆盖成 Ready"
     );
     assert!(
-        repo(&conn).revision_ids_for_source(profile, source).unwrap().is_empty(),
+        repo(&conn)
+            .revision_ids_for_source(profile, source)
+            .unwrap()
+            .is_empty(),
         "GB-DB-04：取消后不应留下 revision"
     );
     assert!(
-        repo(&conn).chunk_ids_for_source(profile, source).unwrap().is_empty(),
+        repo(&conn)
+            .chunk_ids_for_source(profile, source)
+            .unwrap()
+            .is_empty(),
         "GB-DB-04：取消后不应留下 chunk"
     );
     assert_eq!(
-        repo(&conn).get_job(profile, ticket.job_id).unwrap().unwrap().state,
+        repo(&conn)
+            .get_job(profile, ticket.job_id)
+            .unwrap()
+            .unwrap()
+            .state,
         "Cancelled"
     );
 }
@@ -256,7 +279,11 @@ fn gb_db_05_retry_from_failed_works() {
     // 从 Failed 重试。
     let t2 = begin_ingestion(&conn, profile, source, true).unwrap();
     assert_eq!(
-        repo(&conn).get_job(profile, t2.job_id).unwrap().unwrap().state,
+        repo(&conn)
+            .get_job(profile, t2.job_id)
+            .unwrap()
+            .unwrap()
+            .state,
         "Parsing"
     );
     let o2 = finish_ingestion(&mut conn, &t2, Ok(parsed_doc(1, 2))).unwrap();
@@ -272,20 +299,30 @@ fn gb_db_06_start_while_active_is_rejected() {
     let (profile, _att, source) = scaffold(&conn, "gb-db-06");
     let t1 = begin_ingestion(&conn, profile, source, false).unwrap();
     assert_eq!(
-        repo(&conn).get_job(profile, t1.job_id).unwrap().unwrap().state,
+        repo(&conn)
+            .get_job(profile, t1.job_id)
+            .unwrap()
+            .unwrap()
+            .state,
         "Parsing"
     );
 
     // 同一来源再起始 -> 拒绝（已有活动作业）。
     let err = begin_ingestion(&conn, profile, source, false);
     assert!(err.is_err(), "GB-DB-06：活动作业期间重复起始必须被拒绝");
-    assert_eq!(err.unwrap_err().code, DocumentIngestionErrorCode::InvalidJobState);
+    assert_eq!(
+        err.unwrap_err().code,
+        DocumentIngestionErrorCode::InvalidJobState
+    );
 
     // 收尾为 Ready 后，再起始应允许（替换语义）。
     let o1 = finish_ingestion(&mut conn, &t1, Ok(parsed_doc(1, 1))).unwrap();
     assert_eq!(o1.state, "Ready");
     let t2 = begin_ingestion(&conn, profile, source, false).unwrap();
-    assert!(t2.job_id > t1.job_id, "GB-DB-06：Ready 后可重新导入（替换）");
+    assert!(
+        t2.job_id > t1.job_id,
+        "GB-DB-06：Ready 后可重新导入（替换）"
+    );
 
     // Ready 后 retry 应被拒绝（只有 Failed 可重试）。
     let retry_err = begin_ingestion(&conn, profile, source, true);
@@ -309,7 +346,9 @@ fn gb_db_07_successful_persist_is_transactional() {
     assert!(out.revision_id.is_some());
     assert_eq!(out.chunk_count, 3);
 
-    let revs = repo(&conn).revision_ids_for_source(profile, source).unwrap();
+    let revs = repo(&conn)
+        .revision_ids_for_source(profile, source)
+        .unwrap();
     assert_eq!(revs.len(), 1);
     let rev = revs[0];
     assert_eq!(repo(&conn).list_sections(profile, rev).unwrap().len(), 2);
@@ -324,7 +363,11 @@ fn gb_db_07_successful_persist_is_transactional() {
         );
     }
     assert_eq!(
-        repo(&conn).get_job(profile, ticket.job_id).unwrap().unwrap().state,
+        repo(&conn)
+            .get_job(profile, ticket.job_id)
+            .unwrap()
+            .unwrap()
+            .state,
         "Ready"
     );
 }

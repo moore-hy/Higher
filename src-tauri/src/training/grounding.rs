@@ -309,10 +309,7 @@ fn ref_of(candidate: &ContextCandidate) -> Option<GroundedMaterialRef> {
 /// 只写真实存在的东西：`source_excerpt` 来自真实 chunk 文本，
 /// `cue_text` 只用**已存在**的父/章节上下文（绝不 LLM 生成），
 /// `provenance` 只指向真实行。**绝不**编造引文，**绝不**声称不存在的章节。
-fn deterministic_material(
-    ctx: &GroundedContext,
-    protocol: ProtocolId,
-) -> GroundedTrainingMaterial {
+fn deterministic_material(ctx: &GroundedContext, protocol: ProtocolId) -> GroundedTrainingMaterial {
     let candidates = &ctx.pack.candidates;
 
     let mut provenance: Vec<GroundedMaterialRef> = Vec::new();
@@ -458,11 +455,7 @@ fn apply_draft(
     if let Some(v) = draft.prompt_text.and_then(clean) {
         m.prompt_text = Some(v);
     }
-    let steps: Vec<String> = draft
-        .worked_steps
-        .into_iter()
-        .filter_map(clean)
-        .collect();
+    let steps: Vec<String> = draft.worked_steps.into_iter().filter_map(clean).collect();
     if !steps.is_empty() {
         m.worked_steps = steps;
     }

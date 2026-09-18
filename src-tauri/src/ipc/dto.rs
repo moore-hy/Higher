@@ -30,9 +30,7 @@ use crate::repository::study_session::StudySession;
 use crate::repository::task::Task;
 // GROUNDED LEARNING BRIDGE V1 · W2 — 文档智能 IPC 面（§7.1 暴露给产品 UI）。
 #[allow(unused_imports)]
-use crate::commands::document::{
-    DocumentRuntimeStatus, DocumentSourceView, DocumentStructureView,
-};
+use crate::commands::document::{DocumentRuntimeStatus, DocumentSourceView, DocumentStructureView};
 #[allow(unused_imports)]
 use crate::document_intelligence::ingestion::IngestionOutcome;
 #[allow(unused_imports)]

@@ -179,13 +179,19 @@ pub fn begin_ingestion(
             if job.state != "Failed" {
                 return Err(DocumentIngestionError::new(
                     DocumentIngestionErrorCode::InvalidJobState,
-                    format!("来源 {source_id} 的最新作业处于 {}，只有 Failed 才可重试", job.state),
+                    format!(
+                        "来源 {source_id} 的最新作业处于 {}，只有 Failed 才可重试",
+                        job.state
+                    ),
                 ));
             }
         } else if job.state == "Parsing" || job.state == "Indexing" {
             return Err(DocumentIngestionError::new(
                 DocumentIngestionErrorCode::InvalidJobState,
-                format!("来源 {source_id} 已有进行中的作业（{}），不可重复起始", job.state),
+                format!(
+                    "来源 {source_id} 已有进行中的作业（{}），不可重复起始",
+                    job.state
+                ),
             ));
         }
     }

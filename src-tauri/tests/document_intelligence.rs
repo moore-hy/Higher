@@ -958,12 +958,26 @@ fn di_25_semantic_disabled_ignores_semantic_input() {
         },
         ..Default::default()
     };
-    input2
-        .lexical
-        .push(chunk("lx0", "s1", "r1", Some("sec1"), 0, "l", Some(0.9), None));
-    input2
-        .semantic
-        .push(chunk("sm0", "s1", "r1", Some("sec1"), 0, "s", None, Some(0.9)));
+    input2.lexical.push(chunk(
+        "lx0",
+        "s1",
+        "r1",
+        Some("sec1"),
+        0,
+        "l",
+        Some(0.9),
+        None,
+    ));
+    input2.semantic.push(chunk(
+        "sm0",
+        "s1",
+        "r1",
+        Some("sec1"),
+        0,
+        "s",
+        None,
+        Some(0.9),
+    ));
     let pack2 = compile(&input2);
     assert!(pack2.candidates.iter().any(|c| c.chunk_id == "lx0"));
     assert!(!pack2.candidates.iter().any(|c| c.chunk_id == "sm0"));
@@ -979,12 +993,26 @@ fn di_26_rerank_disabled_uses_fallback_relevance_order() {
         },
         ..Default::default()
     };
-    input
-        .lexical
-        .push(chunk("c_low", "s1", "r1", Some("sec1"), 0, "low", Some(0.1), None));
-    input
-        .lexical
-        .push(chunk("c_high", "s1", "r1", Some("sec1"), 1, "high", Some(0.9), None));
+    input.lexical.push(chunk(
+        "c_low",
+        "s1",
+        "r1",
+        Some("sec1"),
+        0,
+        "low",
+        Some(0.1),
+        None,
+    ));
+    input.lexical.push(chunk(
+        "c_high",
+        "s1",
+        "r1",
+        Some("sec1"),
+        1,
+        "high",
+        Some(0.9),
+        None,
+    ));
     // rerank 可用且分数与真实相关度冲突：给 c_low 极高 rerank 分。
     input.rerank_available = true;
     input.rerank_scores.insert("c_low".to_string(), 0.99);
@@ -1004,12 +1032,26 @@ fn di_27_rerank_enabled_controls_ordering() {
         },
         ..Default::default()
     };
-    input
-        .lexical
-        .push(chunk("c_low", "s1", "r1", Some("sec1"), 0, "low", Some(0.1), None));
-    input
-        .lexical
-        .push(chunk("c_high", "s1", "r1", Some("sec1"), 1, "high", Some(0.9), None));
+    input.lexical.push(chunk(
+        "c_low",
+        "s1",
+        "r1",
+        Some("sec1"),
+        0,
+        "low",
+        Some(0.1),
+        None,
+    ));
+    input.lexical.push(chunk(
+        "c_high",
+        "s1",
+        "r1",
+        Some("sec1"),
+        1,
+        "high",
+        Some(0.9),
+        None,
+    ));
     input.rerank_available = true;
     input.rerank_scores.insert("c_low".to_string(), 0.99);
     input.rerank_scores.insert("c_high".to_string(), 0.01);

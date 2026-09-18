@@ -2186,22 +2186,29 @@ fn audit_a26_no_frozen_taxonomy_expansion() {
 
 /// A27 —— **不存在**超出当前授权上限的迁移。
 ///
-/// # 上限为何是 v042 而不是 v041（NIGHT SHIFT O2 · M1）
+/// # 上限为何是 v043 而不是 v042（GROUNDED LEARNING BRIDGE V1 · W3）
 ///
 /// 本门在 HOTFIX-01 时期断言「最新迁移必须是 v041」，其**真实意图**是
 /// 「不得出现未被授权的迁移」。NIGHT SHIFT O2 §12 明确授权并**要求**创建
 /// `v042_document_ingestion`（REAL LEARNING ENGINE V1 早已把 v042 预留给
-/// PACK B / W5 的文档导入，见 `.higher/REAL_LEARNING_ENGINE_V1_PROGRESS.md` §2）。
+/// PACK B / W5 的文档导入，见 `.higher/REAL_LEARNING_ENGINE_V1_PROGRESS.md` §2），
+/// 于是上限上移到 v042。
 ///
-/// 因此上限随授权一起上移到 v042，而本门真正要锁的东西**没有变**：
-/// `v043+` 仍然属于 PACK C / W6，本夜不得出现。O2-04 / O2-21 在
-/// `real_learning_engine_document_foundation` 里对同一上限再断言一次。
+/// GROUNDED LEARNING BRIDGE V1 §8 又明确授权并**要求**创建
+/// `v043_grounded_training_material`（「This is the only wave authorized to
+/// introduce V043」），于是上限随授权再次上移到 v043，而本门真正要锁的东西
+/// **没有变**：`v044+` 仍然属于后续包，本次不得出现。
+///
+/// 本次同步是 W3 遗漏的收口：W3 已把 `real_learning_engine_document_foundation`
+/// 里的同义门 O2-04 / O2-21 由 v042 抬到 v043，但没有同步本文件的 A27 / A28
+/// （两处 `latest_version() == 42`）。两处断言完全同义，必须一起移动，
+/// 否则同一份授权在两个文件里得到互相矛盾的判定。
 #[test]
 fn audit_a27_no_migration_beyond_authorized_ceiling_exists() {
     assert_eq!(
         migrations::latest_version(),
-        42,
-        "A27：最新迁移必须是 v042（document_ingestion）—— v043+ 属于 PACK C / W6"
+        43,
+        "A27：最新迁移必须是 v043（grounded_training_material）—— v044+ 属于后续包"
     );
 
     let dir = repo_root().join("src-tauri/src/migrations");
@@ -2212,7 +2219,7 @@ fn audit_a27_no_migration_beyond_authorized_ceiling_exists() {
         if let Some(rest) = name.strip_prefix('v') {
             if let Some(num) = rest.get(0..3) {
                 if let Ok(n) = num.parse::<u32>() {
-                    if n >= 43 {
+                    if n >= 44 {
                         offenders.push(name);
                     }
                 }
@@ -2221,7 +2228,7 @@ fn audit_a27_no_migration_beyond_authorized_ceiling_exists() {
     }
     assert!(
         offenders.is_empty(),
-        "A27：发现了 v043+ 迁移文件：{offenders:?} —— 本夜只授权 v042"
+        "A27：发现了 v044+ 迁移文件：{offenders:?} —— 当前只授权到 v043"
     );
 
     // 迁移账本里也不得有 v043+ 的记录。
@@ -2275,11 +2282,11 @@ fn audit_a28_pack_b_and_w5_remain_untouched() {
         );
     }
 
-    // ---- 3. 迁移上限 = v042（NIGHT SHIFT O2 §12 授权），v043+ 仍属 PACK C ----
+    // ---- 3. 迁移上限 = v043（GROUNDED LEARNING BRIDGE V1 §8 授权），v044+ 仍属后续包 ----
     assert_eq!(
         migrations::latest_version(),
-        42,
-        "A28：本夜只授权到 v042；出现 v043+ 才说明 PACK C 被动了"
+        43,
+        "A28：当前授权到 v043（grounded_training_material）；出现 v044+ 才说明后续包被动了"
     );
 
     // ---- 4. 训练运行时只有三张表（PACK A 的边界）----

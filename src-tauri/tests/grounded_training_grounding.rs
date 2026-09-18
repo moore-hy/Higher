@@ -261,7 +261,13 @@ fn gb_gr_01_item_never_receives_other_items_source() {
 
     let mat = compile_grounded_material(
         &conn,
-        &req(p, item_a, ProtocolId::FreeRecall, "复习", DecisionMode::Copilot),
+        &req(
+            p,
+            item_a,
+            ProtocolId::FreeRecall,
+            "复习",
+            DecisionMode::Copilot,
+        ),
         None,
     )
     .unwrap();
@@ -309,7 +315,13 @@ fn gb_gr_02_profile_never_receives_other_profiles_source() {
     // A 编译出的材料，出处全部属于 A。
     let mat_a = compile_grounded_material(
         &conn,
-        &req(pa, item_a, ProtocolId::FreeRecall, "复习", DecisionMode::Copilot),
+        &req(
+            pa,
+            item_a,
+            ProtocolId::FreeRecall,
+            "复习",
+            DecisionMode::Copilot,
+        ),
         None,
     )
     .unwrap();
@@ -318,7 +330,13 @@ fn gb_gr_02_profile_never_receives_other_profiles_source() {
     // B 的档案里编译 A 的 item：明确不可用，而不是泄漏 A 的内容。
     let mat_cross = compile_grounded_material(
         &conn,
-        &req(pb, item_a, ProtocolId::FreeRecall, "复习", DecisionMode::Copilot),
+        &req(
+            pb,
+            item_a,
+            ProtocolId::FreeRecall,
+            "复习",
+            DecisionMode::Copilot,
+        ),
         None,
     )
     .unwrap();
@@ -339,7 +357,13 @@ fn gb_gr_03_no_ready_source_is_unavailable_not_fake_context() {
     let bare = create_item(&conn, p, "chunk bare");
     let m1 = compile_grounded_material(
         &conn,
-        &req(p, bare, ProtocolId::FreeRecall, "复习", DecisionMode::Copilot),
+        &req(
+            p,
+            bare,
+            ProtocolId::FreeRecall,
+            "复习",
+            DecisionMode::Copilot,
+        ),
         None,
     )
     .unwrap();
@@ -365,7 +389,13 @@ fn gb_gr_03_no_ready_source_is_unavailable_not_fake_context() {
 
     let m2 = compile_grounded_material(
         &conn,
-        &req(p, item2, ProtocolId::FreeRecall, "复习", DecisionMode::Copilot),
+        &req(
+            p,
+            item2,
+            ProtocolId::FreeRecall,
+            "复习",
+            DecisionMode::Copilot,
+        ),
         None,
     )
     .unwrap();
@@ -438,7 +468,13 @@ fn gb_gr_05_deterministic_material_has_real_provenance() {
 
     let mat = compile_grounded_material(
         &conn,
-        &req(p, item, ProtocolId::FreeRecall, "复习", DecisionMode::Copilot),
+        &req(
+            p,
+            item,
+            ProtocolId::FreeRecall,
+            "复习",
+            DecisionMode::Copilot,
+        ),
         None,
     )
     .unwrap();
@@ -628,7 +664,13 @@ fn gb_gr_08_direct_protocol_is_never_silently_substituted() {
     // 对照：DIRECT + 只需要接地上下文的协议 → 正常可用（不是一刀切封杀）。
     let ok = compile_grounded_material(
         &conn,
-        &req(p, item, ProtocolId::FreeRecall, "复习", DecisionMode::Direct),
+        &req(
+            p,
+            item,
+            ProtocolId::FreeRecall,
+            "复习",
+            DecisionMode::Direct,
+        ),
         None,
     )
     .unwrap();
@@ -697,7 +739,10 @@ fn gb_gr_09_autopilot_avoids_protocols_whose_material_cannot_be_satisfied() {
         ProtocolId::ReviewShort,
         ProtocolId::ReadingComprehension,
     ] {
-        assert_eq!(material_requirement(p), MaterialRequirement::GroundedContext);
+        assert_eq!(
+            material_requirement(p),
+            MaterialRequirement::GroundedContext
+        );
     }
 
     // 空能力时，「只需要接地上下文」的协议也不可满足；有接地上下文时则可以。
