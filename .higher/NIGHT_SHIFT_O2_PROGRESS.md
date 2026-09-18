@@ -413,7 +413,7 @@ Resolution use the OFFICIAL endpoint for model artifacts.
            huggingface_hub. Nothing was downgraded or upgraded to work around it.
 ```
 
-#### Three more real defects, found only by running it
+#### Four more real defects, found only by running it
 
 ```text
 BUG 3  no parse timeout → a permanently stuck `Parsing` job (UNRECOVERABLE).
@@ -446,6 +446,20 @@ Hardened in the same pass:
     message is always last.
   · temp staging filenames now carry a per-process sequence number, so two concurrent
     parses in one process cannot overwrite each other's files.
+
+BUG 6  the runner script littered the runtime directory without bound.
+       `runner_path()` named the script `higher_docling_runner_<pid>.py`, so every
+       application launch left a NEW 7 KB file behind (three had already accumulated
+       during this session alone).
+       FIXED: the name is now stable (`higher_docling_runner.py`). The content comes
+       from `include_str!` and is therefore identical for a given binary, so it is
+       reused when it already matches; when a write is needed it goes to a temp file
+       and is renamed into place, so a concurrent process can never read a half-written
+       script. Two tests lock both properties.
+       NOTE: the three PID-named runners left in the isolated runtime by the old
+       scheme are deliberately LEFT IN PLACE — this taskbook forbids cleaning
+       runtime directories, and they are harmless. The new naming means the count
+       will not grow again.
 ```
 
 #### A hierarchy observation — recorded so it is not "fixed" later
@@ -616,7 +630,7 @@ integration  tests/real_learning_engine_document_foundation.rs
                                                            zero learning facts
                                                            (availability + model-cache gated)
 
-unit  src/document_intelligence/docling_parser.rs   9 tests (discovery totality,
+unit  src/document_intelligence/docling_parser.rs  11 tests (discovery totality,
                                                               missing runtime recoverable,
                                                               empty input unsupported,
                                                               path sanitisation,
@@ -624,7 +638,9 @@ unit  src/document_intelligence/docling_parser.rs   9 tests (discovery totality,
                                                               deadline really kills a hung child,
                                                               tail_of never splits UTF-8,
                                                               only managed runtime paths isolated,
-                                                              model cache dir single-sourced)
+                                                              model cache dir single-sourced,
+                                                              runner name stable / no pid,
+                                                              runner materialisation idempotent)
 unit  src/document_intelligence/parser.rs           1 test  (UnavailableParser recoverable)
 unit  src/document_intelligence/retrieval.rs        4 tests (O2-19, O2-20, lexical-without-
                                                               semantic, empty query)
@@ -638,7 +654,7 @@ cargo test --test real_learning_engine_document_foundation
            -j 1 -- --test-threads=1                           23 passed / 0 failed
                                                               (incl. the REAL PDF parse)
 cargo test --lib -j 1 -- --test-threads=1 document_intelligence
-                                                              41 passed / 0 failed
+                                                              43 passed / 0 failed
 cargo test --test real_learning_engine_pack_a_audit
            -j 1 -- --test-threads=1                           32 passed / 0 failed  (M0 regression)
 cargo fmt --check                                             7 places / 4 files
@@ -717,7 +733,7 @@ LEXICAL RETRIEVAL:            existing SearchRepository FTS, entity_type='docume
 CONTEXT COMPILER:             existing compile() fed by retrieval.rs (unchanged pipeline)
 UI REACHABILITY:              UI_DEFERRED_PRODUCT_DECISION (no UI invented)
 
-TESTS ACTUALLY RUN:           see M8 gates above (23 + 41 + 32 = 96 passed, 0 failed)
+TESTS ACTUALLY RUN:           see M8 gates above (23 + 43 + 32 = 98 passed, 0 failed)
                               incl. m4_real_docling_end_to_end_ingestion AND
                               m4_real_docling_pdf_path_end_to_end, both on the REAL runtime
 TESTS DEFERRED:               DOCX / PPTX were not exercised as inputs. They are not a

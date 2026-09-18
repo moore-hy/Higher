@@ -299,26 +299,37 @@ impl DoclingParser {
 
     /// runner 脚本的落地路径。
     ///
-    /// 优先放在运行时目录旁边（一次性、可审计）；不可写时退回临时目录。
+    /// 优先放在运行时目录旁边（可审计）；不可写时退回临时目录。
     /// 无论哪种情况，写的都是 **Higher 自己的** runner，绝不改动 docling 包。
+    ///
+    /// 名字是**稳定**的，不带 pid：内容来自 `include_str!`，对同一个二进制永远
+    /// 相同，所以复用同一个文件即可。早先用 `_<pid>` 命名，结果是每启动一次
+    /// 应用就往运行时目录里多堆一个 7KB 的脚本 —— 无上界的目录污染。
     fn runner_path(&self) -> PathBuf {
-        let name = format!("higher_docling_runner_{}.py", std::process::id());
+        const NAME: &str = "higher_docling_runner.py";
         if let Some(dir) = &self.runner_dir {
             if dir.is_dir() {
-                return dir.join(name);
+                return dir.join(NAME);
             }
         }
-        std::env::temp_dir().join(name)
+        std::env::temp_dir().join(NAME)
     }
 
     /// 把 runner 写盘（内容来自 `include_str!`，不依赖打包后的资源路径）。
+    ///
+    /// 内容一致就直接复用，不重写。需要写时先落临时文件再改名 ——
+    /// 这样并发进程永远读不到写了一半的脚本。
     fn materialize_runner(&self) -> Result<PathBuf, ParseFailure> {
         let path = self.runner_path();
-        if path.is_file() {
+        let body = include_str!("docling_runner.py");
+        if std::fs::read_to_string(&path).is_ok_and(|existing| existing == body) {
             return Ok(path);
         }
-        std::fs::write(&path, include_str!("docling_runner.py"))
+        let staged = path.with_extension("py.tmp");
+        std::fs::write(&staged, body)
             .map_err(|e| ParseFailure::Failed(format!("cannot write docling runner: {e}")))?;
+        std::fs::rename(&staged, &path)
+            .map_err(|e| ParseFailure::Failed(format!("cannot install docling runner: {e}")))?;
         Ok(path)
     }
 
@@ -745,5 +756,50 @@ mod tests {
             Some(RUNTIME_DIR_NAME),
             "缓存必须住在隔离运行时内部，而不是别处"
         );
+    }
+
+    // runner 的落地名必须是**稳定**的（不带 pid）。早先按 pid 命名，结果是
+    // 每启动一次应用就往运行时目录里多堆一个脚本 —— 无上界的目录污染。
+    #[test]
+    fn runner_path_is_stable_and_carries_no_pid() {
+        let parser = DoclingParser::with_interpreter(
+            std::env::temp_dir().join("definitely-not-a-python-binary"),
+        );
+        let path = parser.runner_path();
+        assert_eq!(
+            path.file_name().and_then(|s| s.to_str()),
+            Some("higher_docling_runner.py")
+        );
+        assert!(
+            !path
+                .to_string_lossy()
+                .contains(&std::process::id().to_string()),
+            "runner 路径不得包含 pid"
+        );
+    }
+
+    // 重复物化必须幂等：内容一致就复用，且落盘内容与内嵌 runner 逐字一致。
+    #[test]
+    fn materialize_runner_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("higher_o2_runner_{}", std::process::id()));
+        let scripts = dir.join("Scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        let interpreter = scripts.join("python.exe");
+        std::fs::write(&interpreter, b"stub").unwrap();
+
+        let parser = DoclingParser::with_interpreter(&interpreter);
+        let first = parser.materialize_runner().unwrap();
+        let second = parser.materialize_runner().unwrap();
+
+        assert_eq!(first, second, "两次物化必须得到同一个路径");
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            include_str!("docling_runner.py"),
+            "落盘内容必须与内嵌 runner 逐字一致"
+        );
+
+        let _ = std::fs::remove_file(&interpreter);
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
