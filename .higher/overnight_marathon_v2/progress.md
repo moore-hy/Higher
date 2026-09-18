@@ -184,3 +184,78 @@ P2 没有产出一笔前置修复提交 —— 任务书 §12 允许「发现真
 
 next pack   : P3
 next action : 八个专项体验在**生产创建的快照**上的读取行为（不重设计体验）
+
+---
+
+## CP-03 · P3 Eight specialized experience hardening — VERIFIED_DONE
+
+```text
+timestamp   : 2026-09-19 02:05 (+08)
+branch      : main
+HEAD before : b52fc7d
+HEAD after  : d2fc7c2
+pack        : P3
+changed     : src-tauri/tests/grounded_specialized_experiences.rs      (NEW, 12 tests)
+              tests/product-ui/groundedTrainingExperience.test.tsx      (+3 tests, 16 -> 19)
+              **生产代码零改动**
+resource    : 单线程 cargo；vitest 单文件
+```
+
+### 本包实测结果
+
+```text
+cargo test --test grounded_specialized_experiences            : 12 passed / 0 failed
+npx vitest run tests/product-ui/groundedTrainingExperience.test.tsx : 19 passed / 0 failed
+npm run check:types                                           : ok
+npx tsc --noEmit                                              : ok（无输出）
+rustfmt --check（task-owned 文件）                             : clean
+```
+
+### 为什么这不算 SKIPPED_ALREADY_SATISFIED
+
+契约确实**本来就成立**（生产代码零改动），但「已经有可执行证据」并不成立：
+
+```text
+GB-GR-01..09 / GB-MAT-01..05  : 协议无关（不区分八个专项）
+GB-UX-01..10                  : 只验渲染层
+```
+
+也就是说，在 P3 之前**没有任何测试**钉住「八个协议各自」的接地契约 ——
+任何一条协议的完成规则、moment 族、cue/隐藏步语义被改动，都不会有任何测试变红。
+OM-P3-01..10 补的就是这个缺口，因此本包是**真实交付**而非空提交。
+
+### 关键取证（反向可证伪）
+
+```text
+OM-P3-01  尝试无结果 -> recall_attempt + moment_not_recall_result + 完成契约仍不满足
+          （「没有尝试 ≠ failure」在 moment 与完成规则两侧同时成立）
+OM-P3-02  线索双向取证：有标题 -> 逐字等于 document_sections.title；
+          无标题 -> 必须 None，且该档案确实不存在任何非空标题
+OM-P3-03  落库往返逐字段一致；「只看」-> 0 moment / 0 review / 0 FSRS；
+          纯规则推进也推不动（规则未满足）
+OM-P3-04  hidden_step_index 越界 -> None（不就近修正）；同事实编译两次逐字段相同
+OM-P3-05  SelfCheck / AiTutor -> practice_attempt + skip=source_is_non_authoritative；
+          Deterministic -> practice_success，但 skip=moment_not_recall_result
+OM-P3-06  没有真实错误 -> reason=error_detected_but_not_corrected；
+          自检声称的修正 -> 0 moment；真实验证后才签发 error_corrected
+OM-P3-07  AI 反馈 -> explanation_attempt；对照材料 == 落库那一份（不重新生成）
+OM-P3-08  生成情境不进 provenance / source_excerpt，也不出现在任何被引用 chunk 文本里
+OM-P3-09  四个非八专协议：落库 protocol_id / goal / rule_kind / rule_zh 逐字保留
+OM-P3-10  八协议 × {Direct, Copilot}：反复读材料 + example_view
+          -> 0 moment / 0 review / 0 FSRS，仅 +1 条动作行
+（UI 侧）  八协议各渲染一次 -> 0 提交；Unavailable 快照 -> 14 个材料呈现面全不出现
+```
+
+### 本包发现的议题（均已登记，**未**越权改动）
+
+```text
+F-013a  八专只映射到 6 条冻结完成规则（free_recall≡cued_recall、
+        worked_example≡faded_example）—— 我原先的「两两不同」假设不成立
+F-013b  练习族结果的 skip 归因是 moment_not_recall_result（门 1），
+        不是 no_memory_unit_bound（门 2）；skip 链的顺序是「先语义后绑定」
+F-014   协议选择是测试驱动的（生产无协议参数、intent 表无协议列），
+        但材料 / 落库 / 读取 / 丰富材料解析全部是生产实现 —— 边界已写入文件头
+```
+
+next pack   : P4
+next action : 产品可达性 + 恢复加固（真实用户能不能走到这条闭环）

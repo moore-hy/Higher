@@ -221,3 +221,76 @@ detail=... docling convert failed: ProxyError(MaxRetryError(
 ```bash
 cd src-tauri && cargo test --test grounded_learning_bridge_realtime
 ```
+
+---
+
+## F-013 · 被测试纠正的**我自己的**两个错误假设（产品事实，非缺陷）
+
+P3 的第一版断言有两处失败。两处都是**我**对既有语义的假设错了，不是生产缺陷。
+按纪律：先读代码确认事实，再按事实改断言，并把事实登记下来。
+
+### F-013a · 八个专项只映射到 **6** 条冻结完成规则
+
+我写了「八个专项的 CompletionRuleKind 必须两两不同」——这条要求**不存在**，
+是我发明的。实际（`src/cognitive/protocol.rs` 注册表）：
+
+```text
+free_recall        -> AtLeastOneRecallOutcome
+cued_recall        -> AtLeastOneRecallOutcome          <-- 与 free_recall 同一条
+worked_example     -> ExampleViewedThenExplanationOrExplicit
+faded_example      -> ExampleViewedThenExplanationOrExplicit   <-- 与 worked_example 同一条
+standard_practice  -> AtLeastOnePracticeOutcome
+error_correction   -> ErrorDetectedThenCorrectedOrStopped
+explain_back       -> AtLeastOneExplanationOutcome
+transfer_challenge -> AtLeastOneTransferOutcome
+```
+
+22 条协议共享 15 条冻结规则，这是**设计**（按教学法族分组），不是漏配。
+断言已改为钉住这张真实映射表 + 断言「不同规则数 == 6」。
+将来有人改某条协议的完成规则，OM-P3 的结构性守卫会立刻显形。
+
+### F-013b · 练习族的结果**推不动** FSRS，而且原因码不是「没绑定记忆单元」
+
+我从「块绑定了记忆单元」推出「权威练习结果会推进 FSRS」，错了。实际：
+
+```text
+resolve_recall_memory_unit 只在 is_recall_compatible(pid) 时被调用
+  RECALL_COMPATIBLE_PROTOCOLS = [FreeRecall, CuedRecall, Recognition, ReviewShort]
+  => standard_practice 块 memory_unit_id 恒为 NULL（两道门之一）
+
+effect 链的 skip 判定顺序（runtime.rs，**先语义后绑定**）：
+  block_is_break -> non_authoritative -> no_moment
+  -> NOT_RECALL_MOMENT -> no_memory_unit -> evidence_too_low
+```
+
+因此标准练习的一次权威成功，报出的原因是 `moment_not_recall_result`（门 1），
+**不是** `no_memory_unit_bound`（门 2）。两道门同时为真，但报门 2 会把原因说成
+「偶然没绑上」，而真相是「练习族永远不可能是回忆结果」。断言已按门 1 钉住。
+这条顺序本身值得记住：它决定了任何一次 skip 的**归因**是否诚实。
+
+**Status.** 两处均已按事实改断言并提交；无生产行为变更。
+
+---
+
+## F-014 · P3 的诚实边界：协议选择是测试驱动的，材料不是
+
+生产入口（`start_training_for_item` / `create_training_run_for_item`）**没有任何协议参数**，
+`active_learning_intent` 表也**没有协议列**（只有 mode / domain / learning_item_id /
+goal_id / free_text）—— `DecisionMode::Direct` 点名的是**目标**，不是协议。
+
+后果：「对八个协议各测一遍接地契约」无法经由生产编排入口做到，只能由测试构造
+`TrainingSessionPlan`。但被断言的东西**不是**测试造的：
+
+```text
+material      <- compile_grounded_material（= prepare_block_materials 在生产的同一函数）
+落库           <- save_material_snapshot（自带 profile 归属校验 + 已写不可改）
+读取           <- block_grounded_material_core（命令层 core）
+「更丰富材料」  <- 生成器测试替身喂 StrictJson，解析/合并走生产
+                  parse_rich_material_json / apply_draft（等价于 Docling 解析替身）
+```
+
+这条边界写在 `tests/grounded_specialized_experiences.rs` 文件头，避免后来者把它
+误读成「生产已经能按协议点单」。**如果 owner 希望用户能直接点某个协议**，那是
+一个**新的产品能力**（需要在 intent / IPC 层加协议选择），不属于本包授权范围。
+
+**Status.** 已登记为边界说明；无代码变更。

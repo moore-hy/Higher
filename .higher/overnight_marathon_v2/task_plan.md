@@ -16,7 +16,7 @@ States: `NOT_STARTED` | `IN_PROGRESS` | `GREEN` | `VERIFIED_DONE` | `SKIPPED_ALR
 | P0 | Preflight + skill bootstrap | VERIFIED_DONE | de9d6d0 |
 | P1 | Grounded Learning Bridge closure hotfix | VERIFIED_DONE | 354b1b1, eb59a16, 3210949, +closure |
 | P2 | Real production closed-loop E2E | VERIFIED_DONE | cf37466 |
-| P3 | Eight specialized experience hardening | NOT_STARTED | — |
+| P3 | Eight specialized experience hardening | VERIFIED_DONE | d2fc7c2 |
 | P4 | Product reachability + recovery hardening | NOT_STARTED | — |
 | P5 | Truth / transaction / isolation audit | NOT_STARTED | — |
 | P6 | Broad sequential regression + build | NOT_STARTED | — |
@@ -67,6 +67,31 @@ Evidence: `progress.md` CP-01. New findings: F-008 (CJK recall, deferred), F-009
 Evidence: `progress.md` CP-02. Suite: `src-tauri/tests/grounded_learning_bridge_e2e.rs` (6 passed / 0 failed).
 **No new production defect was found** — P2 produced no preceding repair commit.
 No new findings beyond the already-registered F-008 / F-009 / F-012.
+
+---
+
+## P3 — sub-item table
+
+| Item | Title | State |
+|---|---|---|
+| P3.1 | free_recall — hide before attempt / attempt≠failure | VERIFIED_DONE |
+| P3.2 | cued_recall — persisted cue, never invented | VERIFIED_DONE |
+| P3.3 | worked_example — view creates zero evidence / explicit Unavailable | VERIFIED_DONE |
+| P3.4 | faded_example — persisted hidden_step_index, never chosen at render | VERIFIED_DONE |
+| P3.5 | standard_practice — Practice* only, non-authoritative stays non-authoritative | VERIFIED_DONE |
+| P3.6 | error_correction — real prior error only, never fabricated | VERIFIED_DONE |
+| P3.7 | explain_back — real attempt required, AI feedback non-authoritative | VERIFIED_DONE |
+| P3.8 | transfer_challenge — persisted scenario, never quoted as source | VERIFIED_DONE |
+| P3.9 | Generic fallback preserves ProtocolId / goal / completion_rule | VERIFIED_DONE |
+| P3.10 | No experience creates evidence on render/view | VERIFIED_DONE |
+
+Evidence: `progress.md` CP-03.
+
+**No production code changed** — the contract already held; P3 delivered the previously
+missing executable evidence. Suites: `src-tauri/tests/grounded_specialized_experiences.rs`
+(12 passed) + `tests/product-ui/groundedTrainingExperience.test.tsx` (19 passed, +3).
+New findings: **F-013** (two of my own assumptions corrected by the tests, both recorded
+as product facts, not defects).
 
 ---
 
