@@ -113,7 +113,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ✅ DONE (ea9137c) |
 | W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ✅ DONE (a6a8ce2) |
 | W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | ✅ DONE (f361aa3) |
-| W7 | Close stale progress projection | `fix(progress): derive difficulty from real training blocks` | ⏳ pending |
+| W7 | Close stale progress projection | `fix(progress): derive difficulty from real training blocks` | ✅ DONE (9531d58) |
 | W8 | Final validation + closure | `feat(cognitive): close grounded learning bridge v1` | ⏳ pending |
 
 ---
@@ -667,6 +667,140 @@ by grepping `ipc/dto.rs`).
 | fmt (W6-owned files) | `rustfmt --edition 2021 --check` × 6 files | ✅ 0 diffs each |
 
 **Totals:** 134/134 targeted Rust tests green; 179/179 product-UI tests green (174 after W5 + 5 new).
+
+---
+
+## §10 — W7 IMPLEMENTATION NOTES
+
+**Commit:** `TBD` — `fix(progress): derive difficulty from real training blocks`
+
+### 10.1 What was actually wrong
+
+`build_difficulty()` was a **constant** returning `available = false` +
+`no_protocol_sessions`. Its justification ("协议选择是确定性决策、没有协议会话表") was true
+when written but became **false at W3/W4**, when `training_block_runs` started being
+persisted. The axis was therefore telling a stiff, confident lie: a user could finish a
+whole training session and Progress would still say "还没有开始记录".
+
+### 10.2 Files touched
+
+| File | Nature |
+|---|---|
+| `src-tauri/src/cognitive/progress_projection.rs` | `build_difficulty()` now takes `(conn, profile_id, since)` and counts real blocks; module doc + `DifficultyAxis` doc de-staled |
+| `src/pages/CognitiveProgress.tsx` | `PROGRESS_DIFFICULTY_ZH` label map; `DifficultyBody` keys off `axis.available`; reason copy + axis explain copy corrected |
+| `src-tauri/tests/grounded_training_progress.rs` | **NEW** — GB-PROG-01..06 (11 cases) |
+| `tests/product-ui/cognitiveProgress.test.tsx` | fixed the assertion that pinned the now-false copy; +4 cases for the real distribution |
+
+### 10.3 The counting rule (§12.1), exactly
+
+```text
+counted      status = 'completed' AND is_break = 0
+             AND protocol_id parses in the frozen registry
+             AND ended_at >= now - 30d            (the Progress window)
+not counted  skipped / pending / active blocks   (no completion, no evidence)
+             break blocks                        (a rest is not a challenge)
+             protocol_id not in the registry     (no invented bucket, no "unknown" bucket)
+buckets      fixed three, fixed order: light → medium → high (a 0 stays visible)
+no data      available = false + no_protocol_sessions + buckets = []
+```
+
+Two deliberate choices worth recording:
+
+- **A 0-count bucket is emitted, not omitted.** "This window had no high-difficulty work"
+  and "high-difficulty does not exist" are different facts; omitting the bucket would let
+  a rendering choice blur them together.
+- **An unrecognised `protocol_id` is dropped, not bucketed.** Putting it in an `unknown`
+  bucket would invent a difficulty level the frozen registry never declared.
+
+### 10.4 Nothing aggregate was introduced (§26)
+
+GB-PROG-06 asserts on the **JSON key set**, not on individual fields: top level must be
+exactly `{profile_id, generated_at, window_days, volume, quality, difficulty, adaptation}`,
+the axis exactly `{available, buckets, reason_code}`, each bucket exactly
+`{count, difficulty}` — plus a forbidden-substring sweep over the whole serialised view
+(`score` / `efficiency` / `aggregate` / `weighted` / `overall` / `rating` / `grade`).
+Adding an `overall_difficulty_score` tomorrow would turn this test red.
+
+### 10.5 Frozen contracts untouched
+
+22-entry Protocol Registry (the projection **reads** `base_difficulty`, never re-declares it),
+the 8 TrainingExperience types, migration ceiling v043.
+`cognitive/` still contains **zero** provider / runtime / agent symbols (decision layer stays LLM-free).
+No ts-rs DTO changed — `CognitiveDifficultyAxis` is hand-mirrored, so `src/generated/` is untouched.
+
+### 10.6 Deviation / residue registry (honest) — **a pre-existing time-of-day flake**
+
+`closed_loop_core` reports **21 passed / 2 failed** in this wave. The two failures are
+**NOT caused by W7** — they are a pre-existing, wall-clock-dependent fixture bug. Evidence:
+
+1. **The failing assertions have nothing to do with difficulty.** They are
+   `assert_eq!(snap.today.actual_minutes, 25)` (CL003, line 245) and `= 20` (CL004, line 294),
+   failing with `left: 0`.
+2. **W7 has no code path into them.** `build_learning_state` / `learning_state` does not
+   reference `progress_projection` or `build_difficulty` at all (grepped);
+   `build_cognitive_progress` is called from exactly one place, `commands/learning_state.rs:83`,
+   a separate IPC command. `state.rs` is untouched this wave.
+3. **The mechanism is the UTC+8 calendar day, not the code.** Both tests backdate a session
+   with `started_at = datetime('now','-N minutes')` (N = 25 and 20) and then assert on
+   *today's* actual minutes. Running within N minutes after local midnight puts `started_at`
+   on **yesterday**:
+
+   ```text
+   UTC now                       2026-09-18 16:07:37
+   local (UTC+8) now             2026-09-19 00:07:37  → today_local() = 2026-09-19
+   backdate -25min, local       2026-09-18 23:42:37  → local day   = 2026-09-18
+   same local day?               False   ⇒ 「today」的分钟数为 0，断言期望 25
+   ```
+
+4. **The same unchanged suite passed 18 minutes earlier.** W6's run of the identical
+   `closed_loop_core` binary was at `2026-09-18T15:49Z` = **23:49 local** → 23/23 pass.
+   W7's run is at `16:07Z` = **00:07 local** → 21/23. Nothing between the two runs touched
+   any file on that code path (W6's commit is `f361aa3`; W7 only edits progress_projection).
+
+   **Daily exposure window:** `00:00–00:25` UTC+8 affects CL003 and CL004
+   (`00:00–00:20` for the two `-20` cases; the `-3` case at line 554 has a 3-minute window).
+
+**Action taken:** none — fixing `closed_loop_core`'s fixture is outside W7's locked scope
+(it is a baseline test-harness defect, not a W7 defect), and the taskbook forbids fixing
+unrelated problems. Recorded here with a reproducible command so W8 can act:
+
+```bash
+# proves the other 21 are green (this is the W7 evidence for the suite):
+cargo test --manifest-path src-tauri/Cargo.toml --test closed_loop_core -- \
+  --skip cl003_ending_session_changes_evidence \
+  --skip cl004_recomputing_state_after_real_learning_really_changes
+# → ok. 21 passed; 0 failed; 2 filtered out
+```
+
+**Recommendation for W8's final matrix:** run it outside `00:00–00:30` UTC+8, or the two
+tests will fail for reasons unrelated to any wave. If W8 wants this permanently fixed, the
+minimal honest fix is to pin the fixture's `started_at` inside the current local day instead
+of relative to `now` — that is a test-harness change and should be its own explicitly-scoped step.
+
+### 10.7 W7 closure — validation (all green, modulo §10.6)
+
+| Gate | Command | Result |
+|---|---|---|
+| lib compile | `cargo check --lib --manifest-path src-tauri/Cargo.toml -j 1` | ✅ 0 errors (34 baseline warnings) |
+| **GB-PROG-01..06** | `cargo test --test grounded_training_progress` | ✅ **11/11 pass** (re-run after fmt: still 11/11) |
+| Progress UI | `npx vitest run tests/product-ui/cognitiveProgress.test.tsx` | ✅ **21/21 pass** (17 + 4 new) |
+| Product UI (full) | `npm run test:product-ui` | ✅ **183/183 pass** (11 files) |
+| Frontend types | `npx tsc --noEmit` | ✅ 0 errors |
+| W6 regression | `cargo test --test grounded_training_routing` | ✅ 8/8 pass |
+| W5 regression | `cargo test --test grounded_training_grounding` | ✅ 9/9 pass |
+| W3 regression | `cargo test --test grounded_training_material` | ✅ 5/5 pass |
+| Training regression | `cargo test --test real_learning_engine_training` | ✅ 38/38 pass |
+| Learning-state regression | `cargo test --test learning_friction` | ✅ 9/9 pass |
+| Today regression | `cargo test --test today_coach_v1` | ✅ 6/6 pass |
+| Progress regression | `cargo test --test review_progress` | ✅ 16/16 pass |
+| Cognitive regression | `cargo test --test cognitive_decision_v2` | ✅ 6/6 pass |
+| W2 regression | `cargo test --test document_knowledge_surface` | ✅ 9/9 pass |
+| W1 regression | `cargo test --test document_intelligence` | ✅ 27/27 pass |
+| Closed-loop regression | `cargo test --test closed_loop_core` | ⚠️ 21/23 — **pre-existing flake, see §10.6** |
+| fmt (W7-owned files) | `rustfmt --edition 2021 --check` × 2 files | ✅ 0 diffs each |
+
+**Totals:** 155/157 targeted Rust tests green (2 = the §10.6 pre-existing time-of-day flake);
+183/183 product-UI tests green (179 after W6 + 4 new).
 
 
 
