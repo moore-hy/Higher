@@ -129,6 +129,41 @@ New findings: **F-015**（P4 的真实缺口清单：三处无取证、一处只
 
 ---
 
+## P5 — sub-item table
+
+| Item | Title | State |
+|---|---|---|
+| P5.1 | Required invariants — 八条逐条取证（本包复核，未新增） | VERIFIED_DONE |
+| P5.2 | No migration expansion — 未新增 v044，v043 仍为最新 | VERIFIED_DONE |
+| P5.3a | Truth audit — **证明并修复一个真值缺陷**（幂等判定漏 `result`/`prompt_text`） | VERIFIED_DONE（已修） |
+| P5.3b | Public reachability audit — 分类表 + 「故意不接线」写进代码 | VERIFIED_DONE（不接线） |
+
+Evidence: `progress.md` CP-05. Commit **`6effc9a fix(cognitive): close grounded learning truth invariants`**
+（任务书建议的提交标题，本包**确实**有修复，故直接使用）。
+
+```text
+修复 1（Critical）  handle_duplicate 的「同一 payload」判定漏掉 result 与 prompt_text
+                  result 是唯一决定 moment 类型与 FSRS 方向的入参
+                  既有用例 A25 / reusing_the_key_with_a_different_payload_is_rejected
+                  同时改了 result 和 user_response_text（后者一直在比较里）
+                  => 那条用例**即使 result 完全没被比较也照样通过**（passing for the wrong reason）
+                  新增两条只改单一字段的用例：先 RED（实测 replayed:true）后 GREEN
+修复 2（Major）     material_availability / select_satisfiable_protocols / protocol_satisfiable
+                  零生产调用方，且 doc 在断言一个「编排侧本该先过滤」的义务
+                  —— 接线会造成两处产品回归（见 F-016），按 P5.3 不接线，只把结论写进注释
+```
+
+审计未修项（已记录，未越权改动）：`retry_ingestion` / `ingest_source`（A+B 库辅助）、
+`merge_dedupe` / `interpreter_candidates` / `managed_model_cache_dir`（A，仅模块内使用）、
+`parse_rich_material_json` / `apply_draft` / `RichMaterialGenerator`（A，P1.2 已锁定的延期能力）。
+
+门禁：`cargo test -j 1`（11 个受影响套件）**180 passed / 0 failed**；
+`rustfmt --edition 2021 --check` 全部改动文件 clean。
+
+New findings: **F-016**（可达性分类表）、**F-017**（幂等真值缺陷，已修）。
+
+---
+
 ## Locked decisions taken (ordinary ambiguity → safest option, recorded, continue)
 
 | # | Decision | Rationale |
@@ -136,3 +171,7 @@ New findings: **F-015**（P4 的真实缺口清单：三处无取证、一处只
 | D-01 | Use taskbook §11 P1.1 **shape B** (`create_training_run_with_materials` helper, `pub(crate)`), not shape A (extend `CreateTrainingRunParams`) | Shape A would break 26 struct-literal call sites across 8 test files for no behavioural gain. `create_training_run` has exactly **one** production caller (`training/start.rs:138`), so the helper is a smaller coherent diff with unchanged public semantics. |
 | D-02 | Transaction-level invariants OM-P1-16 / OM-P1-17 proved via `#[cfg(test)] mod tests` inside `src/training/runtime.rs` | `pub(crate)` helper is not reachable from `tests/`, and the repo already accepts in-module `#[cfg(test)]` (see `document_intelligence/retrieval.rs`). Avoids adding a second public runtime surface. |
 | D-03 | (`recorded as needed`) | |
+| D-04 | **P4 未使用任务的建议标题 `fix(product): harden grounded learning entry and recovery`**，改用 `test(product): prove grounded material flow and reopen recovery` | 任务书写的是「only if changes were required」。四条路都读成生产实现，**没有一处**需要修；缺的是证据。用一个 `fix` 标题会谎报「修了 bug」。 |
+| D-05 | **P5.3 判定 `material_availability` / `select_satisfiable_protocols` / `protocol_satisfiable` 为「不得接线」**，并把这个结论写进代码注释 | P5.3 只允许接 category **C**，且要求「intended owner contract is already explicit」。这里两份**已锁定**的任务书互相冲突：原 §9.5 说编排侧应过滤，后续 P1.2（`ai = None`）+ P1.3（无 Ready 来源也要落 Unavailable）说不过滤。以后者为准 —— 接线会永久排除 4 个 RICH 协议、并让没导入文档的用户完全无法开始训练。属 P5.3 明令「Do NOT wire ambiguous features」的情形。零行为变更。 |
+
+P5.3 完整分类表见 `findings.md` F-016。

@@ -386,3 +386,155 @@ gb_doc_01 / gb_doc_02 / gb_doc_03 的 `let mut conn` 是 unused_mut（编译警�
 next pack   : P5
 next action : 真值 / 事务 / 隔离审计（Truth / transaction / isolation audit）
 
+---
+
+## CP-05 · P5 真值 / 事务 / 隔离审计
+
+```text
+timestamp   : 2026-09-19 02:30 (+08)
+branch      : main
+HEAD before : daf07bd
+HEAD after  : 6effc9a  fix(cognitive): close grounded learning truth invariants
+pack        : P5
+changed     : src-tauri/src/training/runtime.rs                       (M, 修复 + 诊断 + 注释)
+              src-tauri/src/training/grounding.rs                     (M, 注释：为何不接线)
+              src-tauri/tests/real_learning_engine_training.rs        (M, +2 用例)
+              src-tauri/tests/grounded_specialized_experiences.rs     (M, 注释对齐)
+tests run   : cargo test -j 1（11 个受影响套件）                       180 / 180
+              rustfmt --edition 2021 --check（4 个改动文件）           clean
+passed      : 180
+failed      : 0
+resource    : cargo 单线程；最长单套件 190s；无 OOM、无超时、无后台残留
+next pack   : P6
+next action : 全量顺序回归 + 构建
+```
+
+### 本包**不是**空提交 —— 找到了一个真值缺陷
+
+任务书要求「focused code audit followed by repairs ONLY for proven defects」。
+审计逐项读完生产实现，**证明**并修复了一个缺陷：
+
+```text
+修复（Critical）· handle_duplicate 的「同一 payload」判定漏掉 result / prompt_text
+
+原比较：training_run_id, block_run_id, interaction_type,
+        user_response_text, hint_level
+缺：    prompt_text, result      ← 两者都是 training_interactions 的载荷列
+
+result 是唯一决定「这次交互变成哪一种学习事实」的入参：
+  derive_moment_type(protocol, interaction_type, result, verification)
+    Recall：Success->RecallSuccess / Partial->RecallPartial
+            Failure->RecallFailure / 其余->RecallAttempt
+  只有 RecallSuccess|Partial|Failure 会推进 FSRS（档位由 result 决定）
+
+后果：同一 client_action_id 把 result 从 Success 换成 Failure
+      -> 返回 replayed:true +「当时是成功」的摘要
+      -> 调用方声明的结果被静默丢弃，而 API 声称这就是刚才那次动作的真值
+```
+
+### 为什么这条缝存在了这么久（值得记住的一类问题）
+
+```text
+既有用例 reusing_the_key_with_a_different_payload_is_rejected（以及 AUDIT-A25）
+同时改了 result **和** user_response_text —— 而 user_response_text 一直在比较里，
+所以那条用例**即使 result 完全没被比较也照样通过**。
+它证明的是「换 payload 会被拒」，没有证明「result 属于 payload」。
+=> 这是一个 passing-for-the-wrong-reason 的用例：
+   断言写得对，触发条件却让真正想覆盖的那条分支从未被走到。
+   防线：新用例每次只改**一个**字段。
+```
+
+### TDD 实录（先红后绿，RED 可复现）
+
+```text
+RED   两条新用例均失败，且失败信息就是缺陷本身：
+      got InteractionOutcome { ..., replayed: true, effect: fsrs_applied: true,
+                               result: Some(Success) }
+      while caller declared Failure
+GREEN 补上 prompt_text + result 比较，并让冲突诊断**点名**不一致字段
+      （原消息只写 run/block/type —— 会把「换了 result」读成「看起来哪儿都没变」，
+        正是让这个 bug 隐身的同一类问题）
+```
+
+刻意**不**比较的字段（理由已写进注释，避免被当成漏改）：
+`occurred_at`（领域层时钟，真实重试的到达时间本就不同，比较它会把所有重试判成冲突）、
+`verification`（命令层决定 FIX A1，落在 `effect_summary_json` 而非独立列上）。
+
+### P5.1 八条不变量 —— 全部有真实取证，本包复核通过
+
+```text
+one client_action_id -> one persisted interaction fact
+        A25 / P2-B / retrying_the_same_action_creates_no_second_fact
+one real learning event -> no duplicate moment under retry     同上
+skip -> no success/failure evidence                 OM-P3-05 / OM-P3-06
+break -> no learning fact                           PA-CLOSE-09 / A24 / GB-PROG-04 / OM-P1-07
+Unavailable material -> no failure evidence         P2-D / OM-P3-10b / OM-P3-10c
+document import -> no learning fact                 GB-DOC-07 / GB-DOC-08 / GB-DOC-09
+cross-profile source -> impossible to consume       GB-DOC-02 / O2-20 / P2-E
+snapshot persistence failure -> whole create rolls back
+        OM-P1-09 / OM-P1-16 / OM-P1-17（+ runtime.rs 同模块单元测试）
+```
+
+其余事务边界复核：`create_training_run_with_materials`（单事务：profile/item 校验 →
+开放位 → Session 绑定 → Run → 全部块 → 每块快照 → DIRECT 意图消费；任一失败整体回滚）、
+`start_training_run`（run→active + 首个 pending 块→active + `current_block_ordinal` 同一事务）、
+`persist_revision`（先清旧 chunk 的检索条目、再删旧 revision，两步同事务 → 无孤儿）。
+
+### P5.2 迁移扩张
+
+**未新增 v044**；`v043` 仍是最新迁移（`o2_04` / `o2_21` 的断言未动）。
+本包修复不需要任何 schema 变更 —— 它是判定逻辑补全，不是数据模型问题。
+
+### P5.3 公开可达性审计（完整分类见 F-016）
+
+```text
+分类 符号                                          处置
+A+B  retry_ingestion / ingest_source                不接线（行为已由生产 run_ingestion 覆盖）
+A    merge_dedupe / interpreter_candidates           不改（仅自身模块内使用，可见性偏宽，非缺陷）
+     managed_model_cache_dir
+A    parse_rich_material_json / apply_draft /        不接线（P1.2 已锁定的延期能力）
+     RichMaterialGenerator
+A    material_availability /                         不接线 + **把结论写进注释**（本包修复 2）
+     select_satisfiable_protocols /
+     protocol_satisfiable
+```
+
+`material_availability` 一族的特殊性：它们**零生产调用方**，doc 却断言
+「Session Composer 只能从可满足的协议里选」，`compile_grounded_material` 的表格里
+也写着「编排侧本该先过滤」。而接线会造成**两处产品回归**：
+
+```text
+(1) P1.2 锁定 ai = None => has_rich_material 恒为 false
+    => 4 条 RICH_MATERIAL_PROTOCOLS 被永久排除出真实编排
+    => 八个专项体验里有四个再也组合不出来
+(2) P1.3 锁定「无 Ready 来源时仍须落一份诚实的 Unavailable」
+    => 没导入过文档的用户将完全无法开始训练（PLAN_HAS_NO_BLOCKS）
+```
+
+两份已锁定任务书冲突（原 §9.5 说应过滤；后续 P1.2/P1.3 说不过滤），以后者为准。
+按 P5.3「Do NOT wire ambiguous features」不接线，只把结论与其后果写进注释。
+**零行为变更。** 见 D-05。
+
+### 门禁原文
+
+```text
+cargo test -j 1（11 个受影响套件）
+  real_learning_engine_training            40 passed
+  real_learning_engine_pack_a_audit        32 passed
+  real_learning_engine_completion          21 passed
+  real_learning_engine_start                8 passed
+  real_learning_engine_document_foundation 12 passed
+  grounded_learning_bridge_e2e              6 passed
+  grounded_learning_bridge_closure          9 passed
+  grounded_training_grounding               5 passed
+  grounded_training_material               10 passed
+  grounded_specialized_experiences         25 passed
+  document_knowledge_surface               12 passed
+                                          180 passed / 0 failed
+
+rustfmt --edition 2021 --check          全部 4 个改动文件 clean
+```
+
+next pack   : P6
+next action : 全量顺序回归 + 构建（含 P6R 预留取证车道 R1..R7）
+

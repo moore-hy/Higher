@@ -370,3 +370,169 @@ GB-DOC-10 断言了**失败作业必须留档**：重试之后作业表里必须
 **Status.** 已补齐全部证据并提交（`80c0c47`）；**无生产代码变更**。
 因此任务书 §14 的 `fix(product): harden grounded learning entry and recovery`
 **未使用** —— 没有需要修的东西，用一个 `fix` 标题会谎报「修了 bug」。
+
+---
+
+## F-016 · P5.3 公开可达性分类表（哪些「只在测试里用到」的符号**不得**接线）
+
+任务书 P5.3 要求：找出 O2 / Grounding Bridge 引入的、**只在测试里用到或从未被调用**的
+公开/生产函数，逐个分类为 A（刻意只做库/辅助）/ B（已由另一个生产函数可达）/
+C（本意是生产能力但漏接）/ D（死代码）。只有 C 才允许在「owner 契约已经明确」时接线。
+
+实测（`grep` 全仓 + 逐条追调用链，判据是**能否到达 `#[tauri::command]`**）：
+
+| 符号 | 分类 | 判据 | 处置 |
+|---|---|---|---|
+| `compile_grounded_material` | B | → `prepare_block_materials` → `start_training_for_item` → 命令层 | 已接线（P1） |
+| `compile_grounded_context` | B | 同上链（`grounding.rs:586`） | 已接线 |
+| `eligible_ready_sources` | B | 被 `compile_grounded_context` 调用（:273） | 已接线 |
+| `material_requirement` | B | 被 `protocol_satisfiable` + `compile_grounded_material`(:550) 调用 | 已接线 |
+| `save_material_snapshot` | B | 被 `create_training_run_with_materials`(:566) 调用 | 已接线 |
+| `load_material_snapshot` | B | 被 `commands/training.rs:311` 调用 | 已接线 |
+| `retry_ingestion` | **A+B** | `src/` 内**零调用**（只有两处 doc 提到）；行为已由生产 `run_ingestion(retry=true)` = `begin_ingestion(true)`+`finish_ingestion` 覆盖 | 不接线 |
+| `ingest_source` | A | 自身 doc 明写「供测试与不需释放全局锁的调用方使用」；生产刻意分三段以不跨 Docling 解析持有全局锁 | 不接线 |
+| `merge_dedupe` | A | `pub` 但仅被同模块 `context_compiler::compile` 使用 | 不改（可见性偏宽，非缺陷） |
+| `interpreter_candidates` | A | 仅被同模块 `discover_runtime` 使用 | 同上 |
+| `managed_model_cache_dir` | A | 仅被同模块内部使用 | 同上 |
+| `parse_rich_material_json` / `apply_draft` / `RichMaterialGenerator` | A | 「更丰富材料」整条链：生产永远传 `ai = None`（P1.2 锁定），只有测试注入替身 | 不接线（已记录的延期能力） |
+| `material_availability` | **A（特殊）** | `src/` 内零调用，只有 `grounded_training_grounding.rs` 使用 | **不接线 + 写进注释** |
+| `select_satisfiable_protocols` | **A（特殊）** | 同上 | 同上 |
+| `protocol_satisfiable` | **A（特殊）** | 只被 `select_satisfiable_protocols` 调用（而后者零生产调用方） | 同上 |
+| `evaluate_completion` | B | 被完成判定路径使用 | 已接线 |
+| `block_completion_state` / `try_complete_training_block` | B | 被 `commands/training.rs` 调用 | 已接线 |
+| `is_recall_compatible` / `training_source_id` | B | 被 runtime 内部生产路径使用（同模块） | 已接线 |
+| `find_open_run_id_for_session` | B | 被 `commands/training.rs` 路径使用 | 已接线 |
+
+### 为什么 `material_availability` 一族是**不得接线**的那一类（而不是 C）
+
+它们的 doc 断言得很硬：「§9.5 AUTOPILOT / COPILOT：Session Composer **只能**从
+可满足的协议里选」；`select_satisfiable_protocols` 的 doc 还说
+「调用侧应给出显式的不可用状态」；`compile_grounded_material` 的表格里则写着
+「COPILOT/AUTOPILOT + 需要丰富材料但产不出 → 确定性底座可用（**编排侧本该先过滤**）」。
+
+也就是说：按字面读，这是标准 C（有明确 owner 契约、只是没接上）。
+**但接线会让闭环退化**，而且是两处：
+
+```text
+(1) P1.2 锁定 ai = None
+    => MaterialAvailability.has_rich_material 恒为 false
+    => protocol_satisfiable(RichStructured) 恒为 false
+    => RICH_MATERIAL_PROTOCOLS 4 条（worked_example / faded_example /
+       standard_practice / transfer_challenge）被**永久排除出真实编排**
+    => 八个专项体验里有四个再也组合不出来
+
+(2) P1.3 锁定「没有 Ready 来源时，只要存在学习块就必须落一份诚实的 Unavailable」
+    且 P2-D 已证明「无 Ready 来源仍要能建训练、能练、如实显示不可用」
+    => 一旦接线，has_grounded_context=false 时所有协议都不可满足
+    => 编排返回空计划 -> PLAN_HAS_NO_BLOCKS
+    => **没导入过文档的用户将完全无法开始训练**
+```
+
+根因是**两份已锁定任务书互相冲突**：
+
+```text
+原 Grounding Bridge §9.5     编排侧应当过滤掉材料撑不起的协议
+后续 FINAL LOCKED P1.2/P1.3  ai = None；不可用是合法且必须如实落库的状态
+```
+
+后者是更晚锁定、且经过审计的，因此以后者为准。代码自己的保守注释其实也站在后一边：
+`material_requirement` 的注释写着「这只是『被点名保证可用』的清单，
+**不是**『其余协议都不可用』的清单 —— 以免凭空挡掉合法协议」。
+
+结论：按 P5.3「Do NOT wire ambiguous features」**不接线**；
+把结论与两处后果写进注释（本包修复 2），使后人不会因为读到一句过时的
+「编排侧本该先过滤」而把它接上。**零行为变更。**
+
+若 owner 确实希望「按材料能力收窄协议池」，那是一个**新的产品决策**，
+需要同时回答「没导入文档的用户怎么办」与「四个 RICH 协议是否允许从编排中消失」，
+不在本次审计授权范围内。见 `task_plan.md` D-05。
+
+---
+
+## F-017 · P5 真值缺陷（已修）：幂等键的「同一 payload」判定漏掉 `result`
+
+### 缺陷
+
+`handle_duplicate`（`src-tauri/src/training/runtime.rs`）原本比较：
+
+```text
+training_run_id, block_run_id, interaction_type, user_response_text, hint_level
+```
+
+`training_interactions` 上的载荷列一共五个，**漏了 `prompt_text` 与 `result`**。
+
+`result` 不是元数据，它是唯一决定「这次交互变成哪一种学习事实」的入参：
+
+```text
+derive_moment_type(protocol, interaction_type, result, verification)
+  Recall 族：Success -> RecallSuccess
+             Partial -> RecallPartial
+             Failure -> RecallFailure
+             其余    -> RecallAttempt          （None / 非权威）
+is_recall_moment(RecallSuccess|Partial|Failure) == true
+  -> 且只有这三个会推进 FSRS（档位由 result 决定）
+```
+
+后果（已用测试复现，非推演）：同一个 `client_action_id` 把 `result` 从 `Success`
+换成 `Failure`，后端返回 `replayed: true` 与一份「当时是成功」的 `EffectSummary`
+（`fsrs_applied: true`, `result: Some(Success)`）—— 调用方声明的结果被**静默丢弃**，
+而 API 却声称这就是它刚才那次动作的真值。这正是 §50 禁止的「把两件不同的事说成一件」。
+
+`prompt_text` 同理：换一道题重发同一个键，会拿回旧题面的回执。
+
+### 它为什么一直没被发现（这一类问题值得单独记住）
+
+既有用例 `reusing_the_key_with_a_different_payload_is_rejected`
+（以及 `pack_a_audit.rs` 的 AUDIT-A25）**同时改了 `result` 和 `user_response_text`**。
+`user_response_text` 一直在比较里，所以那条用例
+
+```text
+即使 result 完全没被比较，也照样通过
+```
+
+它证明的是「换了 payload 会被拒」，**没有**证明「`result` 属于 payload」。
+这是 **passing for the wrong reason**：断言本身写对了，但触发条件恰好让
+真正想覆盖的那条分支从未被走到 —— 而且因为 `result` 与 `user_response_text`
+被**一起**改动过，读代码的人会以为这个字段早就被覆盖了。
+
+防线：本包新增的两条用例**每次只改一个字段**。这条经验适用于任何
+「多字段 payload 的一致性/等价性判定」。
+
+### 修复（TDD，先红后绿）
+
+```text
+RED   两条新用例均失败，失败信息即缺陷本身：
+      got InteractionOutcome { replayed: true, effect.fsrs_applied: true,
+                               interaction.result: Some(Success) }
+      while caller declared Failure
+GREEN same 判定补上 prompt_text 与 result
+      冲突诊断改为**点名**不一致字段
+      （原消息只写 run/block/type —— 「换了 result」会被读成「看起来哪儿都没变」，
+        与让这个 bug 隐身的是同一类问题）
+```
+
+刻意**不**比较（理由写进注释，避免被后人当成漏改）：
+
+```text
+occurred_at   领域层时钟（None = 由领域层取当前 UTC）。一次真实重试的到达时间
+              本就不同，比较它会把**所有**重试都判成冲突 —— 那会毁掉幂等本身。
+verification  由命令层决定（FIX A1，前端无参数可改），且落在
+              effect_summary_json 而不是独立列上，不参与「这次动作是什么」的判定。
+```
+
+### 边界（这次修复**不是**什么）
+
+- 桌面 UI **不会**踩到这个 bug：`TrainingExperience.tsx` 的载荷指纹
+  `[block.id, interactionType, response, result, hintLevel]` **包含** `result`，
+  所以改了结果就是新动作、新键。前端一直在替后端兜这条缝。
+- 因此真实受影响面是**非 UI 调用方**（其它客户端 / 未来重构漏掉指纹里的 `result`），
+  以及「后端契约本身不成立」这一事实。分级：**Critical（真值）但非当前线上故障**。
+- 修复只补判定，不动任何数据模型 —— **不需要迁移**（P5.2 未新增 v044）。
+
+**Status.** 已修复并提交（`6effc9a`）。新增用例：
+`reusing_the_key_with_only_a_changed_result_is_rejected`、
+`reusing_the_key_with_only_a_changed_prompt_is_rejected`。
+回归：11 个受影响套件 180 passed / 0 failed。
+
+> 注：`6effc9a` 的提交消息里「逐条分类见 finding F-016」指的是可达性分类表；
+> 本节（F-017）是那条修复本身的完整记录。
