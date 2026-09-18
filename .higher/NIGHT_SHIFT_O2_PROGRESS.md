@@ -791,8 +791,11 @@ unit  src/document_intelligence/retrieval.rs        4 tests (O2-19, O2-20, lexic
 ```text
 cargo check --lib -j 1                                        EXIT 0   (0 errors)
 cargo test --test real_learning_engine_document_foundation
-           -j 1 -- --test-threads=1                           24 passed / 0 failed
-                                                              (incl. the REAL PDF parse)
+           -j 1 -- --test-threads=1                           25 passed / 0 failed
+                                                              (incl. the REAL PDF parse AND
+                                                               o2_all_supported_formats_parse_on_real_runtime,
+                                                               which parses all 9 non-PDF formats
+                                                               through the REAL docling runtime)
 cargo test --lib -j 1 -- --test-threads=1 document_intelligence
                                                               43 passed / 0 failed
 cargo test --test real_learning_engine_pack_a_audit
@@ -825,8 +828,9 @@ git diff --check            -> CLEAN
 STARTING SHA (task):          ab06ff081ced52535fbace3f928894cd8eae73b7
 STARTING SHA (continuation):  bf5b184969312570c8d137e1d89b246423a2fdbb
 FINAL BRANCH:                 main
-FINAL SHA:                    7cd7b115981eecd9b258490ca315bfbc011c4ed0
-                              (last substantive commit: the .txt/.ascii parse fixes);
+FINAL SHA:                    3a9b737d069523593562cc918c45291fe65b1036
+                              (last substantive commit: the real-runtime format matrix
+                               test that locks all 10 formats against regressions);
                                a docs-only ledger finalization commit follows it.
 
 LOCAL COMMITS ON MAIN (this task):
@@ -846,6 +850,8 @@ LOCAL COMMITS ON MAIN (this task):
   3aef2dc  test(document): exercise the last six formats on the real runtime; record 4 defects
   f4b3b60  docs(o2): fix unbalanced code fence in the six-format section
   7cd7b11  fix(document): stop advertising formats docling cannot parse (.txt, .ascii)
+  03dc7be  docs(o2): finalize the O2 ledger — .txt/.ascii fixes applied and locked
+  3a9b737  test(document): lock the full format matrix on the real docling runtime
 
 COMPLETED WAVES:              M0 M1 M2 M3 M4 (incl. real PDF / DOCX / PPTX / html / htm
                               / xlsx / csv / txt / ascii — all 10 advertised formats now
@@ -882,9 +888,14 @@ LEXICAL RETRIEVAL:            existing SearchRepository FTS, entity_type='docume
 CONTEXT COMPILER:             existing compile() fed by retrieval.rs (unchanged pipeline)
 UI REACHABILITY:              UI_DEFERRED_PRODUCT_DECISION (no UI invented)
 
-TESTS ACTUALLY RUN:           see M8 gates above (24 + 43 + 32 = 99 passed, 0 failed)
+TESTS ACTUALLY RUN:           see M8 gates above (25 + 43 + 32 = 100 passed, 0 failed)
                               incl. m4_real_docling_end_to_end_ingestion AND
-                              m4_real_docling_pdf_path_end_to_end, both on the REAL runtime
+                              m4_real_docling_pdf_path_end_to_end, both on the REAL runtime,
+                              AND o2_all_supported_formats_parse_on_real_runtime — the
+                              availability-gated matrix test that parses every supported
+                              format (markdown/txt/html/htm/asciidoc/docx/pptx/xlsx/csv)
+                              through the REAL docling runtime and asserts the discovered
+                              matrix (9/9 Ready; xlsx/csv = 0 chunks by design)
 FORMAT COVERAGE (real runtime): all 10 advertised suffixes now parsed on docling 2.73.0
                               WORK:          markdown, pdf, docx, pptx, html, htm
                               FIXED:         txt   (now convert_string(InputFormat.MD) ->
@@ -899,9 +910,13 @@ FORMAT COVERAGE (real runtime): all 10 advertised suffixes now parsed on docling
                                              structure is left to the Owner; Higher runtime
                                              behaviour deliberately unchanged.
                               Four defects found by exercising all 10 formats on the real
-                              runtime. Two (txt/ascii) FIXED and locked by an extended
-                              source-level test; two (xlsx/csv) recorded as a product
-                              decision.
+                              runtime. All four are now locked so they cannot silently
+                              regress: txt/ascii are FIXED and asserted by BOTH the extended
+                              source-level suffix test AND the new real-runtime matrix test;
+                              xlsx/csv empty-structure behaviour is asserted by the matrix
+                              test (0 chunks is the expected, locked outcome). The
+                              source-level suffix test alone was necessary but not
+                              sufficient — the matrix test closes that gap permanently.
 
 MAX OBSERVED RAM:             89%   (early continuation; §8 gate exceeded, low-resource mode
                                     enforced for all Rust work. The PDF work then ran at
