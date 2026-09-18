@@ -68,7 +68,9 @@ use app_lib::repository::learning_item::LearningItemRepository;
 use app_lib::repository::search::SearchRepository;
 use app_lib::repository::study_profile::StudyProfileRepository;
 use app_lib::training::grounded_material::{load_material_snapshot, MaterialStatus};
-use app_lib::training::grounding::compile_grounded_context;
+use app_lib::training::grounding::{
+    compile_grounded_context, compile_grounded_material, GroundingRequest,
+};
 use app_lib::training::runtime::{create_training_run, CreateTrainingRunParams};
 use app_lib::training::{start_training_for_item, TrainingErrorCode};
 use rusqlite::{params, Connection};
@@ -783,4 +785,187 @@ fn om_p1_14_latest_migration_is_exactly_43() {
     assert_eq!(version, 43);
     assert_eq!(name, "grounded_training_material");
     let _ = ProtocolId::FreeRecall; // 引用冻结协议表，确认未被动过
+}
+
+// ============================ OM-R3-01（P6R / R3） ============================
+
+/// OM-R3-01 —— 同一学习项上挂**两份正文逐字节相同**的来源。
+///
+/// # 这个形状为什么必须单独覆盖
+///
+/// R3 的既有覆盖里，`OM-P1-11/18` 证的是「无关 chunk 挤不进 top-k」，
+/// `OM-P1-12/19` 证的是「CJK 回退也先收敛范围」，`OM-P1-13` 证的是「跨档案不泄漏」，
+/// 而 `P2-E` 证的是「跨档案同名项不混」。
+/// 它们**都没有**覆盖这种情况：两条来源**都合法、都属于同一个学习项、
+/// 正文完全一样**，于是检索得分**平分**。
+///
+/// 平分是唯一能同时暴露两件事的形状：
+///
+/// ```text
+/// (a) 范围过滤是否对**每一条**授权 revision 生效，而不是「只留下得分最高的那一条」；
+/// (b) 平分时排序是否稳定 —— 若底层用不稳定排序或不带 tie-break 的 SQL，
+///     同一请求反复编译会给出**不同**的出处，而快照是不可变的历史真相，
+///     抖动一旦落库就永久固化。
+/// ```
+///
+/// 两条断言因此都不是「再证一遍已知行为」，而是这条形状独有的性质。
+#[test]
+fn om_r3_01_two_authorized_sources_with_identical_text_stay_scoped_and_deterministic() {
+    let mut conn = setup();
+    let p = create_profile(&conn, "同文本双来源档案");
+    let item = make_due_item(&conn, p, &format!("{ASCII_TOKEN} 同文本主题"));
+
+    // 同一个 item 上挂两份来源，正文逐字节相同。
+    let identical = format!("{ASCII_TOKEN} is the powerhouse of the cell.");
+    let (source_a, revision_a) = ingest_ready(&mut conn, p, item, "a.md", vec![identical.clone()]);
+    let (source_b, revision_b) = ingest_ready(&mut conn, p, item, "b.md", vec![identical.clone()]);
+    assert_ne!(source_a, source_b, "必须是两个不同的来源");
+    assert_ne!(revision_a, revision_b, "必须是两条不同的 revision");
+
+    // ---- 前提：两条 revision 上各自**真的**落了 chunk，且都进了索引 ----
+    // 少了这一步，下面「都在范围内」的断言就只是空话。
+    let chunk_of = |revision: i64| -> i64 {
+        conn.query_row(
+            "SELECT id FROM document_chunks WHERE revision_id = ?1",
+            params![revision],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    let chunk_a = chunk_of(revision_a);
+    let chunk_b = chunk_of(revision_b);
+    assert_ne!(chunk_a, chunk_b);
+
+    let unscoped = SearchRepository::new(&conn)
+        .search(p, ASCII_TOKEN, Some(&["document_chunk".to_string()]), 20)
+        .unwrap();
+    let hit_ids: Vec<i64> = unscoped.iter().map(|h| h.entity_id).collect();
+    assert!(
+        hit_ids.contains(&chunk_a) && hit_ids.contains(&chunk_b),
+        "前提：同文本的两条 chunk 都必须真的可检索，实际命中 {hit_ids:?}"
+    );
+
+    let mut expected_sources = vec![source_a, source_b];
+    expected_sources.sort_unstable();
+
+    // ---- 1. 生产入口只交出这两个来源，且候选集不越界 ----
+    let ctx = compile_grounded_context(&conn, p, item, &format!("回忆 {ASCII_TOKEN}")).unwrap();
+    let mut got_sources: Vec<i64> = ctx.sources.iter().map(|s| s.source_id).collect();
+    got_sources.sort_unstable();
+    assert_eq!(
+        got_sources, expected_sources,
+        "OM-R3-01：绑定到该 item 的两份来源都必须进入上下文"
+    );
+    assert!(
+        !ctx.pack.candidates.is_empty(),
+        "OM-R3-01：同文本不构成「没有候选」的理由"
+    );
+    for c in &ctx.pack.candidates {
+        let sid: i64 = c.source_id.parse().unwrap();
+        assert!(
+            sid == source_a || sid == source_b,
+            "OM-R3-01：候选集不得出现第三个来源，实际 {sid}"
+        );
+    }
+
+    // ---- 2. 平分不得吃掉任何一条合法 revision ----
+    let scoped = SearchRepository::new(&conn)
+        .search_scoped_by_revisions(
+            p,
+            "document_chunk",
+            ASCII_TOKEN,
+            &[revision_a, revision_b],
+            20,
+        )
+        .unwrap();
+    let scoped_ids: Vec<i64> = scoped.iter().map(|h| h.entity_id).collect();
+    assert_eq!(
+        scoped.len(),
+        2,
+        "OM-R3-01：同分的两条合法 chunk 都必须留下，不得因平分丢掉一条，实际 {scoped_ids:?}"
+    );
+    assert!(scoped_ids.contains(&chunk_a) && scoped_ids.contains(&chunk_b));
+
+    // ---- 3. 平分不得让结果抖动：同一请求反复编译逐字段一致 ----
+    let scope_sources = vec![source_a.to_string(), source_b.to_string()];
+    let pack_1 = compile_document_context_scoped(
+        &conn,
+        p,
+        ASCII_TOKEN,
+        &scope_sources,
+        &[revision_a, revision_b],
+        false,
+    )
+    .unwrap();
+    let pack_2 = compile_document_context_scoped(
+        &conn,
+        p,
+        ASCII_TOKEN,
+        &scope_sources,
+        &[revision_a, revision_b],
+        false,
+    )
+    .unwrap();
+    assert_eq!(pack_1, pack_2, "OM-R3-01：平分时检索结果必须稳定");
+    assert_eq!(
+        pack_1
+            .candidates
+            .iter()
+            .map(|c| c.chunk_id.clone())
+            .collect::<Vec<_>>(),
+        pack_2
+            .candidates
+            .iter()
+            .map(|c| c.chunk_id.clone())
+            .collect::<Vec<_>>(),
+        "OM-R3-01：候选**顺序**也必须稳定（顺序会固化进快照的出处）"
+    );
+
+    // ---- 4. 整条生产材料编译：确定 + 出处不越界 + 不产生学习事实 ----
+    let block_goal = format!("{ASCII_TOKEN} powerhouse of the cell");
+    let req = GroundingRequest {
+        profile_id: p,
+        learning_item_id: item,
+        protocol: ProtocolId::FreeRecall,
+        block_goal: &block_goal,
+        mode: DecisionMode::Copilot,
+    };
+    // §8.3：编译材料不是学习事实 —— 编译**前后**逐一比对，而不是假设基线为 0
+    // （夹具 `make_due_item` 为了造出「真实逾期」本身会留下 moment 与 review，
+    //  因此断言必须是「不增」，不能写成「等于 0」。）
+    let moments_before = count_all(&conn, "learning_moments");
+    let reviews_before = count_all(&conn, "memory_reviews");
+
+    let m1 = compile_grounded_material(&conn, &req, None).unwrap();
+    let m2 = compile_grounded_material(&conn, &req, None).unwrap();
+    assert_eq!(m1, m2, "OM-R3-01：反复编译同一请求必须得到同一份材料");
+
+    assert_eq!(
+        m1.status,
+        MaterialStatus::Ready,
+        "OM-R3-01：夹具（ASCII 词元同时出现在 item 名与正文）必须能接地成功"
+    );
+    assert!(!m1.provenance.is_empty(), "Ready 必须带真实出处");
+    for r in &m1.provenance {
+        assert!(
+            r.source_id == source_a || r.source_id == source_b,
+            "OM-R3-01：出处必须落在**已授权**的两份来源内，实际 {}",
+            r.source_id
+        );
+        assert!(
+            r.revision_id == revision_a || r.revision_id == revision_b,
+            "OM-R3-01：出处 revision 必须是这两条 Ready revision 之一"
+        );
+    }
+
+    assert_eq!(
+        count_all(&conn, "learning_moments"),
+        moments_before,
+        "OM-R3-01：编译材料不得产生任何新的 LearningMoment"
+    );
+    assert_eq!(
+        count_all(&conn, "memory_reviews"),
+        reviews_before,
+        "OM-R3-01：编译材料不得产生任何新的 MemoryReview（更不得推进 FSRS）"
+    );
 }
