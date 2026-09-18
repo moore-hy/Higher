@@ -825,10 +825,9 @@ git diff --check            -> CLEAN
 STARTING SHA (task):          ab06ff081ced52535fbace3f928894cd8eae73b7
 STARTING SHA (continuation):  bf5b184969312570c8d137e1d89b246423a2fdbb
 FINAL BRANCH:                 main
-FINAL SHA:                    3aef2dc3b13eda117c8e86be2e8343fb0e6c021d
-                              (last substantive commit: the six-format real-runtime
-                               exercise); a docs-only ledger finalization commit
-                               (f4b3b608f4889e93faa470229267123414a9ec01) follows it.
+FINAL SHA:                    7cd7b115981eecd9b258490ca315bfbc011c4ed0
+                              (last substantive commit: the .txt/.ascii parse fixes);
+                               a docs-only ledger finalization commit follows it.
 
 LOCAL COMMITS ON MAIN (this task):
   7b04bf0  fix(real-learning): narrow learning intent capture boundary            (M0)
@@ -846,6 +845,7 @@ LOCAL COMMITS ON MAIN (this task):
   fb5ad8f  docs(o2): finalize the O2 ledger — PDF/DOCX/PPTX all exercised on the real runtime
   3aef2dc  test(document): exercise the last six formats on the real runtime; record 4 defects
   f4b3b60  docs(o2): fix unbalanced code fence in the six-format section
+  7cd7b11  fix(document): stop advertising formats docling cannot parse (.txt, .ascii)
 
 COMPLETED WAVES:              M0 M1 M2 M3 M4 (incl. real PDF / DOCX / PPTX / html / htm
                               / xlsx / csv / txt / ascii — all 10 advertised formats now
