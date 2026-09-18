@@ -176,6 +176,7 @@ fn push_micro(
             task_id: None,
             learning_item_id: None,
             session_id: None,
+            training_run_id: None,
             review_id: None,
             entry_slice: false,
             suggested_minutes: 0,

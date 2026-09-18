@@ -28,6 +28,20 @@ pub struct LearningStateSnapshot {
     pub today_tasks: Vec<DailyTaskRow>,
     pub today_activities: Vec<DailyActivityRow>,
     pub active_session: Option<StudySession>,
+    /// W6 §11.1 —— 上面这条 active session 是否由一条**未终结**的 TrainingRun 拥有。
+    ///
+    /// 反向读取既有的 `training_runs.study_session_id` 得到（**不新增映射表**）。
+    /// `None` 的含义是「这条会话不由训练拥有」——**不是**「查询失败」。
+    /// 于是「继续学习」只有一条诚实的路由判据：
+    ///
+    /// ```text
+    /// Some(run_id) → /train/:run_id   （结构化训练，由训练运行时拥有）
+    /// None         → /learn/:session_id（自由学习，legacy 工作区）
+    /// ```
+    ///
+    /// `/learn` 仍然有效（快速学习 / 手动自由学习）；本字段只是让 UI 知道
+    /// 该回哪一个，而不是让 UI 自己再查一次。
+    pub active_training_run_id: Option<i64>,
     pub recent_sessions: Vec<StudySession>,
     pub goal_state: GoalState,
     pub planning_state: PlanningState,
@@ -732,6 +746,12 @@ pub struct ExecutionPayload {
     pub task_id: Option<i64>,
     pub learning_item_id: Option<i64>,
     pub session_id: Option<i64>,
+    /// W6 §11.2 —— `continue_session` 时，这条会话由哪一条**未终结**的训练拥有。
+    ///
+    /// 非 `None` 时 UI 必须回 `/train/:training_run_id`（结构化训练），
+    /// `None` 时才回 `/learn/:session_id`（自由学习）。
+    /// 其它 kind 恒为 `None`：本字段只回答「续接去哪」，不表达别的意思。
+    pub training_run_id: Option<i64>,
     pub review_id: Option<i64>,
     /// PHASE 3：完整任务过长 → 只执行入口切片；**不得伪造任务已完成**。
     pub entry_slice: bool,
@@ -746,6 +766,7 @@ impl ExecutionPayload {
             task_id: None,
             learning_item_id: None,
             session_id: None,
+            training_run_id: None,
             review_id: None,
             entry_slice: false,
             suggested_minutes: 0,

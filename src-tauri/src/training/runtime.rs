@@ -1849,6 +1849,30 @@ pub fn find_open_training_run(
     }
 }
 
+/// W6 §11.1 —— 这条 StudySession 是否由一条**未终结**的训练拥有。
+///
+/// 反向读取**既有**列 `training_runs.study_session_id`，不新增任何映射表。
+/// 「未终结」与 §8 的唯一开放位同口径（`ready` / `active` / `paused`）——
+/// `completed` / `abandoned` 的训练**不再**拥有这条会话。
+///
+/// 返回 `Option<i64>` 而不是 `bool`：调用方真正需要的是「回到哪一条训练」，
+/// 而不是一个还要二次查询才能用的布尔值。
+pub fn find_open_run_id_for_session(
+    conn: &Connection,
+    profile_id: i64,
+    study_session_id: i64,
+) -> Result<Option<i64>, TrainingError> {
+    let sql = "SELECT id FROM training_runs
+                WHERE profile_id = ?1 AND study_session_id = ?2
+                  AND status IN ('ready','active','paused')
+                ORDER BY id DESC LIMIT 1";
+    match conn.query_row(sql, params![profile_id, study_session_id], |r| r.get(0)) {
+        Ok(id) => Ok(Some(id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(TrainingError::db(e)),
+    }
+}
+
 /// 列出该训练的全部交互（按写入顺序），用于前端恢复与审计。
 pub fn list_interactions(
     conn: &Connection,

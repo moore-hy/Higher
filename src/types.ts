@@ -1551,6 +1551,13 @@ export interface LearningStateSnapshot {
   today_tasks: DailyTaskRow[];
   today_activities: DailyActivityRow[];
   active_session: StudySession | null;
+  /**
+   * W6 §11.1 —— 上面这条 active session 是否由一条**未终结**的 TrainingRun 拥有。
+   *
+   * `null` = 不由训练拥有（**不是**「查询失败」）。续接路由只有这一条判据：
+   * 有训练 → `/train/:id`；没有 → `/learn/:sessionId`。
+   */
+  active_training_run_id: number | null;
   recent_sessions: StudySession[];
   goal_state: LearningStateGoal;
   planning_state: LearningStatePlanning;
@@ -1835,6 +1842,13 @@ export interface ExecutionPayload {
   task_id: number | null;
   learning_item_id: number | null;
   session_id: number | null;
+  /**
+   * W6 §11.2 —— `continue_session` 时这条会话由哪一条**未终结**的训练拥有。
+   *
+   * 非 `null` → 必须回 `/train/:training_run_id`（结构化训练）；
+   * `null` → 回 `/learn/:session_id`（自由学习）。其它 kind 恒为 `null`。
+   */
+  training_run_id: number | null;
   review_id: number | null;
   /** 仅执行任务入口切片；**任务不会因此完成**。 */
   entry_slice: boolean;

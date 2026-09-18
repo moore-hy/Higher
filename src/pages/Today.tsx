@@ -309,6 +309,25 @@ function Today() {
   const tasks = snapshot?.today_tasks ?? [];
   const activities = snapshot?.today_activities ?? [];
 
+  /** W6 §11.1 —— 这条进行中的会话由哪一条未终结的训练拥有（后端给出的事实）。 */
+  const activeTrainingRunId = snapshot?.active_training_run_id ?? null;
+
+  /**
+   * W6 §11.2 锁定规则 —— 「继续学习」到底回哪里。
+   *
+   * ```text
+   * 由未终结的训练拥有 → /train/:trainingRunId （结构化 / 认知训练）
+   * 否则               → /learn/:sessionId   （自由学习 / 快速学习）
+   * ```
+   *
+   * 这是本页**唯一**的续接判据：所有「继续」入口都走它，避免出现两个入口
+   * 各自判断、各自跑偏。`/learn` 仍然有效 —— 自由学习并没有被删掉，
+   * 只是不再承载「由训练拥有的那条会话」。
+   */
+  function resumeHref(sessionId: number, trainingRunId: number | null): string {
+    return trainingRunId != null ? `/train/${trainingRunId}` : `/learn/${sessionId}`;
+  }
+
   const itemOf = (id: number | null) => (id == null ? undefined : items.find((i) => i.id === id));
 
   /**
@@ -409,8 +428,10 @@ function Today() {
         invalidateClosedLoop();
         navigate(`/learn/${s.id}`);
       } else if (payload.kind === "continue_session" && payload.session_id != null) {
-        // 绝不新开第二条 Session：直接回到已有的那条
-        navigate(`/learn/${payload.session_id}`);
+        // 绝不新开第二条 Session：直接回到已有的那条。
+        // W6 §11.2：若这条会话由**未终结**的训练拥有 → 回 /train（结构化训练），
+        // 否则回 legacy /learn（自由学习）。判据来自后端 payload，不由前端猜。
+        navigate(resumeHref(payload.session_id, payload.training_run_id));
       } else if (payload.kind === "open_review") {
         navigate("/planning");
       }
@@ -607,7 +628,8 @@ function Today() {
           <div className="today-banner__actions">
             <button
               className="btn btn--small btn--primary"
-              onClick={() => navigate(`/learn/${active.id}`)}
+              onClick={() => navigate(resumeHref(active.id, activeTrainingRunId))}
+              data-testid="today-active-continue"
             >
               继续
             </button>

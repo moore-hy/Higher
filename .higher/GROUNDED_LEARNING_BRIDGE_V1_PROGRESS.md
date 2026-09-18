@@ -112,7 +112,7 @@ This pack builds **Adapters / Projections / Orchestration** only. It does NOT cr
 | W3 | Grounded training material snapshot (V043) | `feat(training): persist grounded material snapshots` | ✅ DONE (462d4fa) |
 | W4 | Grounding compiler | `feat(training): ground training blocks in real learning material` | ✅ DONE (ea9137c) |
 | W5 | 8 specialized experiences use real material | `feat(training): render grounded specialized learning experiences` | ✅ DONE (a6a8ce2) |
-| W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | ⏳ pending |
+| W6 | Unify training continuation routing | `fix(training): resume structured learning through training runtime` | 🔧 in_progress |
 | W7 | Close stale progress projection | `fix(progress): derive difficulty from real training blocks` | ⏳ pending |
 | W8 | Final validation + closure | `feat(cognitive): close grounded learning bridge v1` | ⏳ pending |
 
@@ -570,6 +570,103 @@ No new migration (v043 remains the ceiling). DTO regeneration was **purely addit
 | fmt (W5-owned files) | `rustfmt --edition 2021 --check src/commands/training.rs src/app/builder.rs src/ipc/dto.rs` | ✅ no new drift (see §8.5) |
 
 **Totals:** 113/113 targeted Rust tests green; 174/174 product-UI tests green (158 baseline + 16 new).
+
+---
+
+## §9 — W6 IMPLEMENTATION NOTES
+
+**Commit:** `TBD` — `fix(training): resume structured learning through training runtime`
+
+### 9.1 The locked rule
+
+```text
+Structured / cognitive training → /train/:trainingRunId
+Free study / free notes         → /learn/:studySessionId
+```
+
+`/learn` is **NOT deleted**. It keeps quick study, manual free study, and every existing
+explicit learning flow. W6 only decides which page "continue" goes to.
+
+### 9.2 Files touched
+
+| File | Nature |
+|---|---|
+| `src-tauri/src/training/runtime.rs` | `find_open_run_id_for_session(conn, profile_id, study_session_id)` — reverse-lookup on the **existing** `training_runs.study_session_id` column; "open" = `ready`/`active`/`paused` (same口径 as §8's single open slot). **No new mapping table.** Returns `Option<i64>` (the caller needs *which* run, not a boolean). |
+| `src-tauri/src/learning_state/types.rs` | `LearningStateSnapshot.active_training_run_id: Option<i64>`; `ExecutionPayload.training_run_id: Option<i64>` (+ `none()`) |
+| `src-tauri/src/learning_state/state.rs` | populates `active_training_run_id` from the profile-scoped active session. DB errors **propagate** — a failed lookup is never silently downgraded to "free study" (that would route a training-owned session to legacy `/learn`) |
+| `src-tauri/src/learning_state/next_action.rs` | `Candidate.training_run_id` (`Some(snapshot.active_training_run_id)` only in `active_session_candidate`; `None` at the other 5 sites) → mapped straight through `to_payload` |
+| `src-tauri/src/learning_state/pack.rs` | `training_run_id: None` on the micro payload (micro never resumes a session) |
+| `src/types.ts` | hand-mirror of both fields |
+| `src/pages/Today.tsx` | one `resumeHref(sessionId, trainingRunId)` helper + applied to the only two continue deep links |
+| `src-tauri/tests/grounded_training_routing.rs` | **NEW** — GB-ROUTE-01..04 (8 cases) |
+| `tests/product-ui/groundedTrainingRouting.test.tsx` | **NEW** — GB-ROUTE-01..04 at the UI level (5 cases) |
+
+### 9.3 The two continue deep links — and only those
+
+```text
+① Active Study Bar 「继续」             → resumeHref(active.id, snapshot.active_training_run_id)
+② handleStartHere → continue_session   → resumeHref(payload.session_id, payload.training_run_id)
+```
+
+Both funnel through one function, so the two entries can never drift apart.
+**Not touched:** every other historical `/learn/...` link (Knowledge / Planning / Review / Data /
+GoalTreePanel / DailyTasks / DailyActivities / LearningWorkspace / ActiveSessionConflictModal).
+§11.2 explicitly forbids a global rewrite of unrelated routes.
+
+### 9.4 Honest note on reachability of link ②
+
+When an active session exists, `StartHere` is **not rendered at all**
+(`{!hasActive && displayAction && …}` — LEARN-TC002), so link ② is unreachable on the normal
+path. It **is** reachable under partial failure: if `getLearningState` fails while
+`getNextLearningAction` succeeds, Today renders the Next Action card (with a visible error
+banner) and the primary action is `continue_session`. Before W6 that click sent the user to
+`/learn/:id` — straight out of the running training, which is exactly GB-ROUTE-03's failure mode.
+Both branches are covered: GB-ROUTE-03 (snapshot fails, payload points at a run → `/train`) and
+GB-ROUTE-03b (same failure, payload carries no run → `/learn`).
+
+### 9.5 Frozen contracts untouched
+
+22-entry Protocol Registry, the 8 TrainingExperience types and the migration ceiling
+(v043) all unchanged. `session_composer.rs` / `progress_projection.rs` not touched.
+No ts-rs DTO changed → **`src/generated/` is byte-identical this wave**
+(`LearningStateSnapshot` / `ExecutionPayload` are hand-mirrored, not ts-rs-exported — verified
+by grepping `ipc/dto.rs`).
+
+### 9.6 Deviation / residue registry (honest)
+
+- **`tests/` sits outside `tsconfig.include`** (`"include": ["src"]`). Adding a *required* field
+  to the hand-mirrored `LearningStateSnapshot` therefore cannot break any test fixture at
+  compile time, and `npx tsc --noEmit` is structurally unable to catch a stale fixture in
+  `tests/`. W6 checked by hand that the pre-existing fixtures behave identically
+  (`active_training_run_id` absent → `undefined` → `?? null` → `/learn/…`, unchanged), so **no
+  baseline test was modified**. This is a real blind spot in the type gate; fixing it means a
+  repo-wide tsconfig change, which is out of W6 scope. Recorded, not silently patched.
+- **`cargo fmt --check` drift is still the same 9 files as §8.5** (3 recorded at baseline + 6
+  taskbook-era). W6 added **no** new drift: all six W6-owned Rust files are fmt-clean
+  (`rustfmt --edition 2021 --check` → 0 diffs each), and the new test file was formatted before commit.
+- No ambiguous case required a self-chosen conservative fallback in W6.
+
+### 9.7 W6 closure — validation (all green)
+
+| Gate | Command | Result |
+|---|---|---|
+| lib compile | `cargo check --lib --manifest-path src-tauri/Cargo.toml -j 1` | ✅ 0 errors (34 baseline warnings) |
+| **GB-ROUTE-01..04 (Rust)** | `cargo test --test grounded_training_routing` | ✅ **8/8 pass** (re-run after fmt: still 8/8) |
+| **GB-ROUTE-01..04 (UI)** | `npx vitest run tests/product-ui/groundedTrainingRouting.test.tsx` | ✅ **5/5 pass** |
+| Product UI (full) | `npm run test:product-ui` | ✅ **179/179 pass** (11 files) |
+| Frontend types | `npx tsc --noEmit` | ✅ 0 errors |
+| DTO currency | `npm run check:types` | ✅ exit 0 (generated/ untouched) |
+| Training regression | `cargo test --test real_learning_engine_training` | ✅ 38/38 pass |
+| W5 regression | `cargo test --test grounded_training_grounding` | ✅ 9/9 pass |
+| W3 regression | `cargo test --test grounded_training_material` | ✅ 5/5 pass |
+| Learning-state regression | `cargo test --test closed_loop_core` | ✅ 23/23 pass |
+| Learning-state regression | `cargo test --test learning_friction` | ✅ 9/9 pass |
+| Today projection regression | `cargo test --test today_coach_v1` | ✅ 6/6 pass |
+| W2 regression | `cargo test --test document_knowledge_surface` | ✅ 9/9 pass |
+| W1 regression | `cargo test --test document_intelligence` | ✅ 27/27 pass |
+| fmt (W6-owned files) | `rustfmt --edition 2021 --check` × 6 files | ✅ 0 diffs each |
+
+**Totals:** 134/134 targeted Rust tests green; 179/179 product-UI tests green (174 after W5 + 5 new).
 
 
 

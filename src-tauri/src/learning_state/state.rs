@@ -66,6 +66,20 @@ pub fn build_learning_state_at(
         .map_err(|e| e.to_string())?
         .filter(|s| s.profile_id == profile_id);
 
+    // ---- W6 §11.1：这条 active session 是否由一条**未终结**的 TrainingRun 拥有 ----
+    //
+    // 只读反查既有的 `training_runs.study_session_id`（**不新增映射表**）。
+    // 查不到 = `None` =「不由训练拥有」，与「查询失败」严格区分：
+    // 任何 DB 错误都向上传播，绝不把一次失败静默降级成「自由学习」——
+    // 那会让 UI 把一条**训练中**的会话导去 legacy `/learn`。
+    let active_training_run_id = match active_session.as_ref() {
+        Some(session) => {
+            crate::training::runtime::find_open_run_id_for_session(conn, profile_id, session.id)
+                .map_err(|e| e.to_string())?
+        }
+        None => None,
+    };
+
     let recent_sessions = StudySessionRepository::new(conn)
         .list_recent_by_profile(profile_id, RECENT_SESSION_LIMIT)
         .map_err(|e| e.to_string())?;
@@ -229,6 +243,7 @@ pub fn build_learning_state_at(
         today_tasks: report.tasks,
         today_activities: report.activities,
         active_session,
+        active_training_run_id,
         recent_sessions,
         goal_state,
         planning_state,

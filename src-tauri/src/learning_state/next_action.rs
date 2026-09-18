@@ -102,6 +102,11 @@ pub(crate) struct Candidate {
     pub(crate) task_id: Option<i64>,
     pub(crate) learning_item_id: Option<i64>,
     pub(crate) session_id: Option<i64>,
+    /// W6 §11.1/§11.2 —— 续接这条会话时，应该回到哪一条**未终结**的训练。
+    ///
+    /// 只有 `active_session_candidate` 会填它（来自快照的
+    /// `active_training_run_id`）；其余候选恒为 `None`。
+    pub(crate) training_run_id: Option<i64>,
     pub(crate) review_id: Option<i64>,
     /// 动作的自然时长（任务估时 / 上次实际时长 / Recovery 默认 / 快速学习默认）。
     pub(crate) base_estimate: Option<i64>,
@@ -212,6 +217,8 @@ fn active_session_candidate(snapshot: &LearningStateSnapshot) -> Option<Candidat
         task_id: active.task_id,
         learning_item_id: active.learning_item_id,
         session_id: Some(active.id),
+        // W6 §11.2：这条会话由哪一条未终结的训练拥有（`None` = 自由学习）。
+        training_run_id: snapshot.active_training_run_id,
         review_id: None,
         base_estimate: minutes,
         task_scoped: false,
@@ -334,6 +341,7 @@ fn recovery_candidate(snapshot: &LearningStateSnapshot) -> Option<Candidate> {
         task_id,
         learning_item_id,
         session_id: None,
+        training_run_id: None,
         review_id: None,
         base_estimate: base,
         task_scoped,
@@ -369,6 +377,7 @@ fn review_due_candidate(snapshot: &LearningStateSnapshot) -> Option<Candidate> {
         task_id: None,
         learning_item_id: None,
         session_id: None,
+        training_run_id: None,
         review_id: rid,
         base_estimate: None,
         task_scoped: false,
@@ -452,6 +461,7 @@ fn continue_last_candidate(
         task_id,
         learning_item_id,
         session_id: Some(last.id),
+        training_run_id: None,
         review_id: None,
         base_estimate: minutes,
         task_scoped: task_continuable,
@@ -595,6 +605,7 @@ fn planned_task_candidates(
                 task_id: Some(t.id),
                 learning_item_id: t.learning_item_id,
                 session_id: None,
+                training_run_id: None,
                 review_id: None,
                 base_estimate: est,
                 task_scoped: true,
@@ -625,6 +636,7 @@ fn quick_study_candidate(available: Option<i64>) -> Candidate {
         task_id: None,
         learning_item_id: None,
         session_id: None,
+        training_run_id: None,
         review_id: None,
         base_estimate: Some(base),
         task_scoped: false,
@@ -660,6 +672,7 @@ fn to_payload(c: &Candidate, budget: Option<TimeBudget>) -> (ExecutionPayload, O
         task_id: c.task_id,
         learning_item_id: c.learning_item_id,
         session_id: c.session_id,
+        training_run_id: c.training_run_id,
         review_id: c.review_id,
         entry_slice,
         suggested_minutes: estimated.unwrap_or(0),
@@ -876,6 +889,7 @@ fn finish_micro(
             task_id: None,
             learning_item_id: None,
             session_id: None,
+            training_run_id: None,
             review_id: None,
             entry_slice: false,
             suggested_minutes: 0,
