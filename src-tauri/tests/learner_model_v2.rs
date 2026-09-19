@@ -62,6 +62,42 @@ fn simple(ty: LearningMomentType, at: &str) -> LearningMoment {
     moment(ty, at, EvidenceQuality::High, None, None, None)
 }
 
+/// **真实执行过的**确定性验证器所签发的 moment（training runtime 写入的形状）。
+///
+/// # 为什么需要它
+///
+/// 本文件旧夹具的默认形状是 `UserExplicit + High`，**没有** verifier provenance ——
+/// 那正是 A2-1 §4 要封掉的 legacy 语义：质量高 ≠ 权威。
+///
+/// ```text
+/// EvidenceQuality::High  !=  EvidenceAuthority::DeterministicVerified
+/// ```
+///
+/// 因此凡是要断言**客观推进**（`Independent` / `Understood` / 校准度）的用例，
+/// 必须显式给出 verifier provenance；否则它断言的是一个不再成立的前提。
+/// 对应的 fail-closed 断言在 `tests/a2_1_personal_evidence_authority.rs`。
+fn verified(ty: LearningMomentType, at: &str) -> LearningMoment {
+    let mut m = moment(ty, at, EvidenceQuality::High, None, None, None);
+    m.source_type = app_lib::cognitive::MomentSourceType::SystemDerived;
+    m.metadata_json = serde_json::json!({
+        "provenance": { "training_run_id": 1, "block_run_id": 1, "interaction_id": 1 },
+        "verification": "deterministic",
+    });
+    m
+}
+
+fn verified_with_confidence(
+    ty: LearningMomentType,
+    at: &str,
+    confidence: EvidenceConfidence,
+    result: &str,
+) -> LearningMoment {
+    let mut m = verified(ty, at);
+    m.confidence = Some(confidence);
+    m.result = Some(result.to_string());
+    m
+}
+
 fn input(moments: Vec<LearningMoment>) -> LearnerProjectionInput {
     LearnerProjectionInput {
         profile_id: PROFILE,
@@ -144,11 +180,23 @@ fn lm2_03_hinted_success_is_prompted() {
 
 #[test]
 fn lm2_04_independent_success_is_independent() {
-    let s = project(vec![simple(
+    // A2-1：客观推进必须由**真实验证器 provenance** 授权（§12 Recall）。
+    let s = project(vec![verified(
         LearningMomentType::RecallSuccess,
         "2026-09-20 02:00:00",
     )]);
     assert_eq!(s.recall_state, RecallState::Independent);
+
+    // 同样的成功若只有「用户自报 + High」而无 provenance → 不得 Independent
+    // （fail-closed 断言见 tests/a2_1_personal_evidence_authority.rs A21-LM-01）。
+    assert_ne!(
+        project(vec![simple(
+            LearningMomentType::RecallSuccess,
+            "2026-09-20 02:00:00",
+        )])
+        .recall_state,
+        RecallState::Independent
+    );
 }
 
 // =============== LM2-05 ===============
@@ -156,7 +204,7 @@ fn lm2_04_independent_success_is_independent() {
 #[test]
 fn lm2_05_no_transfer_evidence_is_unknown() {
     // 即使应用能力已经很强，没有迁移证据时 transfer 仍是 unknown
-    let s = project(vec![simple(
+    let s = project(vec![verified(
         LearningMomentType::PracticeSuccess,
         "2026-09-20 02:00:00",
     )]);
@@ -168,7 +216,7 @@ fn lm2_05_no_transfer_evidence_is_unknown() {
 
 #[test]
 fn lm2_06_transfer_success_is_independent() {
-    let s = project(vec![simple(
+    let s = project(vec![verified(
         LearningMomentType::TransferSuccess,
         "2026-09-20 02:00:00",
     )]);
@@ -236,24 +284,24 @@ fn lm2_07_fewer_than_three_pairs_is_calibration_unknown() {
 #[test]
 fn lm2_08_high_confidence_repeated_failure_is_overconfident() {
     let mut moments = Vec::new();
-    // 3 对：两次「高置信 + 失败」、一次「高置信 + 成功」
+    // 3 对：两次「高置信 + 失败」、一次「高置信 + 成功」。
+    //
+    // A2-1 §12 Calibration：校准度 = 用户置信度 + **客观**结果，
+    // 客观结果一侧必须是权威准入的，因此这三对必须由真实验证器签发 ——
+    // 「自报置信度 + 自报正确性」称不出校准度（A21-LM-08）。
     for at in ["2026-09-20 02:00:00", "2026-09-21 02:00:00"] {
-        moments.push(moment(
+        moments.push(verified_with_confidence(
             LearningMomentType::PracticeFailure,
             at,
-            EvidenceQuality::High,
-            None,
-            Some(EvidenceConfidence::High),
-            Some("failure"),
+            EvidenceConfidence::High,
+            "failure",
         ));
     }
-    moments.push(moment(
+    moments.push(verified_with_confidence(
         LearningMomentType::PracticeSuccess,
         "2026-09-22 02:00:00",
-        EvidenceQuality::High,
-        None,
-        Some(EvidenceConfidence::High),
-        Some("success"),
+        EvidenceConfidence::High,
+        "success",
     ));
 
     let s = project(moments);
