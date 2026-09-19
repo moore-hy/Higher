@@ -1,7 +1,42 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+
+/**
+ * HOTFIX-TEST-TIME-01 —— 消除对真实系统日期的依赖。
+ *
+ * `elapsed` 由 `Date.now() - started_at` 推导（LearningWorkspace 的 elapsedLabel），
+ * 一旦 fixture 把 started_at 写成硬编码的绝对时刻，真实时间往前走，
+ * 计时器就会漂移：超过 100 小时后变成 `100:36:14`，撞破 HH:MM:SS 契约。
+ *
+ * 因此这里把「现在」钉死在一个固定锚点上，started_at 由锚点反推（now - 5 分钟），
+ * 使计时器恒为 `00:05:00`，与运行测试的真实日期无关。
+ */
+const FIXED_NOW = new Date("2026-09-15T01:05:00.000Z");
+const SESSION_START_OFFSET_MS = 5 * 60 * 1000;
+
+/**
+ * Rust 侧时间列格式 `YYYY-MM-DD HH:MM:SS`（UTC）。
+ * 必须按 UTC 序列化：组件用 `started_at.replace(" ", "T") + "Z"` 解析它。
+ */
+function toUtcColumn(d: Date): string {
+  return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
+const SESSION_STARTED_AT = toUtcColumn(
+  new Date(FIXED_NOW.getTime() - SESSION_START_OFFSET_MS)
+);
+
+// 只伪造 Date，setTimeout / setInterval 保持真实：
+// userEvent 与 waitFor 都依赖真实定时器推进，假定时器会把它们拖死。
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FIXED_NOW);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /**
  * PRODUCT-2.0 §8A / §23.5 / §46A.3 — Learning Suite：P0 DATA SAFETY 的 UI 侧契约。
@@ -21,14 +56,14 @@ function makeSession(over: Record<string, unknown>) {
     task_id: null,
     learning_item_id: null,
     title: "快速学习",
-    started_at: "2026-09-15 01:00:00",
+    started_at: SESSION_STARTED_AT,
     ended_at: null,
     duration_seconds: null,
     status: "active",
     note: null,
     note_document_json: null,
-    created_at: "2026-09-15 01:00:00",
-    updated_at: "2026-09-15 01:00:00",
+    created_at: SESSION_STARTED_AT,
+    updated_at: SESSION_STARTED_AT,
     time_corrected: 0,
     activity_kind: "unplanned",
     duration_review_state: "normal",
@@ -312,10 +347,12 @@ describe("Learning Suite — 基础渲染契约", () => {
     await waitLoaded();
 
     expect(screen.getByText("快速学习")).toBeInTheDocument();
-    // 不锁定具体时刻（取决于运行时区），只要求真实跳动的计时器格式。
+    // started_at 恒为「固定锚点 - 5 分钟」，所以计时器不再依赖真实系统日期，
+    // 也就不需要只敢断言格式 —— 这里可以直接锁定真实跳动的时刻本身。
     const timer = container.querySelector(".lw__timer");
     expect(timer).not.toBeNull();
     expect(timer?.textContent ?? "").toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    expect(timer?.textContent ?? "").toBe("00:05:00");
   });
 });
 
