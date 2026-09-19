@@ -7,9 +7,11 @@ import {
   completeTrainingRun,
   getBlockGroundedMaterial,
   getTrainingSession,
+  precheckTrainingVerification,
   recordTrainingInteraction,
   startTrainingBlock,
   startTrainingRun,
+  verifyTrainingInteraction,
 } from "../api";
 import TrainingExperienceDispatch from "../components/training/TrainingExperienceDispatch";
 import type { ExperienceSubmit } from "../components/training/experienceTypes";
@@ -392,19 +394,55 @@ export default function TrainingExperience() {
           };
         }
 
-        const outcome = await recordTrainingInteraction({
+        const actionId = attemptRef.current.id;
+        const responseText = response.trim() === "" ? null : response;
+
+        // A2-2 §11：**先只读预检一次**，再决定走哪条通路。
+        //
+        //   verified -> 受控验证通路（权威由后端验证器签发，前端给不了）
+        //   其它     -> 既有自检通路（与今天**完全相同** —— 没有任何用户变差）
+        //
+        // 之所以必须由**验证结果**而不是「有没有验证器」来路由：未命中时后端写
+        // `result = null`，而块完成规则（AtLeastOneRecallOutcome）要求
+        // `result.is_some()`，块就推进不了。未命中的用户只能拿回今天的既有行为。
+        // 类型跟着「今天的那个调用」走，不另引一份可能漂移的定义。
+        let outcome: Awaited<ReturnType<typeof recordTrainingInteraction>>;
+        const pre = await precheckTrainingVerification({
           profileId,
           trainingRunId,
           blockRunId: selectedBlock.id,
-          clientActionId: attemptRef.current.id,
-          interactionType: args.interactionType,
-          userResponseText: response.trim() === "" ? null : response,
-          promptText: null,
-          hintLevel: args.hintLevel > 0 ? args.hintLevel : null,
-          // 用户显式声明的结果；`null` 表示未知 —— 未知永远不等于失败（§50）。
-          result: args.result,
-          occurredAt: null,
+          userResponseText: responseText,
         });
+        if (pre && pre.result === "verified") {
+          const verified = await verifyTrainingInteraction({
+            profileId,
+            trainingRunId,
+            blockRunId: selectedBlock.id,
+            clientActionId: actionId,
+            interactionType: args.interactionType,
+            userResponseText: responseText,
+            hintLevel: args.hintLevel > 0 ? args.hintLevel : null,
+            occurredAt: null,
+          });
+          // 生成类型里 `verification` 是 `string`（Rust 侧字段就是 `String`）；
+          // `src/types.ts` 把它收窄成 4 个取值的联合。这是**既有**约定，
+          // 后端只会发出这 4 个值，所以在这里显式收窄一次，不再另建一份定义。
+          outcome = verified.outcome as typeof outcome;
+        } else {
+          outcome = await recordTrainingInteraction({
+            profileId,
+            trainingRunId,
+            blockRunId: selectedBlock.id,
+            clientActionId: actionId,
+            interactionType: args.interactionType,
+            userResponseText: responseText,
+            promptText: null,
+            hintLevel: args.hintLevel > 0 ? args.hintLevel : null,
+            // 用户显式声明的结果；`null` 表示未知 —— 未知永远不等于失败（§50）。
+            result: args.result,
+            occurredAt: null,
+          });
+        }
 
         setLastEffect(outcome.effect);
         setLastReplayed(outcome.replayed);

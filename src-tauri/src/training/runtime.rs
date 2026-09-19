@@ -1180,6 +1180,55 @@ pub fn verify_and_record_interaction(
     })
 }
 
+/// A2-2 §11 —— **只读预检**：跑一遍验证器，但**一个字节都不写**。
+///
+/// # 为什么需要它
+///
+/// 前端要决定「这次提交走验证通路还是既有自检通路」，而这个决定必须由
+/// **验证结果**做出 —— 只由「这个块有没有验证器」做出来是不够的：
+/// 有验证器但没命中时，`result` 会是 `None`，而既有的块完成规则
+/// （`AtLeastOneRecallOutcome`）要求 `result.is_some()`，块就推进不了。
+///
+/// 所以流程是：
+///
+/// ```text
+/// precheck → Verified       → verify_and_record_interaction（权威）
+/// precheck → 其它 / None    → 既有手工通路（SelfCheck + 用户自报结果）
+///                              ↑ 与今天**逐字节相同**，没有任何用户变差
+/// ```
+///
+/// `None` = 这个块没有合法确定性真相源（**不是**「验证失败」）。
+pub fn precheck_verification(
+    conn: &Connection,
+    profile_id: i64,
+    training_run_id: i64,
+    block_run_id: i64,
+    user_response_text: Option<&str>,
+) -> Result<Option<VerifierOutcome>, TrainingError> {
+    let run = load_run(conn, profile_id, training_run_id)?;
+    let block = load_block_run(conn, profile_id, block_run_id)?;
+    if block.training_run_id != run.id {
+        return Err(TrainingError::new(
+            TrainingErrorCode::TrainingBlockNotFound,
+            format!(
+                "块 {} 不属于训练 {}（跨 run 引用被拒绝）",
+                block_run_id, training_run_id
+            ),
+        ));
+    }
+    if block.is_break {
+        return Ok(None);
+    }
+    let material =
+        load_material_snapshot(conn, profile_id, block_run_id).map_err(TrainingError::db)?;
+    Ok(verify_grounded_source_recall(
+        block.protocol_id,
+        block_run_id,
+        material.as_ref(),
+        user_response_text,
+    ))
+}
+
 fn record_interaction_inner(
     conn: &Connection,
     p: RecordInteractionParams,

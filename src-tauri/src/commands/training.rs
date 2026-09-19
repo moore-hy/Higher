@@ -25,7 +25,7 @@ use crate::db;
 use crate::training;
 use crate::training::grounded_material::GroundedTrainingMaterial;
 use crate::training::types::{BlockAdvanceIntent, InteractionResult, VerificationMethod};
-use crate::training::VerifiedInteractionOutcome;
+use crate::training::{VerifiedInteractionOutcome, VerifierOutcome};
 use rusqlite::OptionalExtension;
 
 /// §19 创建训练的结果：新 run + 被物化出来的块。
@@ -225,6 +225,45 @@ pub fn verify_training_interaction(
             hint_level,
             occurred_at,
         },
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// A2-2 §11 —— **只读**预检：跑一遍验证器，但**一个字节都不写**。
+///
+/// 返回值：
+///
+/// ```text
+/// Some(outcome)  这个块有合法验证器，`outcome.result` 是它的判定
+/// None           这个块**没有**合法确定性真相源（不是「验证失败」）
+/// ```
+///
+/// # 它为什么存在
+///
+/// 前端用它来决定走哪条通路：
+///
+/// ```text
+/// verified -> verify_training_interaction（权威：后端签名）
+/// 其它     -> 既有自检通路（SelfCheck + 用户自报结果，**与今天完全相同**）
+/// ```
+///
+/// 这个决定必须由**验证结果**做出，不能只由「有没有验证器」做出 ——
+/// 有验证器却没命中时 `result` 为 `None`，而块完成规则要求 `result.is_some()`。
+#[tauri::command]
+pub fn precheck_training_verification(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    training_run_id: i64,
+    block_run_id: i64,
+    user_response_text: Option<String>,
+) -> Result<Option<VerifierOutcome>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    training::precheck_verification(
+        &conn,
+        profile_id,
+        training_run_id,
+        block_run_id,
+        user_response_text.as_deref(),
     )
     .map_err(|e| e.to_string())
 }

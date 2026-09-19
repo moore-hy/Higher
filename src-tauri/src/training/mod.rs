@@ -52,12 +52,13 @@ pub use grounding::{
 pub use runtime::{
     abandon_training_run, advance_training_block, block_is_current_active, complete_training_run,
     create_training_run, find_open_training_run, get_training_run, list_block_runs,
-    list_interactions, record_interaction, resolve_recall_memory_unit, start_training_block,
-    start_training_run, training_source_id, transition_training_run, try_complete_training_block,
-    verify_and_record_interaction, AdvanceBlockParams, BlockAdvanceOutcome,
-    CreateTrainingRunParams, InteractionOutcome, RecordInteractionParams, TryCompleteBlockParams,
-    VerifiedInteractionOutcome, VerifyInteractionParams, NO_VERIFIER_FOR_BLOCK,
-    TRAINING_SOURCE_PREFIX, VERIFIER_PROOF_NOT_VERIFIED, VERIFIER_PROOF_REQUIRED,
+    list_interactions, precheck_verification, record_interaction, resolve_recall_memory_unit,
+    start_training_block, start_training_run, training_source_id, transition_training_run,
+    try_complete_training_block, verify_and_record_interaction, AdvanceBlockParams,
+    BlockAdvanceOutcome, CreateTrainingRunParams, InteractionOutcome, RecordInteractionParams,
+    TryCompleteBlockParams, VerifiedInteractionOutcome, VerifyInteractionParams,
+    NO_VERIFIER_FOR_BLOCK, TRAINING_SOURCE_PREFIX, VERIFIER_PROOF_NOT_VERIFIED,
+    VERIFIER_PROOF_REQUIRED,
 };
 pub use start::{load_training_session, start_training_for_item, TrainingSessionView};
 pub use types::{

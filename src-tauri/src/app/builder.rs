@@ -304,6 +304,7 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             record_training_interaction,
             // A2-2 —— 受控后端验证通路（唯一能产出权威判定方式的命令）
             verify_training_interaction,
+            precheck_training_verification,
             transition_training_run,
             complete_training_run,
             // PACK A 收口 —— 块推进（Owner 补充决定 D11–D21）

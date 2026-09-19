@@ -13,6 +13,9 @@
 //! A22-10  重试幂等
 //! A22-11  AI 结果仍然非权威
 //! A22-12  legacy 行（声称已验证但无 proof）仍 fail closed
+//! A22-13  生产路径无法自己铸造权威（源码结构）
+//! A22-14  预检是**只读**的（跑验证器但一个字节都不写）
+//! A22-15  预检的三种结果决定路由（verified / unverified / 没有验证器）
 //! ```
 //!
 //! 前 6 项与 11 / 12 项是**纯**断言；07–10 走真实 sqlite（内存库 + 真实迁移）。
@@ -42,9 +45,9 @@ use app_lib::training::grounded_material::{
     save_material_snapshot, GeneratedBy, GroundedTrainingMaterial, MaterialStatus,
 };
 use app_lib::training::{
-    create_training_run, record_interaction, start_training_run, verify_and_record_interaction,
-    CreateTrainingRunParams, GroundedMaterialRef, InteractionResult, RecordInteractionParams,
-    VerificationMethod, VerifyInteractionParams,
+    create_training_run, precheck_verification, record_interaction, start_training_run,
+    verify_and_record_interaction, CreateTrainingRunParams, GroundedMaterialRef, InteractionResult,
+    RecordInteractionParams, VerificationMethod, VerifierResult, VerifyInteractionParams,
 };
 
 const NOW: &str = "2026-09-20 02:00:00";
@@ -812,4 +815,100 @@ fn load_moment(conn: &Connection, id: i64) -> LearningMoment {
         metadata_json: serde_json::from_str(&metadata_json).unwrap(),
         created_at: NOW.to_string(),
     }
+}
+
+// ============================ A22-14 / A22-15 ============================
+
+fn row_count(conn: &Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
+/// A22-14 —— 预检跑验证器但**一个字节都不写**。
+///
+/// 它存在的意义是让前端能按「验证结果」路由；如果它自己会写东西，
+/// 那一次用户动作就会落两条事实。
+#[test]
+fn a22_14_precheck_is_read_only() {
+    let conn = setup();
+    let profile_id = make_profile(&conn, "预检只读");
+    let item_id = make_item(&conn, profile_id, "线粒体");
+    let (run_id, block_id) = make_run(&conn, profile_id, item_id, ProtocolId::FreeRecall);
+    save_ready_material(&conn, profile_id, block_id, EXCERPT);
+
+    let before = (
+        row_count(&conn, "training_interactions"),
+        row_count(&conn, "learning_moments"),
+        row_count(&conn, "memory_reviews"),
+    );
+
+    let outcome = precheck_verification(&conn, profile_id, run_id, block_id, Some(EXCERPT))
+        .unwrap()
+        .expect("free_recall + Ready 确定性材料 → 必须有验证器");
+    assert_eq!(
+        outcome.result,
+        VerifierResult::Verified,
+        "预检必须真的跑验证器"
+    );
+
+    let after = (
+        row_count(&conn, "training_interactions"),
+        row_count(&conn, "learning_moments"),
+        row_count(&conn, "memory_reviews"),
+    );
+    assert_eq!(
+        before, after,
+        "A22-14：预检**只读** —— 交互 / 学习事实 / 记忆复习都必须纹丝不动（{before:?} vs {after:?}）"
+    );
+}
+
+/// A22-15 —— 预检的三种结果决定前端路由。
+///
+/// ```text
+/// Some(Verified)   -> verify_training_interaction（权威由后端签发）
+/// Some(Unverified) -> 既有自检通路（**与今天完全相同**，未命中的用户不会变差）
+/// None             -> 同上（这个块没有合法真相源）
+/// ```
+#[test]
+fn a22_15_precheck_result_decides_the_route() {
+    let conn = setup();
+    let profile_id = make_profile(&conn, "预检路由");
+    let item_id = make_item(&conn, profile_id, "线粒体");
+    let (run_id, block_id) = make_run(&conn, profile_id, item_id, ProtocolId::FreeRecall);
+    save_ready_material(&conn, profile_id, block_id, EXCERPT);
+
+    // ① 命中 → 走权威通路
+    let hit = precheck_verification(&conn, profile_id, run_id, block_id, Some(EXCERPT))
+        .unwrap()
+        .expect("有验证器");
+    assert_eq!(hit.result, VerifierResult::Verified);
+
+    // ② 未命中 → 回落到既有自检通路（**不是**「验证失败」）
+    let miss = precheck_verification(
+        &conn,
+        profile_id,
+        run_id,
+        block_id,
+        Some("我记得大概是能量"),
+    )
+    .unwrap()
+    .expect("有验证器");
+    assert_eq!(
+        miss.result,
+        VerifierResult::Unverified,
+        "A22-15：未命中是 Unverified —— 它**不是**失败，只是拿不到权威（§11）"
+    );
+
+    // ③ 没有合法真相源的协议 → None（前端回落）
+    //
+    // 一个档案至多一个未终结 TrainingRun，所以这条走**另一个档案**。
+    let profile_b = make_profile(&conn, "例题档案");
+    let item_b = make_item(&conn, profile_b, "例题项");
+    let (run_b, block_b) = make_run(&conn, profile_b, item_b, ProtocolId::WorkedExample);
+    save_ready_material(&conn, profile_b, block_b, EXCERPT);
+    let none = precheck_verification(&conn, profile_b, run_b, block_b, Some(EXCERPT)).unwrap();
+    assert!(
+        none.is_none(),
+        "A22-15：没有合法确定性真相源的块 → None（前端走既有通路，绝不伪造验证）"
+    );
 }

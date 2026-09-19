@@ -2698,6 +2698,62 @@ export const recordTrainingInteraction = (args: {
     occurredAt: args.occurredAt ?? null,
   });
 
+// 本地使用（下面两个 invoke 的返回类型）—— 与上面转发的是同一份定义，不是第二份。
+import type { VerifierOutcome } from "./generated/VerifierOutcome";
+import type { VerifiedInteractionOutcome } from "./generated/VerifiedInteractionOutcome";
+
+/**
+ * A2-2 §11 —— **只读**预检：跑一遍后端验证器，但一个字节都不写。
+ *
+ * 返回 `null` = 这个块没有合法确定性真相源（**不是**「验证失败」）。
+ *
+ * 前端用它来路由：
+ * - `result === "verified"` → `verifyTrainingInteraction`（权威由后端签发）
+ * - 其它 / `null`           → `recordTrainingInteraction`（既有自检通路，与今天完全相同）
+ */
+export const precheckTrainingVerification = (args: {
+  profileId: number;
+  trainingRunId: number;
+  blockRunId: number;
+  userResponseText?: string | null;
+}) =>
+  invoke<VerifierOutcome | null>("precheck_training_verification", {
+    profileId: args.profileId,
+    trainingRunId: args.trainingRunId,
+    blockRunId: args.blockRunId,
+    userResponseText: args.userResponseText ?? null,
+  });
+
+/**
+ * A2-2 §9 —— 受控后端验证通路。
+ *
+ * **没有** `verification` / `result` 参数：命中由后端写 `Deterministic + Success`，
+ * 未命中写 `SelfCheck + null`（未知，**绝不**写失败）。前端提供不了这两者中的任何一个。
+ *
+ * 调用前应当先用 `precheckTrainingVerification` 确认会命中 —— 否则落到
+ * `SelfCheck + null`，而块完成规则要求 `result.is_some()`，块就推进不了。
+ */
+export const verifyTrainingInteraction = (args: {
+  profileId: number;
+  trainingRunId: number;
+  blockRunId: number;
+  clientActionId: string;
+  interactionType: string;
+  userResponseText?: string | null;
+  hintLevel?: number | null;
+  occurredAt?: string | null;
+}) =>
+  invoke<VerifiedInteractionOutcome>("verify_training_interaction", {
+    profileId: args.profileId,
+    trainingRunId: args.trainingRunId,
+    blockRunId: args.blockRunId,
+    clientActionId: args.clientActionId,
+    interactionType: args.interactionType,
+    userResponseText: args.userResponseText ?? null,
+    hintLevel: args.hintLevel ?? null,
+    occurredAt: args.occurredAt ?? null,
+  });
+
 /**
  * HOTFIX-01 FIX D：**初始启动**一次训练（原子）。
  *
