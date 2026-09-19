@@ -205,6 +205,7 @@ pub fn start_training_for_item(
         prepare_block_materials(conn, profile_id, &plan, snapshot.mode)?;
 
     // PHASE B —— 同事务落库（run + 全部块 + 接地快照 + DIRECT 意图消费）。
+    // 生产路径要求完整覆盖：每个 non-break 学习块恰好 1 份材料（AUDIT REOPEN 项 3）。
     create_training_run_with_materials(
         conn,
         CreateTrainingRunParams {
@@ -215,5 +216,6 @@ pub fn start_training_for_item(
             now_utc,
         },
         &prepared,
+        true,
     )
 }

@@ -674,6 +674,12 @@ pub enum TrainingErrorCode {
     /// 只会以约束错误或静默错位的形式暴露，而事务中间的错误只能整体回滚，
     /// 无法给出可读诊断。**不存在**「先建 run 再慢慢补材料」的路径。
     PreparedMaterialMismatch,
+    /// GROUNDED LEARNING BRIDGE V1 · P1.1（AUDIT REOPEN 项 3）：生产路径要求
+    /// 每一个 non-break 学习块必须**恰好有 1 份** `PreparedBlockMaterial`
+    /// （`Unavailable` 也算有效快照，`Unavailable != NULL`）；缺一份或多份 → 在事务开始前拒绝。
+    /// 休息块必须 0 份（已由 `PreparedMaterialMismatch` 覆盖）。合成/测试路径
+    /// （`create_training_run`）显式不要求完整覆盖。
+    MaterialCoverageIncomplete,
     /// GROUNDED LEARNING BRIDGE V1 · P1.1：接地材料快照在创建事务内落库失败，
     /// 因此整个创建事务已回滚 —— **不会**留下一个 RUNNING/READY 却无接地的训练。
     GroundedSnapshotPersistFailed,
@@ -706,6 +712,7 @@ impl TrainingErrorCode {
             Self::TrainingRunHasNoBlocks => "TRAINING_RUN_HAS_NO_BLOCKS",
             Self::TrainingRunHasOpenBlocks => "TRAINING_RUN_HAS_OPEN_BLOCKS",
             Self::PreparedMaterialMismatch => "PREPARED_MATERIAL_MISMATCH",
+            Self::MaterialCoverageIncomplete => "MATERIAL_COVERAGE_INCOMPLETE",
             Self::GroundedSnapshotPersistFailed => "GROUNDED_SNAPSHOT_PERSIST_FAILED",
             Self::Db => "DB_ERROR",
         }

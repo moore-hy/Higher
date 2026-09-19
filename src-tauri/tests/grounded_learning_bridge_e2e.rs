@@ -10,11 +10,16 @@
 //!       → Ready revision/section/chunk → SearchRepository 索引
 //!       → start_training_for_item → TrainingRun → TrainingBlock
 //!       → material_snapshot_json → get_block_grounded_material（命令层 core）
-//! P2-B  start current block → record real learner interaction
-//!       → 既有 LearningMoment 语义 → retry 同一 client_action_id
-//!       → exactly-once → 只在 CompletionRule 满足时完成块
-//! P2-C  真实交互之后，既有投影（Memory / Learner Model / Today Coach / Progress）
-//!       在它们**真正保证**的范围内观测到结果；unknown 仍然是 unknown
+//! P2-B  【A. 手工 UI 路径 / SelfCheck】start current block
+//!       → record_training_interaction_core（前端提交，内固定 SelfCheck）
+//!       → 既有 LearningMoment 语义（RecallAttempt / 非权威 / 不推进 FSRS）
+//!       → retry 同一 client_action_id → exactly-once
+//!       → 只在 CompletionRule 满足时完成块（块完成 ≠ 权威掌握证据）
+//! P2-C  【B. 可信验证器运行时契约 / Deterministic（非 UI 路径）】一次真实学习者动作后，
+//!       既有投影（Memory / Learner Model / Today Coach / Progress）
+//!       在它们**真正保证**的范围内观测到结果；unknown 仍然是 unknown。
+//!       注意：这里的 Deterministic 是「假如存在一个真实验证器，它签发证据的样子」，
+//!       它**不是**用户界面、也不是用户提交，故不得被读作「真实 UI 用户路径」。
 //! P2-D  没有 Ready 来源 → 训练不崩、Unavailable 诚实、无假来源文本、无假证据
 //! P2-E  两个档案的同名材料 → 档案 A 的训练绝不接地到档案 B 的来源 / chunk
 //!       （在查询边界强制，不是 UI 后过滤）
@@ -35,6 +40,25 @@
 //! 它只替代「字节 → ParsedDocument」这一步；落库 / 索引 / 状态机 / 检索 / 投影
 //! 全部是生产实现。
 
+//! # 两条路径必须严格分开（AUDIT REOPEN 项 4）
+//!
+//! ```text
+//! A. 手工 UI 路径 (manual UI path)  = SelfCheck
+//!    —— 来自前端的真实用户提交。`record_training_interaction_core` 内固定为 SelfCheck，
+//!       调用方（含 tauri command）无法从外部指定判定方式。非权威：不推进 FSRS、
+//!       不写 MemoryReview、只落一条 RecallAttempt 记录。
+//!
+//! B. 可信验证器运行时契约 (trusted verifier runtime contract) = Deterministic / Structured
+//!    —— 仅当存在**真实执行过的**后端验证器时才可能签发（FIX A4：本仓库不发明验证器）。
+//!       它不是「用户界面」，也不是「用户提交」；本文件里用它，纯粹是为了证明
+//!       「若有一个真实验证器，它签发的证据长什么样」。
+//! ```
+//!
+//! 关键结论：**当前没有真实 production verifier 接线** →
+//! `AUTHORITATIVE LEARNING VERIFICATION = NOT_WIRED`。
+//! 所以 UI → 权威证据 → FSRS 仍不是已完成的产品闭环。SelfCheck 可以（在冻结完成规则
+//! 满足时）完成一个块，但「块完成」≠「权威掌握证据」。
+
 use app_lib::cognitive::decision::DecisionMode;
 use app_lib::cognitive::learner_model::{build_learner_item_state_v2, RecallState};
 use app_lib::cognitive::memory_projection::build_memory_dashboard;
@@ -44,7 +68,7 @@ use app_lib::cognitive::{
     build_today_coach_snapshot, record_learning_moment, EvidenceQuality, LearningMomentType,
     MomentSourceType, NewLearningMoment,
 };
-use app_lib::commands::training::block_grounded_material_core;
+use app_lib::commands::training::{block_grounded_material_core, record_training_interaction_core};
 use app_lib::document_intelligence::ingestion::ingest_source;
 use app_lib::document_intelligence::parser::{
     DocumentParser, ParseFailure, ParsedChunk, ParsedDocument, ParsedSection,
@@ -65,7 +89,9 @@ use app_lib::training::runtime::{
     block_completion_state, record_interaction, start_training_run, try_complete_training_block,
     RecordInteractionParams, TryCompleteBlockParams,
 };
-use app_lib::training::types::{is_recall_compatible, InteractionResult, VerificationMethod};
+use app_lib::training::types::{
+    is_recall_compatible, InteractionResult, VerificationMethod, FSRS_SKIP_NON_AUTHORITATIVE,
+};
 use app_lib::training::TrainingBlockRun;
 use app_lib::training::{start_training_for_item, TrainingErrorCode};
 use rusqlite::{params, Connection};
@@ -486,7 +512,9 @@ fn p2_a_user_material_flows_into_a_real_grounded_training_run() {
 
 // ============================ P2-B ============================
 
-/// P2.2 —— 真实学习者动作：恰好一次 + 只在冻结完成规则满足时完成块。
+/// P2.2 —— **A. 手工 UI 路径（SelfCheck，经 command-core）**：恰好一次 +
+/// 只在冻结完成规则满足时完成块。证明 SelfCheck 是非权威的（不推进 FSRS / 不写
+/// MemoryReview / 只落 RecallAttempt），但仍可在规则满足时完成块。
 #[test]
 fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
     let mut conn = setup();
@@ -558,49 +586,94 @@ fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
     let moments_before = count_all(&conn, "learning_moments");
     let reviews_before = count_all(&conn, "memory_reviews");
     let fsrs_before = fsrs_rows(&conn);
+    let review_count_before: i64 = conn
+        .query_row(
+            "SELECT review_count FROM memory_units WHERE id = ?1",
+            params![g.memory_unit_id],
+            |r| r.get(0),
+        )
+        .unwrap();
 
-    // ---- 真实学习者动作：一次自由回忆成功 ----
-    let params = RecordInteractionParams {
-        profile_id: g.profile_id,
-        training_run_id: g.run_id,
-        block_run_id: g.block_id,
-        client_action_id: "p2-b-action-1".to_string(),
-        interaction_type: IT_RECALL.to_string(),
-        prompt_text: Some("请回忆这个结构的作用".to_string()),
-        user_response_text: Some("它是细胞的能量工厂".to_string()),
-        hint_level: None,
-        result: Some(InteractionResult::Success),
-        verification: VerificationMethod::Deterministic,
-        // `None` = 由领域层取当前 UTC（§18）。这里刻意交给领域层：
-        // 场景 C 要验证「投影能看见这次事实」，因此时间必须落在真实当前窗口内。
-        occurred_at: None,
-    };
-
-    let first = record_interaction(&conn, params.clone()).unwrap();
+    // ---- A. 手工 UI 路径 = SelfCheck（经 command-core，verification 由 core 内固定）----
+    //
+    // 这是**真实 UI 提交**对应的生产入口：前端 `recordTrainingInteraction` 命令 →
+    // `record_training_interaction_core`。核心**不接受** verification 参数、内固定 SelfCheck，
+    // 因此这一步**不可能**被调用方改成 Deterministic/Structured。它**不是** B 路径
+    // （可信验证器运行时契约），后者见 P2-C。
+    let first = record_training_interaction_core(
+        &conn,
+        g.profile_id,
+        g.run_id,
+        g.block_id,
+        "p2-b-action-1".to_string(),
+        IT_RECALL.to_string(),
+        Some("它是细胞的能量工厂".to_string()),
+        Some("请回忆这个结构的作用".to_string()),
+        None,
+        Some(InteractionResult::Success),
+        None,
+    )
+    .unwrap();
     assert!(!first.replayed, "P2-B：首次提交不可能是重放");
     assert!(
         first.interaction.block_run_id == g.block_id
             && first.interaction.profile_id == g.profile_id,
         "P2-B：交互必须落在该档案的该块上"
     );
+    // 手工 SelfCheck → 非权威：交互被持久化，但**不**推进 FSRS、不写 MemoryReview。
+    assert_eq!(
+        first.effect.verification, "self_check",
+        "P2-B：command-core 内固定为 SelfCheck（手工 UI 路径，无法从外部篡改）"
+    );
+    assert!(
+        !first.effect.fsrs_applied,
+        "P2-B：非权威 SelfCheck 绝不推进 FSRS。实际跳过原因：{:?}",
+        first.effect.fsrs_skip_reason
+    );
+    assert_eq!(
+        first.effect.fsrs_skip_reason,
+        Some(FSRS_SKIP_NON_AUTHORITATIVE.to_string()),
+        "P2-B：非权威跳过原因必须是 source_is_non_authoritative"
+    );
+    // 非权威回忆结果仍产生一条 LearningMoment（诚实记录这次尝试），但它是
+    // **RecallAttempt / 非权威**，而非 RecallSuccess。
     assert_eq!(
         first.effect.learning_moment_ids.len(),
         1,
-        "P2-B：权威回忆结果必须产生**恰好一条** LearningMoment"
+        "P2-B：SelfCheck 回忆仍产生一条 LearningMoment（作为 RecallAttempt 记录）"
     );
-    assert!(
-        first.effect.fsrs_applied,
-        "P2-B：绑定了记忆单元的权威回忆结果必须推进 FSRS。实际跳过原因：{:?}",
-        first.effect.fsrs_skip_reason
+    let moment_type: String = conn
+        .query_row(
+            "SELECT moment_type FROM learning_moments WHERE id = ?1",
+            params![first.effect.learning_moment_ids[0]],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        moment_type, "recall_attempt",
+        "P2-B：非权威回忆只能是 RecallAttempt，绝不能是 RecallSuccess（未由系统核实）"
     );
     assert_eq!(
         first.effect.memory_unit_id,
         Some(g.memory_unit_id),
-        "P2-B：推进的必须是该块绑定的那个记忆单元"
+        "P2-B：binding 必须指向该块绑定的记忆单元"
     );
 
     // ---- 网络重试：同一个 client_action_id 原样再来一次 ----
-    let retry = record_interaction(&conn, params.clone()).unwrap();
+    let retry = record_training_interaction_core(
+        &conn,
+        g.profile_id,
+        g.run_id,
+        g.block_id,
+        "p2-b-action-1".to_string(),
+        IT_RECALL.to_string(),
+        Some("它是细胞的能量工厂".to_string()),
+        Some("请回忆这个结构的作用".to_string()),
+        None,
+        Some(InteractionResult::Success),
+        None,
+    )
+    .unwrap();
     assert!(
         retry.replayed,
         "P2-B：复用同一 client_action_id 必须被识别为重放（§13/§14）"
@@ -614,7 +687,7 @@ fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
         "P2-B：重放必须返回同一份效果摘要（不得再推进一次）"
     );
 
-    // ---- 恰好一次：逐表核对，没有第二条真相 ----
+    // ---- 恰好一次：逐表核对，没有第二条真相，且 FSRS / MemoryReview 纹丝不动 ----
     assert_eq!(
         count_all(&conn, "training_interactions"),
         1,
@@ -623,12 +696,13 @@ fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
     assert_eq!(
         count_all(&conn, "learning_moments"),
         moments_before + 1,
-        "P2-B：不得出现重复的 LearningMoment"
+        "P2-B：不得出现重复的 LearningMoment（仅 1 条 RecallAttempt）"
     );
+    // 关键：SelfCheck 是非权威的 → 绝不写 MemoryReview、绝不推进 FSRS。
     assert_eq!(
         count_all(&conn, "memory_reviews"),
-        reviews_before + 1,
-        "P2-B：不得出现重复的 MemoryReview"
+        reviews_before,
+        "P2-B：非权威 SelfCheck 不得产生 MemoryReview"
     );
     let fsrs_after = fsrs_rows(&conn);
     assert_eq!(
@@ -644,8 +718,8 @@ fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
         .collect();
     assert_eq!(
         advanced_units,
-        vec![g.memory_unit_id],
-        "P2-B：**只有**该块绑定的记忆单元可以发生 FSRS 推进，且只推进一次"
+        Vec::<i64>::new(),
+        "P2-B：非权威 SelfCheck 不得推进任何记忆单元的 FSRS"
     );
     let unit_review_count: i64 = conn
         .query_row(
@@ -655,8 +729,8 @@ fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
         )
         .unwrap();
     assert_eq!(
-        unit_review_count, 2,
-        "P2-B：重放不得造成第二次 FSRS 推进（review_count 只加 1）"
+        unit_review_count, review_count_before,
+        "P2-B：非权威 SelfCheck 不得改变记忆单元 review_count"
     );
 
     // ---- 现在规则满足 → 完成块（并且完成动作本身不写证据）----
@@ -693,8 +767,8 @@ fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
     );
     assert_eq!(
         count_all(&conn, "memory_reviews"),
-        reviews_before + 1,
-        "P2-B：推进块之后仍不得出现新的记忆复习"
+        reviews_before,
+        "P2-B：推进块之后仍不得出现新的记忆复习（SelfCheck 本身不写 MemoryReview）"
     );
 
     // 完成分类没有被改动：本文件的推进走的是既有 `try_complete_training_block`，
@@ -704,7 +778,14 @@ fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
 
 // ============================ P2-C ============================
 
-/// P2.3 —— 既有投影在它们**真正保证**的范围内观测到那次真实交互。
+/// P2.3（B 路径 / 可信验证器运行时契约）——
+/// 既有投影在它们**真正保证**的范围内观测到那次真实交互。
+///
+/// 重要：这里用的是 `VerificationMethod::Deterministic`，它代表**可信验证器运行时契约**
+/// （trusted verifier runtime contract，路径 B），用于证明「若存在真实验证器，证据长什么样」。
+/// 它**不是**手工 UI 路径（A 路径 / SelfCheck，见 P2-B）。本仓库当前没有 production verifier
+/// 接线（AUTHORITATIVE LEARNING VERIFICATION = NOT_WIRED），所以这条路径仅供契约证明，
+/// 不得被读作「真实 UI 用户路径」。
 #[test]
 fn p2_c_existing_projections_observe_the_real_result_where_they_guarantee_it() {
     let mut conn = setup();

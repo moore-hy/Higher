@@ -95,9 +95,21 @@ pub fn get_training_session(
 ///
 /// `moment_type` 同样不再由调用方声明（FIX B）：它由 runtime 从
 /// `(ProtocolId, interaction_type, result, verification)` 推导。
-#[tauri::command]
-pub fn record_training_interaction(
-    state: tauri::State<'_, db::DbState>,
+/// §15：记录一次用户交互的**薄内部核心**（FIX A1 / AUDIT REOPEN 项 1）。
+///
+/// # 设计纪律（FIX A1 / AUDIT REOPEN 项 1）
+///
+/// - **不接受** `verification` 参数：调用方（tauri command、测试、任何未来入口）都**无法**
+///   从外部指定判定方式。手工路径的判定方式由本函数**唯一**定义。
+/// - 内部固定 `VerificationMethod::SelfCheck`：手工前端提交一律是非权威的「用户自检」，
+///   证据质量上限 MEDIUM。Deterministic / Structured 只允许由真实执行过的**后端验证器**签发，
+///   它们不可能经由这个 core 从外部获得（见 §9.5 协议过滤族的刻意不接线）。
+/// - tauri command 只负责 `lock` + 调用本函数，不持有任何业务逻辑。
+///
+/// 这样「用户不能把 SelfCheck 提升成 Deterministic / Structured」是**结构性**保证，
+/// 而不是「接收后覆盖」的约定（后者会在下一次重构时悄悄失效）。
+pub fn record_training_interaction_core(
+    conn: &rusqlite::Connection,
     profile_id: i64,
     training_run_id: i64,
     block_run_id: i64,
@@ -109,14 +121,11 @@ pub fn record_training_interaction(
     result: Option<InteractionResult>,
     occurred_at: Option<String>,
 ) -> Result<training::InteractionOutcome, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-
-    // FIX A1：手工提交的唯一判定方式。前端无从选择，因此这里不是「默认值」，
-    // 而是**该通路的定义**。
+    // core 内固定 SelfCheck：手工路径唯一判定方式。前端无从选择，因此这里不是「默认值」，
+    // 而是**该通路的定义**（FIX A1 / AUDIT REOPEN 项 1）。
     let verification = VerificationMethod::SelfCheck;
-
     crate::training::record_interaction(
-        &conn,
+        conn,
         training::RecordInteractionParams {
             profile_id,
             training_run_id,
@@ -133,6 +142,39 @@ pub fn record_training_interaction(
             // 的注释：格式若有第二个来源，就会静默污染按时间排序的真相。
             occurred_at,
         },
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn record_training_interaction(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    training_run_id: i64,
+    block_run_id: i64,
+    client_action_id: String,
+    interaction_type: String,
+    user_response_text: Option<String>,
+    prompt_text: Option<String>,
+    hint_level: Option<i64>,
+    result: Option<InteractionResult>,
+    occurred_at: Option<String>,
+) -> Result<training::InteractionOutcome, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // tauri command 只负责 lock + 调用 core；core 不接受 verification 参数、内部固定 SelfCheck
+    // （FIX A1 / AUDIT REOPEN 项 1）。这样判定方式无法从 IPC 外部被篡改。
+    record_training_interaction_core(
+        &conn,
+        profile_id,
+        training_run_id,
+        block_run_id,
+        client_action_id,
+        interaction_type,
+        user_response_text,
+        prompt_text,
+        hint_level,
+        result,
+        occurred_at,
     )
     .map_err(|e| e.to_string())
 }

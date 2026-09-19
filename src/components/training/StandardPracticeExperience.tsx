@@ -22,9 +22,12 @@ import { IT_PRACTICE, type ExperienceProps } from "./experienceTypes";
  *
  * # 练习成功不是回忆成功（FIX B2）
  *
- * 这个块的后端族是 Practice，因此一次成功只会成为 `PracticeSuccess` ——
- * **绝不会**变成 `RecallSuccess`。界面上也不允许出现「你记住了」这类措辞：
- * 那是回忆族的结论，拿过来用就是在宣称一次没有发生的回忆。
+ * 这个块的后端族是 Practice。当前唯一接线的判定是 SelfCheck（**非权威**），
+ * 因此一次成功只会成为 `PracticeAttempt` —— **绝不会**变成 `RecallSuccess`，
+ * 也**不会**成为 `PracticeSuccess`。`PracticeSuccess` 只在存在真实验证器签发
+ * 权威证据时才出现，而当前 `AUTHORITATIVE LEARNING VERIFICATION = NOT_WIRED`。
+ * 界面上也不允许出现「你记住了」这类措辞：那是回忆族的结论，
+ * 拿过来用就是在宣称一次没有发生的回忆。
  *
  * # §10.5：题面来自真实材料
  *
@@ -89,9 +92,9 @@ export default function StandardPracticeExperience({
 
       <ResultChoices value={result} onChange={setResult} disabled={busy || blockTerminal} />
       <p className="hc-train__note">
-        这个块没有接上真实核对器，所以这一次的判定来自你自己（自检）——
-        它会作为**练习**被如实记录（`PracticeSuccess`），但不会推进记忆排程，
-        也**不会**被算成一次回忆。
+        这个块没有接上真实核对器。这是一次**练习尝试**：判定来自你自己的自检
+        （用户自检，未由系统核实）。它会被如实记录，但**不推进记忆排程**，
+        也**不会**被算成一次系统核实的回忆。
       </p>
 
       <SubmitRow

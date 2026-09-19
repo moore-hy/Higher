@@ -24,7 +24,7 @@ import { IT_TRANSFER, type ExperienceProps } from "./experienceTypes";
  * # 为什么这一屏最容易造假
  *
  * 「迁移」的全部意义在于情境**真的不同**。如果前端随手把原来的题面换个措辞
- * 就当成迁移题，那测出来的只是同一道题的第二遍 —— 它会让 `TransferSuccess`
+ * 就当成迁移题，那测出来的只是同一道题的第二遍 —— 它会让 `TransferAttempt`
  * 变成一条没有内容的结论。所以 FIX J8 明令：**不得为了把界面填满而编造迁移内容**。
  *
  * # §10.8：生成的情境 **不等于** 来源引文
@@ -39,8 +39,10 @@ import { IT_TRANSFER, type ExperienceProps } from "./experienceTypes";
  *
  * # 迁移成功不是回忆成功（FIX B4）
  *
- * 这个块的后端族是 Transfer，一次成功只会成为 `TransferSuccess` ——
- * 界面**不允许**出现「你想起来了」这类回忆族措辞。
+ * 这个块的后端族是 Transfer。当前唯一接线的判定是 SelfCheck（**非权威**），
+ * 因此一次成功只会成为 `TransferAttempt` —— 界面**不允许**出现「你想起来了」这类回忆族措辞。
+ * `TransferSuccess` 只在存在真实验证器签发权威证据时出现，而当前
+ * `AUTHORITATIVE LEARNING VERIFICATION = NOT_WIRED`，故生产路径不会产生它。
  */
 export default function TransferChallengeExperience({
   material,
@@ -113,9 +115,9 @@ export default function TransferChallengeExperience({
 
       <ResultChoices value={result} onChange={setResult} disabled={busy || blockTerminal} />
       <p className="hc-train__note">
-        这个块没有接上真实核对器，所以判定来自你自己（自检）——
-        它会作为**迁移**被如实记录（`TransferSuccess`），但不会推进记忆排程，
-        也**不会**被算成一次回忆。
+        这个块没有接上真实核对器。这是一次**迁移尝试**：判定来自你自己的自检
+        （用户自检，未由系统核实）。它会被如实记录，但**不推进记忆排程**，
+        也**不会**被算成一次系统核实的回忆。
       </p>
 
       <SubmitRow

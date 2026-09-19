@@ -406,6 +406,40 @@ fn validate_prepared_materials(
     Ok(())
 }
 
+/// 校验「完整覆盖」：生产路径要求每一个 non-break 学习块**恰好有 1 份** `PreparedBlockMaterial`。
+///
+/// - `Unavailable` 也算有效 snapshot：`GroundedTrainingMaterial::Unavailable` 会被
+///   `save_material_snapshot` 写成**非 NULL** 的 JSON（可用性的诚实声明，不是缺席）。
+/// - 休息块必须 0 份（已在 [`validate_prepared_materials`] 中拒绝「休息块带材料」）。
+/// - 仅在 `require_full_coverage = true`（生产路径）时由 [`create_training_run_with_materials`]
+///   调用；合成/测试路径（`create_training_run`）传 `false`，不被此检查阻塞。
+///
+/// 全程在事务**之前**执行，因此失败时连 Session 都不会建立（零真相残留）。
+fn validate_material_coverage(
+    plan: &TrainingSessionPlan,
+    prepared: &[PreparedBlockMaterial],
+) -> Result<(), TrainingError> {
+    for block in &plan.blocks {
+        if block.is_break {
+            continue; // 休息块 0 份由 validate_prepared_materials 保障
+        }
+        let n = prepared
+            .iter()
+            .filter(|pm| pm.ordinal == block.ordinal)
+            .count();
+        if n != 1 {
+            return Err(TrainingError::new(
+                TrainingErrorCode::MaterialCoverageIncomplete,
+                format!(
+                    "学习块 ordinal {} 必须恰好有 1 份接地材料（Unavailable 也算有效），实际有 {n} 份",
+                    block.ordinal
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// §19 —— **原子**创建（无接地材料的简写形式）。
 ///
 /// 合成/测试路径可以显式地传入**空**材料集；生产路径
@@ -415,7 +449,8 @@ pub fn create_training_run(
     conn: &Connection,
     p: CreateTrainingRunParams,
 ) -> Result<(TrainingRun, Vec<TrainingBlockRun>), TrainingError> {
-    create_training_run_with_materials(conn, p, &[])
+    // 合成/测试路径：显式不要求完整覆盖（无材料 / 空材料集）。
+    create_training_run_with_materials(conn, p, &[], false)
 }
 
 /// §19 —— **原子**创建，并在**同一事务内**把准备好的接地材料落成块快照。
@@ -444,6 +479,9 @@ pub(crate) fn create_training_run_with_materials(
     conn: &Connection,
     p: CreateTrainingRunParams,
     prepared: &[PreparedBlockMaterial],
+    // 生产路径（`start_training_for_item`）传 `true`：每个 non-break 学习块必须恰好 1 份材料
+    // （Unavailable 也算有效）。合成/测试路径（`create_training_run`）传 `false`。
+    require_full_coverage: bool,
 ) -> Result<(TrainingRun, Vec<TrainingBlockRun>), TrainingError> {
     if !p.plan.is_executable() {
         return Err(TrainingError::new(
@@ -475,6 +513,11 @@ pub(crate) fn create_training_run_with_materials(
 
     // §11 P1.1：材料与计划的一致性同样在事务**之外**判定。
     validate_prepared_materials(&p.plan, prepared)?;
+
+    // §11 P1.1（AUDIT REOPEN 项 3）：生产路径要求完整覆盖。事务之前发现，零残留。
+    if require_full_coverage {
+        validate_material_coverage(&p.plan, prepared)?;
+    }
 
     begin_immediate(conn)?;
     let tx: &Connection = conn;
@@ -2211,6 +2254,7 @@ mod p1_transaction_boundary_tests {
     use crate::cognitive::session_composer::{TrainingBlock, TrainingSessionPlan};
     use crate::repository::learning_item::LearningItemRepository;
     use crate::repository::study_profile::StudyProfileRepository;
+    use crate::training::grounded_material::MaterialStatus;
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -2359,6 +2403,7 @@ mod p1_transaction_boundary_tests {
                 &conn,
                 params(p, plan_learning_then_break(None)),
                 &prepared_materials,
+                false,
             )
             .expect_err(&format!("{label} 必须被拒绝"));
 
@@ -2382,6 +2427,7 @@ mod p1_transaction_boundary_tests {
             &conn,
             params(p, plan_learning_then_break(None)),
             &[bad],
+            false,
         )
         .expect_err("材料内部协议与 ordinal 协议不一致必须被拒绝");
         assert_eq!(err.code, TrainingErrorCode::PreparedMaterialMismatch);
@@ -2400,6 +2446,7 @@ mod p1_transaction_boundary_tests {
             &conn,
             params(p, plan_learning_then_break(Some(item))),
             &[prepared(0, ProtocolId::FreeRecall)],
+            false,
         )
         .unwrap();
 
@@ -2469,6 +2516,7 @@ mod p1_transaction_boundary_tests {
             &conn,
             params(p, plan_learning_then_break(None)),
             &[prepared(0, ProtocolId::FreeRecall)],
+            false,
         )
         .expect_err("快照写失败必须让整次创建失败");
 
@@ -2491,11 +2539,118 @@ mod p1_transaction_boundary_tests {
             &conn,
             params(p, plan_learning_then_break(None)),
             &[prepared(0, ProtocolId::FreeRecall)],
+            false,
         )
         .unwrap();
         assert_eq!(blocks.len(), 2);
         assert!(snapshot_of(&conn, 0).is_some());
         assert_eq!(counts(&conn), (1, 2, 1));
         let _ = run;
+    }
+
+    // ==================== AUDIT REOPEN 项 3：完整覆盖保证 ====================
+
+    fn material_unavailable(protocol: ProtocolId) -> GroundedTrainingMaterial {
+        let mut m = material_for(protocol);
+        m.status = MaterialStatus::Unavailable;
+        m.unavailable_reason = Some("no ready source for this block".to_string());
+        m
+    }
+
+    fn prepared_unavailable(ordinal: i64, protocol: ProtocolId) -> PreparedBlockMaterial {
+        PreparedBlockMaterial {
+            ordinal,
+            protocol_id: protocol,
+            material: material_unavailable(protocol),
+        }
+    }
+
+    #[test]
+    fn audit3_missing_one_learning_block_material_is_typed_error_with_zero_residue() {
+        let conn = setup();
+        let p = mk_profile(&conn, "AUDIT4-missing");
+        let before = counts(&conn);
+
+        // 生产路径要求完整覆盖，但只给了空材料集 → 学习块 ordinal 0 缺材料。
+        let err = create_training_run_with_materials(
+            &conn,
+            params(p, plan_learning_then_break(None)),
+            &[],
+            true,
+        )
+        .expect_err("少一个学习块材料必须被拒绝");
+
+        assert_eq!(
+            err.code,
+            TrainingErrorCode::MaterialCoverageIncomplete,
+            "必须是 typed error（{err}）"
+        );
+        assert_eq!(counts(&conn), before, "拒绝不得留下任何真相");
+        assert_eq!(counts(&conn), (0, 0, 0), "事务前拒绝，连 Session 都不该建");
+    }
+
+    #[test]
+    fn audit3_full_coverage_succeeds_and_learning_block_gets_snapshot() {
+        let conn = setup();
+        let p = mk_profile(&conn, "AUDIT4-full");
+        let (run, blocks) = create_training_run_with_materials(
+            &conn,
+            params(p, plan_learning_then_break(None)),
+            &[prepared(0, ProtocolId::FreeRecall)],
+            true,
+        )
+        .expect("完整覆盖（每个学习块恰好 1 份）必须成功");
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(snapshot_of(&conn, 0).is_some(), true, "学习块必须有快照");
+        assert_eq!(snapshot_of(&conn, 1).is_none(), true, "休息块必须保持 NULL");
+        let _ = run;
+    }
+
+    #[test]
+    fn audit3_unavailable_counts_as_valid_coverage_and_is_not_null() {
+        let conn = setup();
+        let p = mk_profile(&conn, "AUDIT4-unavail");
+        let (run, blocks) = create_training_run_with_materials(
+            &conn,
+            params(p, plan_learning_then_break(None)),
+            &[prepared_unavailable(0, ProtocolId::FreeRecall)],
+            true,
+        )
+        .expect("Unavailable 也算有效 coverage");
+
+        assert_eq!(blocks.len(), 2);
+        let json = snapshot_of(&conn, 0).expect("Unavailable 必须落库为非 NULL 快照");
+        let parsed: GroundedTrainingMaterial = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.status,
+            MaterialStatus::Unavailable,
+            "Unavailable != NULL 且状态正确"
+        );
+        let _ = run;
+    }
+
+    #[test]
+    fn audit3_break_block_must_not_carry_material() {
+        let conn = setup();
+        let p = mk_profile(&conn, "AUDIT4-break");
+        let before = counts(&conn);
+
+        // 休息块（ordinal 1）带了材料 → 无论是否要求覆盖都必须拒绝。
+        let err = create_training_run_with_materials(
+            &conn,
+            params(p, plan_learning_then_break(None)),
+            &[prepared(1, ProtocolId::FreeRecall)],
+            true,
+        )
+        .expect_err("休息块带材料必须被拒绝");
+
+        assert_eq!(
+            err.code,
+            TrainingErrorCode::PreparedMaterialMismatch,
+            "必须是 typed error（{err}）"
+        );
+        assert_eq!(counts(&conn), before, "拒绝不得留下任何真相");
+        assert_eq!(counts(&conn), (0, 0, 0));
     }
 }

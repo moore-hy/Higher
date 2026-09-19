@@ -340,7 +340,9 @@ describe("§10.5 standard_practice", () => {
     );
 
     expect(screen.getByTestId("hc-train-practice-prompt").textContent).toContain("方程式");
-    expect(screen.getByText(/作为\*\*练习\*\*被如实记录（`PracticeSuccess`）/)).toBeTruthy();
+    expect(screen.getByText(/这是一次\*\*练习尝试\*\*：判定来自你自己的自检/)).toBeTruthy();
+    // 自检未由系统核实，绝不能被讲成权威掌握证据。
+    expect(screen.getByText(/不推进记忆排程/)).toBeTruthy();
 
     fireEvent.click(screen.getByText("提交这次练习"));
     const args = submit.mock.calls[0][0] as ExperienceSubmit;
