@@ -4,10 +4,11 @@
 **Branch:** `main` · **Push:** none (local commits only)
 
 ```
-A2-1 STATUS: AUDIT_REOPENED
+A2-1 STATUS: VERIFIED_DONE
 ```
 
-> 只有 R1 全部通过才会改写为 `VERIFIED_DONE`。
+> R1 五个分项全部通过（见末节 RESULT）后，状态由 `AUDIT_REOPENED` 恢复为
+> `VERIFIED_DONE`。
 
 ---
 
@@ -138,4 +139,28 @@ interaction_id 一致）。矛盾形状的断言改由新增的 R1 攻击型测�
 
 # 4. RESULT
 
-见本文件末节（gate 跑完后填写）。
+| 门 | 结果 |
+|---|---|
+| `cargo fmt --check` | **7 处 / 4 文件**，与 START 实测欠债**逐字一致**（无新增欠债） |
+| 既有 A2-1 契约测试 | **44 passed / 0 failed** |
+| `learner_model_v2`（LM2-01..09） | **9 passed / 0 failed** |
+| 新增 `a2_1_r1_authority_provenance_gate` | **17 passed / 0 failed** |
+| broad regression（`cargo test --no-fail-fast`） | **27 = 27 baseline** |
+| `tsc --noEmit` | clean |
+| `vitest run` | **17 files / 264 tests passed** |
+
+```
+NEW_CODE_REGRESSION = 0
+```
+
+broad regression 的 27 条失败与 START 基线清单（`.higher_a21_baseline_failures.txt`）
+**逐条相同**：`comm -23`（新增）与 `comm -13`（消失）均为空集。
+15 个失败 target 与基线一致，且全部落在 AI runtime / Android / migration / UI-governance
+等既有区域，与权威解析或客观投影无关。
+
+本地提交（**未 push**）：
+
+```text
+982d2b5 fix(personal-core): A2-1 AUDIT REOPEN R1 — authority provenance gate
+        + authority-aware objective projection
+```
