@@ -10,8 +10,8 @@
 ```text
 Branch        : main
 START SHA     : 96cc109f6b2fc33faee5b6ea7d378670bed7be45   （与 taskbook 预期 baseline 一致）
-FINAL SHA     : 67c3929（代码冻结；b28f541 / 555d5a1 / 77f1298 / 7c2200b / 6d9f3ff 只含文档）
-文档收尾提交   : 紧随其后 —— 只新增 .higher/a2_next/ 文档，零代码改动
+FINAL SHA     : 67c3929（**代码冻结**；门禁全部在此 SHA 上跑）
+文档收尾提交   : 92edda4 / 2dfbd3b —— 只改 `.higher/a2_next/` 文档 + 一处源码注释，零逻辑改动
 ```
 
 ```text
@@ -210,6 +210,72 @@ free_recall / cued_recall / review_short   已接线真实验证器
 （`.higher/a1/` 下 A1 时期的历史报告**没有**改写 —— 那是当时真实状态的存档，
 把历史改成「当时就已经完成」才是造假。）
 
+---
+
+## 3. A2-3 —— Person State / Know Me
+
+- **它是投影，不是第二份真相。** `personal_core/person.rs` 全文件只有 `SELECT`
+  （A23-09 在源码层与运行时双重锁定：文件里没有 INSERT/UPDATE/DELETE/CREATE，
+  调用前后行计数不变）。
+- **没有** `person_state` / `personal_state` / `life_event` 表。
+
+### 3.1 快照字段（`get_person_state()` 一次返回，无 N+1，不依赖云 AI）
+
+```text
+as_of / scope(=study_profile) / profile_id / profile_name / person_profile_count
+learning     { current_focus, recall_state, application_state,
+               verified_evidence_count, last_activity_at }
+execution    { tasks_done_today, open_tasks }
+goals[]      { id, name, status, source_class, reason, goal_mode }
+time         { minutes_today }
+soft_context { summary, note }
+body         { sleep, energy, stress, mood, recovery }
+capability   （A2-4）
+workspaces[] { profile_id, name, goal_count }
+unknowns[]   { domain, label, reason }
+```
+
+### 3.2 来源类别（4 类，透明可追溯）
+
+```text
+ConfirmedByUser   用户自己创建的目标（goals）
+Observed          真实投影读到的东西（learning / execution / time）
+Inferred          软记忆（PersonalizationProfile / UserContext / AI 抽取上下文）——
+                  只能是 soft_context，永不晋升为 Observed 真相
+Unknown           没有真实数据来源 —— 尤其是 body 全部 5 项
+```
+
+`LocalPerson != StudyProfile`：学习/执行/时间是**档案级**；person 级只有
+`workspaces` / `soft_context` / `body`。同一 `LocalPerson` 可拥有多个 `StudyProfile`
+（`person_profile_count` + `workspaces` 体现），跨档案学习证据不污染别的档案的能力状态。
+
+Body V1 **恒为 Unknown**，并且 5 项全部进 `unknowns`：本轮不接手表 / Health Connect（§36），
+仓库里没有任何身体数据表。自报只能是 `SelfReported`，**不会**被自动升级成
+「医学上恢复不足」。
+
+Me 面（`/me`）：Current Focus / Goals / Higher Knows / Capability，按
+Confirmed / Observed / Inferred / Unknown 分组，每条带 reason + evidence refs；
+**只显示**后端给的 `source_class`，前端绝不本地重算（A23-11 源码级锁定）。
+侧栏新增 Me 入口（`Layout.tsx`），配套 `.me*` 样式此前**一行都没有**，本轮补齐。
+
+---
+
+## 4. A2-4 —— Goal Mode + Capability（CONTRACT ONLY）
+
+| 项 | 状态 |
+|---|---|
+| Goal Mode 词表 | `Exam` / `Growth` / `Life` / `Maintenance` / `Unclassified`（已冻结） |
+| Exam vs Growth | 语义已锁：Exam 优化**截止日期内的结果**（score / coverage / 题权重 / mock / 剩余时间）；Growth 优化**长期真实能力**（understand / recall / apply / independent / debug / build / transfer / retain） |
+| 会猜吗 | **不会。** `resolve_goal_mode` 只认结构化来源；`goals` 表没有 mode/kind 字段（F-A24-01），无来源 → `Unclassified` + reason「不按标题猜测」。「考研」不会变成 Exam（A24-02） |
+| Capability 轴 | 8 条全在，但**只有 5 条可投影**：`Recall`←recall_state、`Apply`←application_state、`Independent`←application_state、`Transfer`←transfer_state、`Retain`←fluency_state |
+| `Understand` / `Debug` / `Build` | **恒 Unknown**（本轮没有对应证据），禁止为了 UI 完整写 `Debug = 50%` / `Build = Beginner` |
+| 反写 / 新表 | **没有。** 只读投影，不反写 Learner Model，无 `capability_scores` / `skill_percentages`（A24-06 / A24-08） |
+| AI 能改吗 | **不能**（A24-07） |
+
+只建契约，**没有**做完整 Exam Planner / Growth Planner（§36 明令不做）。
+
+---
+
 ## 5. 迁移 / 依赖 / 新表
 
 ```text
@@ -329,11 +395,15 @@ AI Cost Governor、大导航重构、大 UI 重设计。
 
 ## 9. `git status --short`
 
-过滤掉非本轮的既有 untracked 产物目录后：**工作区无 task-owned 脏文件**
-（全部已提交）。未过滤的原始输出里还有
-`.git_broken3/`、`.git_pack_rescue/`、`.w9_check/`、`node_modules/`、`dist/`、
-`.workbuddy-ai/`、`.higher_a21_baseline_failures.txt` 等**既有**产物/目录 —— 均非本轮创建，
-也**没有**被提交（本仓库纪律：永远不要 `git add -A`）。
+**代码与文档全部已提交，工作区没有 task-owned 的脏文件（0 modified / 0 staged）。**
+
+本轮唯一残留的 untracked 文件：`.higher/a2_next/_section27.md` —— 写 §2.7 时
+的草稿，内容已并入 `FINAL.md` §2.7，属**可丢弃**；删除时被沙箱的批量删除保护拦下，
+留给 Owner 决定。它不影响任何门禁（不是代码，不在 `src-tauri/src` 下）。
+
+未过滤的原始输出里还有 `.git_broken3/`、`.git_pack_rescue/`、`.w9_check/`、
+`node_modules/`、`dist/`、`.workbuddy-ai/`、`.higher_a21_baseline_failures.txt`
+等**既有**产物/目录 —— 均非本轮创建，也**没有**被提交（本仓库纪律：永远不要 `git add -A`）。
 
 ---
 
@@ -358,8 +428,8 @@ A2 NEXT STAGE = VERIFIED_DONE
 ```text
 A2-2 AUTHORITATIVE LEARNING VERIFICATION V1   = VERIFIED_DONE
      （真实验证器 + 真实生产通路 + 不可伪造 proof + 读侧四道闸门；
-       faded_example 如实记为 F-A22-VERIFIER-UNAVAILABLE，没有伪造验证器；
-       UI 那一跳尚未接线，已在 §2.7 显式声明）
+       前端提交管线已按**验证结果**路由，未命中者行为逐字节不变（§2.7）；
+       faded_example 如实记为 F-A22-VERIFIER-UNAVAILABLE，没有伪造验证器）
 A2-3 PERSON STATE V1 / KNOW ME                = VERIFIED_DONE
 A2-4 GOAL MODE + CAPABILITY CONTRACT V1       = CONTRACT = VERIFIED_DONE
 NEW_CODE_REGRESSION                           = 0
