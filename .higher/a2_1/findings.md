@@ -177,13 +177,18 @@ Progress 投影、Decision 引擎的**代码**均未改动
 # 6. Broad regression classification（§29）
 
 对比 `.higher_a21_baseline.log`（START `7347c31`，125 个测试目标）
-与 `.higher_a21_after.log`（A2-1 后，126 个目标 —— 多出的 1 个就是新增的
-`a2_1_personal_evidence_authority`）。
+与 `.higher_a21_final.log`（A2-1 **提交后**的干净工作区，126 个目标 ——
+多出的 1 个就是新增的 `a2_1_personal_evidence_authority`）。
 
 ```text
-BASELINE FAILURES REMAINING = 27  —— 与 START 逐字相同，无新增、无消失
-NEW_CODE_REGRESSION         = 0
+START 基线失败 = 27
+最终失败       = 27   逐名比对：新增 0，消失 0
+NEW_CODE_REGRESSION = 0
 ```
+
+> 中途的 `.higher_a21_after.log` 是在**未提交**的工作区上跑的（多出 2 条
+> git-diff 型治理测试的红，见 6.2）。最终数字以提交后的 `.higher_a21_final.log`
+> 为准 —— 它与 START 基线**逐字一致**。
 
 ## 6.1 START 基线红（27 条 / 15 个目标），A2-1 后**逐字不变**
 
