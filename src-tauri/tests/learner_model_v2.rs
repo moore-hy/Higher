@@ -76,6 +76,12 @@ fn simple(ty: LearningMomentType, at: &str) -> LearningMoment {
 /// 因此凡是要断言**客观推进**（`Independent` / `Understood` / 校准度）的用例，
 /// 必须显式给出 verifier provenance；否则它断言的是一个不再成立的前提。
 /// 对应的 fail-closed 断言在 `tests/a2_1_personal_evidence_authority.rs`。
+///
+/// # R1-1：溯源链必须指回**同一次**交互
+///
+/// runtime 写下的 `source_id` 就是 `training_interaction:<interaction_id>`，
+/// 因此夹具也必须把它补上 —— 否则这条 moment 声称 deterministic 却指不回
+/// 任何真实交互，权威解析器会（正确地）fail closed。
 fn verified(ty: LearningMomentType, at: &str) -> LearningMoment {
     let mut m = moment(ty, at, EvidenceQuality::High, None, None, None);
     m.source_type = app_lib::cognitive::MomentSourceType::SystemDerived;
@@ -83,6 +89,14 @@ fn verified(ty: LearningMomentType, at: &str) -> LearningMoment {
         "provenance": { "training_run_id": 1, "block_run_id": 1, "interaction_id": 1 },
         "verification": "deterministic",
     });
+    m.source_id = Some("training_interaction:1".to_string());
+    m
+}
+
+/// 带提示的权威成功（R1-2：hinted 仍按原规则落到 `Prompted`）。
+fn verified_hinted(ty: LearningMomentType, at: &str, hint: i64) -> LearningMoment {
+    let mut m = verified(ty, at);
+    m.hint_level = Some(hint);
     m
 }
 
@@ -138,42 +152,41 @@ fn lm2_01_no_evidence_is_unknown_everywhere() {
 
 #[test]
 fn lm2_02_recall_failure_is_fragile() {
-    let s = project(vec![simple(
+    // R1-2：`Fragile` 是**客观能力结论**，因此这条失败必须由权威验证器签发。
+    let s = project(vec![verified(
         LearningMomentType::RecallFailure,
         "2026-09-20 02:00:00",
     )]);
     assert_eq!(s.recall_state, RecallState::Fragile);
+
+    // 自报的失败**不得**改变客观 RecallState（也不得被当成 Fragile）：没有权威
+    // 回忆结果时，诚实停在 Unknown。
+    let self_reported = simple(LearningMomentType::RecallFailure, "2026-09-20 02:00:00");
+    assert_eq!(
+        project(vec![self_reported]).recall_state,
+        RecallState::Unknown
+    );
 }
 
 // =============== LM2-03 ===============
 
 #[test]
 fn lm2_03_hinted_success_is_prompted() {
-    // 有提示的成功 → prompted（**不是** independent）
-    let hinted = moment(
-        LearningMomentType::RecallSuccess,
-        "2026-09-20 02:00:00",
-        EvidenceQuality::High,
-        Some(1),
-        None,
-        Some("success"),
-    );
+    // 有提示的**权威**成功 → prompted（**不是** independent）
+    let hinted = verified_hinted(LearningMomentType::RecallSuccess, "2026-09-20 02:00:00", 1);
     assert_eq!(project(vec![hinted]).recall_state, RecallState::Prompted);
 
-    // 部分回忆同样 → prompted
-    let partial = simple(LearningMomentType::RecallPartial, "2026-09-20 02:00:00");
+    // 部分回忆同样 → prompted（同样要求权威）
+    let partial = verified(LearningMomentType::RecallPartial, "2026-09-20 02:00:00");
     assert_eq!(project(vec![partial]).recall_state, RecallState::Prompted);
 
-    // 无提示但证据不可信 → 保守停在 prompted，绝不虚报 independent
-    let weak = moment(
-        LearningMomentType::RecallSuccess,
-        "2026-09-20 02:00:00",
-        EvidenceQuality::Low,
-        None,
-        None,
-        Some("success"),
+    // 无提示、但**没有**权威 provenance（用户自报）→ R1-2：不进入客观判定，
+    // 诚实停在 Unknown，绝不虚报 independent。
+    let self_reported = simple(LearningMomentType::RecallSuccess, "2026-09-20 02:00:00");
+    assert_eq!(
+        project(vec![self_reported]).recall_state,
+        RecallState::Unknown
     );
-    assert_eq!(project(vec![weak]).recall_state, RecallState::Prompted);
 }
 
 // =============== LM2-04 ===============
@@ -222,15 +235,26 @@ fn lm2_06_transfer_success_is_independent() {
     )]);
     assert_eq!(s.transfer_state, TransferState::Independent);
 
-    // 仅尝试（无可信成功）→ Attempted，而不是 Independent
+    // 仅尝试（无权威成功）→ Attempted，而不是 Independent。
+    //
+    // R1-2：非权威的迁移事实最多保留「尝试过」这一低层事实，因此自报的
+    // TransferAttempt 仍然落在这里 —— 但**自报的成功/partial 不得**升级。
     let attempted = project(vec![simple(
         LearningMomentType::TransferAttempt,
         "2026-09-20 02:00:00",
     )]);
     assert_eq!(attempted.transfer_state, TransferState::Attempted);
 
-    // result = partial → Partial
-    let partial = moment(
+    // result = partial → Partial（**权威**结果才能形成这个能力结论）
+    let mut partial = verified(LearningMomentType::TransferAttempt, "2026-09-20 02:00:00");
+    partial.result = Some("partial".to_string());
+    assert_eq!(
+        project(vec![partial]).transfer_state,
+        TransferState::Partial
+    );
+
+    // 自报的 partial → 不得升级为 Partial，只保留「尝试过」
+    let self_reported_partial = moment(
         LearningMomentType::TransferAttempt,
         "2026-09-20 02:00:00",
         EvidenceQuality::High,
@@ -239,8 +263,8 @@ fn lm2_06_transfer_success_is_independent() {
         Some("partial"),
     );
     assert_eq!(
-        project(vec![partial]).transfer_state,
-        TransferState::Partial
+        project(vec![self_reported_partial]).transfer_state,
+        TransferState::Attempted
     );
 }
 

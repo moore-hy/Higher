@@ -67,16 +67,43 @@ fn legacy_self_report(ty: LearningMomentType) -> LearningMoment {
 }
 
 /// 真实执行过的后端验证器（training runtime 写入的形状）。
+///
+/// # R1-1：形状必须**自洽**，否则它证明不了自己
+///
+/// runtime 是按 token 决定 `source_type` 的（`source_type_for`）：
+///
+/// ```text
+/// self_check    -> UserExplicit
+/// ai_tutor      -> TutorObserved
+/// deterministic -> SystemDerived
+/// structured    -> SystemDerived
+/// ```
+///
+/// 并写下 `source_id = training_interaction:<interaction_id>`。
+///
+/// 本夹具**原先**把 `self_check` 也写成 `SystemDerived`，且 `source_id`(11)
+/// 与 `interaction_id`(3) 对不上 —— 那恰好就是 R1-1 要封掉的「声称型」溯源：
+/// token 与来源互相矛盾、溯源链指不回任何真实交互。因此这里改为按
+/// **生产写入者的真实形状**构造；矛盾形状的断言在
+/// `tests/a2_1_r1_authority_provenance_gate.rs`。
 fn verified(ty: LearningMomentType, token: &str) -> LearningMoment {
-    moment(
+    let source = match token {
+        "self_check" => MomentSourceType::UserExplicit,
+        "ai_tutor" => MomentSourceType::TutorObserved,
+        _ => MomentSourceType::SystemDerived,
+    };
+    let mut m = moment(
         ty,
-        MomentSourceType::SystemDerived,
+        source,
         EvidenceQuality::High,
         serde_json::json!({
             "provenance": { "training_run_id": 1, "block_run_id": 2, "interaction_id": 3 },
             "verification": token,
         }),
-    )
+    );
+    // 溯源链必须指回**同一次**交互（R1-1）：source_id 与 interaction_id 对得上。
+    m.source_id = Some("training_interaction:3".to_string());
+    m
 }
 
 fn project(moments: Vec<LearningMoment>) -> app_lib::cognitive::LearnerItemStateV2 {

@@ -10,23 +10,24 @@
 //!
 //! - **Acquisition**：无相关证据 → `unknown`；有 grounded 学习/讲解暴露 → `exposed`；
 //!   `explanation_success`（medium/high）或**结构化评估**的成功 → `understood`。
-//! - **Recall**：取最近 3 次回忆结果（新→旧）。最新 `recall_failure` → `fragile`；
-//!   最新 `recall_partial` 或最新成功需要 `hint_level > 0` → `prompted`；
-//!   最新 `recall_success` 且 `hint_level` 空/0 且证据 >= medium → `independent`。
-//!   **不做百分比平均。**
-//! - **Application**：无练习结果 → `unknown`；最新成功带引导 → `guided`；
-//!   最新成功无引导且证据 >= medium → `independent`；
+//! - **Recall**：**先**过滤权威准入的回忆结果，**再**取最近 3 次（新→旧）。
+//!   最新 `recall_failure` → `fragile`；最新 `recall_partial` 或最新成功需要
+//!   `hint_level > 0` → `prompted`；最新 `recall_success` 且 `hint_level` 空/0
+//!   → `independent`。没有任何权威回忆结果 → `unknown`。**不做百分比平均。**
+//! - **Application**：无**权威**练习结果 → `unknown`；最新成功带引导 → `guided`；
+//!   最新成功无引导 → `independent`；
 //!   最新失败**不抹除**历史成功，只把 `independent` 降为 `guided`，**绝不回到 `unknown`**。
-//! - **Transfer**：无迁移 moment → `unknown`；attempt/failure → `attempted`；
-//!   partial → `partial`；成功且证据 >= medium → `independent`。
+//! - **Transfer**：无迁移 moment → `unknown`；无权威迁移结果 → `attempted`
+//!   （非权威的 success / partial / failure **不得**升级成 Partial / Independent）；
+//!   权威 `partial` → `partial`；权威成功 → `independent`。
 //! - **Stability**：无 MemoryUnit → `unknown`；有但未完成复习 → `new`；
 //!   到期/逾期或 retrievability 低于期望保留率 → `due`；
 //!   有成功复习但 FSRS 仍低置信/新 → `unstable`；
 //!   未到期且至少 2 次成功间隔复习 → `stable`。
-//! - **Fluency**：V1 保守。无延迟/独立性证据 → `unknown`；
+//! - **Fluency**：V1 保守。**先**筛选权威准入的成功：没有 → `unknown`；
 //!   独立成功但无重复计时证据 → `functional`；
 //!   重复独立成功 **且** 至少 3 个相关成功 moment 分布在 **>= 2 个本地日期** → `fluent`；
-//!   引导/缓慢证据 → `slow`。**不得由学习时长推断。**
+//!   权威成功但全部需要提示 → `slow`。**不得由学习时长推断。**
 //! - **Calibration**：只有当**同一条** moment 同时存在用户置信度与客观结果时才计一对；
 //!   少于 3 对 → `unknown`；高置信 + 反复失败 → `overconfident`；
 //!   低置信 + 反复成功 → `underconfident`；否则 → `calibrated`。
@@ -382,13 +383,24 @@ pub fn project_acquisition(moments: &[LearningMoment]) -> AcquisitionState {
 // ---- Recall ----
 
 pub fn project_recall(moments: &[LearningMoment]) -> RecallState {
+    // R1-2：**先**按权威准入过滤，**再**套用最近窗口 —— 顺序本身就是契约。
+    //
+    // 反过来（先取 3 条再过滤）会让三条新的自报结果把一条更老的权威结果
+    // 挤出窗口，于是「后来者自报」抹掉了「验证过的结论」。
+    //
+    // 只有 `LearningMasteryOutcome = Admissible` 的
+    // RecallSuccess / RecallPartial / RecallFailure 才能进入客观 RecallState 判定。
+    // 自报 / AI 推断的这三类**全部**不改变客观状态，且**不得**被转成 Failure
+    // （§12：unknown ≠ failure）。
     let recent: Vec<&LearningMoment> = moments
         .iter()
         .filter(|m| RECALL_TYPES.contains(&m.moment_type))
+        .filter(|m| admits_mastery(m))
         .take(RECALL_WINDOW)
         .collect();
 
     let Some(latest) = recent.first() else {
+        // 没有权威回忆结果 —— 诚实停在 Unknown，绝不用自报填空。
         return RecallState::Unknown;
     };
 
@@ -398,13 +410,9 @@ pub fn project_recall(moments: &[LearningMoment]) -> RecallState {
         LearningMomentType::RecallSuccess => {
             if latest.hint_level.unwrap_or(0) > 0 {
                 RecallState::Prompted
-            } else if admits_mastery(latest) {
-                RecallState::Independent
             } else {
-                // A2-1 §12 Recall：自报 / AI 推断的成功**不得**产出 `Independent`。
-                // 保守停在 prompted：它承认「有过一次成功的说法」，
-                // 但**不**把它升级成「独立回忆」，也绝不降级成失败。
-                RecallState::Prompted
+                // 走到这里一定已被准入（上方已过滤），因此这是**被证明的**独立回忆。
+                RecallState::Independent
             }
         }
         _ => RecallState::Unknown,
@@ -415,12 +423,19 @@ pub fn project_recall(moments: &[LearningMoment]) -> RecallState {
 // ---- Application ----
 
 pub fn project_application(moments: &[LearningMoment]) -> ApplicationState {
+    // R1-2：先过滤权威准入的练习结果，再看最新一条。
+    //
+    // 自报的 `PracticeSuccess` **既不得** `Independent` **也不得** `Guided`
+    // （Guided 也是「能做什么」的能力结论）；自报的 `PracticeFailure` 同样
+    // 不改变客观应用能力。两者单独存在时，落点都是 `Unknown`。
     let practice: Vec<&LearningMoment> = moments
         .iter()
         .filter(|m| PRACTICE_TYPES.contains(&m.moment_type))
+        .filter(|m| admits_mastery(m))
         .collect();
 
     let Some(latest) = practice.first() else {
+        // 没有权威练习结果 —— 能力尚未被证明（Unknown，不是失败）。
         return ApplicationState::Unknown;
     };
 
@@ -443,12 +458,9 @@ pub fn project_application(moments: &[LearningMoment]) -> ApplicationState {
         LearningMomentType::PracticeSuccess => {
             if latest.hint_level.unwrap_or(0) > 0 {
                 ApplicationState::Guided
-            } else if admits_mastery(latest) {
-                ApplicationState::Independent
             } else {
-                // A2-1 §12 Application：自报 / AI 推断的 `PracticeSuccess`
-                // 不得产出 `Independent`。停在 `Guided`（既有的保守落点）。
-                ApplicationState::Guided
+                // 走到这里一定已被准入（上方已过滤），因此这是**被证明的**独立应用。
+                ApplicationState::Independent
             }
         }
         _ => ApplicationState::Unknown,
@@ -463,8 +475,17 @@ pub fn project_transfer(moments: &[LearningMoment]) -> TransferState {
         .filter(|m| TRANSFER_TYPES.contains(&m.moment_type))
         .collect();
 
-    let Some(latest) = transfer.first() else {
+    if transfer.is_empty() {
         return TransferState::Unknown;
+    }
+
+    // R1-2：只有权威准入的结果才能形成能力结论（`Partial` / `Independent`）。
+    // 先找**最新的权威**迁移结果 —— 更老的一条不会被后来的自报挤出判定。
+    let Some(latest) = transfer.iter().find(|m| admits_mastery(m)) else {
+        // 没有权威结果：非权威的 success / partial / failure 一律**不得**升级成
+        // Partial / Independent。它们最多保留「尝试过」这一低层事实 ——
+        // 那是真的，而「能迁移」没有被证明。它**不是**失败。
+        return TransferState::Attempted;
     };
 
     // 「transfer partial」用 result = "partial" 表达（moment 类型集合里没有 transfer_partial）。
@@ -473,10 +494,7 @@ pub fn project_transfer(moments: &[LearningMoment]) -> TransferState {
     }
 
     match latest.moment_type {
-        // A2-1 §12 Transfer：自报 / AI 推断的 `TransferSuccess` 不得产出 `Independent`。
-        LearningMomentType::TransferSuccess if admits_mastery(latest) => TransferState::Independent,
-        // 未被准入的成功退回 `Attempted`：这是**诚实**的 —— 「尝试过且自报成功」
-        // 是真的，而「能独立迁移」没有被证明。它**不是**失败。
+        LearningMomentType::TransferSuccess => TransferState::Independent,
         _ => TransferState::Attempted,
     }
 }
@@ -504,12 +522,18 @@ pub fn project_stability(input: &LearnerProjectionInput) -> StabilityState {
 // ---- Fluency ----
 
 pub fn project_fluency(moments: &[LearningMoment]) -> FluencyState {
+    // R1-2：**先**筛选权威准入的成功。
+    //
+    // 自报 / AI 推断的成功**不得**产出 Slow / Functional / Fluent ——
+    // `Slow` 同样是「能力」判断（能完成，只是慢），因此它也必须有权威结果支撑，
+    // 而不是「反正有个成功说法」就给一档。
     let successes: Vec<&LearningMoment> = moments
         .iter()
         .filter(|m| SUCCESS_TYPES.contains(&m.moment_type))
+        .filter(|m| admits_mastery(m))
         .collect();
     if successes.is_empty() {
-        // 「没有成功证据」就是 unknown ——绝不能由学习时长推断出任何熟练度。
+        // 没有**权威**成功证据就是 unknown ——绝不能由学习时长推断出任何熟练度。
         return FluencyState::Unknown;
     }
 
@@ -519,7 +543,7 @@ pub fn project_fluency(moments: &[LearningMoment]) -> FluencyState {
         .collect();
 
     if independent.is_empty() {
-        // 有成功但全部需要提示 → slow（既有引导证据 = 缓慢）。
+        // 有权威成功但全部需要提示 → slow（既有引导证据 = 缓慢）。
         return FluencyState::Slow;
     }
 
