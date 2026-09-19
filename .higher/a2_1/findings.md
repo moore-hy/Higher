@@ -3,6 +3,11 @@
 **START SHA:** `7347c319740aa55e02547823bad6c29153cb3464`
 **Branch:** `main` · **Push:** none (local commits only)
 
+> 当前状态见 [`STATUS.md`](./STATUS.md)（本 pack 状态的唯一入口）。
+> 审计重开的 R1 修复（权威溯源闸门 / 客观投影准入）见 [`REOPEN_R1.md`](./REOPEN_R1.md)：
+> 它在本账本之上**追加**了两条不得回退的不变量（声称 != 证明、先过滤后窗口），
+> 但没有推翻 F-A21-01..07 的任何一条。
+
 ---
 
 # 1. Architecture ledger（§27）

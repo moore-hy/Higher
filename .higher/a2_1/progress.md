@@ -2,6 +2,8 @@
 
 **START SHA:** `7347c319740aa55e02547823bad6c29153cb3464`
 
+> 当前状态见 [`STATUS.md`](./STATUS.md)（本 pack 状态的唯一入口）。
+
 | step | status |
 |---|---|
 | 1 preflight (branch/HEAD/diff --check) | DONE ✅ |
@@ -15,6 +17,7 @@
 | 9 broad regression §29 + classification | DONE ✅ |
 | 10 findings ledger F-A21-01..07 | DONE ✅ |
 | 11 local commits, no push | DONE ✅ |
+| 12 AUDIT REOPEN R1（权威溯源闸门 + 客观投影准入） | DONE ✅ |
 
 See `writer_census.md` for the census, `findings.md` for the architecture ledger
-and the verification record.
+and the verification record, `REOPEN_R1.md` for the audit-reopen remediation.

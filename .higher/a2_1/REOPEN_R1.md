@@ -3,12 +3,8 @@
 **START SHA:** `328251653362c84c2f5dc333e1080afd1758bed5`
 **Branch:** `main` · **Push:** none (local commits only)
 
-```
-A2-1 STATUS: VERIFIED_DONE
-```
-
-> R1 五个分项全部通过（见末节 RESULT）后，状态由 `AUDIT_REOPENED` 恢复为
-> `VERIFIED_DONE`。
+> **状态不写在本文件。** 唯一入口见 [`STATUS.md`](./STATUS.md)：
+> R1 五个分项全部通过后，状态由 `AUDIT_REOPENED` 恢复为 `VERIFIED_DONE`。
 
 ---
 
