@@ -29,7 +29,8 @@
 //!
 //! - 不新建任何测试专用的「假闭环」：全部走生产服务函数
 //!   （`ingest_source` / `start_training_for_item` / `start_training_run` /
-//!   `record_interaction` / `try_complete_training_block` / `build_*` 投影 /
+//!   `record_interaction` / `verify_and_record_interaction` / `try_complete_training_block`
+//!   / `build_*` 投影 /
 //!   `block_grounded_material_core`）。
 //! - 不手工注入快照：快照只能由生产写入路径产生（本文件里没有任何一处直接
 //!   `UPDATE training_block_runs SET material_snapshot_json = ...`）。
@@ -54,10 +55,13 @@
 //!       「若有一个真实验证器，它签发的证据长什么样」。
 //! ```
 //!
-//! 关键结论：**当前没有真实 production verifier 接线** →
-//! `AUTHORITATIVE LEARNING VERIFICATION = NOT_WIRED`。
-//! 所以 UI → 权威证据 → FSRS 仍不是已完成的产品闭环。SelfCheck 可以（在冻结完成规则
-//! 满足时）完成一个块，但「块完成」≠「权威掌握证据」。
+//! 关键结论（A2-2 之后更新）：`free_recall` / `cued_recall` / `review_short` 三条协议
+//! **已有真实 production verifier 接线**（`verify_and_record_interaction`，真相源 =
+//! 接地材料 `source_excerpt`），因此 P2-C 不再是「契约替身」，它跑的是真实验证器。
+//! 其余协议仍 `NOT_WIRED` —— 尤其 `faded_example`：它的 `worked_steps` /
+//! `hidden_step_index` 只可能来自 AI，没有合法确定性真相源
+//! （`F-A22-VERIFIER-UNAVAILABLE`，见 `.higher/a2_next/findings.md`），**不得**伪造验证器。
+//! SelfCheck 可以（在冻结完成规则满足时）完成一个块，但「块完成」≠「权威掌握证据」。
 
 use app_lib::cognitive::decision::DecisionMode;
 use app_lib::cognitive::learner_model::{build_learner_item_state_v2, RecallState};
@@ -86,12 +90,13 @@ use app_lib::training::grounded_material::{
     load_material_snapshot, GeneratedBy, GroundedTrainingMaterial, MaterialStatus,
 };
 use app_lib::training::runtime::{
-    block_completion_state, record_interaction, start_training_run, try_complete_training_block,
-    RecordInteractionParams, TryCompleteBlockParams,
+    block_completion_state, start_training_run, try_complete_training_block,
+    verify_and_record_interaction, TryCompleteBlockParams, VerifyInteractionParams,
 };
 use app_lib::training::types::{
     is_recall_compatible, InteractionResult, VerificationMethod, FSRS_SKIP_NON_AUTHORITATIVE,
 };
+use app_lib::training::verifier::VerifierResult;
 use app_lib::training::TrainingBlockRun;
 use app_lib::training::{start_training_for_item, TrainingErrorCode};
 use rusqlite::{params, Connection};
@@ -778,14 +783,16 @@ fn p2_b_real_learner_action_is_exactly_once_and_completes_by_frozen_rule() {
 
 // ============================ P2-C ============================
 
-/// P2.3（B 路径 / 可信验证器运行时契约）——
+/// P2.3（B 路径 / 受控后端验证通路）——
 /// 既有投影在它们**真正保证**的范围内观测到那次真实交互。
 ///
-/// 重要：这里用的是 `VerificationMethod::Deterministic`，它代表**可信验证器运行时契约**
-/// （trusted verifier runtime contract，路径 B），用于证明「若存在真实验证器，证据长什么样」。
-/// 它**不是**手工 UI 路径（A 路径 / SelfCheck，见 P2-B）。本仓库当前没有 production verifier
-/// 接线（AUTHORITATIVE LEARNING VERIFICATION = NOT_WIRED），所以这条路径仅供契约证明，
-/// 不得被读作「真实 UI 用户路径」。
+/// A2-2 之前，这里直接给 `record_interaction` 传 `verification: Deterministic`，
+/// 当作「可信验证器运行时契约」的**替身**：那时仓库里确实没有验证器接线。
+/// A2-2 之后有了真实通路 `verify_and_record_interaction`（真相源 = 接地材料的
+/// `source_excerpt`），而读侧闸门要求权威声明必须带真实且自洽的 proof ——
+/// 声称不再够用。所以这里不再是替身：把材料原文作为回忆提交，由**真实验证器**签发。
+///
+/// 它仍然**不是**手工 UI 路径（A 路径 / SelfCheck，见 P2-B）。
 #[test]
 fn p2_c_existing_projections_observe_the_real_result_where_they_guarantee_it() {
     let mut conn = setup();
@@ -823,24 +830,47 @@ fn p2_c_existing_projections_observe_the_real_result_where_they_guarantee_it() {
         "P2-C：夹具那次回忆在 30 天窗口之外，窗口内应当还没有成功回忆"
     );
 
-    // ---------- 一次真实学习者动作 ----------
-    let outcome = record_interaction(
+    // ---------- 一次真实学习者动作（权威由真实验证器签发，不由调用方声称）----------
+    let material = raw_snapshot(&conn, g.block_id);
+    assert_eq!(
+        material.status,
+        MaterialStatus::Ready,
+        "P2-C：验证通路的真相源必须是一份 Ready 的接地材料"
+    );
+    assert_eq!(
+        material.generated_by,
+        GeneratedBy::Deterministic,
+        "P2-C：真相源必须是确定性产物（AI 产物不是真相源）"
+    );
+    let excerpt = material
+        .source_excerpt
+        .clone()
+        .expect("P2-C：Ready 的确定性材料必须带来源摘录");
+    let verified = verify_and_record_interaction(
         &conn,
-        RecordInteractionParams {
+        VerifyInteractionParams {
             profile_id: g.profile_id,
             training_run_id: g.run_id,
             block_run_id: g.block_id,
             client_action_id: "p2-c-action-1".to_string(),
             interaction_type: IT_RECALL.to_string(),
-            prompt_text: Some("请回忆这个结构的作用".to_string()),
-            user_response_text: Some("它是细胞的能量工厂".to_string()),
+            user_response_text: Some(excerpt),
             hint_level: None,
-            result: Some(InteractionResult::Success),
-            verification: VerificationMethod::Deterministic,
             occurred_at: None,
         },
     )
-    .unwrap();
+    .expect("P2-C：free_recall 块必须有一条真实的验证通路");
+    assert_eq!(
+        verified.verifier.result,
+        VerifierResult::Verified,
+        "P2-C：提交的回忆就是材料原文，验证器必须判定 verified"
+    );
+    assert_eq!(
+        verified.verification,
+        VerificationMethod::Deterministic,
+        "P2-C：只有验证器命中才允许权威判定方式"
+    );
+    let outcome = verified.outcome;
     assert!(outcome.effect.fsrs_applied);
 
     // ---------- Memory：排程真的动了，投影真的看见了 ----------
