@@ -10,7 +10,7 @@
 ```text
 Branch        : main
 START SHA     : 96cc109f6b2fc33faee5b6ea7d378670bed7be45   （与 taskbook 预期 baseline 一致）
-FINAL SHA     : 81ea663（代码冻结；b28f541 / 555d5a1 / 77f1298 只含文档）
+FINAL SHA     : f8d30db（代码冻结；b28f541 / 555d5a1 / 77f1298 只含文档）
 文档收尾提交   : 紧随其后 —— 只新增 .higher/a2_next/ 文档，零代码改动
 ```
 
@@ -22,6 +22,7 @@ d945b6a  feat(personal-core): add goal mode and capability contracts (A2-4)
 3a0579b  test(grounded-bridge): P2-C proves authority through the real verifier
 0b8d075  feat(ui): make the Me surface reachable from the sidebar (A2-3)
 81ea663  feat(ui): show Capability and Goal Mode on the Me surface (A2-4)
+f8d30db  feat(ipc): register the A2 contract types in the generated IPC surface
 ```
 
 ---
@@ -242,6 +243,19 @@ Confirmed / Observed / Inferred / Unknown 分组，每条带 reason + evidence r
 
 ---
 
+### 2.8 IPC 边界类型只保留**一份**定义
+
+`src-tauri/src/ipc/dto.rs` 自述是「凡跨越 Tauri IPC 边界的类型都登记在这里」的注册表。
+收尾自查时发现：`get_person_state` 与 `verify_training_interaction` 的返回类型是
+**手抄**进 `src/api.ts` 的 —— 一份迟早会漂移的第二定义。
+
+已把 `PersonStateSnapshot`（含全部子视图）、Goal Mode / Capability、验证器三件套
+登记进注册表，由 ts-rs 生成到 `src/generated/`（+21 个文件），`api.ts` 改为**转发**
+生成类型而不是重述。一致性由 `npm run check:types` 守住。
+
+顺带一个结构性事实：生成出来的 `VerifiedInteractionOutcome` 里**没有任何**
+可以传入 `verification` / `result` 的入口 —— 权威只能由后端验证器签发。
+
 ## 5. 迁移 / 依赖 / 新表
 
 ```text
@@ -272,6 +286,16 @@ cargo test --test learner_model_v2                    -j 1    9 passed / 0 faile
 npx tsc --noEmit                                          0 errors
 ```
 
+前端套件（`verify:frontend` 的分项，本轮全部跑过）：
+
+```text
+npm run test:product-ui           204 passed / 13 files
+npm run test:interaction-contract   7 passed
+npm run test:learning-engine       28 passed
+npm run test:product-e2e           25 passed
+npm run check:types                  0 diff（重新导出 + git diff --exit-code src/generated）
+```
+
 A2-2 覆盖 A22-01..A22-12 加 3 条边界（写侧声称不成就不能变 Verified、
 无验证器不伪造、AI 材料不是真相源）；A2-3 覆盖 A23-01..A23-12；A2-4 覆盖 A24-01..A24-09。
 
@@ -284,21 +308,24 @@ cargo test --no-fail-fast -j 1 -- --test-threads=1
 | | passed | failed | ignored |
 |---|---|---|---|
 | BASELINE (`96cc109`) | 1898 | **29** | 2 |
-| FINAL (`81ea663`) | 1937 | **29** | 2 |
+| FINAL (`f8d30db`) | 1939 | **27** | 2 |
 
-> 1937 − 1898 = **39** = 本轮新增的 18(A2-2) + 12(A2-3) + 9(A2-4)，一个不差。
+> 1939 − 1898 = **41** = 本轮新增的 39（18 A2-2 + 12 A2-3 + 9 A2-4）
+> \+ 2 条**本次网络通了**才转绿的：`rt_gr_01` / `rt_gr_02`
+> （真实 Docling 解析 PDF，依赖 `huggingface.co`；baseline 那次是代理 502）。
+> 它们是**环境相关**的既有红，**不是**本轮改动修好的 —— 下一次代理抽风还会红回去。
 > 口径说明：`baseline.md` 里写的「2055 executed」是把 `test result:` 汇总行也数进去了
 > （1898+29+2+126）。这里改用同一口径的 passed/failed/ignored 直接对比，
 > 两侧统计方法完全一致。
 
 ```text
-FINAL_FAILURE_SET − BASELINE_FAILURE_SET = ∅
-BASELINE_FAILURE_SET − FINAL_FAILURE_SET = ∅      （两份清单逐行相同）
+FINAL_FAILURE_SET − BASELINE_FAILURE_SET = ∅        ← 这一条才是门禁
+BASELINE_FAILURE_SET − FINAL_FAILURE_SET = { rt_gr_01, rt_gr_02 }   （网络通了，非本轮改动）
 
 NEW_CODE_REGRESSION = 0
 ```
 
-清单：`.higher/a2_next/final_failures.txt`（与 `baseline_failures.txt` 逐行一致）
+清单：`.higher/a2_next/final_failures.txt`（27 条，是 `baseline_failures.txt` 的**子集**）
 日志：`.higher/a2_next/final_broad.log`
 
 ### 6.3 唯一一条回归及其处置（findings F-A22-07）
@@ -318,6 +345,9 @@ NEW_CODE_REGRESSION = 0
 ## 7. 已知 baseline 欠债（本轮未修，也**不是**本轮引入）
 
 - **29 条既有红测试**：多为 AI runtime / migration / docling 网络相关。
+  另有两条治理测试（`r2_u23_backend_freeze` / `u28_no_src_tauri_src_diff`）跑
+  `git diff --name-only HEAD`，未提交的工作区会让它们变红 —— 本轮中途确实被它们抓到一次，
+  **提交后自动恢复绿**（不是回归）。
   其中 `rt_gr_01` / `rt_gr_02` 本轮实测失败原因是**代理 502**
   （`huggingface.co` 不可达 → `PARSER_FAILED`），不是代码回归 ——
   与 BASELINE_FAILURE_SET 里的同一批，前后一致。
