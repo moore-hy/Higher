@@ -12,6 +12,7 @@ pub mod memory;
 pub mod migrations;
 pub mod model_router;
 pub mod notifications;
+pub mod personal_core;
 pub mod platform;
 pub mod repository;
 pub mod resource;
