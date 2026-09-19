@@ -10,7 +10,7 @@
 ```text
 Branch        : main
 START SHA     : 96cc109f6b2fc33faee5b6ea7d378670bed7be45   （与 taskbook 预期 baseline 一致）
-FINAL SHA     : 0b8d075（代码冻结；b28f541 / 555d5a1 与本报告同批，只含文档）
+FINAL SHA     : 81ea663（代码冻结；b28f541 / 555d5a1 / 77f1298 只含文档）
 文档收尾提交   : 紧随其后 —— 只新增 .higher/a2_next/ 文档，零代码改动
 ```
 
@@ -21,6 +21,7 @@ dc0905b  feat(personal-core): A2-3 person state projection V1 + Know Me surface
 d945b6a  feat(personal-core): add goal mode and capability contracts (A2-4)
 3a0579b  test(grounded-bridge): P2-C proves authority through the real verifier
 0b8d075  feat(ui): make the Me surface reachable from the sidebar (A2-3)
+81ea663  feat(ui): show Capability and Goal Mode on the Me surface (A2-4)
 ```
 
 ---
@@ -206,11 +207,16 @@ Me 面（`/me`）：Current Focus / Goals / Higher Knows，按
 Confirmed / Observed / Inferred / Unknown 分组，每条带 reason + evidence refs；
 **只显示**后端给的 `source_class`，前端绝不本地重算（A23-11 源码级锁定）。
 
-可达性（补于收尾后）：路由原本挂了但**没有任何入口**，只能手敲 URL —— 那不算「可见」。
-已在桌面侧栏**「进阶」分组**加一个 Me 入口（只动 `ADVANCED_NAV_ITEMS`）。
-**没有**动一级导航：COGNITIVE CORE V1.2 §21 把一级 IA 冻结为
-Today / Journey / Memory / Progress，那是别的 sprint 的冻结契约；
-放一级还是放进阶属产品决策，留给 Owner。MobileLayout（`MOBILE_NAV_ITEMS`）零改动。
+可达性与渲染（收尾后补齐的两处，都是「链上最后一公里」）：
+
+1. 路由原本挂了但**没有任何入口**，只能手敲 URL —— 那不算「可见」。
+   已在桌面侧栏**「进阶」分组**加一个 Me 入口（只动 `ADVANCED_NAV_ITEMS`）。
+   **没有**动一级导航：COGNITIVE CORE V1.2 §21 把一级 IA 冻结为
+   Today / Journey / Memory / Progress，那是别的 sprint 的冻结契约；
+   放一级还是放进阶属产品决策，留给 Owner。MobileLayout（`MOBILE_NAV_ITEMS`）零改动。
+2. `.me*` 的样式原本**一行都没有**（`styles.css` 里查不到任何 `me__` 选择器）——
+   面板带着一堆不存在的 class 上线。已补一段最小样式，只用既有 `--h-*` token
+   与允许的字号/间距档位，**不做**视觉重设计。
 
 ---
 
@@ -227,6 +233,12 @@ Today / Journey / Memory / Progress，那是别的 sprint 的冻结契约；
 | AI 能改吗 | **不能**（A24-07） |
 
 只建契约，**没有**做完整 Exam Planner / Growth Planner（§36 明令不做）。
+
+可见性（收尾补齐）：`PersonStateSnapshot.capability` 与 `GoalView.goal_mode`
+原本在后端有、前端**一处都没渲染** —— 那 A2-4 的契约就没人看得见。现在 Me 面
+新增 Capability 段（8 条轴全列，带后端给的 source_class；`value = null` 渲染成
+「还不知道」，绝不写 beginner / 50%）与每个目标的 Goal Mode 徽标（tooltip =
+后端 reason，并列出 `focuses_on`）。UI **只展示**，不猜 mode。
 
 ---
 
@@ -272,7 +284,7 @@ cargo test --no-fail-fast -j 1 -- --test-threads=1
 | | passed | failed | ignored |
 |---|---|---|---|
 | BASELINE (`96cc109`) | 1898 | **29** | 2 |
-| FINAL (`0b8d075`) | 1937 | **29** | 2 |
+| FINAL (`81ea663`) | 1937 | **29** | 2 |
 
 > 1937 − 1898 = **39** = 本轮新增的 18(A2-2) + 12(A2-3) + 9(A2-4)，一个不差。
 > 口径说明：`baseline.md` 里写的「2055 executed」是把 `test result:` 汇总行也数进去了

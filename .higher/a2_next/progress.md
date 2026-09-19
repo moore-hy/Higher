@@ -11,8 +11,9 @@
 | 4 | `b28f541` | `docs(higher): close A2 next-stage sprint`（task_plan / findings / progress / baseline / FINAL） |
 | 5 | `555d5a1` | `docs(higher): record the closing SHA in the sprint progress log` |
 | 6 | `0b8d075` | `feat(ui): make the Me surface reachable from the sidebar (A2-3)` |
+| 7 | `81ea663` | `feat(ui): show Capability and Goal Mode on the Me surface (A2-4)` |
 
-**代码冻结点 = `0b8d075`**（b28f541 / 555d5a1 只加文档）。
+**代码冻结点 = `81ea663`**（b28f541 / 555d5a1 / 77f1298 只加文档）。
 收尾后补的一条：`/me` 路由原本挂了但**没有任何入口**，只能手敲 URL，不算「可见」；
 已在桌面侧栏**「进阶」分组**加一个 Me 入口。**没动**一级导航 ——
 COGNITIVE CORE V1.2 §21 把一级 IA 冻结为 Today / Journey / Memory / Progress，
@@ -84,6 +85,10 @@ COGNITIVE CORE V1.2 §21 把一级 IA 冻结为 Today / Journey / Memory / Progr
 
 改    src/Layout.tsx   ADVANCED_NAV_ITEMS + Me 入口（/me 现在点得到）
 改    src/App.tsx      /me 路由（lazy）
+改    src/components/me/MePanel.tsx
+      · + Capability 段（8 条轴，value=null → 「还不知道」）
+      · + 每个目标的 Goal Mode 徽标（tooltip = 后端 reason + focuses_on）
+新增  src/styles.css   .me* 最小样式（原本**一行都没有**，面板带着不存在的 class）
 ```
 
 ## A2-4 落地清单
