@@ -25,6 +25,7 @@ use crate::db;
 use crate::training;
 use crate::training::grounded_material::GroundedTrainingMaterial;
 use crate::training::types::{BlockAdvanceIntent, InteractionResult, VerificationMethod};
+use crate::training::VerifiedInteractionOutcome;
 use rusqlite::OptionalExtension;
 
 /// §19 创建训练的结果：新 run + 被物化出来的块。
@@ -175,6 +176,55 @@ pub fn record_training_interaction(
         hint_level,
         result,
         occurred_at,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// A2-2 §9 —— **受控后端验证通路**（唯一能产出权威判定方式的 IPC 入口）。
+///
+/// # 与 `record_training_interaction` 的区别
+///
+/// ```text
+/// record_training_interaction  手工/自检  内部固定 SelfCheck，前端无从选择
+/// verify_training_interaction  后端验证  判定方式由**验证器结果**决定
+/// ```
+///
+/// # 这个命令**没有** `verification` / `result` 参数
+///
+/// 与 FIX A1 同一个道理，而且更强：这里连 `result` 都没有。
+///
+/// ```text
+/// 命中   -> 后端写 Deterministic + Success
+/// 未命中 -> 后端写 SelfCheck     + None（未知，**绝不**写 Failure）
+/// ```
+///
+/// 删掉参数而不是「忽略前端传来的值」：不存在的参数是**结构性**保证。
+/// 前端唯一能提供的是「用户写了什么」，其余全部由后端验证器决定。
+#[tauri::command]
+pub fn verify_training_interaction(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    training_run_id: i64,
+    block_run_id: i64,
+    client_action_id: String,
+    interaction_type: String,
+    user_response_text: Option<String>,
+    hint_level: Option<i64>,
+    occurred_at: Option<String>,
+) -> Result<VerifiedInteractionOutcome, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    training::verify_and_record_interaction(
+        &conn,
+        training::VerifyInteractionParams {
+            profile_id,
+            training_run_id,
+            block_run_id,
+            client_action_id,
+            interaction_type,
+            user_response_text,
+            hint_level,
+            occurred_at,
+        },
     )
     .map_err(|e| e.to_string())
 }

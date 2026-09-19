@@ -88,6 +88,21 @@ fn verified(ty: LearningMomentType, at: &str) -> LearningMoment {
     m.metadata_json = serde_json::json!({
         "provenance": { "training_run_id": 1, "block_run_id": 1, "interaction_id": 1 },
         "verification": "deterministic",
+        // A2-2 §13：权威声明必须带真实且自洽的 verifier proof。
+        // 只有 `verify_and_record_interaction` 能签发权威，而它一定写 proof；
+        // 缺 proof 的形状是生产不可能产生的，会被读侧闸门 fail closed。
+        "verifier_proof": {
+            "verifier_kind": "grounded_source_recall",
+            "verifier_version": 1,
+            "profile_id": PROFILE,
+            "training_run_id": 1,
+            "block_run_id": 1,
+            "interaction_id": 1,
+            "input_reference": "training_response:block_run:1",
+            "expected_reference": "grounded_material:block_run:1#source_excerpt",
+            "result": "verified",
+            "issued_at": at,
+        },
     });
     m.source_id = Some("training_interaction:1".to_string());
     m

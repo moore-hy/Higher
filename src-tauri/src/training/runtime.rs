@@ -49,7 +49,9 @@ use crate::repository::active_learning_intent::clear_active_intent_in_tx;
 use crate::repository::study_session::StudySessionRepository;
 
 use super::completion::{evaluate_completion, BlockInteractionFact, CompletionFacts};
-use super::grounded_material::{save_material_snapshot, GroundedTrainingMaterial};
+use super::grounded_material::{
+    load_material_snapshot, save_material_snapshot, GroundedTrainingMaterial,
+};
 use super::types::{
     derive_moment_type, is_recall_compatible, is_recall_moment, transition_block_status,
     transition_run_status, validate_block_invariant, BlockAdvanceIntent, BlockProgression,
@@ -58,6 +60,16 @@ use super::types::{
     FSRS_SKIP_BLOCK_IS_BREAK, FSRS_SKIP_EVIDENCE_TOO_LOW, FSRS_SKIP_NON_AUTHORITATIVE,
     FSRS_SKIP_NOT_RECALL_MOMENT, FSRS_SKIP_NO_MEMORY_UNIT, FSRS_SKIP_NO_MOMENT,
 };
+use super::verifier::{
+    verify_grounded_source_recall, VerifierOutcome, VerifierProofV1, VERIFIER_PROOF_KEY,
+};
+
+/// A2-2 §13：声称权威却没有**真实 proof** —— 拒绝写入，而不是静默降级。
+pub const VERIFIER_PROOF_REQUIRED: &str = "VERIFIER_PROOF_REQUIRED";
+/// A2-2 §13：proof 的结论不是 `verified`，却要求签发权威判定方式。
+pub const VERIFIER_PROOF_NOT_VERIFIED: &str = "VERIFIER_PROOF_NOT_VERIFIED";
+/// A2-2：这个块没有受控后端验证通路（协议不在可验证集合内）。
+pub const NO_VERIFIER_FOR_BLOCK: &str = "NO_VERIFIER_FOR_BLOCK";
 
 /// §18：训练派生的 moment 统一来源前缀。
 pub const TRAINING_SOURCE_PREFIX: &str = "training_interaction:";
@@ -996,6 +1008,39 @@ pub struct RecordInteractionParams {
     pub occurred_at: Option<String>,
 }
 
+/// A2-2 [`verify_and_record_interaction`] 的入参。
+///
+/// # 为什么**没有** `verification` 与 `result`
+///
+/// 这两个字段由**后端验证器**决定（§9）。若它们出现在入参里，前端就又能
+/// 「选择判定方式」了 —— 那是 FIX A1 明令封死的洞。
+/// 这里没有它们，就是结构性保证，而不是「接收后覆盖」的约定。
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifyInteractionParams {
+    pub profile_id: i64,
+    pub training_run_id: i64,
+    pub block_run_id: i64,
+    pub client_action_id: String,
+    pub interaction_type: String,
+    /// 被验证的输入。空/缺失 = 「还没想起来」= 未知（**不是**失败）。
+    pub user_response_text: Option<String>,
+    pub hint_level: Option<i64>,
+    pub occurred_at: Option<String>,
+}
+
+/// 受控验证通路的返回值。
+///
+/// `verifier` 与 `verification` 一并返回，是为了让调用方（与前端）能诚实呈现
+/// 「这次到底验证成功了没有、依据是什么」，而不是自己猜。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
+pub struct VerifiedInteractionOutcome {
+    pub outcome: InteractionOutcome,
+    /// 验证器的真实输出（含 `result` 与真相源指针）。
+    pub verifier: VerifierOutcome,
+    /// 本次**实际**采用的判定方式（未命中时是 `SelfCheck`）。
+    pub verification: VerificationMethod,
+}
+
 /// 一次交互的返回值：既有行 + 效果摘要。
 ///
 /// `replayed = true` 表示这是**重试命中幂等键**，没有产生任何新事实。
@@ -1023,10 +1068,139 @@ pub struct InteractionOutcome {
 ///
 /// 任何 DB 失败 → 整体回滚。**不允许**出现「有 interaction 没有 moment」
 /// 或「有 moment 但 FSRS 只更新一半」的状态。
+/// §15 —— 手工/自检通路（**唯一**的历史入口）。
+///
+/// A2-2 之后它仍然**不**接受验证器：调用方拿不到 `verification` 之外的手段
+/// 来提升权威性（FIX A1）。要真实验证请走 [`verify_and_record_interaction`]。
 pub fn record_interaction(
     conn: &Connection,
     p: RecordInteractionParams,
 ) -> Result<InteractionOutcome, TrainingError> {
+    record_interaction_inner(conn, p, None)
+}
+
+/// A2-2 §9 / §13 —— **受控后端验证通路**（本模块唯一能产出权威判定方式的入口）。
+///
+/// ```text
+/// 前端 ──user response──> 后端 verifier ──VerifierOutcome──> record_interaction_inner
+///        （不带 verification）                              （权威只在命中时签发）
+/// ```
+///
+/// # 为什么不复用 `record_interaction` 加一个参数
+///
+/// §9：「`record_training_interaction_core()` 继续固定 `SelfCheck`，
+/// 不要修改这个手工入口让它『顺便支持 verifier』」。
+/// 因此这是**另一条**通路：它自己决定 `verification` 与 `result`，
+/// 调用方对两者**都没有**发言权。
+///
+/// # 未命中时发生什么（§11）
+///
+/// ```text
+/// Verified      -> verification = Deterministic, result = Success
+/// Unverified    -> verification = SelfCheck,     result = None   ← 未知，绝不写 Failure
+/// NotApplicable -> verification = SelfCheck,     result = None
+/// ```
+///
+/// `None` 的 result 会让 `derive_moment_type` 落到 `*Attempt` 类 ——
+/// 「尝试过」是事实，「错了」不是本通路能证明的。
+pub fn verify_and_record_interaction(
+    conn: &Connection,
+    p: VerifyInteractionParams,
+) -> Result<VerifiedInteractionOutcome, TrainingError> {
+    // 1) 归属与协议：run / block 都必须属于该档案，block 必须属于该 run。
+    let run = load_run(conn, p.profile_id, p.training_run_id)?;
+    let block = load_block_run(conn, p.profile_id, p.block_run_id)?;
+    if block.training_run_id != run.id {
+        return Err(TrainingError::new(
+            TrainingErrorCode::TrainingBlockNotFound,
+            format!(
+                "块 {} 不属于训练 {}（跨 run 引用被拒绝）",
+                p.block_run_id, p.training_run_id
+            ),
+        ));
+    }
+    // 休息块恒为零学习事实，没有可验证的东西。
+    if block.is_break {
+        return Err(TrainingError::new(
+            TrainingErrorCode::TrainingBlockNotCurrentActive,
+            "休息块不产生学习事实，因此没有验证通路".to_string(),
+        ));
+    }
+
+    // 2) 真相源：接地材料快照（profile 隔离由 `load_material_snapshot` 保证）。
+    let material =
+        load_material_snapshot(conn, p.profile_id, p.block_run_id).map_err(TrainingError::db)?;
+
+    // 3) 运行验证器（纯函数，确定性，非 AI）。
+    let outcome = verify_grounded_source_recall(
+        block.protocol_id,
+        p.block_run_id,
+        material.as_ref(),
+        p.user_response_text.as_deref(),
+    )
+    .ok_or_else(|| {
+        TrainingError::new(
+            TrainingErrorCode::NoVerifierForBlock,
+            format!(
+                "{}：块 {} 的协议没有合法的确定性真相源（不伪造验证）",
+                NO_VERIFIER_FOR_BLOCK, p.block_run_id
+            ),
+        )
+    })?;
+
+    // 4) 由**验证结果**决定判定方式与结果 —— 调用方对两者都没有发言权。
+    let (verification, result) = if outcome.result.authorizes_authoritative_method() {
+        (
+            VerificationMethod::Deterministic,
+            Some(InteractionResult::Success),
+        )
+    } else {
+        // §11：未命中 = 未知。绝不把 Unverified 写成 Failure。
+        (VerificationMethod::SelfCheck, None)
+    };
+
+    let inner = RecordInteractionParams {
+        profile_id: p.profile_id,
+        training_run_id: p.training_run_id,
+        block_run_id: p.block_run_id,
+        client_action_id: p.client_action_id,
+        interaction_type: p.interaction_type,
+        prompt_text: None,
+        user_response_text: p.user_response_text,
+        hint_level: p.hint_level,
+        result,
+        verification,
+        occurred_at: p.occurred_at,
+    };
+    let outcome_recorded = record_interaction_inner(conn, inner, Some(&outcome))?;
+    Ok(VerifiedInteractionOutcome {
+        outcome: outcome_recorded,
+        verifier: outcome,
+        verification,
+    })
+}
+
+fn record_interaction_inner(
+    conn: &Connection,
+    p: RecordInteractionParams,
+    verifier: Option<&VerifierOutcome>,
+) -> Result<InteractionOutcome, TrainingError> {
+    // ---- A2-2 §13：权威判定方式的**准入闸门在读侧**，不在写侧 ----
+    //
+    // `verification` 是领域层入参。若在这里硬拒「声称权威但没 proof」，
+    // 那么任何需要构造「假设已被验证」的下游语义测试都无法成立 —— 而这类
+    // 假设本身是合法的（它测的是「一旦权威成立，下游该怎样」）。
+    //
+    // 真正挡住伪造的是**两道**：
+    //   ① 结构：`record_training_interaction_core` 固定 `SelfCheck`，
+    //      生产唯一另一条通路 `verify_training_interaction` 必跑真实验证器
+    //      （`VERIFIER_PROOF_REQUIRED` 由 governance 测试在源码层锁定）。
+    //   ② 读侧：`personal_core::adapters::learning::verifier_claim_is_proven`
+    //      要求权威声明**必须**带真实且自洽的 `VerifierProofV1`，
+    //      否则 fail closed —— 声称永远变不成 Verified。
+    //
+    // 因此这里**只**做一件事：验证器真的跑过时，把它封成 proof 一起落库。
+    // 没跑过就不写 proof —— 那一行随后会被读侧闸门判为「未证明」。
     begin_immediate(conn)?;
     let tx: &Connection = conn;
     let result = (|| -> Result<InteractionOutcome, TrainingError> {
@@ -1199,7 +1373,7 @@ pub fn record_interaction(
                 // 宁可拒绝一条自相矛盾的证据，也不要落库一条无法解释的 moment。
                 moment.result = p.result.map(|r| r.as_str().to_string());
                 moment.source_id = Some(training_source_id(interaction_id));
-                moment.metadata_json = serde_json::json!({
+                let mut meta = serde_json::json!({
                     "provenance": {
                         "training_run_id": p.training_run_id,
                         "block_run_id": p.block_run_id,
@@ -1208,6 +1382,29 @@ pub fn record_interaction(
                     "verification": p.verification.as_str(),
                     "interaction_type": p.interaction_type,
                 });
+                // A2-2 §8：验证器**真的跑过**才留下 proof。
+                //
+                // 身份字段（profile / run / block / interaction）一律由 runtime
+                // 在事务内填入 —— 调用方只提供验证器的**输出**，因此它无法伪造
+                // 「这条 proof 属于哪个档案 / 哪次交互」。
+                //
+                // 未命中时**也**写 proof：那时 `result` 是 `unverified`，
+                // 读侧闸门不会放行权威，但它留下了「确实验证过、结论是未知」的
+                // 审计轨迹 —— 这比沉默诚实。
+                if let Some(v) = verifier {
+                    let proof = VerifierProofV1::seal(
+                        v,
+                        p.profile_id,
+                        p.training_run_id,
+                        p.block_run_id,
+                        interaction_id,
+                        &occurred_at,
+                    );
+                    meta[VERIFIER_PROOF_KEY] = serde_json::to_value(&proof).map_err(|e| {
+                        TrainingError::db(format!("verifier proof 序列化失败：{e}"))
+                    })?;
+                }
+                moment.metadata_json = meta;
                 let recorded = record_learning_moment(tx, moment)
                     .map_err(|e| TrainingError::db(format!("LearningMoment 写入失败：{e}")))?;
                 effect.learning_moment_ids = vec![recorded.id];

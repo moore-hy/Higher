@@ -683,6 +683,16 @@ pub enum TrainingErrorCode {
     /// GROUNDED LEARNING BRIDGE V1 · P1.1：接地材料快照在创建事务内落库失败，
     /// 因此整个创建事务已回滚 —— **不会**留下一个 RUNNING/READY 却无接地的训练。
     GroundedSnapshotPersistFailed,
+    /// A2-2 §13：声称 `Deterministic` / `Structured` 却没有**真实执行的** verifier
+    /// 记录。权威判定方式只能由 `verify_and_record_interaction` 签发 ——
+    /// 调用方写一句 `verification: Deterministic` 不算验证（§7）。
+    VerifierProofRequired,
+    /// A2-2 §13：verifier 真的跑了，但结论不是 `verified`
+    /// （`unverified` / `not_applicable`），因此不得签发权威判定方式。
+    VerifierProofNotVerified,
+    /// A2-2 §11/§12：这个块的协议在当前仓库里**没有**合法的确定性真相源。
+    /// 记录为不可用，**不**伪造验证器。
+    NoVerifierForBlock,
     Db,
 }
 
@@ -714,6 +724,9 @@ impl TrainingErrorCode {
             Self::PreparedMaterialMismatch => "PREPARED_MATERIAL_MISMATCH",
             Self::MaterialCoverageIncomplete => "MATERIAL_COVERAGE_INCOMPLETE",
             Self::GroundedSnapshotPersistFailed => "GROUNDED_SNAPSHOT_PERSIST_FAILED",
+            Self::VerifierProofRequired => "VERIFIER_PROOF_REQUIRED",
+            Self::VerifierProofNotVerified => "VERIFIER_PROOF_NOT_VERIFIED",
+            Self::NoVerifierForBlock => "NO_VERIFIER_FOR_BLOCK",
             Self::Db => "DB_ERROR",
         }
     }

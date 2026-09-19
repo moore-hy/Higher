@@ -67,7 +67,7 @@ fn at(m: &mut LearningMoment, when: &str) {
 fn runtime_verified(ty: LearningMomentType, token: &str, interaction: i64) -> LearningMoment {
     let mut m = base(ty, MomentSourceType::SystemDerived, EvidenceQuality::High);
     m.source_id = Some(format!("training_interaction:{interaction}"));
-    m.metadata_json = serde_json::json!({
+    let mut metadata = serde_json::json!({
         "provenance": {
             "training_run_id": 11,
             "block_run_id": 22,
@@ -75,6 +75,22 @@ fn runtime_verified(ty: LearningMomentType, token: &str, interaction: i64) -> Le
         },
         "verification": token,
     });
+    // A2-2 §13：权威判定方式只能由 `verify_and_record_interaction` 签发，
+    // 而那条通路**必然**写出 verifier proof。缺 proof 的行不是「老格式」，
+    // 而是生产不可能产生的形状 —— 夹具必须反映真实形状，否则测的是不存在的东西。
+    metadata["verifier_proof"] = serde_json::json!({
+        "verifier_kind": "grounded_source_recall",
+        "verifier_version": 1,
+        "profile_id": PROFILE,
+        "training_run_id": 11,
+        "block_run_id": 22,
+        "interaction_id": interaction,
+        "input_reference": "training_response:block_run:22",
+        "expected_reference": "grounded_material:block_run:22#source_excerpt",
+        "result": "verified",
+        "issued_at": "2026-09-20 02:00:00",
+    });
+    m.metadata_json = metadata;
     m
 }
 

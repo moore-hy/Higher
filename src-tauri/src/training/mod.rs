@@ -32,6 +32,7 @@ pub mod grounding;
 pub mod runtime;
 pub mod start;
 pub mod types;
+pub mod verifier;
 
 pub use completion::{
     evaluate_completion, CompletionDecision, CompletionFacts, ALL_COMPLETION_RULE_KINDS,
@@ -53,8 +54,10 @@ pub use runtime::{
     create_training_run, find_open_training_run, get_training_run, list_block_runs,
     list_interactions, record_interaction, resolve_recall_memory_unit, start_training_block,
     start_training_run, training_source_id, transition_training_run, try_complete_training_block,
-    AdvanceBlockParams, BlockAdvanceOutcome, CreateTrainingRunParams, InteractionOutcome,
-    RecordInteractionParams, TryCompleteBlockParams, TRAINING_SOURCE_PREFIX,
+    verify_and_record_interaction, AdvanceBlockParams, BlockAdvanceOutcome,
+    CreateTrainingRunParams, InteractionOutcome, RecordInteractionParams, TryCompleteBlockParams,
+    VerifiedInteractionOutcome, VerifyInteractionParams, NO_VERIFIER_FOR_BLOCK,
+    TRAINING_SOURCE_PREFIX, VERIFIER_PROOF_NOT_VERIFIED, VERIFIER_PROOF_REQUIRED,
 };
 pub use start::{load_training_session, start_training_for_item, TrainingSessionView};
 pub use types::{
@@ -64,4 +67,9 @@ pub use types::{
     TrainingBlockStatus, TrainingError, TrainingErrorCode, TrainingInteraction, TrainingRun,
     TrainingRunStatus, VerificationMethod, FSRS_SKIP_NO_MOMENT, LEGAL_BLOCK_TRANSITIONS,
     LEGAL_RUN_TRANSITIONS, RECALL_COMPATIBLE_PROTOCOLS,
+};
+pub use verifier::{
+    grounded_source_excerpt_reference, normalize_for_compare, protocol_is_verifiable,
+    verify_grounded_source_recall, VerifierKind, VerifierOutcome, VerifierProofV1, VerifierResult,
+    EXPECTED_REF_FIELD, EXPECTED_REF_PREFIX, VERIFIER_PROOF_KEY, VERIFIER_VERSION_V1,
 };

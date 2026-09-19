@@ -76,6 +76,8 @@ use crate::personal_core::scope::EvidenceScope;
 // `source_id` 的形状由**写入者**（training runtime）唯一定义 —— 这里复用它，
 // 绝不在权威解析器里再抄一遍前缀（否则两处漂移 = 溯源链静默失效）。
 use crate::training::runtime::training_source_id;
+// A2-2：proof 的类型与键同样只有**一个**定义处（training::verifier）。
+use crate::training::verifier::{VerifierProofV1, VERIFIER_PROOF_KEY};
 
 /// `metadata_json` 里 verifier provenance 的键（training runtime 写入）。
 pub const VERIFICATION_KEY: &str = "verification";
@@ -240,15 +242,57 @@ fn runtime_provenance_interaction_id(m: &LearningMoment) -> Option<i64> {
     Some(interaction_id)
 }
 
-/// R1-1：这条**声称**的 verifier provenance 是否被**证明**？
+/// runtime 溯源里的正整数 `training_run_id`（缺任一环 → `None`）。
+fn runtime_provenance_run_id(m: &LearningMoment) -> Option<i64> {
+    let id = m
+        .metadata_json
+        .get(PROVENANCE_KEY)?
+        .as_object()?
+        .get(TRAINING_RUN_ID_KEY)?
+        .as_i64()?;
+    (id > 0).then_some(id)
+}
+
+/// runtime 溯源里的正整数 `block_run_id`（缺任一环 → `None`）。
+fn runtime_provenance_block_id(m: &LearningMoment) -> Option<i64> {
+    let id = m
+        .metadata_json
+        .get(PROVENANCE_KEY)?
+        .as_object()?
+        .get(BLOCK_RUN_ID_KEY)?
+        .as_i64()?;
+    (id > 0).then_some(id)
+}
+
+/// R1-1 + A2-2 §13：这条**声称**的 verifier provenance 是否被**证明**？
 ///
 /// ```text
-/// 证明 = 来源兼容  &&  （非「已验证」 || 有 runtime 溯源）
+/// 证明 = 来源兼容
+///      && （非「已验证」 || （有 runtime 溯源 && 有真实且自洽的 verifier proof））
 /// ```
 ///
 /// `self_check` / `ai_tutor` 只降级不升级，来源兼容就够了；
 /// `deterministic` / `structured` 会**升级**权威，因此必须额外拿出
 /// 真实 runtime 溯源 —— 否则「声称」就能造出「已验证」，那不是权威。
+///
+/// # A2-2 收紧了什么
+///
+/// A2-1 只要求 runtime 溯源（provenance + `source_id` 自洽）。
+/// 但溯源只证明「这条 moment 来自某次交互」，**不**证明「有验证器真的执行过」。
+/// A2-2 之后，`Deterministic` / `Structured` 只有一条生产通路能签发
+/// （`verify_and_record_interaction`），而那条通路**必然**写出
+/// [`VerifierProofV1`]。因此缺 proof 的行不是「老格式」，而是
+/// **不可能由生产产生的形状** —— 一律 fail closed。
+///
+/// 这就是 §13 的四道门（全部不过即 fail closed）：
+///
+/// ```text
+/// Backend verifier executed  -> proof 存在且严格可解析
+/// Proof valid                -> result == verified
+/// Scope matches              -> proof.profile_id == moment.profile_id
+/// Source provenance valid    -> run / block / interaction 三处 id 与溯源一致
+///                            -> expected_reference 指向本 block 的真相源
+/// ```
 pub fn verifier_claim_is_proven(
     m: &LearningMoment,
     token: &str,
@@ -257,10 +301,28 @@ pub fn verifier_claim_is_proven(
     if !token_source_compatible(token, m.source_type) {
         return false;
     }
-    if authority.is_verified() {
-        return runtime_provenance_interaction_id(m).is_some();
+    if !authority.is_verified() {
+        return true;
     }
-    true
+    let Some(interaction_id) = runtime_provenance_interaction_id(m) else {
+        return false;
+    };
+    let Some(run_id) = runtime_provenance_run_id(m) else {
+        return false;
+    };
+    let Some(block_id) = runtime_provenance_block_id(m) else {
+        return false;
+    };
+    let Some(proof) = verifier_proof(m) else {
+        return false;
+    };
+    proof.is_consistent(m.profile_id, run_id, block_id, interaction_id)
+}
+
+/// 读取 moment 上 A2-2 的 verifier proof（**严格**解析，任何瑕疵 → `None`）。
+pub fn verifier_proof(m: &LearningMoment) -> Option<VerifierProofV1> {
+    let raw = m.metadata_json.get(VERIFIER_PROOF_KEY)?;
+    VerifierProofV1::from_json(raw)
 }
 
 /// **唯一的** LEARN 权威判定（带依据）。

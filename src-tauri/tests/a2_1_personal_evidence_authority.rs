@@ -86,21 +86,46 @@ fn legacy_self_report(ty: LearningMomentType) -> LearningMoment {
 /// token 与来源互相矛盾、溯源链指不回任何真实交互。因此这里改为按
 /// **生产写入者的真实形状**构造；矛盾形状的断言在
 /// `tests/a2_1_r1_authority_provenance_gate.rs`。
+/// A2-2 之后，runtime 为权威判定方式写出的形状**必然**带 verifier proof
+/// （只有 `verify_and_record_interaction` 能签发，而它一定写 proof）。
+///
+/// 这个辅助函数造出那条**真实**的 proof，使夹具始终代表「生产能产生的形状」，
+/// 而不是「手写在 metadata 里的声称」—— 后者正是 R1-1 / §13 要挡掉的东西。
+fn verifier_proof(
+    run_id: i64,
+    block_id: i64,
+    interaction_id: i64,
+    profile_id: i64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "verifier_kind": "grounded_source_recall",
+        "verifier_version": 1,
+        "profile_id": profile_id,
+        "training_run_id": run_id,
+        "block_run_id": block_id,
+        "interaction_id": interaction_id,
+        "input_reference": format!("training_response:block_run:{block_id}"),
+        "expected_reference": format!("grounded_material:block_run:{block_id}#source_excerpt"),
+        "result": "verified",
+        "issued_at": "2026-09-20 02:00:00",
+    })
+}
+
 fn verified(ty: LearningMomentType, token: &str) -> LearningMoment {
     let source = match token {
         "self_check" => MomentSourceType::UserExplicit,
         "ai_tutor" => MomentSourceType::TutorObserved,
         _ => MomentSourceType::SystemDerived,
     };
-    let mut m = moment(
-        ty,
-        source,
-        EvidenceQuality::High,
-        serde_json::json!({
-            "provenance": { "training_run_id": 1, "block_run_id": 2, "interaction_id": 3 },
-            "verification": token,
-        }),
-    );
+    let mut metadata = serde_json::json!({
+        "provenance": { "training_run_id": 1, "block_run_id": 2, "interaction_id": 3 },
+        "verification": token,
+    });
+    // 权威 token 才有 proof；`self_check` / `ai_tutor` 通路不产 proof（它们也不升级权威）。
+    if matches!(token, "deterministic" | "structured") {
+        metadata["verifier_proof"] = verifier_proof(1, 2, 3, PROFILE);
+    }
+    let mut m = moment(ty, source, EvidenceQuality::High, metadata);
     // 溯源链必须指回**同一次**交互（R1-1）：source_id 与 interaction_id 对得上。
     m.source_id = Some("training_interaction:3".to_string());
     m
