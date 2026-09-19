@@ -232,12 +232,19 @@ impl EvidenceSet {
         self.refs.len()
     }
 
-    /// 可信证据条数（medium/high）。
+    /// **质量**计数：medium/high 证据引用的条数。
+    ///
+    /// A2-1：它统计的是**质量**，不是权威。它适合用于「证据看起来有多扎实」
+    /// 这类展示/置信度用途；**不得**被当作「可以推进某个客观状态」的判据 ——
+    /// 后者走 `personal_core::authority_admission`。
     pub fn trusted_count(&self) -> usize {
         self.refs.iter().filter(|r| r.is_trusted()).count()
     }
 
-    /// 是否没有任何可信证据 —— UI 必须据此渲染「暂时没有足够证据」。
+    /// 是否没有任何 medium/high **质量**的证据 —— UI 必须据此渲染「暂时没有足够证据」。
+    ///
+    /// 语义**未变**：这里说的是「质量上可信的证据一条都没有」，
+    /// 与「有没有权威证据可以推进状态」是两个不同的问题（后者一律 fail closed）。
     pub fn lacks_trusted_evidence(&self) -> bool {
         self.trusted_count() == 0
     }
@@ -247,7 +254,10 @@ impl EvidenceSet {
         self.refs.iter().map(|r| r.observed_at.clone()).max()
     }
 
-    /// §18 置信度输入：独立 medium/high 证据引用条数。**无百分比。**
+    /// §18 置信度输入：独立 medium/high **质量**证据引用条数。**无百分比。**
+    ///
+    /// 它是**决策置信度**的一个输入（软信号），不是客观状态准入 —— 见
+    /// [`EvidenceSet::trusted_count`] 的说明。
     pub fn independent_trusted_refs(&self) -> usize {
         self.trusted_count()
     }
