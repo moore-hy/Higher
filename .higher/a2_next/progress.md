@@ -9,8 +9,14 @@
 | 2 | `dc0905b` | `feat(personal-core): A2-3 person state projection V1 + Know Me surface` |
 | 3 | `d945b6a` | `feat(personal-core): add goal mode and capability contracts (A2-4)` |
 | 4 | `b28f541` | `docs(higher): close A2 next-stage sprint`（task_plan / findings / progress / baseline / FINAL） |
+| 5 | `555d5a1` | `docs(higher): record the closing SHA in the sprint progress log` |
+| 6 | `0b8d075` | `feat(ui): make the Me surface reachable from the sidebar (A2-3)` |
 
-**代码冻结点 = `3a0579b`**（b28f541 只加文档，零代码改动）。
+**代码冻结点 = `0b8d075`**（b28f541 / 555d5a1 只加文档）。
+收尾后补的一条：`/me` 路由原本挂了但**没有任何入口**，只能手敲 URL，不算「可见」；
+已在桌面侧栏**「进阶」分组**加一个 Me 入口。**没动**一级导航 ——
+COGNITIVE CORE V1.2 §21 把一级 IA 冻结为 Today / Journey / Memory / Progress，
+那是别的 sprint 的契约。放一级还是放进阶留给 Owner 决定。
 
 > 两次作废的 broad run，都已删除，回归对比只认**代码冻结后**的 `final_broad.log`：
 > ① `mid_broad.log`：run 进行中还在改 A2-4 源码，lib 编译失败
@@ -75,6 +81,9 @@
 新增  src/pages/Me.tsx    + /me 路由（不做导航重构）
 
 新增  src-tauri/tests/a2_3_person_state.rs（12 passed）
+
+改    src/Layout.tsx   ADVANCED_NAV_ITEMS + Me 入口（/me 现在点得到）
+改    src/App.tsx      /me 路由（lazy）
 ```
 
 ## A2-4 落地清单

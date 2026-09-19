@@ -10,7 +10,7 @@
 ```text
 Branch        : main
 START SHA     : 96cc109f6b2fc33faee5b6ea7d378670bed7be45   （与 taskbook 预期 baseline 一致）
-FINAL SHA     : 3a0579bd735a6a0a72e83734814b878fdfe991fd   （代码冻结）
+FINAL SHA     : 0b8d075（代码冻结；b28f541 / 555d5a1 与本报告同批，只含文档）
 文档收尾提交   : 紧随其后 —— 只新增 .higher/a2_next/ 文档，零代码改动
 ```
 
@@ -20,6 +20,7 @@ FINAL SHA     : 3a0579bd735a6a0a72e83734814b878fdfe991fd   （代码冻结）
 dc0905b  feat(personal-core): A2-3 person state projection V1 + Know Me surface
 d945b6a  feat(personal-core): add goal mode and capability contracts (A2-4)
 3a0579b  test(grounded-bridge): P2-C proves authority through the real verifier
+0b8d075  feat(ui): make the Me surface reachable from the sidebar (A2-3)
 ```
 
 ---
@@ -205,6 +206,12 @@ Me 面（`/me`）：Current Focus / Goals / Higher Knows，按
 Confirmed / Observed / Inferred / Unknown 分组，每条带 reason + evidence refs；
 **只显示**后端给的 `source_class`，前端绝不本地重算（A23-11 源码级锁定）。
 
+可达性（补于收尾后）：路由原本挂了但**没有任何入口**，只能手敲 URL —— 那不算「可见」。
+已在桌面侧栏**「进阶」分组**加一个 Me 入口（只动 `ADVANCED_NAV_ITEMS`）。
+**没有**动一级导航：COGNITIVE CORE V1.2 §21 把一级 IA 冻结为
+Today / Journey / Memory / Progress，那是别的 sprint 的冻结契约；
+放一级还是放进阶属产品决策，留给 Owner。MobileLayout（`MOBILE_NAV_ITEMS`）零改动。
+
 ---
 
 ## 4. A2-4 —— Goal Mode + Capability（CONTRACT ONLY）
@@ -265,7 +272,7 @@ cargo test --no-fail-fast -j 1 -- --test-threads=1
 | | passed | failed | ignored |
 |---|---|---|---|
 | BASELINE (`96cc109`) | 1898 | **29** | 2 |
-| FINAL (`3a0579b`) | 1937 | **29** | 2 |
+| FINAL (`0b8d075`) | 1937 | **29** | 2 |
 
 > 1937 − 1898 = **39** = 本轮新增的 18(A2-2) + 12(A2-3) + 9(A2-4)，一个不差。
 > 口径说明：`baseline.md` 里写的「2055 executed」是把 `test result:` 汇总行也数进去了
@@ -322,18 +329,10 @@ AI Cost Governor、大导航重构、大 UI 重设计。
 
 ---
 
-## 9. `git status --short`（过滤掉非本轮的既有 untracked 产物目录）
+## 9. `git status --short`
 
-```text
-?? .higher/a2_next/baseline.md
-?? .higher/a2_next/final_failures.txt
-?? .higher/a2_next/final_failures_pre_fix.txt
-?? .higher/a2_next/findings.md
-?? .higher/a2_next/progress.md
-?? .higher/a2_next/task_plan.md
-```
-
-（以上将随文档收尾提交落地。）未过滤的原始输出里还有
+过滤掉非本轮的既有 untracked 产物目录后：**工作区无 task-owned 脏文件**
+（全部已提交）。未过滤的原始输出里还有
 `.git_broken3/`、`.git_pack_rescue/`、`.w9_check/`、`node_modules/`、`dist/`、
 `.workbuddy-ai/`、`.higher_a21_baseline_failures.txt` 等**既有**产物/目录 —— 均非本轮创建，
 也**没有**被提交（本仓库纪律：永远不要 `git add -A`）。
