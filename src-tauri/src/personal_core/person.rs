@@ -201,6 +201,8 @@ pub struct GoalView {
     pub status: String,
     pub source_class: SourceClass,
     pub reason: String,
+    /// A2-4 §31：Goal Mode。**绝不**按标题猜 —— 没有结构化来源就是 `Unclassified`。
+    pub goal_mode: super::capability::GoalModeResolution,
 }
 
 /// §19 的 `time`。
@@ -271,6 +273,8 @@ pub struct PersonStateSnapshot {
     pub time: TimeView,
     pub soft_context: SoftContextView,
     pub body: BodyStateV1,
+    /// A2-4 §33：Capability 投影（**只读**，不反写 Learner Model，不新建能力分表）。
+    pub capability: super::capability::CapabilityView,
     pub workspaces: Vec<WorkspaceSummary>,
     pub unknowns: Vec<UnknownItem>,
 }
@@ -305,7 +309,7 @@ pub fn project_person_state(
         .map_err(|e| format!("count study profiles failed: {e}"))?;
 
     let goals = project_goals(conn, profile_id)?;
-    let learning = project_learning(conn, profile_id, now_utc)?;
+    let (learning, capability) = project_learning(conn, profile_id, now_utc)?;
     let execution = project_execution(conn, profile_id, now_utc)?;
     let time = project_time(conn, profile_id, now_utc)?;
     let soft_context = project_soft_context(conn, profile_id)?;
@@ -326,6 +330,7 @@ pub fn project_person_state(
         time,
         soft_context,
         body,
+        capability,
         workspaces,
         unknowns,
     })
@@ -353,6 +358,9 @@ fn project_goals(conn: &Connection, profile_id: i64) -> Result<Vec<GoalView>, St
     let mut out = Vec::new();
     for row in rows {
         let (id, name, status) = row.map_err(|e| format!("read goal failed: {e}"))?;
+        // A2-4 §31：Goal Mode **只**看结构化来源。`goals` 表目前没有这种字段，
+        // 因此恒为 Unclassified —— 「考研」不会被猜成 Exam。
+        let goal_mode = super::capability::resolve_goal_mode(&name, None);
         out.push(GoalView {
             id,
             name,
@@ -360,6 +368,7 @@ fn project_goals(conn: &Connection, profile_id: i64) -> Result<Vec<GoalView>, St
             // 目标是**用户自己建的** —— 这是「用户明确告诉 Higher」的最直接形态。
             source_class: SourceClass::ConfirmedByUser,
             reason: "这个目标是你自己创建的".to_string(),
+            goal_mode,
         });
     }
     Ok(out)
@@ -368,11 +377,13 @@ fn project_goals(conn: &Connection, profile_id: i64) -> Result<Vec<GoalView>, St
 // ---------------- learning ----------------
 
 /// 学习域：**只有**权威准入的证据才允许给出客观状态（A2-1）。
+/// 返回 `(learning, capability)` —— capability 由**同一次** Learner Model 投影得出，
+/// 因此不产生第二次查询（§24：不做 N+1）。
 fn project_learning(
     conn: &Connection,
     profile_id: i64,
     now_utc: &str,
-) -> Result<LearningView, String> {
+) -> Result<(LearningView, super::capability::CapabilityView), String> {
     // 最近真的产生过学习事实的学习项（档案内）。
     let focus: Option<(i64, String, String)> = conn
         .query_row(
@@ -399,20 +410,28 @@ fn project_learning(
         .map_err(|e| format!("read last activity failed: {e}"))?
         .flatten();
 
-    let (focus_view, recall_view, application_view) = match focus {
+    let (focus_view, recall_view, application_view, capability) = match focus {
         Some((item_id, name, _at)) => {
             let refs = vec![format!("learning_item:{item_id}")];
-            let states = learner_states_for_item(conn, profile_id, item_id, now_utc)?;
+            let (recall, application, state) =
+                learner_states_for_item(conn, profile_id, item_id, now_utc)?;
+            // A2-4 §33：Capability 是 Learner Model 的**只读投影**。
+            let capability = match state {
+                Some(s) => super::capability::project_capability(&s),
+                None => super::capability::empty_capability(),
+            };
             (
                 KnownText::observed(name, "这是最近真的产生过学习事实的学习项", refs),
-                states.0,
-                states.1,
+                recall,
+                application,
+                capability,
             )
         }
         None => (
             KnownText::unknown("这个档案里还没有任何学习事实"),
             KnownText::unknown("没有学习证据，因此不判断回忆状态"),
             KnownText::unknown("没有学习证据，因此不判断应用状态"),
+            super::capability::empty_capability(),
         ),
     };
 
@@ -440,13 +459,16 @@ fn project_learning(
         )
     };
 
-    Ok(LearningView {
-        current_focus: focus_view,
-        recall_state: recall_view,
-        application_state: application_view,
-        verified_evidence_count: verified_view,
-        last_activity_at: last_activity_view,
-    })
+    Ok((
+        LearningView {
+            current_focus: focus_view,
+            recall_state: recall_view,
+            application_state: application_view,
+            verified_evidence_count: verified_view,
+            last_activity_at: last_activity_view,
+        },
+        capability,
+    ))
 }
 
 fn learner_states_for_item(
@@ -454,7 +476,14 @@ fn learner_states_for_item(
     profile_id: i64,
     item_id: i64,
     now_utc: &str,
-) -> Result<(KnownText, KnownText), String> {
+) -> Result<
+    (
+        KnownText,
+        KnownText,
+        Option<crate::cognitive::learner_model::LearnerItemStateV2>,
+    ),
+    String,
+> {
     use crate::cognitive::learner_model::{
         project_learner_item_state, FrictionBand, LearnerProjectionInput, MemoryUnitSummary,
     };
@@ -500,6 +529,7 @@ fn learner_states_for_item(
         return Ok((
             KnownText::unknown("没有学习证据，因此不判断回忆状态"),
             KnownText::unknown("没有学习证据，因此不判断应用状态"),
+            None,
         ));
     }
 
@@ -523,7 +553,7 @@ fn learner_states_for_item(
         "由**权威准入**的学习证据投影出的客观应用状态",
         refs,
     );
-    Ok((recall, application))
+    Ok((recall, application, Some(state)))
 }
 
 /// `RecallState` → 人话。刻意**不改** `learner_model`（那是冻结的客观投影）。

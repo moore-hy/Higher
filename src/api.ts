@@ -2851,12 +2851,48 @@ export interface PersonExecutionView {
   open_tasks: KnownCount;
 }
 
+/** A2-4 §31：Goal Mode 词表。没有结构化来源时是 `unclassified`（**绝不**按标题猜）。 */
+export type GoalMode = "exam" | "growth" | "life" | "maintenance" | "unclassified";
+
+export interface GoalModeResolution {
+  mode: GoalMode;
+  source_class: SourceClass;
+  reason: string;
+  focuses_on: string[];
+}
+
 export interface PersonGoalView {
   id: number;
   name: string;
   status: string;
   source_class: SourceClass;
   reason: string;
+  goal_mode: GoalModeResolution;
+}
+
+/** A2-4 §33：8 条能力轴。没有证据的轴值是 `null`（**不是** 0 / beginner）。 */
+export type CapabilityAxis =
+  | "understand"
+  | "recall"
+  | "apply"
+  | "independent"
+  | "debug"
+  | "build"
+  | "transfer"
+  | "retain";
+
+export interface CapabilityAxisState {
+  axis: CapabilityAxis;
+  value: string | null;
+  source_class: SourceClass;
+  reason: string;
+  evidence_refs: string[];
+}
+
+export interface CapabilityView {
+  learning_item_id: number | null;
+  axes: CapabilityAxisState[];
+  note: string;
 }
 
 export interface PersonTimeView {
@@ -2900,6 +2936,8 @@ export interface PersonStateSnapshot {
   time: PersonTimeView;
   soft_context: PersonSoftContextView;
   body: PersonBodyState;
+  /** A2-4 §33：Learner Model / Evidence 的只读投影，不是第二份真相。 */
+  capability: CapabilityView;
   workspaces: WorkspaceSummary[];
   unknowns: PersonUnknownItem[];
 }

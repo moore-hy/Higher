@@ -43,10 +43,15 @@
 //! ```
 
 pub mod adapters;
+pub mod capability;
 pub mod evidence;
 pub mod person;
 pub mod scope;
 
+pub use capability::{
+    project_capability, CapabilityAxis, CapabilityAxisState, CapabilityView, GoalMode,
+    GoalModeResolution, ALL_CAPABILITY_AXES,
+};
 pub use evidence::{
     admits_learning_mastery, authority_admission, EvidenceAdmission, EvidenceAuthority,
     EvidenceProvenance, PersonalEvidenceDomain, PersonalEvidenceEnvelope, StateDimension,
