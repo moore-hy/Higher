@@ -44,6 +44,30 @@ use super::learning_moment::{
 };
 use crate::learning_state::friction::build_friction_state;
 use crate::learning_state::types::FrictionLevel;
+use crate::personal_core::adapters::learning::learning_mastery_admitted;
+
+/// 该 moment 是否**被准入**用于推进「客观学习结果」。
+///
+/// # 为什么不再是 `evidence_quality.is_trusted()`
+///
+/// ```text
+/// EvidenceQuality::High  !=  EvidenceAuthority::DeterministicVerified
+/// ```
+///
+/// A1 已经保护了**写入**路径（手工提交一律 `SelfCheck` → 降级成 attempt），
+/// 但**历史行**与**未来的直写者**仍可能带着「高可信的自报成功」躺库里。
+/// 只按质量判断时，这类行会把客观状态推到 `Independent` / `Understood`。
+///
+/// 因此这里走**权威准入**（A2-1 §11 + §12）：
+///
+/// ```text
+/// authority_admission(authority, LearningMasteryOutcome) == Admissible
+/// ```
+///
+/// 判据取自 `personal_core`，全项目只有一份 —— 不允许本模块自己再判一次。
+fn admits_mastery(m: &LearningMoment) -> bool {
+    learning_mastery_admitted(m)
+}
 
 /// 最近 3 次回忆结果参与 Recall 投影（§11 锁定窗口）。
 pub const RECALL_WINDOW: usize = 3;
@@ -238,6 +262,13 @@ pub fn project_learner_item_state(input: &LearnerProjectionInput) -> LearnerItem
     let moments = &input.moments_desc;
 
     let evidence_count = moments.len() as i64;
+    // A2-1 §12 Counts：**质量计数**，不是权威计数。
+    //
+    // `EvidenceQuality::is_trusted()` 只表示 medium/high **质量**。它在这里被保留
+    // 是为了兼容既有消费方（Decision 置信度、UI 证据条数），语义**未被**重新定义。
+    // 任何**客观状态推进**都不读它 —— 那些走 `admits_mastery`（权威准入）。
+    //
+    // A2-1 不新增权威计数，因为没有 A2-1 消费方需要它（§12）。
     let trusted_evidence_count = moments
         .iter()
         .filter(|m| m.evidence_quality.is_trusted())
@@ -316,8 +347,13 @@ fn latest_of(moments: &[LearningMoment], types: &[LearningMomentType]) -> Option
 
 pub fn project_acquisition(moments: &[LearningMoment]) -> AcquisitionState {
     // understood：explanation_success（medium/high）或结构化评估（evaluation 来源）的成功
+    // A2-1 §12 Acquisition：`UserExplicit + ExplanationSuccess + High` **不得**
+    // 仅因为质量是 High 就产出 `Understood`。`High` 是质量，不是权威。
+    //
+    // 未被准入的「成功」不会消失 —— 它仍会把 Acquisition 推进到 `Exposed`
+    // （见下方），因为「用户确实接触/练习过」是真的。被拒的是**掌握断言**。
     let understood = moments.iter().any(|m| {
-        m.evidence_quality.is_trusted()
+        admits_mastery(m)
             && (m.moment_type == LearningMomentType::ExplanationSuccess
                 || (m.moment_type.is_success()
                     && m.source_type == super::learning_moment::MomentSourceType::Evaluation))
@@ -362,10 +398,12 @@ pub fn project_recall(moments: &[LearningMoment]) -> RecallState {
         LearningMomentType::RecallSuccess => {
             if latest.hint_level.unwrap_or(0) > 0 {
                 RecallState::Prompted
-            } else if latest.evidence_quality.is_trusted() {
+            } else if admits_mastery(latest) {
                 RecallState::Independent
             } else {
-                // 无提示但证据不可信：保守停在 prompted，绝不虚报 independent。
+                // A2-1 §12 Recall：自报 / AI 推断的成功**不得**产出 `Independent`。
+                // 保守停在 prompted：它承认「有过一次成功的说法」，
+                // 但**不**把它升级成「独立回忆」，也绝不降级成失败。
                 RecallState::Prompted
             }
         }
@@ -405,9 +443,11 @@ pub fn project_application(moments: &[LearningMoment]) -> ApplicationState {
         LearningMomentType::PracticeSuccess => {
             if latest.hint_level.unwrap_or(0) > 0 {
                 ApplicationState::Guided
-            } else if latest.evidence_quality.is_trusted() {
+            } else if admits_mastery(latest) {
                 ApplicationState::Independent
             } else {
+                // A2-1 §12 Application：自报 / AI 推断的 `PracticeSuccess`
+                // 不得产出 `Independent`。停在 `Guided`（既有的保守落点）。
                 ApplicationState::Guided
             }
         }
@@ -433,9 +473,10 @@ pub fn project_transfer(moments: &[LearningMoment]) -> TransferState {
     }
 
     match latest.moment_type {
-        LearningMomentType::TransferSuccess if latest.evidence_quality.is_trusted() => {
-            TransferState::Independent
-        }
+        // A2-1 §12 Transfer：自报 / AI 推断的 `TransferSuccess` 不得产出 `Independent`。
+        LearningMomentType::TransferSuccess if admits_mastery(latest) => TransferState::Independent,
+        // 未被准入的成功退回 `Attempted`：这是**诚实**的 —— 「尝试过且自报成功」
+        // 是真的，而「能独立迁移」没有被证明。它**不是**失败。
         _ => TransferState::Attempted,
     }
 }

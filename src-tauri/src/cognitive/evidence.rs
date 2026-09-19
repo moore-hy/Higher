@@ -29,6 +29,20 @@
 //! - **LLM 文本本身永远不是 HIGH 证据。**
 //! - 掌握度 / 回忆 / 应用 / 迁移状态，只有在**与该维度相关的证据**存在时，
 //!   才允许从 `unknown` 向上移动。
+//!
+//! ## A2-1：质量 != 权威
+//!
+//! 本文件定义的是**质量**（`low` / `medium` / `high`）。它**不等于**权威：
+//!
+//! ```text
+//! EvidenceQuality::High                !=  EvidenceAuthority::DeterministicVerified
+//! EvidenceRef::is_trusted() == true    !=  有权推进某个客观状态
+//! ```
+//!
+//! 因此凡是**客观状态推进**（Learner Model 的 recall / application / transfer /
+//! acquisition-mastery / fluency / calibration）都必须走
+//! `personal_core::authority_admission`，而不是 `is_trusted()`。
+//! 本文件里的 `is_independent_success` 与 `calibration_pair` 已经改走权威准入。
 //! - 所有未来 UI 断言必须二选一：① 指向 evidence refs；
 //!   ② 显式渲染 `insufficient evidence` / `暂时没有足够证据`。
 //! - `unknown` 永不编码为 `failure`。
@@ -71,7 +85,18 @@ impl EvidenceRef {
         }
     }
 
-    /// 该证据是否可信到足以推进任何「状态」。
+    /// **质量**判定：medium/high。
+    ///
+    /// # 它**只**表达质量（A2-1 / owner 额外锁定）
+    ///
+    /// 与 [`crate::cognitive::learning_moment::EvidenceQuality::is_trusted`] 同义，
+    /// 且同样**不得**被当作「状态准入」或「权威性」使用。
+    ///
+    /// ```text
+    /// 质量 medium/high  !=  有权推进客观状态
+    /// ```
+    ///
+    /// 客观状态推进请走 `personal_core::adapters::learning::learning_mastery_admitted`。
     pub fn is_trusted(&self) -> bool {
         self.quality.is_trusted()
     }
@@ -242,13 +267,26 @@ pub fn recent_of_types(
         .collect()
 }
 
-/// 该 moment 是否代表一次「独立完成」（无提示、且证据可信）。
+/// 该 moment 是否代表一次「独立完成」（无提示、且证据**被权威准入**）。
 ///
 /// 供 Recall / Application / Fluency 轴复用，避免三处各写一遍同义判断。
+///
+/// # A2-1 §12 Fluency：质量不再足够
+///
+/// 旧判据是 `classify_moment_quality(m).is_trusted()`，即「medium/high 质量」。
+/// 那意味着一条自报的、质量被标成 high 的成功会被当成「独立完成」，
+/// 进而把 Fluency 一路推到 `Functional` / `Fluent`。
+///
+/// ```text
+/// 质量 high  !=  Higher 验证过的独立完成
+/// ```
+///
+/// 现在第三条改成**权威准入**（`LearningMasteryOutcome`），判据来自
+/// `personal_core` —— 与本文件之外的 Learner Model 共用同一份。
 pub fn is_independent_success(m: &LearningMoment) -> bool {
     m.moment_type.is_success()
         && m.hint_level.unwrap_or(0) == 0
-        && classify_moment_quality(m).is_trusted()
+        && crate::personal_core::adapters::learning::learning_mastery_admitted(m)
 }
 
 /// 该 moment 是否代表一次「需要支持的成功」（有提示）。
@@ -259,7 +297,23 @@ pub fn is_supported_success(m: &LearningMoment) -> bool {
 /// 用户自报置信度与客观结果是否构成一对可用于 Calibration 的观测。
 ///
 /// §11：只有当**同一条** moment/evaluation 同时存在用户置信度与客观结果时才计一对。
+///
+/// # A2-1 §12 Calibration：客观结果一侧必须是**权威准入**的
+///
+/// Calibration 的定义是：
+///
+/// ```text
+/// 用户置信度  +  客观结果
+/// ```
+///
+/// 如果两侧都是自报（「我觉得我会」+「我觉得我做对了」），那它衡量的是
+/// **用户的自我一致性**，而不是校准度 —— 两杯同样的水倒在一起，称不出重量。
+/// 因此客观结果一侧必须过权威准入，否则这一对不成立。
 pub fn calibration_pair(m: &LearningMoment) -> Option<(EvidenceConfidence, bool)> {
+    // 自报 / AI 推断的结果不构成「客观结果」一侧（A21-LM-08）。
+    if !crate::personal_core::adapters::learning::learning_mastery_admitted(m) {
+        return None;
+    }
     let conf = m.confidence?;
     let outcome = m.result.as_deref()?;
     match outcome {

@@ -221,7 +221,24 @@ impl EvidenceQuality {
         }
     }
 
-    /// §10 / §13：只有 medium/high 证据可以推进 FSRS 状态或学习模型状态。
+    /// **质量**判定：medium/high。
+    ///
+    /// # 它**只**表达质量（A2-1 §23 / owner 额外锁定）
+    ///
+    /// ```text
+    /// is_trusted() == "这条证据的质量是 medium 或 high"
+    /// is_trusted() != "这条证据有权推进某个状态"
+    /// ```
+    ///
+    /// 它**不得**再承担任何「状态准入 / 权威性」语义：
+    ///
+    /// ```text
+    /// EvidenceQuality::High  !=  EvidenceAuthority::DeterministicVerified
+    /// SelfReported + High    ->  依然是自报，对「掌握」不可准入
+    /// ```
+    ///
+    /// 所有客观 Learner Model 状态推进必须走**权威准入**
+    /// （`personal_core::authority_admission`），而不是这个方法。
     pub fn is_trusted(self) -> bool {
         matches!(self, Self::Medium | Self::High)
     }
