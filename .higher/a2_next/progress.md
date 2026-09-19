@@ -12,8 +12,27 @@
 | 5 | `555d5a1` | `docs(higher): record the closing SHA in the sprint progress log` |
 | 6 | `0b8d075` | `feat(ui): make the Me surface reachable from the sidebar (A2-3)` |
 | 7 | `81ea663` | `feat(ui): show Capability and Goal Mode on the Me surface (A2-4)` |
+| 8 | `f8d30db` | `feat(ipc): register the A2 contract types in the generated IPC surface` |
+| 9 | `d06e447` | `docs(personal-core): correct the stale NOT_WIRED claim` |
+| 10 | `67c3929` | `feat(verification): route recall submission through the real verifier` |
 
-**代码冻结点 = `81ea663`**（b28f541 / 555d5a1 / 77f1298 只加文档）。
+**代码冻结点 = `67c3929`**（7c2200b / 6d9f3ff 及之后只加文档）。
+
+### 最后一跳：真实用户动作终于能产出权威证据
+
+后端验证器原本**没有任何调用者**。新增只读命令 `precheck_training_verification`
+（跑验证器、零写入），`TrainingExperience` 按它的结果路由：
+
+```text
+verified   → verify_training_interaction（权威，后端签发）
+unverified → 既有自检通路（与今天逐字节相同）
+null       → 同上（这个块没有合法真相源）
+```
+
+必须由**验证结果**而非「有没有验证器」路由：未命中时 `result = None`，
+而 `AtLeastOneRecallOutcome` 要求 `result.is_some()` —— 一律切过去会让措辞对不上
+原文的用户永远推不动块。现在没有人变差，对得上的用户第一次拿到真实的
+`RecallSuccess` + FSRS 推进 + 权威证据。A22-14 / A22-15 锁住这两条。
 收尾后补的一条：`/me` 路由原本挂了但**没有任何入口**，只能手敲 URL，不算「可见」；
 已在桌面侧栏**「进阶」分组**加一个 Me 入口。**没动**一级导航 ——
 COGNITIVE CORE V1.2 §21 把一级 IA 冻结为 Today / Journey / Memory / Progress，

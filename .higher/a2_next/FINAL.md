@@ -10,7 +10,7 @@
 ```text
 Branch        : main
 START SHA     : 96cc109f6b2fc33faee5b6ea7d378670bed7be45   （与 taskbook 预期 baseline 一致）
-FINAL SHA     : d06e447（代码冻结；b28f541 / 555d5a1 / 77f1298 / 7c2200b / 6d9f3ff 只含文档）
+FINAL SHA     : 67c3929（代码冻结；b28f541 / 555d5a1 / 77f1298 / 7c2200b / 6d9f3ff 只含文档）
 文档收尾提交   : 紧随其后 —— 只新增 .higher/a2_next/ 文档，零代码改动
 ```
 
@@ -24,6 +24,7 @@ d945b6a  feat(personal-core): add goal mode and capability contracts (A2-4)
 81ea663  feat(ui): show Capability and Goal Mode on the Me surface (A2-4)
 f8d30db  feat(ipc): register the A2 contract types in the generated IPC surface
 d06e447  docs(personal-core): correct the stale NOT_WIRED claim（注释级）
+67c3929  feat(verification): route recall submission through the real verifier
 ```
 
 ---
@@ -150,99 +151,37 @@ core  training::verify_and_record_interaction
 受控 IPC 必跑真实验证器（A22-13 断言生产路径里出现 `VerificationMethod::Deterministic`
 /`Structured` 即失败）。这条设计裁决的来龙去脉见 findings **F-A22-06**。
 
-### 2.7 接线状态（如实声明边界）
+### 2.7 接线状态：**已接线**（严格增量，没有任何用户变差）
 
 ```text
-后端受控通路        ✅ 已在 generate_handler! 注册，可被调用，端到端测试通过
-前端 FreeRecall 屏  ⚠️ 仍走手工 SelfCheck 入口，**尚未**切换到验证通路
+后端受控通路     ✅ generate_handler! 已注册，端到端测试通过
+前端提交管线     ✅ 每次提交先做**只读预检**，命中才走验证通路
 ```
 
-也就是说：**「用户动作 → 真实验证器 → 权威证据」的后端闭环已经真实存在且被测试证明，
-但 UI 那一跳还没接。** 本轮不声明该 UI 闭环已完成。切换需要一个产品决策：
-材料 `Unavailable` 或用户措辞与原文不完全一致时的降级/回退行为（否则会把
-「漏判成功」变成用户可见的「不推进复习」），属下一阶段，见 §8。
-
----
-
-## 3. A2-3 —— Person State / Know Me
-
-- **它是投影，不是第二份真相。** `personal_core/person.rs` 全文件只有 `SELECT`
-  （A23-09 在源码层与运行时双重锁定：文件里没有 INSERT/UPDATE/DELETE/CREATE，
-  调用前后行计数不变）。
-- **没有** `person_state` / `personal_state` / `life_event` 表。
-
-### 3.1 快照字段（`get_person_state()` 一次返回，无 N+1，不依赖云 AI）
+新增**只读**命令 `precheck_training_verification`（跑验证器，一个字节都不写），
+`TrainingExperience` 的提交管线据此路由：
 
 ```text
-as_of / scope(=study_profile) / profile_id / profile_name / person_profile_count
-learning     { current_focus, recall_state, application_state,
-               verified_evidence_count, last_activity_at }
-execution    { tasks_done_today, open_tasks }
-goals[]      { id, name, status, source_class, reason, goal_mode }
-time         { minutes_today }
-soft_context { summary, note }
-body         { sleep, energy, stress, mood, recovery }
-capability   （A2-4）
-workspaces[] { profile_id, name, goal_count }
-unknowns[]   { domain, label, reason }
+precheck → verified        → verify_training_interaction（权威由后端签发）
+precheck → unverified      → 既有自检通路（SelfCheck + 用户自报结果）
+precheck → null（无验证器）→ 同上
 ```
 
-### 3.2 来源类别（4 类，透明可追溯）
+**为什么必须由「验证结果」路由，而不是由「有没有验证器」路由** —— 这是这次唯一
+真正棘手的点，也是我先把约束查实才动手的原因：
 
 ```text
-ConfirmedByUser   用户自己创建的目标（goals）
-Observed          真实投影读到的东西（learning / execution / time）
-Inferred          软记忆（PersonalizationProfile / UserContext / AI 抽取上下文）——
-                  只能是 soft_context，永不晋升为 Observed 真相
-Unknown           没有真实数据来源 —— 尤其是 body 全部 5 项
+未命中时后端写 result = None
+AtLeastOneRecallOutcome 规则要求 result.is_some()（has_interaction_outcome）
+→ 若「有验证器就一律切过去」，措辞对不上原文的用户将**永远推不动块**
 ```
 
-`LocalPerson != StudyProfile`：学习/执行/时间是**档案级**；person 级只有
-`workspaces` / `soft_context` / `body`。同一 `LocalPerson` 可拥有多个 `StudyProfile`
-（`person_profile_count` + `workspaces` 体现），跨档案学习证据不污染别的档案的能力状态。
+于是：对不上原文的用户拿回的是**与今天逐字节相同**的行为，一个都不会变差；
+而对得上的用户，第一次拿到产品里真正存在的 `RecallSuccess` —— 权威证据、
+FSRS 推进，并汇入 Person State 的「已验证证据」计数。
 
-Body V1 **恒为 Unknown**，并且 5 项全部进 `unknowns`：本轮不接手表 / Health Connect（§36），
-仓库里没有任何身体数据表。自报只能是 `SelfReported`，**不会**被自动升级成
-「医学上恢复不足」。
-
-Me 面（`/me`）：Current Focus / Goals / Higher Knows，按
-Confirmed / Observed / Inferred / Unknown 分组，每条带 reason + evidence refs；
-**只显示**后端给的 `source_class`，前端绝不本地重算（A23-11 源码级锁定）。
-
-可达性与渲染（收尾后补齐的两处，都是「链上最后一公里」）：
-
-1. 路由原本挂了但**没有任何入口**，只能手敲 URL —— 那不算「可见」。
-   已在桌面侧栏**「进阶」分组**加一个 Me 入口（只动 `ADVANCED_NAV_ITEMS`）。
-   **没有**动一级导航：COGNITIVE CORE V1.2 §21 把一级 IA 冻结为
-   Today / Journey / Memory / Progress，那是别的 sprint 的冻结契约；
-   放一级还是放进阶属产品决策，留给 Owner。MobileLayout（`MOBILE_NAV_ITEMS`）零改动。
-2. `.me*` 的样式原本**一行都没有**（`styles.css` 里查不到任何 `me__` 选择器）——
-   面板带着一堆不存在的 class 上线。已补一段最小样式，只用既有 `--h-*` token
-   与允许的字号/间距档位，**不做**视觉重设计。
-
----
-
-## 4. A2-4 —— Goal Mode + Capability（CONTRACT ONLY）
-
-| 项 | 状态 |
-|---|---|
-| Goal Mode 词表 | `Exam` / `Growth` / `Life` / `Maintenance` / `Unclassified`（已冻结） |
-| Exam vs Growth | 语义已锁：Exam 优化**截止日期内的结果**（score / coverage / 题权重 / mock / 剩余时间）；Growth 优化**长期真实能力**（understand / recall / apply / independent / debug / build / transfer / retain） |
-| 会猜吗 | **不会。** `resolve_goal_mode` 只认结构化来源；`goals` 表没有 mode/kind 字段（F-A24-01），无来源 → `Unclassified` + reason「不按标题猜测」。「考研」不会变成 Exam（A24-02） |
-| Capability 轴 | 8 条全在，但**只有 5 条可投影**：`Recall`←recall_state、`Apply`←application_state、`Independent`←application_state、`Transfer`←transfer_state、`Retain`←fluency_state |
-| `Understand` / `Debug` / `Build` | **恒 Unknown**（本轮没有对应证据），禁止为了 UI 完整写 `Debug = 50%` / `Build = Beginner` |
-| 反写 / 新表 | **没有。** 只读投影，不反写 Learner Model，无 `capability_scores` / `skill_percentages`（A24-06 / A24-08） |
-| AI 能改吗 | **不能**（A24-07） |
-
-只建契约，**没有**做完整 Exam Planner / Growth Planner（§36 明令不做）。
-
-可见性（收尾补齐）：`PersonStateSnapshot.capability` 与 `GoalView.goal_mode`
-原本在后端有、前端**一处都没渲染** —— 那 A2-4 的契约就没人看得见。现在 Me 面
-新增 Capability 段（8 条轴全列，带后端给的 source_class；`value = null` 渲染成
-「还不知道」，绝不写 beginner / 50%）与每个目标的 Goal Mode 徽标（tooltip =
-后端 reason，并列出 `focuses_on`）。UI **只展示**，不猜 mode。
-
----
+两条新测试锁住它：**A22-14**（预检只读：交互 / 学习事实 / 记忆复习行数纹丝不动）、
+**A22-15**（三种预检结果分别对应哪条路由）。
 
 ### 2.8 IPC 边界类型只保留**一份**定义
 
@@ -294,7 +233,7 @@ new columns       : 0
 cargo check --lib -j 1                                    ok（37 warnings，无 error）
 cargo test --test a2_1_personal_evidence_authority    -j 1   44 passed / 0 failed
 cargo test --test a2_1_r1_authority_provenance_gate   -j 1   17 passed / 0 failed
-cargo test --test a2_2_authoritative_verification     -j 1   18 passed / 0 failed
+cargo test --test a2_2_authoritative_verification     -j 1   20 passed / 0 failed
 cargo test --test a2_3_person_state                   -j 1   12 passed / 0 failed
 cargo test --test a2_4_goal_capability_contract       -j 1    9 passed / 0 failed
 cargo test --test learner_model_v2                    -j 1    9 passed / 0 failed
@@ -311,8 +250,9 @@ npm run test:product-e2e           25 passed
 npm run check:types                  0 diff（重新导出 + git diff --exit-code src/generated）
 ```
 
-A2-2 覆盖 A22-01..A22-12 加 3 条边界（写侧声称不成就不能变 Verified、
-无验证器不伪造、AI 材料不是真相源）；A2-3 覆盖 A23-01..A23-12；A2-4 覆盖 A24-01..A24-09。
+A2-2 覆盖 A22-01..A22-15 加 3 条边界（写侧声称不成就不能变 Verified、
+无验证器不伪造、AI 材料不是真相源）；其中 A22-14 / A22-15 锁的是
+「预检只读」与「三种预检结果决定路由」（§2.7）。A2-3 覆盖 A23-01..A23-12；A2-4 覆盖 A24-01..A24-09。
 
 ### 6.2 Broad 回归
 
@@ -323,9 +263,9 @@ cargo test --no-fail-fast -j 1 -- --test-threads=1
 | | passed | failed | ignored |
 |---|---|---|---|
 | BASELINE (`96cc109`) | 1898 | **29** | 2 |
-| FINAL (`d06e447`) | 1939 | **27** | 2 |
+| FINAL (`67c3929`) | 1941 | **27** | 2 |
 
-> 1939 − 1898 = **41** = 本轮新增的 39（18 A2-2 + 12 A2-3 + 9 A2-4）
+> 1941 − 1898 = **43** = 本轮新增的 41（18+2 A2-2 + 12 A2-3 + 9 A2-4）
 > + 2 条**本次网络通了**才转绿的：`rt_gr_01` / `rt_gr_02`
 > （真实 Docling 解析 PDF，依赖 `huggingface.co`；baseline 那次是代理 502）。
 > 它们是**环境相关**的既有红，**不是**本轮改动修好的 —— 下一次代理抽风还会红回去。
@@ -381,8 +321,9 @@ AI Cost Governor、大导航重构、大 UI 重设计。
 
 另外两项**需要 Owner 决策**、本轮刻意没做：
 
-1. **FreeRecall UI 是否切到验证通路**（§2.7）——取决于「措辞不完全一致时如何降级」的产品选择。
-2. **Higher 运行时是否条件化 `HF_HUB_OFFLINE`**（缓存已存在则离线）——会影响首次下载。
+1. **Higher 运行时是否条件化 `HF_HUB_OFFLINE`**（缓存已存在则离线）——会影响首次下载。
+2. **验证通路要不要扩到更多协议**：目前只有 `free_recall` / `cued_recall` /
+   `review_short` 三条有合法真相源；`faded_example` 等**没有**，按 §11 不得伪造。
 
 ---
 
