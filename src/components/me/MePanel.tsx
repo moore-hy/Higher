@@ -16,6 +16,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   getPersonState,
+  type CapabilityAxis,
+  type GoalMode,
   type KnownCount,
   type KnownText,
   type PersonStateSnapshot,
@@ -31,6 +33,27 @@ const CLASS_LABEL: Record<SourceClass, string> = {
 };
 
 const CLASS_ORDER: SourceClass[] = ["confirmed_by_user", "observed", "inferred", "unknown"];
+
+/** A2-4 §33：八条能力轴 → 展示标签。**只做展示**，值来自后端投影。 */
+const AXIS_LABEL: Record<CapabilityAxis, string> = {
+  understand: "理解",
+  recall: "回忆",
+  apply: "应用",
+  independent: "独立",
+  debug: "排错",
+  build: "建构",
+  transfer: "迁移",
+  retain: "保持",
+};
+
+/** A2-4 §31：Goal Mode 词表 → 展示标签。没有结构化来源时后端给 `unclassified`。 */
+const MODE_LABEL: Record<GoalMode, string> = {
+  exam: "考试导向",
+  growth: "能力导向",
+  life: "生活",
+  maintenance: "维持",
+  unclassified: "未分类（不猜）",
+};
 
 interface Row {
   id: string;
@@ -140,6 +163,15 @@ export default function MePanel({ profileId }: { profileId: number }) {
                   {CLASS_LABEL[g.source_class]}
                 </span>
                 <span>{g.name}</span>
+                {/* A2-4 §31：mode 由后端判定，UI 绝不按标题猜；没有来源就是 unclassified。 */}
+                <span className="me__mode" title={g.goal_mode.reason}>
+                  {MODE_LABEL[g.goal_mode.mode]}
+                </span>
+                {g.goal_mode.focuses_on.length > 0 && (
+                  <span className="me__muted">
+                    关注 {g.goal_mode.focuses_on.join(" · ")}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
@@ -162,6 +194,37 @@ export default function MePanel({ profileId }: { profileId: number }) {
         })}
       </section>
 
+      {/* A2-4 §33：能力是 Learner Model / Evidence 的**只读**投影。
+          没有证据的轴 value 是 null —— 这里必须渲染成「还不知道」，
+          绝不为了填满面板写 beginner / 50%。 */}
+      <section className="me__section">
+        <h3 className="me__h3">Capability</h3>
+        {state.capability.axes.length === 0 ? (
+          <p className="me__empty">还没有可投影的能力轴。</p>
+        ) : (
+          <ul className="me__axes">
+            {state.capability.axes.map((a) => (
+              <li key={a.axis} className="me__axis" data-testid={`me-axis-${a.axis}`}>
+                <div className="me__row-head">
+                  <span className={`me__tag me__tag--${a.source_class}`}>
+                    {CLASS_LABEL[a.source_class]}
+                  </span>
+                  <span className="me__row-label">{AXIS_LABEL[a.axis]}</span>
+                  <span className="me__axis-value">
+                    {a.value === null ? "还不知道" : a.value}
+                  </span>
+                </div>
+                <p className="me__row-why">{a.reason}</p>
+                {a.evidence_refs.length > 0 && (
+                  <p className="me__row-refs">依据：{a.evidence_refs.join(" · ")}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {state.capability.note && <p className="me__muted">{state.capability.note}</p>}
+      </section>
+
       {/* §23：Body V1 恒为 Unknown（本轮不接手表）—— 必须真的显示出来。 */}
       <section className="me__section">
         <h3 className="me__h3">Body</h3>
@@ -182,7 +245,7 @@ export default function MePanel({ profileId }: { profileId: number }) {
       </section>
 
       <p className="me__foot">
-        以上是 Higher 目前**真的知道**的事。标着 UNKNOWN 的就是不知道 ——
+        以上是 Higher 目前「真的知道」的事。标着 UNKNOWN 的就是不知道 ——
         它不会被猜测填满。
       </p>
     </div>

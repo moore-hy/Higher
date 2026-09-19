@@ -13542,3 +13542,88 @@ html.higher-qr-scanning body .qr-scan-frame,
 .hc-train__cue .hc-train__effect-title {
   margin-bottom: 2px;
 }
+
+/* ============================================================
+   A2-3 §25 / A2-4 §33 —— ME V1（Know Me）
+   只用既有 token（--h-*），沿用字号 11/12/13/14/15/16/24 与间距 4/8/12/16/24/32。
+   这里**不做**视觉重设计：只是让「Higher 真的知道什么」这张面板能被看清。
+   ============================================================ */
+.me {
+  padding: 24px 32px 32px;
+  color: var(--h-text);
+  max-width: 720px;
+}
+
+.me__head { margin-bottom: 24px; }
+.me__title { font-size: 24px; margin: 0 0 4px; letter-spacing: 0.04em; }
+.me__sub { font-size: 13px; color: var(--h-text-secondary); margin: 0; }
+
+.me__section { margin-top: 24px; }
+.me__h3 {
+  font-size: 15px;
+  color: var(--h-text-secondary);
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--h-border);
+}
+
+.me__row,
+.me__axis {
+  background: var(--h-surface-1);
+  border: 1px solid var(--h-border);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  list-style: none;
+}
+
+.me__row-head { display: flex; align-items: center; gap: 8px; }
+.me__row-label { font-size: 14px; }
+.me__row-value { font-size: 14px; margin: 8px 0 0; }
+.me__row-why { font-size: 12px; color: var(--h-text-muted); margin: 4px 0 0; }
+.me__row-refs { font-size: 11px; color: var(--h-text-muted); margin: 4px 0 0; }
+
+.me__tag {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--h-border-strong);
+  color: var(--h-text-secondary);
+  white-space: nowrap;
+}
+.me__tag--confirmed_by_user { color: var(--h-success); border-color: var(--h-success); }
+.me__tag--observed { color: var(--h-accent); border-color: var(--h-accent-border); }
+.me__tag--inferred { color: var(--h-warning); border-color: var(--h-warning); }
+.me__tag--unknown { color: var(--h-text-muted); border-color: var(--h-border); }
+
+.me__group { margin-bottom: 16px; }
+.me__group-title { font-size: 11px; color: var(--h-text-muted); margin: 0 0 8px; }
+
+.me__goals { list-style: none; margin: 0; padding: 0; }
+.me__goal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--h-border);
+}
+.me__mode {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--h-accent-soft);
+  color: var(--h-text-secondary);
+  white-space: nowrap;
+}
+
+.me__axes { list-style: none; margin: 0; padding: 0; }
+.me__axis-value { margin-left: auto; font-size: 14px; color: var(--h-text); }
+
+.me__empty { font-size: 13px; color: var(--h-text-muted); margin: 0; }
+.me__muted { font-size: 12px; color: var(--h-text-muted); margin: 8px 0 0; }
+.me__loading,
+.me__error { font-size: 14px; color: var(--h-text-secondary); padding: 24px 32px; }
+.me__error { color: var(--h-danger); }
+.me__foot { font-size: 12px; color: var(--h-text-muted); margin-top: 32px; }
