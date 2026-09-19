@@ -2811,136 +2811,45 @@ export const captureLearningIntentFromText = (profileId: number, text: string) =
   invoke<IntentCaptureOutcome>("capture_learning_intent_from_text", { profileId, text });
 
 /* ==========================================================================
- * A2-3 —— PERSON STATE V1 / KNOW ME（§24）
+ * A2-2 / A2-3 / A2-4 —— IPC 边界类型（**只转发**，不手抄）
  *
- * **唯一**的 Person 只读入口：一次返回 V1 所需快照。
+ * 唯一定义处是 Rust，`src/generated/` 是 ts-rs 产物：
+ *   src-tauri/src/personal_core/person.rs       Person State（只读投影）
+ *   src-tauri/src/personal_core/capability.rs   Goal Mode / Capability（只读投影）
+ *   src-tauri/src/training/verifier.rs          验证器输出
+ *   src-tauri/src/training/runtime.rs           受控验证通路的返回值
  *
- * 前端纪律（§11 / A23-11）：
- * - **绝不**自己判定 `source_class` —— 那是后端的权威判定，前端只展示；
- * - **绝不**把 Unknown 渲染成一句听起来像结论的话；
- * - **绝不**为了「填满这一栏」而用推断补洞。
+ * 在这里**手抄**一份类型就等于埋一个迟早会漂移的第二真相，所以只做转发。
+ * 一致性由 `npm run check:types`（重新导出 + `git diff --exit-code src/generated`）守住。
+ *
+ * 前端纪律（A23-11）：**绝不**自己判定 `source_class`；`value: null` 就是
+ * 「没有证据」，不是 0、也不是 beginner。
  * ========================================================================== */
 
-/** §20：来源类别。后端判定，前端**只展示**。 */
-export type SourceClass = "confirmed_by_user" | "observed" | "inferred" | "unknown";
+export type { SourceClass } from "./generated/SourceClass";
+export type { KnownText } from "./generated/KnownText";
+export type { KnownCount } from "./generated/KnownCount";
+export type { LearningView } from "./generated/LearningView";
+export type { ExecutionView } from "./generated/ExecutionView";
+export type { GoalView } from "./generated/GoalView";
+export type { TimeView } from "./generated/TimeView";
+export type { SoftContextView } from "./generated/SoftContextView";
+export type { BodyStateV1 } from "./generated/BodyStateV1";
+export type { WorkspaceSummary } from "./generated/WorkspaceSummary";
+export type { UnknownItem } from "./generated/UnknownItem";
+export type { PersonStateSnapshot } from "./generated/PersonStateSnapshot";
+export type { GoalMode } from "./generated/GoalMode";
+export type { GoalModeResolution } from "./generated/GoalModeResolution";
+export type { CapabilityAxis } from "./generated/CapabilityAxis";
+export type { CapabilityAxisState } from "./generated/CapabilityAxisState";
+export type { CapabilityView } from "./generated/CapabilityView";
+export type { VerifierKind } from "./generated/VerifierKind";
+export type { VerifierResult } from "./generated/VerifierResult";
+export type { VerifierOutcome } from "./generated/VerifierOutcome";
+export type { VerifiedInteractionOutcome } from "./generated/VerifiedInteractionOutcome";
 
-export interface KnownText {
-  value: string | null;
-  source_class: SourceClass;
-  reason: string;
-  evidence_refs: string[];
-}
-
-export interface KnownCount {
-  value: number | null;
-  source_class: SourceClass;
-  reason: string;
-  evidence_refs: string[];
-}
-
-export interface PersonLearningView {
-  current_focus: KnownText;
-  recall_state: KnownText;
-  application_state: KnownText;
-  verified_evidence_count: KnownCount;
-  last_activity_at: KnownText;
-}
-
-export interface PersonExecutionView {
-  tasks_done_today: KnownCount;
-  open_tasks: KnownCount;
-}
-
-/** A2-4 §31：Goal Mode 词表。没有结构化来源时是 `unclassified`（**绝不**按标题猜）。 */
-export type GoalMode = "exam" | "growth" | "life" | "maintenance" | "unclassified";
-
-export interface GoalModeResolution {
-  mode: GoalMode;
-  source_class: SourceClass;
-  reason: string;
-  focuses_on: string[];
-}
-
-export interface PersonGoalView {
-  id: number;
-  name: string;
-  status: string;
-  source_class: SourceClass;
-  reason: string;
-  goal_mode: GoalModeResolution;
-}
-
-/** A2-4 §33：8 条能力轴。没有证据的轴值是 `null`（**不是** 0 / beginner）。 */
-export type CapabilityAxis =
-  | "understand"
-  | "recall"
-  | "apply"
-  | "independent"
-  | "debug"
-  | "build"
-  | "transfer"
-  | "retain";
-
-export interface CapabilityAxisState {
-  axis: CapabilityAxis;
-  value: string | null;
-  source_class: SourceClass;
-  reason: string;
-  evidence_refs: string[];
-}
-
-export interface CapabilityView {
-  learning_item_id: number | null;
-  axes: CapabilityAxisState[];
-  note: string;
-}
-
-export interface PersonTimeView {
-  minutes_today: KnownCount;
-}
-
-export interface PersonSoftContextView {
-  summary: KnownText;
-  note: string;
-}
-
-export interface PersonBodyState {
-  sleep: KnownText;
-  energy: KnownText;
-  stress: KnownText;
-  mood: KnownText;
-  recovery: KnownText;
-}
-
-export interface WorkspaceSummary {
-  profile_id: number;
-  name: string;
-  goal_count: number;
-}
-
-export interface PersonUnknownItem {
-  domain: string;
-  label: string;
-  reason: string;
-}
-
-export interface PersonStateSnapshot {
-  as_of: string;
-  scope: string;
-  profile_id: number;
-  profile_name: string;
-  person_profile_count: number;
-  learning: PersonLearningView;
-  execution: PersonExecutionView;
-  goals: PersonGoalView[];
-  time: PersonTimeView;
-  soft_context: PersonSoftContextView;
-  body: PersonBodyState;
-  /** A2-4 §33：Learner Model / Evidence 的只读投影，不是第二份真相。 */
-  capability: CapabilityView;
-  workspaces: WorkspaceSummary[];
-  unknowns: PersonUnknownItem[];
-}
+// 本地使用（下面 invoke 的返回类型）—— 与上面转发的是同一份定义，不是第二份。
+import type { PersonStateSnapshot } from "./generated/PersonStateSnapshot";
 
 export const getPersonState = (profileId: number) =>
   invoke<PersonStateSnapshot>("get_person_state", { profileId });

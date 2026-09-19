@@ -62,6 +62,22 @@ use crate::training::types::{
 use crate::training::grounded_material::{
     GeneratedBy, GroundedMaterialRef, GroundedTrainingMaterial, MaterialStatus,
 };
+// A2-2 §9 —— 受控后端验证通路的 IPC 面。
+#[allow(unused_imports)]
+use crate::training::runtime::VerifiedInteractionOutcome;
+#[allow(unused_imports)]
+use crate::training::verifier::{VerifierKind, VerifierOutcome, VerifierResult};
+// A2-3 §22-§26 —— Person State 只读投影的 IPC 面（单一入口 `get_person_state`）。
+#[allow(unused_imports)]
+use crate::personal_core::person::{
+    BodyStateV1, ExecutionView, GoalView, KnownCount, KnownText, LearningView, PersonStateSnapshot,
+    SoftContextView, SourceClass, TimeView, UnknownItem, WorkspaceSummary,
+};
+// A2-4 §31/§33 —— Goal Mode 与 Capability 契约的 IPC 面（只读投影，非第二份真相）。
+#[allow(unused_imports)]
+use crate::personal_core::capability::{
+    CapabilityAxis, CapabilityAxisState, CapabilityView, GoalMode, GoalModeResolution,
+};
 
 /// §7 "LearningItem light DTO": the flat projection served by
 /// `list_learning_items_light` (tree/list rendering without full content).
@@ -171,6 +187,41 @@ mod tests {
         GroundedMaterialRef::export_all(&cfg).unwrap();
         MaterialStatus::export_all(&cfg).unwrap();
         GeneratedBy::export_all(&cfg).unwrap();
+
+        // A2-2 §9 —— 受控后端验证通路：`verify_training_interaction` 的返回值。
+        // `VerifiedInteractionOutcome` 会带出 `InteractionOutcome` / `VerificationMethod`
+        // 与验证器三件套（kind / result / outcome）。
+        //
+        // 前端**拿不到** `verification` 与 `result`：这两个字段由后端验证器决定，
+        // 生成出来的 TS 里也没有任何可以从外部写入它们的入口。
+        VerifiedInteractionOutcome::export_all(&cfg).unwrap();
+        VerifierOutcome::export_all(&cfg).unwrap();
+        VerifierKind::export_all(&cfg).unwrap();
+        VerifierResult::export_all(&cfg).unwrap();
+
+        // A2-3 §22-§26 —— Person State 投影（只读；`PersonStateSnapshot` 会带出
+        // 其下全部子视图与 `SourceClass` 四分类）。
+        PersonStateSnapshot::export_all(&cfg).unwrap();
+        LearningView::export_all(&cfg).unwrap();
+        ExecutionView::export_all(&cfg).unwrap();
+        GoalView::export_all(&cfg).unwrap();
+        TimeView::export_all(&cfg).unwrap();
+        SoftContextView::export_all(&cfg).unwrap();
+        BodyStateV1::export_all(&cfg).unwrap();
+        WorkspaceSummary::export_all(&cfg).unwrap();
+        UnknownItem::export_all(&cfg).unwrap();
+        KnownText::export_all(&cfg).unwrap();
+        KnownCount::export_all(&cfg).unwrap();
+        SourceClass::export_all(&cfg).unwrap();
+
+        // A2-4 §31/§33 —— Goal Mode 与 Capability。**只读投影**：
+        // `CapabilityAxisState.value` 为 `string | null`，`null` 就是「没有证据」，
+        // 前端绝不能把它渲染成 0 / beginner。
+        CapabilityView::export_all(&cfg).unwrap();
+        CapabilityAxisState::export_all(&cfg).unwrap();
+        CapabilityAxis::export_all(&cfg).unwrap();
+        GoalModeResolution::export_all(&cfg).unwrap();
+        GoalMode::export_all(&cfg).unwrap();
 
         // GROUNDED LEARNING BRIDGE V1 · W5 —— 块材料视图 IPC 面（§10）。
         // `GroundedMaterialView` 会带出 `GroundedProvenanceLabel`。
