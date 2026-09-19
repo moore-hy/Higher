@@ -32,8 +32,19 @@
 //! 无 UI 改造 · 无新 Today 路由 · 无新验证器
 //! ```
 //!
-//! `AUTHORITATIVE LEARNING VERIFICATION` 在本 pack 结束时**仍是** `NOT_WIRED`
-//! —— A2-2 才接线真实生产验证器。
+//! `AUTHORITATIVE LEARNING VERIFICATION` 在 **A2-1 结束时仍是** `NOT_WIRED`。
+//!
+//! A2-2 之后（见 `.higher/a2_next/FINAL.md`）：
+//!
+//! ```text
+//! free_recall / cued_recall / review_short   已接线真实验证器
+//!     training::verify_and_record_interaction
+//!     真相源 = 接地材料 source_excerpt（确定性产物，非 AI）
+//!
+//! 其余 19 条协议                             仍是 NOT_WIRED
+//!     尤其 worked_example / faded_example / standard_practice / transfer_challenge：
+//!     它们没有合法确定性真相源，按 §11 **不得**伪造验证器
+//! ```
 //!
 //! # 两条正交真相（§4 / §23）
 //!
