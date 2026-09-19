@@ -9,6 +9,7 @@ import {
   Settings as SettingsIcon,
   Sun,
   TrendingUp,
+  User,
   Waypoints,
 } from "lucide-react";
 import { useActiveProfile, canSwitchProfile } from "./contexts/ActiveProfileContext";
@@ -54,6 +55,10 @@ const ADVANCED_NAV_ITEMS = [
   { to: "/knowledge", label: "知识", end: false, Icon: MapIcon },
   { to: "/data", label: "数据", end: false, Icon: Database },
   { to: "/sync", label: "同步", end: false, Icon: Waypoints },
+  // A2-3 §23：Me / Know Me。放**进阶**分组而不是一级导航，是因为 §21 把一级导航
+  // 锁定为 Today/Journey/Memory/Progress —— 那条 IA 是别的 sprint 的冻结契约，
+  // 本轮不动它；这里只保证这个页面**点得到**，不用 deep link 才够得着。
+  { to: "/me", label: "Me", end: false, Icon: User },
 ];
 
 function Layout() {
