@@ -311,7 +311,7 @@ cargo test --no-fail-fast -j 1 -- --test-threads=1
 | FINAL (`f8d30db`) | 1939 | **27** | 2 |
 
 > 1939 − 1898 = **41** = 本轮新增的 39（18 A2-2 + 12 A2-3 + 9 A2-4）
-> \+ 2 条**本次网络通了**才转绿的：`rt_gr_01` / `rt_gr_02`
+> + 2 条**本次网络通了**才转绿的：`rt_gr_01` / `rt_gr_02`
 > （真实 Docling 解析 PDF，依赖 `huggingface.co`；baseline 那次是代理 502）。
 > 它们是**环境相关**的既有红，**不是**本轮改动修好的 —— 下一次代理抽风还会红回去。
 > 口径说明：`baseline.md` 里写的「2055 executed」是把 `test result:` 汇总行也数进去了
