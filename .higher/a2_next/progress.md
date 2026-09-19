@@ -8,7 +8,9 @@
 | 1 | `261bae4` | `feat(verification): A2-2 authoritative learning verification V1` |
 | 2 | `dc0905b` | `feat(personal-core): A2-3 person state projection V1 + Know Me surface` |
 | 3 | `d945b6a` | `feat(personal-core): add goal mode and capability contracts (A2-4)` |
-| 4 | 下一个 | `docs(higher): close A2 next-stage sprint`（task_plan / findings / progress / baseline / FINAL） |
+| 4 | `b28f541` | `docs(higher): close A2 next-stage sprint`（task_plan / findings / progress / baseline / FINAL） |
+
+**代码冻结点 = `3a0579b`**（b28f541 只加文档，零代码改动）。
 
 > 两次作废的 broad run，都已删除，回归对比只认**代码冻结后**的 `final_broad.log`：
 > ① `mid_broad.log`：run 进行中还在改 A2-4 源码，lib 编译失败
