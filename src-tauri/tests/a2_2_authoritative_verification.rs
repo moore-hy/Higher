@@ -673,8 +673,9 @@ fn a22_write_gate_claim_without_proof_never_becomes_verified() {
 /// ```
 #[test]
 fn a22_13_production_cannot_mint_authority() {
-    let commands =
-        strip_comments(&std::fs::read_to_string(src_root().join("src/commands/training.rs")).unwrap());
+    let commands = strip_comments(
+        &std::fs::read_to_string(src_root().join("src/commands/training.rs")).unwrap(),
+    );
 
     // ① 手工通路内部固定 SelfCheck —— 这句必须还在，删了就是开门。
     assert!(

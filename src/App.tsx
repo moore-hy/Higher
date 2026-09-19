@@ -53,6 +53,8 @@ const TrainingExperiencePage = lazy(() => import("./pages/TrainingExperience"));
  * 它引入 `recharts`，沿用 DEV-0055 §125 的做法，不让图表库进主 bundle。
  */
 const CognitiveProgressPage = lazy(() => import("./pages/CognitiveProgress"));
+/** A2-3 §25：ME —— Higher 目前「真的知道」什么（只读投影，单一后端入口）。 */
+const MePage = lazy(() => import("./pages/Me"));
 
 /** Profile Gate：根据档案状态决定显示欢迎页/选择页/主应用 */
 function ProfileGate() {
@@ -113,6 +115,8 @@ function ProfileGate() {
               {!IS_ANDROID && <Route path="/sync" element={<Sync />} />}
               {/* COGNITIVE CORE V1.2 §25：/memory 是新的记忆界面（真正的第一个记忆面） */}
               <Route path="/memory" element={<Memory />} />
+              {/* A2-3 §25：ME / Know Me —— 最小可见产品面（不做导航重构） */}
+              <Route path="/me" element={<MePage />} />
               {/* COGNITIVE CORE V1.2 §26：/progress 由「整体进度并入规划」的兼容重定向
                   升级为四轴 Progress 页（§26 明确要求把 /progress 路由到新页）。
                   旧 Progress.tsx 文件保留但不挂路由（§21「不删除既有页面」）。 */}

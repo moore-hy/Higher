@@ -2809,3 +2809,100 @@ export const tryCompleteTrainingBlock = (args: {
  */
 export const captureLearningIntentFromText = (profileId: number, text: string) =>
   invoke<IntentCaptureOutcome>("capture_learning_intent_from_text", { profileId, text });
+
+/* ==========================================================================
+ * A2-3 —— PERSON STATE V1 / KNOW ME（§24）
+ *
+ * **唯一**的 Person 只读入口：一次返回 V1 所需快照。
+ *
+ * 前端纪律（§11 / A23-11）：
+ * - **绝不**自己判定 `source_class` —— 那是后端的权威判定，前端只展示；
+ * - **绝不**把 Unknown 渲染成一句听起来像结论的话；
+ * - **绝不**为了「填满这一栏」而用推断补洞。
+ * ========================================================================== */
+
+/** §20：来源类别。后端判定，前端**只展示**。 */
+export type SourceClass = "confirmed_by_user" | "observed" | "inferred" | "unknown";
+
+export interface KnownText {
+  value: string | null;
+  source_class: SourceClass;
+  reason: string;
+  evidence_refs: string[];
+}
+
+export interface KnownCount {
+  value: number | null;
+  source_class: SourceClass;
+  reason: string;
+  evidence_refs: string[];
+}
+
+export interface PersonLearningView {
+  current_focus: KnownText;
+  recall_state: KnownText;
+  application_state: KnownText;
+  verified_evidence_count: KnownCount;
+  last_activity_at: KnownText;
+}
+
+export interface PersonExecutionView {
+  tasks_done_today: KnownCount;
+  open_tasks: KnownCount;
+}
+
+export interface PersonGoalView {
+  id: number;
+  name: string;
+  status: string;
+  source_class: SourceClass;
+  reason: string;
+}
+
+export interface PersonTimeView {
+  minutes_today: KnownCount;
+}
+
+export interface PersonSoftContextView {
+  summary: KnownText;
+  note: string;
+}
+
+export interface PersonBodyState {
+  sleep: KnownText;
+  energy: KnownText;
+  stress: KnownText;
+  mood: KnownText;
+  recovery: KnownText;
+}
+
+export interface WorkspaceSummary {
+  profile_id: number;
+  name: string;
+  goal_count: number;
+}
+
+export interface PersonUnknownItem {
+  domain: string;
+  label: string;
+  reason: string;
+}
+
+export interface PersonStateSnapshot {
+  as_of: string;
+  scope: string;
+  profile_id: number;
+  profile_name: string;
+  person_profile_count: number;
+  learning: PersonLearningView;
+  execution: PersonExecutionView;
+  goals: PersonGoalView[];
+  time: PersonTimeView;
+  soft_context: PersonSoftContextView;
+  body: PersonBodyState;
+  workspaces: WorkspaceSummary[];
+  unknowns: PersonUnknownItem[];
+}
+
+export const getPersonState = (profileId: number) =>
+  invoke<PersonStateSnapshot>("get_person_state", { profileId });

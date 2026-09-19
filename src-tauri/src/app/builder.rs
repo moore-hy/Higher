@@ -296,6 +296,8 @@ pub fn build() -> tauri::Builder<tauri::Wry> {
             get_memory_dashboard,
             // HIGHER COGNITIVE CORE V1.2 §26 — Progress 页四轴视图（无跨轴聚合分）
             get_cognitive_progress,
+            // A2-3 —— Person State V1 / Know Me（只读投影，单一入口）
+            get_person_state,
             // REAL LEARNING ENGINE V1 · W4 — TrainingExperience（§19 / §13 / §15 / §20）
             create_training_run_for_item,
             get_training_session,

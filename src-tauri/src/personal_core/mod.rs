@@ -44,11 +44,17 @@
 
 pub mod adapters;
 pub mod evidence;
+pub mod person;
 pub mod scope;
 
 pub use evidence::{
     admits_learning_mastery, authority_admission, EvidenceAdmission, EvidenceAuthority,
     EvidenceProvenance, PersonalEvidenceDomain, PersonalEvidenceEnvelope, StateDimension,
     ALL_AUTHORITIES, ALL_STATE_DIMENSIONS,
+};
+pub use person::{
+    project_person_state, BodyStateV1, ExecutionView, GoalView, KnownCount, KnownText,
+    LearningView, PersonStateSnapshot, SoftContextView, SourceClass, TimeView, UnknownItem,
+    WorkspaceSummary, SCOPE_STUDY_PROFILE,
 };
 pub use scope::{EvidenceScope, ALL_SCOPE_KINDS};

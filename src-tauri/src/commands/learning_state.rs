@@ -83,6 +83,33 @@ pub fn get_cognitive_progress(
     crate::cognitive::build_cognitive_progress(&conn, profile_id)
 }
 
+/// A2-3 §24 —— **唯一**的 Person State 只读入口。
+///
+/// ```text
+/// 一次返回 V1 所需快照
+/// 前端不自己重新拼 Person truth
+/// 不做 N+1 IPC
+/// 不调用云 AI 才能工作
+/// ```
+///
+/// 它带 `profile_id` 是刻意的：学习 / 执行 / 时间部分**必须是档案级**的
+/// （§22：档案 A 的学习证据不得污染档案 B）。person 级信息只有
+/// `workspaces` / `soft_context` / `body`。
+#[tauri::command]
+pub fn get_person_state(
+    state: tauri::State<'_, db::DbState>,
+    profile_id: i64,
+    now_utc: Option<String>,
+) -> Result<crate::personal_core::PersonStateSnapshot, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // 时钟属于领域层：不传就由领域层取当前 UTC（与全库一致的文本格式）。
+    let now = match now_utc {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => crate::cognitive::today_projection::utc_now(),
+    };
+    crate::personal_core::project_person_state(&conn, profile_id, &now)
+}
+
 /// PHASE 2 / 3：唯一 Next Best Learning Action（同一时刻 exactly one primary）。
 #[tauri::command]
 pub fn get_next_learning_action(
