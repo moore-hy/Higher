@@ -10,7 +10,7 @@
 ```text
 Branch        : main
 START SHA     : 96cc109f6b2fc33faee5b6ea7d378670bed7be45   （与 taskbook 预期 baseline 一致）
-FINAL SHA     : f8d30db（代码冻结；b28f541 / 555d5a1 / 77f1298 只含文档）
+FINAL SHA     : d06e447（代码冻结；b28f541 / 555d5a1 / 77f1298 / 7c2200b / 6d9f3ff 只含文档）
 文档收尾提交   : 紧随其后 —— 只新增 .higher/a2_next/ 文档，零代码改动
 ```
 
@@ -23,6 +23,7 @@ d945b6a  feat(personal-core): add goal mode and capability contracts (A2-4)
 0b8d075  feat(ui): make the Me surface reachable from the sidebar (A2-3)
 81ea663  feat(ui): show Capability and Goal Mode on the Me surface (A2-4)
 f8d30db  feat(ipc): register the A2 contract types in the generated IPC surface
+d06e447  docs(personal-core): correct the stale NOT_WIRED claim（注释级）
 ```
 
 ---
@@ -256,6 +257,20 @@ Confirmed / Observed / Inferred / Unknown 分组，每条带 reason + evidence r
 顺带一个结构性事实：生成出来的 `VerifiedInteractionOutcome` 里**没有任何**
 可以传入 `verification` / `result` 的入口 —— 权威只能由后端验证器签发。
 
+### 2.9 顺手清掉一条**已经不成立的声明**
+
+`src/personal_core/mod.rs` 的模块文档原本写着
+「`AUTHORITATIVE LEARNING VERIFICATION` …… 仍是 `NOT_WIRED` —— A2-2 才接线」。
+A2-2 做完了，这句话就变成了一句**躺在生产源码里的假声明**。已改成两半都写：
+
+```text
+free_recall / cued_recall / review_short   已接线真实验证器
+其余 19 条协议                             仍是 NOT_WIRED（没有合法真相源，不得伪造）
+```
+
+（`.higher/a1/` 下 A1 时期的历史报告**没有**改写 —— 那是当时真实状态的存档，
+把历史改成「当时就已经完成」才是造假。）
+
 ## 5. 迁移 / 依赖 / 新表
 
 ```text
@@ -308,7 +323,7 @@ cargo test --no-fail-fast -j 1 -- --test-threads=1
 | | passed | failed | ignored |
 |---|---|---|---|
 | BASELINE (`96cc109`) | 1898 | **29** | 2 |
-| FINAL (`f8d30db`) | 1939 | **27** | 2 |
+| FINAL (`d06e447`) | 1939 | **27** | 2 |
 
 > 1939 − 1898 = **41** = 本轮新增的 39（18 A2-2 + 12 A2-3 + 9 A2-4）
 > + 2 条**本次网络通了**才转绿的：`rt_gr_01` / `rt_gr_02`
